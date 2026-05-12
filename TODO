@@ -1,0 +1,16 @@
+Random human rambling:
+
+- user space side BPF upatch needed too, making use of Jiri's uprobes work
+- kernel side -> open up like killswicth patch
+- operator side BPF upatch management -> LLM black box -> user space /BPF C assets
+- more kernel hardening stuff via BPF LSM in future
+- BPF arena as a shared ring buffer (user space == read-only)
+- shirudo subcmd could be triggered via cron job to push the buffer
+  somewhere (S3 bucket, file, whatever)
+- docs: Don't position as BPF LSM, but BPF-based security platform
+- LLM black box -> uses BPF in user mode linux to validate verifier stuff (Alexei talk)
+- different git branches to track BPF upatch'es as source code
+- thread model -> deployment could also be air-gappend env
+- No BPF ringbuf on kernel side, always BPF arena
+- UI completely decoupled, can query S3 data to visualize, but no direct
+  shirudo integration
