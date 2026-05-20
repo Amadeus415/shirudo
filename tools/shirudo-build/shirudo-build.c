@@ -1,0 +1,281 @@
+// SPDX-License-Identifier: BSD-2-Clause
+/*
+ * Copyright (c) 2026 Authors of shirudo
+ *
+ * Operator-only artifact pipeline: compile, sign, package.
+ */
+
+#include <errno.h>
+#include <fcntl.h>
+#include <libgen.h>
+#include <limits.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "compile.h"
+#include "log.h"
+#include "package.h"
+#include "paths.h"
+#include "upatch.h"
+#include "vmlinux.h"
+
+#define SHIRUDO_SHA256_HEX_LEN	64
+
+static void usage(FILE *fp)
+{
+	fprintf(fp,
+		"usage:\n"
+		"  shirudo-build <input> -o <output.upatch>\n"
+		"                [--name <upatch-name>]\n"
+		"                [--key <signing_key.pem>] [--cert <cert.der>]\n"
+		"                [--vmlinux <vmlinux.h>] [--extra-cflags '<flags>']\n"
+		"\n"
+		"  shirudo-build --unload <upatch-name> -o <output.upatch>\n"
+		"                [--payload-sha256 <64-hex>]\n"
+		"                [--key <signing_key.pem>] [--cert <cert.der>]\n"
+		"\n"
+		"<input> is .bpf.c (compiled via clang) or .bpf.o.\n"
+		"--key defaults to %s\n"
+		"--cert defaults to %s\n"
+		"--vmlinux: explicit; else ./vmlinux.h, then\n"
+		"           /usr/share/shirudo/vmlinux.h.\n"
+		"--payload-sha256: 64 hex chars; if omitted, read from the local\n"
+		"                  archive /var/lib/shirudo/upatches/<name>.upatch,\n"
+		"                  else all-zero (target skips the payload check).\n",
+		SHIRUDO_SIGNING_KEY_PATH, SHIRUDO_CERT_PATH);
+}
+
+static int parse_hex_sha256(const char *s, uint8_t out[32])
+{
+	int i;
+
+	if (strlen(s) != SHIRUDO_SHA256_HEX_LEN)
+		return -EINVAL;
+	for (i = 0; i < 32; i++) {
+		unsigned int b;
+
+		if (sscanf(s + 2 * i, "%2x", &b) != 1)
+			return -EINVAL;
+		out[i] = (uint8_t)b;
+	}
+	return 0;
+}
+
+static const char *derive_name(const char *input, char *buf, size_t buf_sz)
+{
+	const char *base;
+	char tmp[1024];
+	size_t n;
+
+	snprintf(tmp, sizeof(tmp), "%s", input);
+	base = basename(tmp);
+	snprintf(buf, buf_sz, "%s", base);
+
+	n = strlen(buf);
+	if (n > 6 && strcmp(buf + n - 6, ".bpf.c") == 0)
+		buf[n - 6] = '\0';
+	else if (n > 6 && strcmp(buf + n - 6, ".bpf.o") == 0)
+		buf[n - 6] = '\0';
+	else if (n > 2 && strcmp(buf + n - 2, ".o") == 0)
+		buf[n - 2] = '\0';
+	return buf;
+}
+
+static int ends_with(const char *s, const char *suf)
+{
+	size_t ns = strlen(s);
+	size_t nf = strlen(suf);
+
+	return ns >= nf && strcmp(s + ns - nf, suf) == 0;
+}
+
+static int compile_to_temp(const char *source, const char *vmlinux_h,
+			   const char *extra_cflags, char **out_path)
+{
+	char tmpl[] = "/tmp/shirudo-build-XXXXXX.bpf.o";
+	int fd;
+	int rc;
+
+	fd = mkstemps(tmpl, strlen(".bpf.o"));
+	if (fd < 0)
+		return -errno;
+	close(fd);
+
+	rc = shirudo_build_compile(source, tmpl, vmlinux_h, extra_cflags);
+	if (rc) {
+		unlink(tmpl);
+		return rc;
+	}
+	*out_path = strdup(tmpl);
+	if (!*out_path) {
+		unlink(tmpl);
+		return -ENOMEM;
+	}
+	return 0;
+}
+
+int main(int argc, char **argv)
+{
+	const char *pkey = SHIRUDO_SIGNING_KEY_PATH;
+	const char *payload_sha256_hex = NULL;
+	const char *cert = SHIRUDO_CERT_PATH;
+	const char *vmlinux_override = NULL;
+	const char *extra_cflags = NULL;
+	uint8_t payload_sha256[32] = {};
+	const char *unload_name = NULL;
+	const char *output = NULL;
+	const char *input = NULL;
+	const char *name = NULL;
+	char *temp_bpf_o = NULL;
+	const char *src_path = NULL;
+	char name_buf[256];
+	const char *bpf_o;
+	int rc;
+	int i;
+
+	shirudo_log_init();
+
+	for (i = 1; i < argc; i++) {
+		const char *a = argv[i];
+
+		if (strcmp(a, "-o") == 0 && i + 1 < argc) {
+			output = argv[++i];
+		} else if (strcmp(a, "--name") == 0 && i + 1 < argc) {
+			name = argv[++i];
+		} else if (strcmp(a, "--key") == 0 && i + 1 < argc) {
+			pkey = argv[++i];
+		} else if (strcmp(a, "--cert") == 0 && i + 1 < argc) {
+			cert = argv[++i];
+		} else if (strcmp(a, "--vmlinux") == 0 && i + 1 < argc) {
+			vmlinux_override = argv[++i];
+		} else if (strcmp(a, "--extra-cflags") == 0 && i + 1 < argc) {
+			extra_cflags = argv[++i];
+		} else if (strcmp(a, "--unload") == 0 && i + 1 < argc) {
+			unload_name = argv[++i];
+		} else if (strcmp(a, "--payload-sha256") == 0 && i + 1 < argc) {
+			payload_sha256_hex = argv[++i];
+		} else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
+			usage(stdout);
+			return 0;
+		} else if (a[0] == '-') {
+			pr_err("unknown option '%s'", a);
+			usage(stderr);
+			return 2;
+		} else if (!input) {
+			input = a;
+		} else {
+			pr_err("unexpected positional arg '%s'", a);
+			return 2;
+		}
+	}
+
+	if (!output) {
+		pr_err("missing -o <output>");
+		usage(stderr);
+		return 2;
+	}
+
+	if (access(pkey, R_OK) != 0) {
+		pr_err("signing key not readable: %s: %s",
+		       pkey, strerror(errno));
+		pr_err("run `shirudo genkey` on the operator (or pass --key).");
+		return 1;
+	}
+	if (access(cert, R_OK) != 0) {
+		pr_err("cert not readable: %s: %s",
+		       cert, strerror(errno));
+		pr_err("run `shirudo genkey` on the operator (or pass --cert).");
+		return 1;
+	}
+
+	if (unload_name) {
+		if (input) {
+			pr_err("--unload takes no positional input");
+			return 2;
+		}
+		if (payload_sha256_hex) {
+			if (parse_hex_sha256(payload_sha256_hex,
+					     payload_sha256)) {
+				pr_err("--payload-sha256 must be 64 hex chars");
+				return 2;
+			}
+		} else {
+			/*
+			 * No explicit digest: consult the operator's local
+			 * archive so the unload still binds payload_mismatch.
+			 * Absent there too, fall through with the all-zero
+			 * payload, which the target reads as "no expected
+			 * payload" and skips the check (the documented, less
+			 * safe escape hatch).
+			 */
+			char archive[PATH_MAX];
+			struct shirudo_upatch u;
+
+			snprintf(archive, sizeof(archive), "%s/%s.upatch",
+				 SHIRUDO_UPATCHES_DIR, unload_name);
+			if (shirudo_upatch_open(archive, &u) == 0) {
+				memcpy(payload_sha256, u.hdr.payload_sha256,
+				       sizeof(payload_sha256));
+				shirudo_upatch_close(&u);
+				pr_info("--payload-sha256 derived from archive %s",
+					archive);
+			} else {
+				pr_warn("--payload-sha256 omitted and no archive "
+					"entry at %s; the directive will carry no "
+					"expected payload and the target will skip "
+					"the payload_mismatch check. Pass "
+					"--payload-sha256 to bind it.", archive);
+			}
+		}
+
+		return shirudo_build_package_unload(unload_name,
+						    payload_sha256,
+						    output, pkey, cert)
+		       ? 1 : 0;
+	}
+
+	if (!input) {
+		usage(stderr);
+		return 2;
+	}
+
+	if (ends_with(input, ".bpf.c")) {
+		const char *vmlinux_h =
+			shirudo_build_locate_vmlinux(vmlinux_override);
+		if (!vmlinux_h) {
+			pr_err("vmlinux.h not found (tried %s, ./vmlinux.h, "
+			       "./bpf/vmlinux.h, /usr/share/shirudo/vmlinux.h)",
+			       vmlinux_override ? vmlinux_override
+						: "(none)");
+			return 1;
+		}
+		rc = compile_to_temp(input, vmlinux_h, extra_cflags,
+				     &temp_bpf_o);
+		if (rc) {
+			pr_err("compile %s: %d", input, rc);
+			return 1;
+		}
+		bpf_o = temp_bpf_o;
+		src_path = input;	/* embed the .bpf.c source for `info` */
+	} else if (ends_with(input, ".bpf.o") || ends_with(input, ".o")) {
+		bpf_o = input;		/* no source available -> no extras */
+	} else {
+		pr_err("input must be .bpf.c or .bpf.o");
+		return 2;
+	}
+
+	if (!name)
+		name = derive_name(input, name_buf, sizeof(name_buf));
+
+	rc = shirudo_build_package_load(bpf_o, src_path, output, name,
+					pkey, cert);
+
+	if (temp_bpf_o) {
+		unlink(temp_bpf_o);
+		free(temp_bpf_o);
+	}
+	return rc ? 1 : 0;
+}

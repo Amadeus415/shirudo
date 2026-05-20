@@ -1,5 +1,6 @@
 Random human rambling:
 
+- S3 push (operator) and S3 pull (target) as alternative to ssh
 - user space side BPF upatch needed too, making use of Jiri's uprobes work
 - kernel side -> open up like killswicth patch
 - operator side BPF upatch management -> LLM black box -> user space /BPF C assets

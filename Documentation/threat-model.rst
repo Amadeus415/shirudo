@@ -202,8 +202,9 @@ that mitigates a newly disclosed kernel vulnerability, works around
 a specific kernel bug, or adapts behaviour to a new requirement,
 **without rebooting the device**. The device runs the upatch under
 shirudo's signature-verified path; if the mitigation is later
-superseded or rolled into a kernel update, ``shirudo rollback``
-removes it cleanly, again without restart. Operators get a
+superseded or rolled into a kernel update, a signed UNLOAD directive
+(``shirudo upatch unload``, pushed by the same ``rollout``) removes it
+cleanly, again without restart. Operators get a
 kernel-fix lifecycle that is decoupled from the kernel-reboot
 lifecycle, even though both ends are on current kernels.
 
@@ -278,7 +279,7 @@ optimise for one and tolerate the other:
   regardless of fleet size.
 
 - **No assumption about reboots.** ``shirudo upatch load`` and
-  ``shirudo rollback`` take effect immediately and persist until
+  ``shirudo upatch unload`` take effect immediately and persist until
   explicitly reverted. The reboot-persistence systemd unit is a
   deferred enhancement, not a load-bearing dependency. shirudo
   works on a system that never reboots (an in-service control
@@ -513,16 +514,29 @@ What this binding does and doesn't protect against
   cannot — seal denies the write. Substitution **before** init
   attaches is residual #13.
 - An attacker who tries to install their own cert into the
-  ``shirudo`` keyring at runtime via ``add_key(2)``: blocked by
-  bpf2's denial of mutating ``bpf()`` ops from userspace? No —
-  ``add_key`` is a different syscall, not gated by shirudo's
-  BPF LSM. But the kernel only consults the **specific cert in
-  the named keyring at signature-verification time**; adding
-  another cert wouldn't help unless shirudo's own code looked
-  it up by description, which it doesn't (it caches the serial
-  from ``add_key``'s return at init time and references it by
-  serial thereafter — see PLAN.md §"Keyring model"). Still,
-  this is an interesting attack surface for future review.
+  ``shirudo`` keyring at runtime via ``add_key(2)``: blocked
+  two ways. (1) ``shirudo init`` **seals** the keyring
+  (``KEYCTL_SETPERM`` drops link/write/setattr), so no cert can
+  be added to it for the boot. (2) Verification is **scoped to
+  the keyring's serial** — every signed ``BPF_PROG_LOAD`` passes
+  the ``shirudo`` keyring serial as ``attr.keyring_id`` rather
+  than ``KEY_SPEC_USER_KEYRING``, so a cert planted *elsewhere*
+  in ``@u`` is never consulted (verified: a foreign-signed
+  upatch → ``ENOKEY``).
+- The remaining angle is **keyring substitution**: because
+  shirudo is agentless, each load re-resolves ``shirudo`` by
+  *name* (``KEYCTL_SEARCH`` — there is no long-lived process
+  caching the serial), so a root attacker who unlinks the real
+  keyring from ``@u`` and links a fake same-named one could
+  redirect that resolution. This is **mitigated**, not fully
+  closed: ``init`` pins the keyring serial to
+  ``/var/lib/shirudo/keyring.serial`` (under the seal) and every
+  load refuses with ``category: tampered`` unless the
+  resolved-by-name serial still equals the pin, converting the
+  swap from a silent bypass into a fail-closed refusal. A
+  complete fix needs an ``lsm/key_permission`` hook plus a new
+  ``key_ref → struct key *`` kfunc — see residual #16 and
+  PLAN.md §"Keyring model".
 
 **Not protected** (operational, layered defences apply):
 
@@ -879,8 +893,8 @@ state-changing operation proceeds.
 shirudo defense: **The pre-flight version-identity check.** Each
 shirudo binary embeds a ``SHIRUDO_VERSION_ID`` computed at build
 time from architecture-independent inputs (git commit + build
-config + dirty marker). The operator's ``rollout`` /
-``rollback`` auto-derives the target's ``version_id`` from a
+config + dirty marker). The operator's ``rollout``
+auto-derives the target's ``version_id`` from a
 pre-status read and includes the operator's own ``version_id`` as
 the expected value when invoking ``shirudo upatch load`` on the
 target. The target compares the supplied value against its own
@@ -927,19 +941,49 @@ For every userspace ``bpf()`` call (where the LSM hook sees
 - For ``BPF_PROG_LOAD``: denies unless ``prog_type ==
   BPF_PROG_TYPE_SYSCALL`` and ``signature_size > 0``. The kernel's
   signature verifier then runs against the ``shirudo`` keyring; a
-  bad signature returns ``-EKEYREJECTED``.
-- Denies every other mutating command
-  (``BPF_MAP_CREATE``, ``BPF_MAP_UPDATE_ELEM``, ``BPF_LINK_CREATE``,
-  ``BPF_PROG_ATTACH``, ``BPF_BTF_LOAD``, etc.) with ``-EACCES``
-  regardless of caller privilege.
+  bad signature returns ``-EKEYREJECTED``. **This is the trust
+  boundary** — no program enters the kernel from userspace without a
+  valid signature.
+- Allows ``BPF_LINK_CREATE`` and ``BPF_RAW_TRACEPOINT_OPEN`` (attach)
+  and ``BPF_MAP_CREATE`` / ``BPF_MAP_UPDATE_ELEM`` / ``BPF_MAP_FREEZE``
+  (the signed-loader data-map pattern). These are mutating, but they
+  do not widen the trust boundary: attaching a program requires a
+  ``prog_fd``, and the only ``prog_fd`` an adversary can obtain is for
+  a program that was either signed (``BPF_PROG_LOAD`` above) or loaded
+  in kernel context by a signed loader. Every attachable program is
+  therefore operator-vetted; attaching one grants no new
+  code-execution capability. shirudo must allow these from userspace
+  because ``gen_loader`` cannot attach the program it loads and
+  ``bpf_sys_bpf()`` cannot ``BPF_OBJ_PIN`` (see ``TODO.kernel`` items
+  1–2): the signed loader loads the upatch program in kernel context,
+  but shirudo's one-shot CLI creates and pins the link.
+- Denies the tear-down / replace and map-corruption commands
+  (``BPF_LINK_DETACH``, ``BPF_LINK_UPDATE``, ``BPF_PROG_DETACH``,
+  ``BPF_MAP_DELETE_ELEM``, the ``*_BATCH`` and
+  ``LOOKUP_AND_DELETE`` variants, ``BPF_BTF_LOAD``) with ``-EACCES``
+  regardless of caller privilege — these are how an adversary would
+  detach shirudo's own links or corrupt existing state (see T2).
+  shirudo's own infrastructure maps add a second, LSM-independent
+  guard: they are ``BPF_MAP_FREEZE``-d at creation, so a userspace
+  ``BPF_OBJ_GET``-then-update hits the frozen-map ``-EPERM`` even if
+  the LSM verdict were bypassed.
 
 A signed loader prog running in kernel context (``kernel == true``)
-is allowed to issue any of the above — that is how shirudo's own
-``upatch load`` / ``upatch unload`` paths work without contradicting
-the policy.
+is allowed to issue any ``bpf()`` command — that is how shirudo's own
+``upatch load`` / ``upatch unload`` paths load programs without
+contradicting the policy.
 
 Residual risk: **Cryptographic** for forged signatures; **none**
-for direct unsigned ``bpf()`` calls.
+for direct unsigned ``bpf()`` calls. A narrow residual remains from
+allowing userspace attach: an adversary with ``GET_FD_BY_ID`` access
+to an already-loaded signed program could re-attach it (for program
+types whose attach target is chosen at link time rather than fixed at
+load — not LSM/tracing, where ``attach_btf_id`` is baked in). This
+re-triggers operator-vetted code, not adversary code. A future kernel
+that lets the signed loader attach + pin from kernel context
+(``TODO.kernel`` item 1), or an ``exe_file``-scoped identity check on
+the attach commands (the model ``bpf/seal.c`` already uses), would let
+shirudo deny userspace attach again and close this residual.
 
 Threat T2 — Detach / unpin via the LSM-allowed kernel path
 ----------------------------------------------------------
@@ -954,14 +998,44 @@ shirudo defense: **The LSM denies** ``BPF_LINK_DETACH``,
 similar mutating commands from userspace. Even root cannot drop the
 link refcount through these paths.
 
-Residual risk in MVP: **closed by the filesystem-sealing LSM**
-(``bpf/seal.c``, attached at ``shirudo init`` step 12).
-``unlink(2)`` / ``rename(2)`` / write-mode ``open(2)`` /
-``setxattr(2)`` / ``removexattr(2)`` on any inode under
-``/var/lib/shirudo/`` from any process whose executable does
-not share the same ``security.bpf.shirudo`` xattr returns
-``-EACCES`` — including ``rm`` of the LSM pin files and ``rm``
-of upatch pin files.
+The remaining way to drop a link refcount is to ``unlink(2)`` its
+bpffs pin. ``bpf2``'s ``inode_unlink`` hook permits that **only** for
+shirudo's own executable: it compares the unlinking task's
+``current->mm->exe_file`` ``(dev, ino)`` against the identity recorded
+in the frozen identity map at ``shirudo init``, and denies every other
+caller — so root ``rm`` of the LSM pin or any upatch pin is refused,
+while ``shirudo upatch unload`` (which removes a pin to detach a
+program) is allowed. This is the interim, inode-flavoured form of the
+``security.bpf.shirudo`` xattr identity ``bpf/seal.c`` will use; both
+are defeatable only with ``CAP_SYS_RESOURCE`` ``exe_file`` spoofing
+(residual #12). Because the detach happens in userspace rather than
+inside the signed unload BPF (the kernel's ``bpf_sys_bpf()`` cannot
+``LINK_DETACH``/``OBJ_GET``/``OBJ_PIN`` — TODO.kernel #6), a residual
+remains: a root attacker holding *any* validly-signed UNLOAD directive
+could repoint it to a different upatch name (unsigned unload is still
+prevented; target-specificity is not yet cryptographically bound).
+
+Residual risk in MVP: the **bpffs pins** (the LSM link and every
+upatch pin) are protected **today** by ``bpf2`` itself — its
+``inode_unlink`` hook refuses ``rm`` of any pin in shirudo's bpffs
+from a non-shirudo executable, and ``inode_setxattr`` /
+``inode_removexattr`` likewise protect each pin's
+``security.bpf.shirudo.payload`` xattr. bpf2 deliberately scopes
+these hooks to the bpffs superblock only.
+
+The broader regular-fs tree under ``/var/lib/shirudo/`` (the cert,
+persisted ``.upatch`` files, the eventlog) is sealed by a second LSM,
+``bpf/seal.c``, attached at init just before ``lsm/bpf``:
+``unlink(2)`` / ``rename(2)`` / write-mode ``open(2)`` / ``setxattr(2)``
+/ ``removexattr(2)`` on any inode there from a process whose executable
+does not carry the same ``security.bpf.shirudo`` label returns
+``-EACCES``. ``shirudo init`` labels the binary and walks the tree
+(skipping the bpffs mount) before attaching seal, and labels each new
+file it later creates. So root ``rm``/``dd``/``setfattr`` of the cert,
+a ``.upatch`` or the eventlog is refused, while shirudo's own binary
+(which carries the label) operates normally. Distribution-layer
+integrity (signed packages, IMA, dm-verity) is still what protects the
+binary itself against substitution; seal protects the runtime state.
 
 **The LSM is xattr-based, not path-based**, by deliberate design.
 Path-based identity (``bpf_d_path()`` and string comparison) is
@@ -971,9 +1045,11 @@ TOCTOU races between path lookup and the actual operation. Inode
 xattrs survive all of these — the label lives with the inode,
 the LSM hook receives the inode directly, no string parsing
 happens at any point. Specifically, ``bpf/seal.c`` uses
-``bpf_get_inode_xattr()`` to read ``security.bpf.shirudo`` from
-both the target inode and ``current->mm->exe_file``, and allows
-operation iff the two labels match (constant-time compare). The
+``bpf_get_dentry_xattr()`` / ``bpf_get_file_xattr()`` to read
+``security.bpf.shirudo`` from both the target and the calling task's
+``exe_file`` (obtained as a trusted reference via
+``bpf_get_task_exe_file()``), and allows the operation iff the two
+labels match (constant-time compare). The
 shared value is ``SHIRUDO_VERSION_ID`` — the same constant the
 operator/target version check uses — so one xattr serves both
 purposes: "is this binary the authorised shirudo?" and "is this
@@ -1008,17 +1084,37 @@ the same name without the operator noticing.
 
 shirudo defense: **Two layers.**
 
-- The detached state itself is visible via T2's detection paths.
+- The detached state itself is visible via T2's detection paths
+  (the NV chain recorded the original load/unload sequence; the
+  attacker's re-load extends it again, so the operator's expected
+  chain mismatches on next observation).
 - If the attacker manages to re-load something (which would require
-  a valid signature — see T1), a subsequent ``shirudo upatch
-  unload`` against the original name carries an expected
-  ``payload_sha256`` from the original LOAD artifact. The
-  target-side unload directive refuses to detach if the currently-
-  pinned upatch's payload digest doesn't match — ``category:
-  payload_mismatch``.
+  a valid signature — see T1), that load records *its own*
+  ``payload_sha256`` as the ``security.bpf.shirudo.payload`` xattr
+  on the pin directory. A subsequent ``shirudo upatch unload``
+  against the original name reads that xattr and constant-time
+  compares it against the directive's expected ``payload_sha256``;
+  mismatch → ``category: payload_mismatch``, detaching nothing. The
+  stored value is **unforgeable**: ``bpf2``'s ``inode_setxattr`` /
+  ``inode_removexattr`` hooks (the same exe-identity gate as
+  ``inode_unlink``) let only shirudo's own executable set or remove
+  xattrs on its bpffs, so the attacker cannot rewrite it to lie.
+  (Requires the bpffs-xattr kernel patch, TODO.kernel item 7; without
+  it the check degrades to *unavailable*, never wrong.)
 
-Residual risk: As with T2 — depends on the operator observing the
-mismatch promptly.
+Residual risk: two.
+
+- The operator must observe the chain mismatch (or
+  ``payload_mismatch``) promptly — as with T2.
+- The *stored* payload is unforgeable, but the *expected* value the
+  userspace unload compares against comes from the directive's
+  metadata, which — like the target name — is **not**
+  signature-covered (TODO.kernel #6). A root attacker who edits the
+  unsigned metadata can realign the two. Closing this means moving
+  the compare into the signed unload BPF (against its
+  signature-covered ``.rodata``), which awaits the in-kernel detach
+  ops. Until then ``payload_mismatch`` reliably catches
+  honest/accidental substitution and any non-tampering path.
 
 Threat T4 — TPM chain tampering
 -------------------------------
@@ -1363,9 +1459,9 @@ opinions about SSH best practice, which is not its job.
 
 The practical implication: a fleet with a healthy SSH story (keys
 provisioned, ``known_hosts`` populated via whatever channel,
-agent socket reachable) can use shirudo's rollout/rollback/status
+agent socket reachable) can use shirudo's rollout/nodes/status
 without any additional setup; a fleet with a broken SSH story
-sees rollout/rollback/status fail with libssh's error messages
+sees rollout/nodes/status fail with libssh's error messages
 and gets no help from shirudo on what to do next, because that
 help would be SSH-domain advice that doesn't belong here.
 
@@ -1685,6 +1781,30 @@ The residual risks shirudo's MVP design does **not** mitigate:
     instruction/response separation, structured output
     enforcement). This is not new — every compiler-driven AI
     workflow has the same property.
+16. **Same-named keyring substitution.** Because shirudo is
+    agentless, each load re-resolves the ``shirudo`` keyring by
+    *name* (``KEYCTL_SEARCH`` on ``@u``). A root attacker can
+    unlink the real keyring from ``@u`` and link a fake
+    same-named one (or link a fake, which displaces the real one
+    in ``@u``'s by-name index), redirecting that resolution to a
+    keyring holding the attacker's cert. **Mitigated, not
+    closed:** ``shirudo init`` pins the keyring serial to
+    ``/var/lib/shirudo/keyring.serial`` (under the seal), and
+    every load refuses with ``category: tampered`` unless the
+    resolved-by-name serial still equals the pin — so the swap
+    becomes a fail-closed refusal (the attacker can DoS by
+    removing the keyring but cannot get BPF they signed loaded),
+    and ``shirudo status`` reports the mismatch. The pin's
+    integrity rests on the same seal as the rest of the tree, so
+    it inherits residual #12 (``CAP_SYS_RESOURCE`` exe-spoof). A
+    complete fix (deny the swap outright) needs **new kernel
+    code**: ``lsm/key_permission`` is attachable from BPF LSM,
+    but its ``key_ref_t`` argument is opaque (no kfunc converts
+    it to ``struct key *``), so the hook cannot identify the
+    shirudo keyring without a new ``bpf_key_ref_to_key()``-style
+    kfunc; the displace-by-link half also needs gating link into
+    ``@u``. Residual risk: **Low** (fail-closed, observable).
+    See PLAN.md §"Keyring model" and TODO.kernel item 9.
 
 Deferred mitigations
 ====================
@@ -1708,6 +1828,11 @@ Listed in approximate priority order for post-MVP work:
   agentless-on-target invariant).
 - **``shirudo init --update``** for atomic LSM upgrades via
   ``BPF_LINK_UPDATE``.
+- **``lsm/key_permission`` keyring guard** (residual #16). Deny
+  unlink/displace of the ``shirudo`` keyring in ``@u`` by
+  exe-identity, turning the serial-pin mitigation into outright
+  prevention. Needs a new ``key_ref → struct key *`` kfunc
+  first (TODO.kernel item 9).
 - **Remote groups / wildcards** in the registry, for fleet-scale
   operation.
 

@@ -1,0 +1,10 @@
+[submodule "third_party/bpf-next"]
+	path = third_party/bpf-next
+	url = https://git.kernel.org/pub/scm/linux/kernel/git/bpf/bpf-next.git
+	# Pinned commit lives in the parent index. Update with:
+	#   git -C third_party/bpf-next fetch
+	#   git -C third_party/bpf-next checkout <sha>
+	#   git add third_party/bpf-next && git commit
+	# See PLAN.md "Build system" for the rationale (libbpf + libsubcmd
+	# built static from this tree; bpftool used as a build-time tool
+	# for vmlinux.h generation, never shipped).

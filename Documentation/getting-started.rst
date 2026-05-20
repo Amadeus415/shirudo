@@ -135,6 +135,9 @@ The first build is slow — it compiles libbpf, libelf, and ``bpftool``
 (build-time only) from the bpf-next submodule. Subsequent rebuilds
 are fast.
 
+``make help`` prints an overview of every target (build, test,
+the three install variants, and the tunable variables).
+
 Install with:
 
 .. code-block:: sh
@@ -252,7 +255,7 @@ empty on success).
 8. Register the remote (operator machine, required)
 ====================================================
 
-``shirudo rollout``, ``shirudo rollback``, and ``shirudo nodes``
+``shirudo rollout`` and ``shirudo nodes``
 **only accept registered remote names** — literal
 ``user@host:port`` is refused with a "register first" error. So
 the operator's first interaction with each target is to register
@@ -413,7 +416,7 @@ To remove an upatch:
 
     # On the operator machine:
     shirudo build --unload myhook -o myhook.unload.upatch
-    shirudo rollback myhook.unload.upatch prod-a
+    shirudo rollout myhook.unload.upatch prod-a
 
 The unload artifact is itself a signed `.upatch` — there is no
 out-of-band "destroy" path. The target verifies the signature,
@@ -545,7 +548,7 @@ this playbook; refer to it alongside this section.
    ::
 
        shirudo build --unload cve-2026-31431 -o cve-2026-31431.unload.upatch
-       shirudo rollback cve-2026-31431.unload.upatch \\
+       shirudo rollout cve-2026-31431.unload.upatch \\
            --selector='shirudo.nodes.type=production'
 
    The unload directive is signed (same operator key, same
@@ -657,7 +660,7 @@ rollouts target the specific subset that's affected and ready::
 
     # Drain a single kernel revision out of production by rolling
     # back a workaround that was specific to it.
-    shirudo rollback workaround.unload.upatch \
+    shirudo rollout workaround.unload.upatch \
         --selector='kernel="linux-6.8.0@c1fa0bb633e4a6b11e83ffc57fa5abe8ebb87891"'
 
 Labels are operator-chosen plain text — shirudo doesn't validate
@@ -674,28 +677,37 @@ elsewhere".
 Reboot handling in MVP
 ======================
 
-shirudo's reboot-persistence systemd unit is **deferred** (see
-PLAN.md "Open questions"). Until it lands:
+A target reboot drops the bpffs mount (and with it every ``.upatch``
+link and its ``security.bpf.shirudo.payload`` xattr), the kernel
+keyring, and the LSM attachment — only the TPM NV chain survives, by
+design. So ``shirudo init`` must run once per boot to re-establish
+enforcement. shirudo ships a unit for this:
 
-- A target reboot drops the bpffs mount, the kernel keyring, the
-  LSM attachment, the ``upatches_registry`` map, and every
-  ``.upatch`` link. The target is unenforced from boot until
-  someone runs ``shirudo init`` again.
-- The TPM NV chain is the **only** state that survives the
-  reboot — by design. ``Esys_NV_ReadPublic`` returns the
-  chain value as it was at the moment of the last extension.
-- The next ``shirudo nodes`` against the target will show
-  ``UNREACHABLE`` or ``INIT-INCOMPLETE`` depending on whether
-  sshd is up.
+::
 
-What to do about it: drive ``shirudo init`` from your existing
-config-management or boot tooling. Ansible playbook, systemd
-unit you ship yourself, kexec hook, init.d entry, ``cloud-init``
-``runcmd`` — anything that fires once per boot, early. The
-operator-supplied unit should be ``Type=oneshot`` and ordered
-``Before=network.target`` (or earlier) to minimise the
-unenforced window. Once the in-tree shirudo systemd unit
-lands, drop your local unit.
+    # On the target (target-only -- the operator never runs init):
+    make install-target          # drops /usr/lib/systemd/system/shirudo.service
+    systemctl enable shirudo.service
+
+``shirudo.service`` is ``Type=oneshot`` and runs as early as a
+filesystem-dependent service can: ``DefaultDependencies=no``,
+``After=local-fs.target``, ``Before=sysinit.target`` — ahead of
+networking, container runtimes, and any other BPF loader, so the
+``bpf()`` lockdown and filesystem seal are enforcing before anything
+unsigned can act. It uses ``KeyringMode=inherit`` so the cert add into
+the user keyring isn't blocked by systemd's private-keyring isolation.
+
+On a target without a TPM, point the unit at degraded mode without
+editing it:
+
+::
+
+    echo 'SHIRUDO_INIT_ARGS=--no-tpm' > /etc/shirudo/init.env
+
+A reboot still leaves a brief unenforced window between boot and the
+unit running; an even-earlier initramfs-stage init (future work) would
+close it. ``shirudo nodes`` shows a target that has not yet re-init'd
+as ``UNREACHABLE`` or with the LSM detached.
 
 Operators that need closed-loop monitoring of "is shirudo
 running where it should be?" should poll ``shirudo nodes
@@ -754,6 +766,17 @@ Troubleshooting
      pass ``--no-tpm`` to proceed in measurement-disabled
      mode (LSM enforcement still works; chain measurement
      does not).
+   - **owner-hierarchy authorization failed** (log line
+     ``tpm: NV_DefineSpace(...): owner-hierarchy authorization
+     failed (rc=0x9a2)``) — the TPM's owner (storage) hierarchy
+     has an auth value set, so shirudo cannot create its
+     NV-extend index. Common on cloud vTPMs and any TPM a prior
+     tool has taken ownership of. Supply the owner auth via
+     ``tpm.owner_auth`` in ``/etc/shirudo/shirudo.conf`` (a
+     passphrase, or ``hex:<even-hex>`` for a binary value), or
+     the ``SHIRUDO_TPM_OWNER_AUTH`` env var, or clear the TPM
+     owner auth out of band. Until then init still completes but
+     the chain is unmeasured (degraded), exactly as ``--no-tpm``.
 
    Run ``shirudo init --check-only`` (or ``shirudo status``)
    to inspect the readiness picture without attempting
@@ -808,18 +831,21 @@ Troubleshooting
    chain-tamper-evidence layer is disabled. Consider this a
    separate trust tier for your fleet.
 
-``shirudo init`` reports ``failed_checks: [bpffs_xattr_unsupported]``
-   The target's bpffs implementation doesn't support
-   ``security.*`` xattrs end-to-end (setxattr appears to succeed
-   but getxattr returns ``ENODATA``). shirudo cannot operate
-   safely on such a kernel — the filesystem-sealing LSM authorises
-   by reading inode-bound labels, and pin files that silently
-   reject labels become unprotected. Recovery: upgrade the
-   kernel to a current upstream release that includes bpffs
-   xattr support (see ``kernel/bpf/inode.c::bpf_inode_xattr_*``
-   in the kernel tree). This is a hard failure; ``--no-tpm``
-   does not bypass it because filesystem sealing is independent
-   of TPM measurement.
+``shirudo upatch load`` warns ``payload_mismatch check unavailable``
+   The target's bpffs does not support extended attributes
+   (``setxattr`` returns ``-EOPNOTSUPP``), so shirudo cannot record
+   or read the per-upatch ``security.bpf.shirudo.payload`` value.
+   This is **not** a hard failure: ``init``, ``upatch load``, and
+   ``upatch unload`` all still work; only the unload-time
+   ``payload_mismatch`` check is skipped (load logs "payload check
+   unavailable for this upatch", unload logs "cannot verify payload
+   ... proceeding"). Recovery: run a kernel that includes the bpffs
+   simple-xattr support (the ``kernel/bpf/inode.c`` ``simple_xattrs``
+   / ``bpf_fs_*`` patch; TODO.kernel item 7). On a patched kernel the
+   check activates automatically — no shirudo config change. (Until
+   the regular-fs sealing LSM ``bpf/seal.c`` lands and depends on
+   xattrs more deeply, missing bpffs-xattr support stays a soft
+   degradation, not an init blocker.)
 
 ``shirudo init`` reports ``failed_checks: [tpm_index_conflict]`` or
 ``[tpm_index_auth_mismatch]``
@@ -850,37 +876,180 @@ Troubleshooting
    ``shirudo eventlog rotate`` subcommand is in the open
    questions.
 
-``shirudo rollback`` returns ``category: payload_mismatch``
+``shirudo upatch unload`` returns ``category: payload_mismatch``
    The pin under ``/var/lib/shirudo/bpffs/upatches/<name>/link``
-   exists, but the loaded upatch's ``payload_sha256`` (looked
-   up in the in-kernel ``upatches_registry`` map) does not
-   match the digest embedded in the unload directive. Either
-   (a) an attacker substituted a different upatch under the
+   exists, but the loaded upatch's ``payload_sha256`` — read from
+   the ``security.bpf.shirudo.payload`` xattr on the pin directory
+   (set at load, kept unforgeable by bpf2's ``inode_setxattr``
+   guard) — does not match the digest the unload directive expects.
+   Either (a) an attacker substituted a different upatch under the
    same name (security incident; investigate), or (b) the
-   operator's rollback artifact is stale (re-derive the
-   ``--payload-sha256`` from the currently-loaded upatch on
-   the target via ``shirudo upatch list`` or
-   ``shirudo upatch info``). shirudo refuses to detach
-   without confirmation; this protection is intentional.
+   operator's unload directive is stale (re-derive the
+   ``--payload-sha256`` from the currently-loaded upatch on the
+   target via ``shirudo upatch info``). shirudo refuses to detach
+   without confirmation; this protection is intentional. (Pushed
+   from the operator, this is a ``shirudo rollout`` of an UNLOAD
+   directive — there is no separate ``rollback`` command.)
 
-``shirudo rollback`` returns ``category: detach_failed``
-   The unload directive ran and verified, but the kernel
-   returned an error on ``BPF_LINK_DETACH`` or
-   ``BPF_OBJ_UNPIN``. Unusual — surface to a human with the
-   reported errno. Could indicate a kernel BPF subsystem
-   issue, an extension of the LSM hook policy that's now
-   stricter than expected, or a state corruption.
+``shirudo upatch unload`` returns ``category: detach_failed``
+   The unload directive verified, but the userspace VFS-unlink of
+   the pin failed (dropping the link refcount is how shirudo
+   detaches; ``bpf_sys_bpf`` cannot detach in-kernel — TODO.kernel
+   item 6). Unusual — surface to a human with the reported errno.
+   Could indicate a kernel BPF subsystem issue or state corruption.
 
-shirudo refuses to start with ``category: binary_tampered``
-   ``util/self_check.c`` read the shirudo binary's bytes on
-   disk, hashed them with the embedded hash region zeroed,
-   and got a different value from the build-time stamped
-   expected hash. **Refuse to operate.** The binary has been
-   modified since the build host's stamping pass. This
-   catches in-place patches; it does NOT catch a sophisticated
-   attacker who also re-stamped the patched binary (the
-   stamping tool is not a secret). Real defence is
-   distribution-layer integrity (signed packages, IMA
-   appraisal, dm-verity, measured boot — see
-   ``threat-model.rst`` §"Binary integrity"). Recovery:
-   re-install shirudo from a trusted distribution source.
+shirudo does **not** self-check its own binary
+   There is no ``binary_tampered`` category and no build-time hash
+   stamping — by design, on-disk binary integrity is **not** an
+   in-shirudo defense. It belongs to the distribution layer: signed
+   packages, IMA appraisal, dm-verity, measured boot (see
+   ``threat-model.rst`` §"Binary integrity"). A substituted shirudo
+   binary can lie about anything, including its ``SHIRUDO_VERSION_ID``;
+   nothing shirudo runs at startup would catch that, so it does not
+   pretend to.
+
+Developer setup: one box as operator and target
+================================================
+
+For hacking on shirudo it is convenient to play **both** roles on a
+single machine. This works because shirudo is one binary whose role is
+decided by which artifacts are present locally, not by a build flag: put
+the signing key on the box and it is an operator; put the cert in the
+keyring and run ``init`` and it is a target. On a dev box both sets of
+artifacts co-locate under ``/var/lib/shirudo/`` and ``shirudo keys``
+shows both halves.
+
+This is a development convenience only. A real deployment keeps the
+private key on the operator and never on a target; see
+``threat-model.rst`` for why.
+
+Prerequisites: root, a current upstream kernel with the BPF LSM enabled
+(``lsm=...,bpf`` on the kernel command line) and bpffs xattr support,
+and ``clang`` for ``shirudo build``. ``shirudo init --check-only``
+reports the readiness picture without touching kernel state.
+
+1. Build and install both roles
+--------------------------------
+
+.. code-block:: sh
+
+    make
+    # Installs the core binary + completion + systemd unit (target),
+    # the shirudo-build dispatch + BPF headers (operator):
+    sudo make install-target install-operator
+
+2. Generate the signing key and cert (operator half)
+----------------------------------------------------
+
+.. code-block:: sh
+
+    sudo shirudo genkey
+    # → /var/lib/shirudo/keys/{signing_key.pem,cert.der}
+    #   On a both-roles box the cert is already where the target reads it.
+
+3. Bring up enforcement (target half)
+-------------------------------------
+
+.. code-block:: sh
+
+    sudo shirudo init --no-tpm     # simplest dev path; drop --no-tpm to measure
+    sudo shirudo status            # LSM attached, keyring serial, assets, ...
+
+``--no-tpm`` keeps the LSM enforcing while skipping chain measurement —
+the least-friction choice for a dev loop. To exercise the TPM path, see
+"TPM in development" below.
+
+4. Build and load an upatch (the round trip)
+--------------------------------------------
+
+.. code-block:: sh
+
+    # Operator half: compile + sign a BPF program into a .upatch.
+    shirudo build path/to/your.bpf.c -o /tmp/your.upatch
+    shirudo upatch info /tmp/your.upatch          # inspect (works either side)
+
+    # Target half: load it. --no-precheck skips the operator-supplied
+    # --expect-chain gate, which a local one-shot load has no need for.
+    sudo shirudo upatch load /tmp/your.upatch --no-precheck
+
+    sudo shirudo upatch list      # persisted vs loaded, with orphan detection
+    sudo shirudo status           # upatch now shows under "upatches loaded"
+
+To exercise the **full operator path** (SFTP + ssh-exec over libssh)
+against your own box, register loopback as a remote and roll out — this
+needs ``sshd`` running locally and key-based auth to ``127.0.0.1``
+(ssh-agent or ``authorized_keys``):
+
+.. code-block:: sh
+
+    shirudo remote add local root@127.0.0.1 --label env=dev
+    shirudo remote list
+    shirudo rollout /tmp/your.upatch local
+
+Unload is signed BPF too — there is no separate rollback verb:
+
+.. code-block:: sh
+
+    shirudo build --unload your-name --payload-sha256 <hex> -o /tmp/unload.upatch
+    sudo shirudo upatch unload /tmp/unload.upatch --no-precheck
+
+5. The rebuild/reinstall loop (important)
+-----------------------------------------
+
+Once ``init`` has run, the filesystem-sealing LSM (``bpf/seal.c``)
+protects the installed binary and the whole ``/var/lib/shirudo/`` tree:
+a plain ``make install`` then fails with ``Operation not permitted``,
+because the seal only lets shirudo's own (matching-xattr) executable
+write those inodes. Unmounting the private bpffs drops every shirudo
+pin, which detaches the LSM and the seal in one step, after which the
+binary is writable again:
+
+.. code-block:: sh
+
+    sudo umount /var/lib/shirudo/bpffs     # detaches LSM + seal + all pins
+    sudo make install-target install-operator
+    sudo shirudo init --no-tpm             # re-attach; boot-restores the upatch set
+
+If ``umount`` reports the mount busy, retry it a couple of times (a pin
+fd may still be closing). This umount/install/init cycle is the standard
+inner loop while iterating on shirudo itself.
+
+TPM in development
+------------------
+
+Three options, easiest first:
+
+- ``--no-tpm`` — LSM enforces, chain is not measured. Fine for most work.
+- **swtpm** — a software TPM 2.0. Start it, then point shirudo at it
+  with ``SHIRUDO_TPM_TCTI`` for ``init``/``status``:
+
+  .. code-block:: sh
+
+      mkdir -p /tmp/swtpm-dev
+      swtpm socket --tpm2 --tpmstate dir=/tmp/swtpm-dev,mode=0700 \
+          --server type=tcp,port=2321 --ctrl type=tcp,port=2322 \
+          --flags startup-clear &
+      export SHIRUDO_TPM_TCTI='swtpm:host=127.0.0.1,port=2321'
+      sudo -E shirudo init        # defines the NV index, extends the chain
+
+- **A real/virtual hardware TPM** at ``/dev/tpmrm0`` (the default). If
+  its owner hierarchy auth is set (common on cloud vTPMs), ``init``
+  cannot define the NV index and degrades with ``tpm: ...
+  owner-hierarchy authorization failed``; supply the auth via
+  ``tpm.owner_auth`` in ``/etc/shirudo/shirudo.conf`` or
+  ``SHIRUDO_TPM_OWNER_AUTH`` (see Troubleshooting).
+
+6. Tear it all down
+-------------------
+
+.. code-block:: sh
+
+    sudo umount /var/lib/shirudo/bpffs     # LSM off, all pins gone
+    sudo rm -rf /var/lib/shirudo/*         # keys, cert, upatches, eventlog, pins
+
+A reboot also clears the in-kernel state (keyring and bpffs are
+per-boot); the installed systemd unit re-runs ``init`` early on the next
+boot to restore enforcement. The **only** state that survives a reboot
+is the TPM NV measurement chain — if you defined it and want a clean
+slate, undefine the index out of band (under the TPM owner auth) or pick
+a different ``tpm.nv_index``.

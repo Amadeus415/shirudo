@@ -111,7 +111,7 @@ coding style (`Documentation/process/coding-style.rst`).
 - **Pre-flight TPM state check on every state-changing operation.**
   Before extending the chain, the target verifies that its current chain
   value matches the operator's last-observed value (`--expect-chain=<hex>`,
-  auto-derived by `rollout`/`rollback` from a pre-status read against
+  auto-derived by `rollout` from a pre-status read against
   the same target on the same libssh session, or supplied explicitly
   by an AI agent that maintains its own per-host expected_pcr from the
   previous report). On mismatch the operation is refused with
@@ -205,7 +205,7 @@ coding style (`Documentation/process/coding-style.rst`).
   |---|---|---|
   | `libc` | Obvious. | n/a |
   | `libcrypto` (OpenSSL) | X.509, EVP, CMS/PKCS#7, SHA-256. The kernel's signature-verification path matches OpenSSL CMS by design; using anything else would require shirudo to re-implement CMS — large, security-critical surface. | `libgcrypt`, mbed TLS — more niche, smaller user base; no compelling reason to prefer. |
-  | `libssh ≥ 0.10` | SSH session, SFTP, exec channel for `rollout`/`rollback`/`status`. Required by the no-subprocess invariant (we can't exec the OpenSSH client). | `libssh2` — also acceptable in principle, smaller user base and historically more CVEs. libssh is the canonical choice. Hand-rolling SSH is out of the question. |
+  | `libssh ≥ 0.10` | SSH session, SFTP, exec channel for `rollout`/`status`. Required by the no-subprocess invariant (we can't exec the OpenSSH client). | `libssh2` — also acceptable in principle, smaller user base and historically more CVEs. libssh is the canonical choice. Hand-rolling SSH is out of the question. |
   | `libtss2-esys` + `libtss2-tcti-device` (tpm2-tss) | TPM2 NV-extend chain (target only). The reference TCG implementation; no realistic alternative. | None viable. |
   | `libbpf` | `bpf()` syscall wrapper, BTF handling, gen_loader, the entire BPF userspace API. shirudo cannot reasonably re-implement this. | None — kernel-tools-canonical. |
   | `libelf` | Parses BPF ELF objects for libbpf. | None viable. |
@@ -406,12 +406,13 @@ coding style (`Documentation/process/coding-style.rst`).
   raise the bar for an attacker who has a foothold on the
   target and is trying to subvert shirudo's own operation.
 
-- **Signed rollback, symmetric to rollout.**
+- **Signed removal is just a rollout of an UNLOAD directive.**
   `shirudo build --unload <name>` produces a signed UNLOAD directive
-  (`.upatch` with the `DIRECTIVE_UNLOAD` flag bit set);
-  `shirudo rollback` pushes it like any other upatch over libssh;
-  the target's signed-loader path detaches the named link, unpins
-  it, and extends the TPM2 NV-extend chain with
+  (`.upatch` with the `DIRECTIVE_UNLOAD` flag bit set); `shirudo
+  rollout` pushes it like any other upatch over libssh (the flag, not
+  a separate verb, makes the target run `upatch unload`); the target
+  detaches the named link, unpins it, and extends the TPM2 NV-extend
+  chain with
   `SHA256("shirudo-unload\0" \|\| payload_sha256 \|\| upatch_name)`. Load and unload are both
   forward progress in the TPM chain — the chain records *what
   happened*, not *current state*, so loading then unloading the
@@ -426,9 +427,12 @@ coding style (`Documentation/process/coding-style.rst`).
   reproduce locally without round-tripping the target.
 
 **Deferred (note in README, not implemented):**
-- Reboot persistence via systemd unit (re-runs `shirudo init` early in boot,
-  ideally before any other BPF user). Documented as the planned next step —
-  the user wants the LSM up as early as possible to forestall tampering.
+- **(Done — `systemd/shirudo.service`.)** Reboot persistence via a
+  `Type=oneshot` systemd unit that re-runs `shirudo init` as early as
+  possible (`DefaultDependencies=no`, `After=local-fs.target`,
+  `Before=sysinit.target`, `KeyringMode=inherit`), target-only
+  (`make install-target`). An even-earlier initramfs stage remains
+  future work (threat T5).
 - **(Done in MVP — see "Target hardening" in Goals.)** Pin-file
   hardening, originally deferred, is now provided by the
   xattr-based filesystem-sealing LSM program `bpf/seal.c`, which
@@ -468,7 +472,7 @@ coding style (`Documentation/process/coding-style.rst`).
   they already run — OpenSSH, signed-CA SSH, smart-card-backed
   keys, hardware tokens, bastion hosts, Vault SSH issuance,
   whatever. shirudo piggy-backs on it. If a fleet's SSH key
-  story is healthy, shirudo's rollout/rollback/status work; if
+  story is healthy, shirudo's rollout/status work; if
   it's broken, shirudo refuses to connect (loudly, via libssh
   error reporting) and offers no opinion on how to fix it. This
   is the same posture `git push` takes toward SSH: it uses your
@@ -660,33 +664,53 @@ case BPF_PROG_LOAD:
     if (attr->signature_size == 0)                  return -EACCES;
     return 0;                        /* kernel verifies signature next */
 
-/* mutating ops from userspace — must go through a signed loader */
-case BPF_MAP_CREATE:
-case BPF_MAP_UPDATE_ELEM:
+/* tear-down / replace / corruption — denied (see threat T2) */
 case BPF_MAP_DELETE_ELEM:
 case BPF_MAP_DELETE_BATCH:
 case BPF_MAP_UPDATE_BATCH:
-case BPF_LINK_CREATE:
+case BPF_MAP_LOOKUP_AND_DELETE_ELEM:
+case BPF_MAP_LOOKUP_AND_DELETE_BATCH:
 case BPF_LINK_DETACH:
 case BPF_LINK_UPDATE:
 case BPF_PROG_ATTACH:
 case BPF_PROG_DETACH:
 case BPF_BTF_LOAD:
-case BPF_RAW_TRACEPOINT_OPEN:
-case BPF_OBJ_PIN:
-case BPF_OBJ_UNPIN:                   /* protects shirudo's own pin */
     return -EACCES;
+
+/*
+ * Attach + signed-loader data-map pattern — allowed from userspace.
+ * Does not widen the trust boundary: a prog_fd can only be obtained
+ * via the signature-gated BPF_PROG_LOAD above or GET_FD_BY_ID of an
+ * already-vetted prog, so every attachable program is operator-signed.
+ * shirudo needs these because gen_loader can't attach and
+ * bpf_sys_bpf() can't OBJ_PIN (TODO.kernel 1-2): the signed loader
+ * loads the upatch in kernel context, shirudo's CLI creates + pins
+ * the link. BPF_OBJ_PIN falls through to default-allow.
+ * Infra maps stay safe via BPF_MAP_FREEZE at creation, independent
+ * of the LSM verdict.
+ */
+case BPF_LINK_CREATE:
+case BPF_RAW_TRACEPOINT_OPEN:
+case BPF_MAP_CREATE:
+case BPF_MAP_UPDATE_ELEM:
+case BPF_MAP_FREEZE:
+    return 0;
 
 default:                              /* read-only ops: BPF_OBJ_GET,
                                          BPF_*_GET_FD_BY_ID, BPF_MAP_LOOKUP_*,
-                                         BPF_PROG_QUERY, BPF_OBJ_GET_INFO_BY_FD */
+                                         BPF_PROG_QUERY, BPF_OBJ_GET_INFO_BY_FD;
+                                         plus BPF_OBJ_PIN, BPF_PROG_TEST_RUN.
+                                         BPF_OBJ_UNPIN is not a bpf() cmd. */
     return 0;
 }
 ```
 
 Allowing read-only commands keeps observability working (`bpftool prog show`,
-`bpftool map dump`, our own `shirudo status`). Mutating ops are denied; loader
-progs that run from kernel context bypass the deny because of the `kernel`
+`bpftool map dump`, our own `shirudo status`). The signature-gated
+`BPF_PROG_LOAD` is the trust boundary; attach and the signed-loader map
+pattern are allowed (they cannot introduce unsigned code); tear-down,
+replace, and map-corruption commands are denied. Loader progs that run
+from kernel context bypass all denials because of the `kernel`
 discriminator.
 
 #### Hook 2: `lsm/inode_unlink`
@@ -860,7 +884,13 @@ above have passed (or been overridden):
     → `keyring_serial`. If it already exists, reuse it.
 5.  Link the cert:
     `add_key("asymmetric", "shirudo:<fingerprint>", cert_der,
-    der_len, keyring_serial)`.
+    der_len, keyring_serial)`. Then **seal the keyring**
+    (`KEYCTL_SETPERM` drops write/link/setattr, keeping
+    view/read/search) so no further cert can be added this boot,
+    and **pin `keyring_serial`** to
+    `/var/lib/shirudo/keyring.serial` (sealed) for load-time
+    swap detection (see "Keyring model"). The pin is (re)written
+    on every init, including the idempotent already-present path.
 6.  Determine the upatch set `S` to re-apply: scan
     `/var/lib/shirudo/upatches/` for `.upatch` files, sort by
     upatch name (lexicographic, by `<name>.upatch` basename).
@@ -970,13 +1000,13 @@ above have passed (or been overridden):
     `shirudo upatch load` uses (parse container, signature-
     verified `BPF_PROG_LOAD`, `BPF_PROG_TEST_RUN`, create + pin
     the upatch link under `/var/lib/shirudo/bpffs/upatches/<name>/link`,
-    **immediately followed by** `setxattr` of
-    `security.bpf.shirudo = SHIRUDO_VERSION_ID` on the new pin
-    path, and the same pin+label invariant applied to the
-    upatches_registry map entry's storage). Same pin-then-label-
-    no-gap rule as for the LSM links above. **Per-upatch chain
-    extensions are suppressed during boot-restore** — the chain
-    extension happens once, at step 16.
+    then `setxattr` of the `security.bpf.shirudo.payload`
+    payload_sha256 on the pin directory `<name>/` — the unload
+    `payload_mismatch` ground truth — re-established the same way a
+    fresh load does it). Same pin-then-label-no-gap rule as for the
+    LSM links above. **Per-upatch chain extensions are suppressed
+    during boot-restore** — the chain extension happens once, at
+    step 16.
 15. Define the TPM NV-extend index if not yet defined
     (`Esys_NV_DefineSpace` with `TPMA_NV_EXTEND` attributes per
     PLAN.md §"TPM measurement"). Idempotent: subsequent runs
@@ -1026,8 +1056,22 @@ re-apply + extend retries).
   link is pinned, the keyring is no longer needed for the LSM to remain
   enforcing — but it *is* needed for any future signed loader the operator
   loads.
-- No kernel keyring persists across reboots. The cert/key on disk plus a future
-  systemd unit re-running `shirudo init` is how persistence will work.
+- No kernel keyring persists across reboots. The cert/key on disk plus the
+  `systemd/shirudo.service` unit re-running `shirudo init` is how persistence
+  works.
+- **Verification is scoped to the sealed keyring's serial, with a serial pin
+  against substitution.** Every signed `BPF_PROG_LOAD` passes the `shirudo`
+  keyring's serial as `attr.keyring_id` (not `KEY_SPEC_USER_KEYRING`), confining
+  the kernel signer search to that one keyring — a cert planted elsewhere in
+  `@u` is ignored (`ENOKEY`). Because find-by-name could still be redirected by
+  a root attacker who unlinks the real keyring and links a fake same-named one,
+  `init` pins the keyring serial to `/var/lib/shirudo/keyring.serial` (under the
+  filesystem seal, labelled like the rest of the tree), and every load refuses
+  with `category: tampered` unless the resolved-by-name serial still equals the
+  pin (absent pin → warn + proceed; present-but-unreadable → `tampered`). This
+  degrades the swap from a silent bypass into a fail-closed refusal. A complete
+  fix (deny the swap outright) needs an `lsm/key_permission` hook plus a new
+  `key_ref → struct key *` kfunc — see `TODO.kernel` item 9.
 
 ### Bootstrap chicken-and-egg, resolved
 
@@ -1058,9 +1102,8 @@ a kernel keyring, never mounts a bpffs (the target manages its own private bpffs
 |---|---|
 | `shirudo genkey` | Generate the X.509 self-signed cert (2048-bit RSA, SHA-256, CN=`shirudo`, 10-year validity) into `/var/lib/shirudo/keys/{signing_key.pem,cert.der}`. Mirrors `tools/testing/selftests/bpf/verify_sig_setup.sh:genkey()`. Uses OpenSSL EVP / X509 APIs directly — no shelling out. **Algorithm/key-size are upgradable without code changes to anything outside `builtin-genkey.c`**: the kernel signature path consumes whatever the operator's cert and the signed CMS blob agree on, so a future `shirudo genkey --algorithm=ed25519` or `--rsa-bits=3072` only needs to flip the EVP_PKEY parameters. RSA-2048/SHA-256 is the MVP default — acceptable per NIST guidance through approximately 2030. Multi-key support and key rotation (Open questions) provide the runtime path for migrating a deployed fleet to a stronger algorithm without a flag day. |
 | `shirudo build <input> -o <output.upatch> [-I <dir>...] [-D <macro>...] [--vmlinux <path>] [--extra-cflags '<flags>']` *or* `shirudo build --unload <name> [--payload-sha256=<hex>] -o <output.upatch>` | **The unified operator-side artifact-producing command** — compiles BPF source if needed, runs gen_loader, signs the loader bytes with the operator's private key, and serializes a `.upatch` container ready for `shirudo rollout`. **Implemented as a dispatch** to a separate binary `$(libexecdir)/shirudo/shirudo-build` (git-style — see git's `libexec/git-core/git-<foo>` layout); the core `shirudo` binary's `builtin-build.c` is a five-line `execv` wrapper. `shirudo-build` does the actual work, including the **sole subprocess exception in shirudo**: when the input is a `.bpf.c` source file, `shirudo-build` `execv`s `clang -target bpf -O2 -g -Wall -Wextra …` to compile it; for `.bpf.o` inputs it skips compilation. **Both `shirudo-build` and `clang` ship only with the operator package, never to a target** — on a target where `shirudo-build` is not installed, `shirudo build` returns exit 127 with a clear "operator-only subcommand" message. **Three input/output forms:** (a) `<source.bpf.c>` → compile + gen_loader + sign + package → LOAD `.upatch`; (b) `<file.bpf.o>` → gen_loader + sign + package → LOAD `.upatch` (skip compilation; useful when the operator has a pre-compiled object from a separate build farm); (c) `--unload <name>` → emit a signed UNLOAD directive `.upatch` with `flags & DIRECTIVE_UNLOAD` set, embedding the small hand-written unload BPF program (from `bpf/unload.bpf.c`) that opens the pin at `/var/lib/shirudo/bpffs/upatches/<name>/link`, verifies the loaded upatch's `payload_sha256` against the directive's expected value, then issues `BPF_LINK_DETACH` + `BPF_OBJ_UNPIN` from kernel context. For `.bpf.c` input shirudo auto-locates `vmlinux.h` (current directory first, then `/usr/share/shirudo/vmlinux.h`); `--vmlinux <path>` overrides. `--extra-cflags` is the operator's escape hatch. For `--unload`, `--payload-sha256=<hex>` pins the expected digest; if omitted, the operator's local upatch archive at `/var/lib/shirudo/upatches/` is consulted. |
-| `shirudo rollout <upatch>... { <name>... | --selector=<expr> } [--report=<path>] [--sudo] [--expect-chain=<hex>] [--expect-version-id=<hex>] [--no-precheck] [--no-version-check] [--dry-run]` | Push one or more LOAD `.upatch` files to one or more destinations via **SFTP**, then run `shirudo upatch load` over an **SSH exec channel**. **Targets are selected either by explicit registered names or by a label selector** (mutually exclusive — pick one form). Each `<name>` must be a registered remote name (via `shirudo remote add`). `--selector=<expr>` evaluates a label expression against every registered remote and selects the matching subset; expressions support equality (`key=value`), inequality (`key!=value`), existence (`key`), non-existence (`!key`), `&&` (AND, higher precedence), `||` (OR, lower precedence), and parentheses — e.g. `--selector='shirudo.nodes.type=production && shirudo.nodes.location=us-east-1'` or `--selector='(role=database || role=cache) && env!=staging'`. Empty match set is an error ("selector matched zero registered remotes"). Originally registered beforehand via `shirudo remote add <name> <user@host[:port]>`. Literal `user@host[:port]` arguments are **refused** with a clear "register first" error. This forces every state-changing operation through the auditable remote set, makes `shirudo nodes` complete by construction, and eliminates the fat-finger class of "I typed the wrong hostname" rollouts. By default `rollout` first issues `shirudo status --json --include-tpm` against each target on the same libssh session, captures that target's current chain value, and threads it through as `--expect-chain=<captured>` on the subsequent `upatch load` invocation — the target then refuses to extend unless its current chain still matches what `rollout` just observed (see "Pre-flight TPM state check"). `--expect-chain=<hex>` overrides the auto-derive with an explicit value (the AI-agent pattern: stash `chain_after` from each report, pass it as the next op's expected value, or compute the post-reboot value locally as `SHA256(chain_after || init_event_digest)` — where `init_event_digest = SHA256("shirudo-init\0" \|\| cert_sha256 \|\| set_digest)` and `set_digest` is the canonical hash of the loaded-upatch set the agent is tracking — when the target has rebooted in between). `--no-precheck` skips the check entirely (logged at `LOG_WARNING`; for first-time bootstrap or emergency recovery). Multiple destinations mix freely; all must be registered. Both transports go through **libssh** linked into the binary; shirudo never `fork+exec`s `ssh`, `scp`, or `sftp`. Authentication uses ssh-agent and the operator's default keys (`~/.ssh/id_ed25519`, `~/.ssh/id_rsa`); host verification reads `~/.ssh/known_hosts` under a strict policy — unknown or changed host keys fail loudly, never trust-on-first-use. `--report=<path>` emits an aggregate JSON document covering per-target results — **load-bearing input for AI agents driving the rollout loop**; see "Failure reporting for AI-driven rollouts". Failures are reported per-target so partial rollouts are visible. `--dry-run` resolves the destination set, parses every `.upatch` argument, opens libssh sessions to each target, runs the pre-flight checks (chain read, version-id compare, LSM-attached check), and emits the report with `"result": "ok-dryrun"` per target — **no SFTP upload, no `shirudo upatch load` invocation, no chain extension**. Useful for AI agents validating a planned operation before committing, for operator change-management approval, and for confirming a selector expression matches the intended target set. Refuses UNLOAD-directive `.upatch` files (use `shirudo rollback` instead — the verb has to match the artifact). |
-| `shirudo rollback <upatch>... { <name>... | --selector=<expr> } [--report=<path>] [--sudo] [--expect-chain=<hex>] [--expect-version-id=<hex>] [--no-precheck] [--no-version-check] [--dry-run]` | Symmetric to `rollout`, for UNLOAD directives. **Same destination model**: either explicit registered names or a `--selector=<expr>` label expression — see the `rollout` row for selector syntax and the registration requirement. Same auto-derive / `--expect-chain` / `--expect-version-id` / `--no-precheck` / `--no-version-check` semantics as `rollout` (see that row and "Pre-flight TPM state check"). Pushes signed UNLOAD `.upatch` files via SFTP, then runs `shirudo upatch unload` over the SSH exec channel. Same auth path, same `--report=<path>` aggregate JSON schema (per-target results with their own `category` taxonomy including `already_unloaded` and `detach_failed`). On the target, the signed-loader path verifies the directive's `payload_sha256` matches the currently-loaded upatch under that name; mismatch refuses to detach. The NV chain extends with `SHA256("shirudo-unload\0" \|\| payload_sha256 \|\| upatch_name)` on success — the unload is **forward progress in the chain**, not a rewind; see "TPM measurement". `--dry-run` matches `rollout` semantics: resolve, pre-flight, report `"result": "ok-dryrun"`, do not detach or extend. Refuses LOAD `.upatch` files. |
-| `shirudo remote add <name> <user@host[:port]> [--port N] [--user U] [--system] [--label key=value ...]` *(also `list`, `rm`, `rename`, `show`)* | Manage the operator-local **remote registry** so `rollout`/`rollback`/`nodes` can reference targets by name and by label selector. Each remote is one file under `$XDG_CONFIG_HOME/shirudo/remotes.d/<name>.conf` (per-user) or `/etc/shirudo/remotes.d/<name>.conf` (with `--system`). `--label key=value` (repeatable) attaches Kubernetes-style labels to the remote — operator-chosen key=value pairs used by `--selector` expressions on the operation subcommands. Common conventions: `shirudo.nodes.type=production`, `shirudo.nodes.location=us-east-1`, `shirudo.nodes.role=database`. No secrets in the registry — only routing metadata + labels; host-key verification still goes through `~/.ssh/known_hosts`, authentication still through ssh-agent. To modify labels after registration, edit the conf file directly (it is plain `key = value` text; shirudo intentionally does not provide a `set-label`/`rm-label` subcommand — operators are expected to manage text files). See the "Remote registry" section for the full file format, lookup precedence, and selector grammar. |
+| `shirudo rollout <upatch>... { <name>... | --selector=<expr> } [--report=<path>] [--sudo] [--expect-chain=<hex>] [--expect-version-id=<hex>] [--no-precheck] [--no-version-check] [--dry-run]` | Push one or more signed `.upatch` files to one or more destinations via **SFTP**, then apply each over an **SSH exec channel**. **Each file's `DIRECTIVE_UNLOAD` flag selects the remote verb**: a LOAD artifact runs `shirudo upatch load`, an UNLOAD directive runs `shirudo upatch unload` — so one rollout (and one mental model) covers both deploy and remove, and a batch may mix the two. **Targets are selected either by explicit registered names or by a label selector** (mutually exclusive — pick one form). Each `<name>` must be a registered remote name (via `shirudo remote add`). `--selector=<expr>` evaluates a label expression against every registered remote and selects the matching subset; expressions support equality (`key=value`), inequality (`key!=value`), existence (`key`), non-existence (`!key`), `&&` (AND, higher precedence), `||` (OR, lower precedence), and parentheses — e.g. `--selector='shirudo.nodes.type=production && shirudo.nodes.location=us-east-1'` or `--selector='(role=database || role=cache) && env!=staging'`. Empty match set is an error ("selector matched zero registered remotes"). Originally registered beforehand via `shirudo remote add <name> <user@host[:port]>`. Literal `user@host[:port]` arguments are **refused** with a clear "register first" error. This forces every state-changing operation through the auditable remote set, makes `shirudo nodes` complete by construction, and eliminates the fat-finger class of "I typed the wrong hostname" rollouts. By default `rollout` first issues `shirudo status --json --include-tpm` against each target on the same libssh session, captures that target's current chain value, and threads it through as `--expect-chain=<captured>` on the subsequent `upatch load` invocation — the target then refuses to extend unless its current chain still matches what `rollout` just observed (see "Pre-flight TPM state check"). `--expect-chain=<hex>` overrides the auto-derive with an explicit value (the AI-agent pattern: stash `chain_after` from each report, pass it as the next op's expected value, or compute the post-reboot value locally as `SHA256(chain_after || init_event_digest)` — where `init_event_digest = SHA256("shirudo-init\0" \|\| cert_sha256 \|\| set_digest)` and `set_digest` is the canonical hash of the loaded-upatch set the agent is tracking — when the target has rebooted in between). `--no-precheck` skips the check entirely (logged at `LOG_WARNING`; for first-time bootstrap or emergency recovery). Multiple destinations mix freely; all must be registered. Both transports go through **libssh** linked into the binary; shirudo never `fork+exec`s `ssh`, `scp`, or `sftp`. Authentication uses ssh-agent and the operator's default keys (`~/.ssh/id_ed25519`, `~/.ssh/id_rsa`); host verification reads `~/.ssh/known_hosts` under a strict policy — unknown or changed host keys fail loudly, never trust-on-first-use. `--report=<path>` emits an aggregate JSON document covering per-target results — **load-bearing input for AI agents driving the rollout loop**; see "Failure reporting for AI-driven rollouts". Failures are reported per-target so partial rollouts are visible. `--dry-run` resolves the destination set, parses every `.upatch` argument, opens libssh sessions to each target, runs the pre-flight checks (chain read, version-id compare, LSM-attached check), and emits the report with `"result": "ok-dryrun"` per target — **no SFTP upload, no `shirudo upatch load` invocation, no chain extension**. Useful for AI agents validating a planned operation before committing, for operator change-management approval, and for confirming a selector expression matches the intended target set. **There is no separate `rollback` verb** — a removal is a rollout of a signed UNLOAD-directive `.upatch`. For an UNLOAD directive the target's `upatch unload` verifies the directive's `payload_sha256` against the loaded upatch under that name (mismatch → `category: payload_mismatch`, refuse), extends the NV chain with `SHA256("shirudo-unload\0" \|\| payload_sha256 \|\| upatch_name)` on success (forward progress, not a rewind), and is idempotent (`already_unloaded` if no pin). |
+| `shirudo remote add <name> <user@host[:port]> [--port N] [--user U] [--system] [--label key=value ...]` *(also `list`, `rm`, `rename`, `show`)* | Manage the operator-local **remote registry** so `rollout`/`nodes` can reference targets by name and by label selector. Each remote is one file under `$XDG_CONFIG_HOME/shirudo/remotes.d/<name>.conf` (per-user) or `/etc/shirudo/remotes.d/<name>.conf` (with `--system`). `--label key=value` (repeatable) attaches Kubernetes-style labels to the remote — operator-chosen key=value pairs used by `--selector` expressions on the operation subcommands. Common conventions: `shirudo.nodes.type=production`, `shirudo.nodes.location=us-east-1`, `shirudo.nodes.role=database`. No secrets in the registry — only routing metadata + labels; host-key verification still goes through `~/.ssh/known_hosts`, authentication still through ssh-agent. To modify labels after registration, edit the conf file directly (it is plain `key = value` text; shirudo intentionally does not provide a `set-label`/`rm-label` subcommand — operators are expected to manage text files). See the "Remote registry" section for the full file format, lookup precedence, and selector grammar. |
 
 ### Target-side — applies upatches under LSM enforcement
 
@@ -1074,8 +1117,9 @@ reads the private key, never produces a signed artifact.
 | `shirudo init [--no-tpm] [--check-only] [--report=<path>]` | Bootstrap sequence above. **Always runs the pre-flight check first** (see Architecture §"Pre-flight checks for `shirudo init`") — if any required prerequisite is absent (root privilege, BPF LSM in the kernel, bpffs mountable, cert on disk, embedded loader in the binary, TPM reachable), init exits non-zero with `category: init_prereqs_missing` and a full enumeration of failed prerequisites; **no kernel state is touched on failure**. `--no-tpm` is the single override: proceed without TPM measurement in degraded mode (LSM still enforces; chain not extended), logged `LOG_WARNING` at both target and report. `--check-only` runs the pre-flight gate and exits without bootstrapping — useful for CI sanity and operator dry-runs. `--report=<path>` (use `-` for stdout) emits the structured JSON readiness/result document. Otherwise idempotent: re-running on an already-initialised target is a no-op (the pre-flight still runs and confirms the system is still healthy). Reads `cert.der` from `/var/lib/shirudo/keys/` — the cert is typically copied to targets via `rollout` (or any out-of-band channel) without the matching private key. |
 | `shirudo upatch load <file.upatch> [--report=<path>] [--expect-chain=<hex>] [--expect-version-id=<hex>] [--no-precheck] [--no-version-check]` | Load a signed LOAD `.upatch` into the kernel. **Pre-flight check first** (unless `--no-precheck`): read the current NV chain value, compare against `--expect-chain=<hex>` (which `shirudo rollout` always supplies; an operator running this command directly must supply it from a prior `shirudo status` observation, or use `--no-precheck`). Also confirm the LSM link is pinned at `/var/lib/shirudo/bpffs/lsm_link` and the `shirudo` keyring exists. On any mismatch: refuse with `category: tampered`, no `BPF_PROG_LOAD`, no chain extend, no eventlog write. On pass: parse the container, validate header/version and that `flags & DIRECTIVE_UNLOAD == 0`, issue `BPF_PROG_LOAD` with the embedded loader insns + signature + `keyring_id` set to the `shirudo` keyring serial. The kernel verifies the signature; on success, `BPF_PROG_TEST_RUN` invokes the loader, which installs the payload, shirudo pins the resulting link to `/var/lib/shirudo/bpffs/upatches/<name>/link` **and immediately (no intervening syscalls) labels the new pin with `setxattr(security.bpf.shirudo, SHIRUDO_VERSION_ID)`** — same pin-then-label-no-gap rule as the bootstrap pins. The source `.upatch` is then copied into `/var/lib/shirudo/upatches/` (also xattr-labelled at creation), and the TPM2 NV chain is extended (see "TPM measurement and remote attestation"). `--report=<path>` (use `-` for stdout) emits a per-upatch JSON document covering `result`, `phase`, `errno`, `category`, the full kernel **verifier log** on rejection, and the chain state on success — see "Failure reporting for AI-driven rollouts" for the schema. Refuses UNLOAD directives (use `upatch unload`). Invoked automatically by `shirudo rollout` over the SSH exec channel; available standalone for operators who have hand-copied a `.upatch`. |
 | `shirudo upatch unload <file.upatch> [--report=<path>] [--expect-chain=<hex>] [--expect-version-id=<hex>] [--no-precheck] [--no-version-check]` | Apply a signed UNLOAD directive. **Pre-flight check first** (same protocol as `upatch load`): the target's current chain value must match `--expect-chain=<hex>`, the LSM must be pinned, the keyring must be present — mismatch → `category: tampered`, refuse. On pass: parses the container, validates `flags & DIRECTIVE_UNLOAD != 0`, issues `BPF_PROG_LOAD` with the embedded unload-prog insns + signature + `keyring_id`. The kernel verifies the signature; on success, `BPF_PROG_TEST_RUN` invokes the unload directive, which (a) opens `/var/lib/shirudo/bpffs/upatches/<name>/link`, (b) confirms the currently-pinned link's owning upatch has the expected `payload_sha256` (refuses with `category: payload_mismatch` on disagreement — protects against an attacker who substituted a different upatch under the same name), (c) issues `BPF_LINK_DETACH` then `BPF_OBJ_UNPIN` from kernel context (LSM allows because `kernel == true`). On success shirudo also removes `/var/lib/shirudo/upatches/<name>.upatch`, extends the TPM2 NV chain with `SHA256("shirudo-unload\0" \|\| payload_sha256 \|\| upatch_name)`, and appends an `"type":"upatch_unload"` eventlog entry. If the pin is already absent: no detach, no chain extend, no eventlog write, but `result: ok, category: already_unloaded` — idempotent. Refuses LOAD `.upatch` files. |
-| `shirudo upatch list` | List installed upatches under `/var/lib/shirudo/upatches/` and indicate which are currently loaded (pin present under `/var/lib/shirudo/bpffs/upatches/<name>/link`). |
-| `shirudo upatch info <file.upatch> [--json]` | **Local-only inspection of a `.upatch` file** — runs on either side; touches no kernel state. Reads the file from disk, parses the v1 container header, validates magic/version/section bounds, verifies the CMS signature against the on-disk cert (if available), and prints a structured description: `name`, `flags` (LOAD / UNLOAD-directive), `payload_sha256`, `loader_insns` size, `signature` size and signer (CMS-extracted), `metadata` (build host, build timestamp, source path, `vmlinux.h` source if recorded), `log_buf_sz`, and the **signing cert's** fingerprint + validity dates. **The signer-cert validity field reports a separate question from `shirudo nodes`' cert-expiry warning**: `nodes` flags the *target keyring's* cert (what the target trusts); `upatch info` flags the *signer's* cert (extracted from the CMS blob — what was used to produce this artifact). Both should match for the artifact to load against the target, but they answer different questions and shirudo reports both. Output line `cert: 84d (warn)` on the signer if the same 12-month threshold from `cert.expiry_warn_days` is breached. Useful for AI agents debugging a `.upatch` that an earlier `shirudo build` produced, operators sanity-checking an artifact before `rollout`, and CVE-response audit trails ("did we sign the right thing?"). `--json` emits a single document with `"schema": 1`; default human output is a two-column key/value table. **Does not** require a kernel keyring, root, or a TPM — `shirudo upatch info` works on any host with the shirudo binary and the file. |
+| `shirudo upatch list [--json]` | **Local-only, read-only — runs on either side, touches no kernel state.** Cross-references the persisted archive (`/var/lib/shirudo/upatches/*.upatch` — what survives reboot) against the live bpffs pins (`/var/lib/shirudo/bpffs/upatches/<name>/link` — what is currently loaded). For each persisted upatch prints loaded-or-not, `LOAD`/`UNLOAD-directive` type, and `payload_sha256`; and flags **orphans** — a live pin with no persisted `.upatch` behind it (loaded but will not survive reboot) — so drift in either direction is visible. `--json` emits `{"schema":1,"upatches":[{name,type,loaded,persisted,payload_sha256}]}`. |
+| `shirudo upatch info <file.upatch> [--json]` | **Local-only inspection of a `.upatch` file** — runs on either side; touches no kernel state. Reads the file from disk, parses the v1 container header, validates magic/version/section bounds, verifies the CMS signature against the on-disk cert (if available), and prints a structured description: `name`, `flags` (LOAD / UNLOAD-directive), `payload_sha256`, `loader_insns` size, `signature` size and signer (CMS-extracted), `metadata` (build host, build timestamp, source path, `vmlinux.h` source if recorded), `log_buf_sz`, and the **signing cert's** fingerprint + validity dates. **The signer-cert validity field reports a separate question from `shirudo nodes`' cert-expiry warning**: `nodes` flags the *target keyring's* cert (what the target trusts); `upatch info` flags the *signer's* cert (extracted from the CMS blob — what was used to produce this artifact). Both should match for the artifact to load against the target, but they answer different questions and shirudo reports both. Output line `cert: 84d (warn)` on the signer if the same 12-month threshold from `cert.expiry_warn_days` is breached. Useful for AI agents debugging a `.upatch` that an earlier `shirudo build` produced, operators sanity-checking an artifact before `rollout`, and CVE-response audit trails ("did we sign the right thing?"). `--json` emits a single document with `"schema": 1`; default human output is a two-column key/value table. **Does not** require a kernel keyring, root, or a TPM — `shirudo upatch info` works on any host with the shirudo binary and the file. **Also dumps the full program source** — the entire `.bpf.c` the build embedded verbatim in the artifact's *extras* blob: a numbered `source` block in human output, and a `source` string (plus `source_file` and `has_source`) in `--json`. Unlike `shirudo upatch get`'s kernel `line_info` (which shows only the sparse instruction-tagged lines `clang -O2` recorded), this is the **complete** source — comments, blank lines, every statement. This source is the artifact's **own, unsigned/advisory** copy (the extras trail the signature-covered sections); the authoritative view of what is *actually loaded* is the kernel's, via `shirudo upatch get` on the target. Absent for artifacts built from a `.bpf.o` (no source to embed) or in the pre-extras format. |
+| `shirudo upatch get <name> [--json]` | **Target-side, read-only.** Dump the BPF `line_info` (source) of a currently-loaded upatch, read **from the kernel**: resolve the pinned link at `/var/lib/shirudo/bpffs/upatches/<name>/link` → its program → the program's `line_info` + `btf_id` (preserved through the signed gen_loader at load), load that BTF, and print the source grouped by file. Uses only read-only `bpf()` cmds — `BPF_OBJ_GET`, `*_GET_FD_BY_ID`, `BPF_OBJ_GET_INFO_BY_FD` — all permitted by the LSM. Unlike `upatch info` (the file's own unsigned copy), this is **authoritative**: the BTF was loaded into the kernel by the signed loader. Prints `(no line info)` when the program was built without `clang -g`. |
 
 ### Read-only inspection — runs on either side
 
@@ -1088,10 +1132,10 @@ material with the same command they use to inspect a fleet member.
 
 | Subcommand | Purpose |
 |---|---|
-| `shirudo status [--json] [--include-tpm]` | **Local-only**, two modes auto-detected. **On a target**: read `/var/lib/shirudo/bpffs/lsm_link` via `BPF_OBJ_GET`, confirm attachment with `BPF_OBJ_GET_INFO_BY_FD`, dump kernel-config gaps, report keyring presence and active upatches; with `--include-tpm`, also read the NV chain value and the eventlog. Always emits the local `SHIRUDO_VERSION_ID`. Safe to run before `init` (dry-run). **On the operator**: report cert/key presence in `/var/lib/shirudo/keys/`, list staged `.upatch` files, emit local `SHIRUDO_VERSION_ID`, note no kernel-side state. `--json` produces machine-readable output. **Fleet/remote-query mode has moved to `shirudo nodes`** — `status` is now strictly local and does not take destination arguments. |
+| `shirudo status [--json] [--include-tpm]` | **Local-only**, two modes auto-detected. **On a target**: read `/var/lib/shirudo/bpffs/lsm_link` via `BPF_OBJ_GET`, confirm attachment with `BPF_OBJ_GET_INFO_BY_FD`, dump kernel-config gaps, report keyring presence and active upatches; **also report the live keyring serial, the init-pinned serial (`/var/lib/shirudo/keyring.serial`), and whether they match** (`keyring_serial` / `keyring_serial_pinned` / `keyring_serial_matches` in JSON; a `keyring pin: … (matches|MISMATCH -- swapped?)` line in the human output) so a substituted same-named keyring is visible at a glance; **also emit an `assets` inventory of what is physically present under `/var/lib/shirudo/`** — `keys/cert.der`, `keys/signing_key.pem`, `keyring.serial`, `eventlog` (+ size), `upatches/` (count of persisted `.upatch` files, distinct from the bpffs-pinned *loaded* set), `incoming/` (staged count), and whether the private `bpffs/` is mounted (the `assets` object in JSON; an `assets (/var/lib/shirudo):` block in the human output); with `--include-tpm`, also read the NV chain value and the eventlog. Always emits the local `SHIRUDO_VERSION_ID`. Safe to run before `init` (dry-run). **On the operator**: report cert/key presence in `/var/lib/shirudo/keys/`, list staged `.upatch` files, emit local `SHIRUDO_VERSION_ID`, note no kernel-side state. `--json` produces machine-readable output. **Fleet/remote-query mode has moved to `shirudo nodes`** — `status` is now strictly local and does not take destination arguments. |
 | `shirudo nodes [<name>...] [--filter=<glob>] [--selector=<expr>] [--json] [--include-tpm] [--expect-sequence=<file>] [--parallel=<N>]` | **Operator-only fleet observability**: queries every registered remote (or a subset, by explicit names or a glob filter) and renders an aggregate status table. Iterates over `$XDG_CONFIG_HOME/shirudo/remotes.d/*.conf` and `/etc/shirudo/remotes.d/*.conf`; for each remote, opens a libssh session and runs `shirudo status --json --include-tpm` on the target; aggregates results into a per-row drift table — name, host, reachable yes/no, LSM attached, keyring cert fingerprint, target `SHIRUDO_VERSION_ID`, NV chain value, count of loaded upatches, **cert validity remaining** (e.g. `cert: 8.2y` / `cert: 84d (warn)` / `cert: -3d (EXPIRED)`), drift label (`OK` / `CERT-DRIFT` / `CHAIN-DRIFT` / `VERSION-DRIFT` / `CERT-EXPIRING` / `CERT-EXPIRED` / `UNREACHABLE` / `INIT-INCOMPLETE`). Cert expiry is computed by `shirudo status` on the target from the cert in the kernel keyring (no clock sync between operator and target needed — each target reports its own view). Warning threshold: 12 months remaining → `CERT-EXPIRING` label and `pr_warn` log on both target and operator; 0 days remaining → `CERT-EXPIRED` (and operations against the target start failing with `category: signature_rejected` once the kernel rejects loads against the expired cert). The thresholds (12 months / 0 days) are compile-time constants in `util/cert.c`; rationale: shirudo's `genkey` ships 10-year certs, so 12 months is a comfortable rotation lead time without being noisy on healthy fleets. `--json` produces the same aggregate as a structured document for AI agents and automation. `--include-tpm` is on by default (operators almost always want chain state); `--no-include-tpm` skips for faster polling. `--filter=<glob>` selects a subset by **name** (e.g. `--filter=prod-*`); `--selector=<expr>` selects a subset by **label expression** (e.g. `--selector='shirudo.nodes.type=production && location=us-east-1'`, see the rollout row and the "Label selectors" subsection in Remote registry for the full grammar); positional `<name>` arguments select specific remotes by exact match (and must be registered). When multiple selectors are supplied (`--filter` AND `--selector`, or names AND `--selector`) they intersect — useful for "all production targets in the us-east region": `--selector='type=production' --filter='us-east-*'`. `--expect-sequence=<file>` pins the canonical event sequence for the fleet; targets whose eventlog tail doesn't match are labelled `SEQUENCE-DRIFT`. `--parallel=<N>` runs up to N SSH sessions concurrently (default 16); shirudo never `fork+exec`s ssh — concurrency is libssh-level only. The exit status is non-zero if any target drifts or is unreachable, so this fits naturally into operator scripts and CI checks. This is the canonical "what's the state of my fleet?" command; pair with `--expect-sequence` for "is my fleet where I expect it to be?" |
 | `shirudo version [--version-id]` | Print version information. Without flags: human-readable release name plus the architecture-stripped `SHIRUDO_VERSION_ID` (64-char hex). With `--version-id`: just the hex, suitable for shell substitution into other commands. Reads the compiled-in `shirudo_version_id` constant; no syscalls, no network. |
-| `shirudo keys` | On a target: list asymmetric keys in the `shirudo` named keyring with descriptions, fingerprints, and validity. Uses `keyctl_read`/`KEYCTL_DESCRIBE` — no `keyutils` dependency, direct `syscall(__NR_keyctl, ...)`. On the operator machine: report the on-disk cert (and private-key fingerprint, if present) from `/var/lib/shirudo/keys/`. |
+| `shirudo keys` | Local-only inspection of the key material this host holds, reporting **each side independently** (both can coexist on one host, since `cert.der` is held by the target as well as the operator — so this is *not* an either/or mode pick on cert presence). Reports the on-disk cert and, if present, the signing key with a cert-match check from `/var/lib/shirudo/keys/`; **and** lists the asymmetric keys in the `shirudo` named kernel keyring (descriptions, fingerprints) once `shirudo init` has populated one, via `keyctl_read`/`KEYCTL_DESCRIBE` — no `keyutils` dependency, direct `syscall(__NR_keyctl, ...)`. A pure operator shows only the on-disk section; a pure target shows the cert plus the keyring; a both-roles host shows everything. |
 
 ## Remote registry
 
@@ -1133,7 +1177,7 @@ identity_file         = ~/.ssh/id_ed25519_shirudo_prod
 sudo                  = yes        # prefix remote commands with "sudo -n"
 
 # Labels — Kubernetes-style key=value, repeatable, used by
-# --selector expressions on rollout/rollback/nodes. Each label is
+# --selector expressions on rollout/nodes. Each label is
 # its own line, prefixed `label.` and then the label key.
 label.shirudo.nodes.type     = production
 label.shirudo.nodes.location = us-east-1
@@ -1151,7 +1195,7 @@ configuration data, not code.
 
 ### Label selectors
 
-`shirudo rollout`, `shirudo rollback`, and `shirudo nodes` all
+`shirudo rollout` and `shirudo nodes` all
 accept `--selector=<expr>` to select a subset of the registered
 remote set by label expression. The grammar is small and
 Kubernetes-flavoured:
@@ -1177,7 +1221,7 @@ Examples:
 ```
 shirudo rollout foo.upatch --selector='shirudo.nodes.type=production'
 shirudo rollout foo.upatch --selector='type=staging && location=dallas'
-shirudo rollback foo.unload.upatch \
+shirudo rollout foo.unload.upatch \
     --selector='(role=database || role=cache) && env!=staging'
 shirudo nodes --selector='!shirudo.nodes.maintenance'  # only nodes
                                                       # without a
@@ -1201,7 +1245,7 @@ not a trust layer.
 
 ### Lookup precedence
 
-A destination argument to `rollout`/`rollback`/`nodes` resolves
+A destination argument to `rollout`/`nodes` resolves
 **by name only** — there is no literal `user@host[:port]`
 fallback. The resolver:
 
@@ -1289,6 +1333,20 @@ defaults; CLI flags override both.
 # Type: 32-bit hex. Default: 0x01818E00.
 tpm.nv_index = 0x01818E00
 
+# Owner (storage) hierarchy authorization, used only to *define* the
+# NV index (DefineSpace for an owner-range index is authorised by the
+# owner hierarchy). Needed on TPMs whose owner auth is set (many cloud
+# vTPMs and any TPM a prior tool has taken ownership of); leave empty
+# for a fresh TPM, swtpm, or most VMs. If the owner auth is set and not
+# supplied here, `shirudo init` cannot create the index and degrades to
+# unmeasured mode with a `tpm: ... owner-hierarchy authorization
+# failed` diagnostic. A literal passphrase, or "hex:<even-hex>" for a
+# binary auth value. The env var SHIRUDO_TPM_OWNER_AUTH overrides this
+# (handy for not persisting the secret to disk). The per-index auth
+# (read/extend) is always the derived value and is NOT this key.
+# Type: string | hex:<hex> | empty. Default: empty.
+tpm.owner_auth =
+
 # Verifier log buffer size, in bytes, allocated inside the in-kernel
 # signed loader for every upatch load. Larger values capture larger
 # verifier rejections without truncation; cost is one allocation
@@ -1324,7 +1382,7 @@ bpffs.remount_if_lax = yes
 # Default: 16.
 fleet.parallel = 16
 
-# Default report path template for rollout/rollback when --report
+# Default report path template for rollout when --report
 # is not given on the CLI. The literal token "{rollout_id}" is
 # substituted with the UUID shirudo generated; "{ts}" is the
 # RFC 3339 timestamp. Empty string disables auto-report.
@@ -1418,6 +1476,20 @@ offset  size            field
 - **metadata** (TLV): name, version string, build host, build timestamp, target
   LSM hook name (informational; not security-relevant). UTF-8, length-prefixed
   records.
+- **extras (embedded C source)**: an optional trailing blob (header
+  `struct shirudo_upatch_extras` = magic + `format` + `name_len` +
+  `source_len`, then the source path string, then the verbatim `.bpf.c`
+  source bytes), pointed to by the header `extra_off` field — the slot
+  that was `reserved` in the original layout, so this is **additive and
+  backward-compatible**: a reader that predates it sees `extra_off == 0`
+  and ignores the trailing bytes, and the extras follow every
+  signature-covered section. For a `.bpf.c` input `shirudo build` embeds
+  the full source so `shirudo upatch info` can print the **complete**
+  program offline (comments and all) — not just the sparse
+  instruction-tagged `line_info` lines. The extras are **not
+  signature-covered** — informational only; the authoritative view of
+  what is loaded is the kernel's `line_info` (the signed loader installs
+  the BTF), surfaced by `shirudo upatch get`.
 - **log_buf**: a zero-initialised region (typically 1 MiB) that the
   in-kernel signed loader treats as `log_buf` for the inner
   `BPF_PROG_LOAD`. After `BPF_PROG_TEST_RUN`, userspace reads this region
@@ -1505,120 +1577,124 @@ private SSH material directly.
 libssh client. This keeps the trust boundary clear: the operator machine
 signs; the target verifies cryptographically.
 
-## `rollback` flow
+## Removal flow (a rollout of an UNLOAD directive)
 
-`shirudo rollback file1.upatch file2.upatch prod-a prod-b` is mechanically
-identical to `rollout` — same libssh session setup, `known_hosts`
-verification, ssh-agent auth, SFTP push to
-`/var/lib/shirudo/incoming/`, exec channel for the apply step. The
-only differences:
+There is no separate `rollback` verb. `shirudo rollout
+file1.unload.upatch prod-a prod-b` is the same command as any rollout —
+same libssh session setup, `known_hosts` verification, ssh-agent auth,
+SFTP push to `/var/lib/shirudo/incoming/`, exec channel for the apply
+step. The file's `DIRECTIVE_UNLOAD` flag is what differs:
 
-1. Operator-side: each input `.upatch` is required to have
-   `flags & DIRECTIVE_UNLOAD == 1`. If a LOAD `.upatch` is passed
-   `rollback` refuses with a clear "use rollout instead" error; this
-   keeps the two verbs from being interchangeable, since they have
-   very different effects.
-2. Target-side: `shirudo upatch unload` (not `upatch load`) is invoked
-   over the SSH exec channel. The **pre-flight checks run first**:
-   the operator-supplied `--expect-version-id=<hex>` must match the
-   target's compiled-in `SHIRUDO_VERSION_ID`, the operator-supplied
-   `--expect-chain=<hex>` (auto-derived from a pre-status, or passed
-   explicitly, exactly as for `rollout`) must match the target's
-   current NV chain value, the LSM must be pinned, and the keyring
-   must be present. On mismatch → `category: tampered`,
-   refuse, no detach, no extend. On pass: the kernel verifies the
-   signature against the same `shirudo` keyring; the signed unload
-   directive runs from kernel context, opens the named pin, checks
-   `payload_sha256` against the loaded upatch (refusing on mismatch),
-   and issues `BPF_LINK_DETACH` + `BPF_OBJ_UNPIN` — both permitted
-   because the LSM's `kernel == true` discriminator is set.
-3. On success: the NV chain extends with the unload digest, an
-   `"type":"upatch_unload"` eventlog entry is appended, and
-   `/var/lib/shirudo/upatches/<name>.upatch` is removed.
+1. Operator-side: rollout reads each `.upatch`'s flag and chooses the
+   remote verb — `upatch load` for a LOAD artifact, `upatch unload`
+   for an UNLOAD directive. A batch may mix the two. (The artifact is
+   self-describing, so there is nothing to "match" against a verb and
+   nothing to fat-finger.)
+2. Target-side: `shirudo upatch unload` runs over the SSH exec
+   channel. The **pre-flight checks run first** (`--expect-chain` —
+   auto-derived from a pre-status or passed explicitly — must match
+   the current NV chain; the LSM must be pinned; the keyring must be
+   present). On mismatch → `category: tampered`, refuse. On pass: the
+   kernel verifies the directive's signature against the `shirudo`
+   keyring (the authorization gate). The detach itself happens in
+   **userspace**, not in the signed BPF: the kernel's `bpf_sys_bpf()`
+   cannot `BPF_LINK_DETACH`/`OBJ_GET`/`OBJ_PIN` (`TODO.kernel` #6), so
+   shirudo VFS-unlinks the named pin under
+   `/var/lib/shirudo/bpffs/upatches/<name>/` (the refcount drop
+   detaches the program), permitted because bpf2's `inode_unlink`
+   recognises shirudo's own `exe_file` identity and denies every
+   other caller.
+3. On success: `/var/lib/shirudo/upatches/<name>.upatch` is removed
+   (so boot-restore won't re-apply it), the NV chain extends with the
+   unload digest, and a `"type":"upatch_unload"` eventlog entry is
+   appended.
 
-The per-target aggregate report uses the same JSON schema as
-`rollout`; the `reports` array contains UNLOAD-flavoured per-upatch
-documents with the new failure categories (`already_unloaded`,
-`payload_mismatch`, `detach_failed`). Operators (or AI agents)
-driving a recovery can interleave `rollout` and `rollback` calls
-freely; the TPM chain records each operation as forward progress, so
-the resulting chain value uniquely identifies the full ordered
-history of state changes over the machine's lifetime.
+The per-target aggregate report uses the same JSON schema as any
+rollout. Operators (or AI agents) driving a recovery interleave load
+and unload rollouts freely; the TPM chain records each as forward
+progress, so the resulting chain value uniquely identifies the full
+ordered history of state changes over the machine's lifetime.
 
-Idempotency: `shirudo rollback` of an already-unloaded upatch is a
-no-op on the target (`result: ok, category: already_unloaded`,
-**no chain extend**, no eventlog entry). The chain only records actual
-state transitions; replaying a rollback that finds nothing to remove
-adds nothing to the chain. This matters for the replay-to-PCR
+Idempotency: a rollout of an UNLOAD directive for an already-unloaded
+upatch is a no-op on the target (`result: ok, category:
+already_unloaded`, **no chain extend**, no eventlog entry). The chain
+only records actual state transitions; an unload that finds nothing to
+remove adds nothing to the chain. This matters for the replay
 invariant — the eventlog tail (since the last `shirudo-init` event)
-and the chain must agree on what happened, and a no-op rollback
-genuinely did not happen.
+and the chain must agree on what happened, and a no-op unload genuinely
+did not happen.
 
 ### How `payload_sha256` is verified at unload
 
 The unload directive's `payload_mismatch` check is the property
 that protects against an attacker who managed to substitute a
-different signed upatch under the same name. Concretely:
+different signed upatch under the same name. The ground truth for
+"what is currently loaded under name X" is a **bpffs extended
+attribute on the pin directory**, not a BPF map. Concretely:
 
-- At every successful `shirudo upatch load`, the **in-kernel
-  signed loader** inserts the entry `(upatch_name,
-  payload_sha256)` into a **pinned, frozen BPF hash map** at
-  `/var/lib/shirudo/bpffs/upatches_registry`. The map's keys are
-  fixed-width upatch names (NUL-padded `char[64]`) and values are
-  the 32-byte SHA-256 of the upatch's signed `loader_insns`
-  section — the same `payload_sha256` recorded in the eventlog.
-  Userspace shirudo never writes to the map directly — the write
-  happens from the loader running with `kernel == true`.
-- The map is created by `shirudo init` as part of the LSM
-  bootstrap (between steps 11 and 12), with `max_entries = 256`
-  (raise via the `SHIRUDO_MAX_UPATCHES` compile-time macro for
-  fleets that need more), then **`BPF_MAP_FREEZE`d immediately
-  after `BPF_MAP_CREATE` and before `BPF_OBJ_PIN`**, then pinned
-  under shirudo's private bpffs. The freeze is permanent (one-way)
-  and means **no userspace `bpf()` call can ever mutate this map
-  for the lifetime of the boot**, regardless of what the LSM
-  policy does. The bpf2 LSM still denies userspace mutating ops
-  on the map (defence in depth), but the freeze is the kernel-
-  level cut: even if bpf2 detached or its policy were bypassed,
-  the map remains immutable from any userspace caller. BPF
-  programs running with `kernel == true` (the in-kernel signed
-  loaders) **can still update the frozen map** — `BPF_MAP_FREEZE`
-  scopes to the syscall path, not to in-program access — so
-  load-time insert and unload-time delete continue to work.
-- Map fd flow into the kernel-context BPF: the userspace target-
-  side shirudo, at every `upatch load`/`upatch unload`, opens
-  the pin via `bpf_obj_get("/var/lib/shirudo/bpffs/upatches_registry")`,
-  gets an fd, and threads it into the gen_loader-produced loader
-  context (`loader_data` blob) before calling
-  `BPF_PROG_TEST_RUN`. The signed loader / unload BPF references
-  the map symbolically; `gen_loader` patches the fd at load time.
-  The pin path `/var/lib/shirudo/bpffs/upatches_registry` is a
-  compile-time constant, so operator-side `shirudo build` and
-  target-side `shirudo upatch unload` agree on where to look
-  without out-of-band coordination.
-- The signed unload program embeds the expected `payload_sha256`
-  from the directive's metadata in its read-only data section
-  (covered by the same signature that covers `loader_insns`).
-  When it runs, it looks up the name in the registry map, reads
-  the stored 32 bytes, and compares against the embedded value
-  in **constant time**. Match → proceed with `BPF_LINK_DETACH` +
-  `BPF_OBJ_UNPIN`. Mismatch → return `-EPERM` from the BPF
-  program; userspace surfaces `category: payload_mismatch`.
-- At unload success, the in-kernel program also deletes the
-  registry entry (same `kernel == true` privilege).
+- At every successful `shirudo upatch load`, **after** the program
+  is attached and its link pinned, target-side shirudo records the
+  loaded upatch's 32-byte `payload_sha256` (the SHA-256 of the
+  signed `loader_insns`, the same value in the eventlog) as the
+  `security.bpf.shirudo.payload` xattr on the pin directory
+  `/var/lib/shirudo/bpffs/upatches/<name>/`. It is written last, so
+  the recorded value always reflects an actually-loaded upatch and
+  there is no rollback window if a step fails.
+- The value is **authentic without an in-kernel write**: the kernel
+  already verified, at the signature-gated `BPF_PROG_LOAD`, that the
+  loaded loader's hash equals `payload_sha256` (the `excl_prog_hash`
+  binding on `__loader.map`). So the header value userspace writes is
+  cryptographically bound to what ran.
+- The value is **immutable / unforgeable** via the bpf2
+  `lsm/inode_setxattr` and `lsm/inode_removexattr` hooks: scoped to
+  shirudo's private bpffs superblock and gated on the same exe
+  identity as `inode_unlink`, they let only shirudo's own executable
+  set or remove xattrs there. A root attacker who substitutes a
+  different upatch under name X cannot also rewrite the xattr to lie
+  (the substitute's own load already wrote the substitute's payload,
+  and the attacker cannot overwrite it). Replacing the pin directory
+  is likewise blocked (`inode_unlink`).
+- `shirudo upatch unload` reads the xattr with `getxattr` and
+  constant-time compares it against the directive's expected payload.
+  Match → proceed to detach (userspace VFS-unlink of the pin, per
+  TODO.kernel item 6). Mismatch → refuse with
+  `category: payload_mismatch`, detaching nothing. The check is
+  skipped (warning; detach proceeds) when the directive carries no
+  expected payload or the xattr is unavailable.
+- **Residual.** The *stored* value is unforgeable (excl_prog_hash +
+  bpf2 setxattr guard), but the *expected* value the userspace compare
+  uses comes from the directive's metadata, which — like the target
+  name — is not signature-covered (TODO.kernel item 6). So a root
+  attacker who edits the unsigned metadata can realign the two. The
+  same value is also baked into the signed unload program's `.rodata`
+  (signature-covered); moving the comparison into that in-kernel BPF
+  (which needs the `bpf_sys_bpf` detach ops) is what closes the gap.
+  Until then `payload_mismatch` reliably catches honest/accidental
+  substitution and any non-tampering path.
 
-The registry map is the **single source of truth** for "what is
-currently loaded under name X". `BPF_PROG_GET_INFO_BY_FD.tag` is
-an 8-byte truncated SHA-1 of program instructions, not a SHA-256
-of the upatch payload, and would not match the directive's
-expectation — the registry map exists precisely to bridge that
-gap.
+`BPF_PROG_GET_INFO_BY_FD.tag` is an 8-byte truncated SHA-1 of program
+instructions, not a SHA-256 of the upatch payload, and would not match
+the directive's expectation — the pin-directory xattr exists precisely
+to bridge that gap.
 
-The registry is **per-boot ephemeral** (it lives in shirudo's
-private bpffs, gone after reboot) and is rebuilt by `shirudo
-init`'s boot-restore step (13) from `/var/lib/shirudo/upatches/`
-before per-upatch loads are re-applied. The set is what becomes
-`set_digest` for the single boot-restore chain extension.
+The xattr is **per-boot ephemeral** (bpffs is RAM-backed; xattrs are
+held in an in-memory `simple_xattrs` store and vanish with the mount)
+and is re-set by `shirudo init`'s boot-restore step from
+`/var/lib/shirudo/upatches/` through the same load path, before the
+single boot-restore chain extension. The restored set is what becomes
+`set_digest`.
+
+**Kernel/libbpf prerequisites.** This rests on the bpffs-xattr kernel
+patch (TODO.kernel item 7); without it `setxattr`/`getxattr` on bpffs
+return `-EOPNOTSUPP` and the check degrades to *unavailable* (the load
+and unload still work, the comparison is skipped) — never *wrong*. The
+originally-planned single shared, frozen `upatches_registry` BPF map
+written by signed in-kernel BPF was abandoned because a frozen map
+cannot grow per-load (freeze is one-way) and a signed gen_loader'd
+program cannot bind a shared pre-pinned map in its signable
+instruction stream (TODO.kernel item 8); the xattr-on-pin delivers the
+same guarantee, co-located with the object it describes, on a stock
+libbpf.
 
 ## Failure reporting for AI-driven rollouts
 
@@ -1665,8 +1741,8 @@ be `-` for stdout. Schema:
     "nv_index":    "0x01818E00",    /* configurable via SHIRUDO_NV_INDEX */
     "chain_after": "<hex>"          /* 32 bytes hex, post-extend */
   },
-  "journal_excerpt": ["..."],       /* shirudo events for this load */
-  "dmesg_excerpt":   ["..."]        /* best-effort /dev/kmsg replay */
+  "journal_excerpt": ["..."],       /* shirudo events for this load (deferred) */
+  "dmesg_excerpt":   ["..."]        /* /dev/kmsg replay (deferred) */
 }
 ```
 
@@ -1727,8 +1803,8 @@ safe for JSON encoding.
 | `version_mismatch` | `pre_flight` | `EPERM` | Operator's `SHIRUDO_VERSION_ID` does not match the target's. Either the operator binary was upgraded and the target wasn't (or vice versa), or the operator is pointing a development build at a production target. **Hard stop** — no fleet operation should proceed across a version skew, even though the affected components might happen to be compatible. Re-deploy a matching shirudo binary to either side, or override with `--no-version-check` (logged at `LOG_WARNING`). |
 | `tampered` | `pre_flight` | `EPERM` | Target's pre-flight state doesn't match the operator's expectation (chain drift, LSM detached, keyring missing). The BPF was **never loaded** — no `BPF_PROG_LOAD` was issued, no chain extend, no eventlog entry. **Hard stop, not a retry signal**: agents should not iterate on the BPF source, since the BPF is not the problem. Re-run `shirudo status`, investigate, then decide whether to re-issue with a refreshed `--expect-chain=`. The report's `message` names which check failed: `chain_drift`, `lsm_detached`, or `keyring_missing`. |
 | `init_prereqs_missing` | `pre_flight` (init only) | varies | `shirudo init`'s pre-flight gate found one or more missing prerequisites (not root; BPF LSM absent; bpffs unmountable; cert missing; `/var/lib/shirudo/` unwritable; embedded LSM loader missing from the binary; `add_key` unsupported; TPM unreachable). The report's `failed_checks` array enumerates each missing item with a short fix hint. **No state was changed**. Override with `--no-tpm` is available only for the TPM-absence case; everything else is hard. AI agents should refuse to retry until a human has confirmed the target's infrastructure. |
-| `already_unloaded` | `parse` or `payload_load` (unload directive) | `ENOENT` | Target has no pin for this upatch — rollback is a no-op. Idempotent; `result: ok`, no chain extend, no eventlog entry. Agent moves on. |
-| `payload_mismatch` | `payload_load` (unload directive) | `EPERM` | The pin exists but the loaded upatch's `payload_sha256` doesn't match what the unload directive expects. Either an attacker substituted a different upatch under the same name, or the operator's rollback artifact is stale. Refuse to detach. Surface to a human. |
+| `already_unloaded` | `parse` or `payload_load` (unload directive) | `ENOENT` | Target has no pin for this upatch — the unload is a no-op. Idempotent; `result: ok`, no chain extend, no eventlog entry. Agent moves on. |
+| `payload_mismatch` | `payload_load` (unload directive) | `EPERM` | The pin exists but the loaded upatch's `payload_sha256` doesn't match what the unload directive expects. Either an attacker substituted a different upatch under the same name, or the operator's unload directive is stale. Refuse to detach. Surface to a human. |
 | `detach_failed` | `payload_load` (unload directive) | varies | The unload directive ran but `BPF_LINK_DETACH` or `BPF_OBJ_UNPIN` returned an error from the kernel. Unusual; surface to a human with the errno. |
 | `eventlog_full` | `pre_flight` or `tpm_extend` | `ENOSPC` | shirudo's eventlog has reached `eventlog.max_bytes` from `/etc/shirudo/shirudo.conf` and the operation would write a new entry. **No state was changed**: the BPF was not loaded, the chain was not extended, the file was not appended. Required so that the chain and the eventlog never drift — a chain extension without a logged event would defeat replay verification. The operator must rotate the eventlog out of band (copy/move and re-create empty), then retry. Surface to a human. |
 | `unknown` | — | — | Catch-all; surface to a human. |
@@ -1775,10 +1851,11 @@ and iterates. The loop closes without humans for `verifier_rejected` /
 Per the "No subprocesses at runtime" invariant: JSON assembly uses
 shirudo's own emitter under `util/report.c` (a small BSD-2-Clause
 whiteroom — git's `json-writer.c` is GPL-2.0, same vendoring rule).
-`/dev/kmsg` excerpts come from direct file I/O via `util/kmsg.c`, not
-from `dmesg(1)`. Journal excerpts come from the `sd_journal_*` API if
-linked, otherwise are omitted with a `"journal_excerpt": null` — there
-is no `journalctl(1)` invocation.
+The `dmesg_excerpt` and `journal_excerpt` fields are **deferred** (not
+emitted in MVP); the report carries them as `null`. When implemented,
+`/dev/kmsg` excerpts will come from direct file I/O, never `dmesg(1)`,
+and journal excerpts from the `sd_journal_*` API if linked — never a
+`journalctl(1)` invocation. No shell-out either way.
 
 ## TPM measurement and remote attestation
 
@@ -2105,7 +2182,13 @@ no whiteroom and no GPL contamination. shirudo's TPM surface is tiny:
 
 TPM access goes through `/dev/tpmrm0` (the kernel's TPM resource
 manager) via the `device` TCTI. No direct character-device byte-banging,
-no command marshalling by hand.
+no command marshalling by hand. The `SHIRUDO_TPM_TCTI` environment
+variable overrides the TCTI string (e.g.
+`swtpm:host=127.0.0.1,port=2321`) for VMs/CI whose `/dev/tpmrm0` is
+owner-provisioned and for tests against `swtpm`; it does not weaken the
+trust model, since the operator verifies chain values against
+locally-computed expectations and a redirected/fake TPM produces values
+the check rejects.
 
 ### Graceful degradation
 
@@ -2129,7 +2212,7 @@ perspective (one shirudo process, no IPC, sequential syscalls):
    `SHIRUDO_VERSION_ID` (compiled-in constant) against
    `--expect-version-id=<hex>` supplied by the caller (the
    operator's own `SHIRUDO_VERSION_ID`, threaded through by
-   `rollout`/`rollback` automatically — see below). On mismatch:
+   `rollout` automatically — see below). On mismatch:
    refuse with `category: version_mismatch`, no other checks
    attempted, no kernel state touched. This is the cheapest
    pre-flight gate and runs first because a version-skewed pair
@@ -2172,7 +2255,7 @@ investigation) is the right next step.
 
 **Where the expected PCR comes from:**
 
-- *Default for `rollout`/`rollback`*: shirudo on the operator first
+- *Default for `rollout`*: shirudo on the operator first
   opens an SSH exec channel running `shirudo status --json
   --include-tpm`, captures the target's current chain value, then
   opens a second exec channel running `shirudo upatch load
@@ -2300,10 +2383,10 @@ target drifts.
   provisioning, EK certificate validation, and AK trust policy on
   the operator are non-trivial and bring meaningful complexity
   (AK storage, AK revocation, EK chains, vendor CA roots).
-- **Unload directives are signed BPF**, which means rollback
+- **Unload directives are signed BPF**, which means rolling one out
   produces a verifier log too. Most unload directives are tiny and
   well-tested (a fixed template per kernel version), so verifier
-  failures during rollback should be rare; when they happen, the
+  failures on an unload should be rare; when they happen, the
   same `category: verifier_rejected` path applies and AI agents
   iterate on the unload-directive template rather than on the
   user-authored BPF.
@@ -2498,7 +2581,6 @@ shirudo/
 │   ├── upatch.c / upatch.h       # .upatch container serializer / parser
 │   ├── keyring.c / keyring.h     # add_key/keyctl raw syscalls
 │   ├── paths.c   / paths.h       # /var/lib/shirudo/{keys,upatches,bpffs,…}
-│   ├── kconfig.c / kconfig.h     # /sys/kernel/security/lsm probe + feature checks
 │   ├── harden.c   / harden.h     # process-hardening primitives called
 │   │                             #   from shirudo.c main() before any
 │   │                             #   subcommand: PR_SET_DUMPABLE=0,
@@ -2553,9 +2635,6 @@ shirudo/
 │   │                             #   top of util/json.c; defines the
 │   │                             #   per-document schemas and field
 │   │                             #   sets.
-│   ├── kmsg.c    / kmsg.h        # /dev/kmsg replay window helper for
-│   │                             #   the report dmesg_excerpt field. No
-│   │                             #   dmesg(1) shell-out.
 │   ├── version_id.c              # AUTO-GENERATED at build time: the
 │   │                             #   architecture-independent
 │   │                             #   SHIRUDO_VERSION_ID constant.
@@ -2563,7 +2642,7 @@ shirudo/
 │   │                             #   committed to git. See "Build system
 │   │                             #   — Version identity" subsection.
 │   ├── selector.c / selector.h   # label-selector parser+evaluator for
-│   │                             #   `--selector` on rollout/rollback/
+│   │                             #   `--selector` on rollout/
 │   │                             #   nodes. ~150 LOC recursive-descent
 │   │                             #   parser for the grammar
 │   │                             #   `expr ::= term ('||' term)*`,
@@ -2574,8 +2653,8 @@ shirudo/
 │   │                             #   takes a parsed AST and a remote's
 │   │                             #   {key→value} label map, returns
 │   │                             #   bool. No external library; standard
-│   │                             #   C. Used by builtin-rollout,
-│   │                             #   builtin-rollback, builtin-nodes.
+│   │                             #   C. Used by builtin-rollout
+│   │                             #   and builtin-nodes.
 │   └── remotes.c / remotes.h     # remote registry: read/write
 │                                 #   $XDG_CONFIG_HOME/shirudo/remotes.d/
 │                                 #   with /etc/shirudo/remotes.d/ as the
@@ -2681,14 +2760,7 @@ shirudo/
 │   └── helper/                   # small C programs invoked from shell
 │                                 #   tests — security-critical negative
 │                                 #   paths (raw bpf(), tamper, race, …)
-├── ci/                           # shell-driven CI logic, see "Testing and CI" §
-│   ├── lib.sh
-│   ├── install-dependencies.sh
-│   ├── run-build-and-tests.sh
-│   ├── print-test-failures.sh
-│   └── run-static-checks.sh
-├── .github/workflows/ci.yml      # one-screen wrapper around
-│                                 #   ci/run-build-and-tests.sh
+├── (ci/ and .github/ -- DEFERRED, not in tree; see "Testing and CI" §)
 └── third_party/
     └── bpf-next/                 # git submodule
 ```
@@ -3176,13 +3248,17 @@ clang's, not shirudo's.
 #### Dual install targets
 
 ```
-make install              # target install: just 'shirudo'
+make help                 # overview of all targets + tunable variables
+
+make install              # common install: 'shirudo' + bash completion
                           # → /usr/local/bin/shirudo
+
+make install-target       # install + the systemd reboot-persistence unit
+                          # → /usr/lib/systemd/system/shirudo.service
 
 make install-operator     # operator install: 'shirudo' + 'shirudo-build'
                           # → /usr/local/bin/shirudo
                           # → /usr/local/libexec/shirudo/shirudo-build
-                          # → /usr/local/share/man/man1/shirudo*
 ```
 
 Distribution packagers split into two packages:
@@ -3229,7 +3305,7 @@ external program — shirudo never `fork+exec`s. This is the
 "No subprocesses at runtime" invariant enforced at the binary level.
 
 The same binary ships on both sides: libssh is exercised only by
-`rollout`/`rollback`/`status --remote` on the operator side, and
+`rollout`/`status --remote` on the operator side, and
 libtss2 is exercised only by `init`/`upatch load`/`upatch unload`/
 `status --include-tpm` on the target side, but linking them
 unconditionally keeps the build trivial and avoids `dlopen`/weak-
@@ -3619,6 +3695,15 @@ skips steps 7–8 and runs locally.
 
 ## Testing and CI
 
+> **Status (deferred):** the test suite under `t/` is present and live
+> (`make check`). The **CI runner infra** — the `ci/` shell tree and
+> `.github/workflows/ci.yml` described in this section — has been
+> **removed for now and deferred**; it needs a privileged,
+> shirudo-capable (bpffs-xattr) kernel with `shirudo init` run to host
+> the opt-in integration suite, which stock GitHub runners cannot
+> provide. The design below is the plan for when CI is restored. See
+> `TODO.claude`.
+
 shirudo ships an automated test suite and a portable CI surface modeled on
 git's design — shell-driven tests, TAP-emitting, callable from a one-screen
 CI YAML on any provider. Scope for MVP is intentionally narrow: numbered
@@ -3641,7 +3726,7 @@ Numbering bands group by area, leaving room between for future inserts:
 | `t03xx` | LSM enforcement: unsigned `BPF_PROG_LOAD` from userspace rejected; signed-SYSCALL-prog accepted; read-only ops survive (`BPF_PROG_QUERY`, `*_GET_FD_BY_ID`, `BPF_OBJ_GET_INFO_BY_FD`); bpf2's `lsm/inode_unlink` denies `rm` of any inode in shirudo's bpffs from non-shirudo callers; seal denies write/unlink/rename/setxattr/removexattr on `/var/lib/shirudo/` for non-shirudo callers; `kernel == true` callers always allowed (negative test under signed-loader path); LSM stacking interop with active SELinux/AppArmor on the runner |
 | `t04xx` | `.upatch` container: parse / sign / load round-trip; v1 header offsets; tamper test (flip one byte → kernel rejects); LOAD vs UNLOAD-directive `flags` discrimination; `log_buf` region carries verifier output verbatim on rejection; `shirudo upatch info` reads the same field set as the writer wrote; CMS signer-cert expiry warning |
 | `t05xx` | Local-observability subcommands: `shirudo status` (both target and operator modes), `shirudo keys` (keyring listing on target, on-disk cert on operator), `shirudo upatch list` (archive vs active cross-reference), `shirudo upatch info <file>` (header + signature + metadata + signer-cert validity), `shirudo version --version-id` |
-| `t06xx` | `rollout` and `rollback` (operator → target via libssh): SFTP push, SSH exec channel, `--expect-chain` auto-derive from pre-status, `--expect-version-id` auto-derive, `--no-precheck` opt-out, `--dry-run` (resolves + pre-flights + reports without committing); strict `known_hosts` (no TOFU); refuses literal `user@host:port` (requires registered remote); UNLOAD-directive routing through `rollback` (refused by `rollout` and vice versa); rollback signed-unload path through `upatches_registry` lookup, payload_sha256 match + mismatch cases, idempotent `already_unloaded` |
+| `t06xx` | `rollout` (operator → target via libssh): SFTP push, SSH exec channel, `--expect-chain` auto-derive from pre-status, `--expect-version-id` auto-derive, `--no-precheck` opt-out, `--dry-run` (resolves + pre-flights + reports without committing); strict `known_hosts` (no TOFU); refuses literal `user@host:port` (requires registered remote); per-file verb dispatch on the `DIRECTIVE_UNLOAD` flag (LOAD → `upatch load`, UNLOAD directive → `upatch unload`, batches may mix); signed-unload path: payload_sha256 match + `payload_mismatch` (via the `security.bpf.shirudo.payload` pin xattr), idempotent `already_unloaded` |
 | `t07xx` | AI failure reporting: every `category` in the taxonomy produces the right JSON (`verifier_rejected`, `btf_mismatch`, `attach_target_missing`, `signature_rejected`, `keyring_missing`, `lsm_denied`, `parser_rejected`, `tpm_error`, `tampered`, `version_mismatch`, `init_incomplete`, `init_prereqs_missing`, `already_unloaded`, `payload_mismatch`, `detach_failed`, `eventlog_full`, `unknown`); verifier-log truncation marker; schema-versioned JSON documents; `util/json.{c,h}` LLVMFuzzer harness ingests adversarial inputs without crash or OOB |
 | `t08xx` | TPM measurement: NV-index define with derived `auth_value`; NV-index conflict and auth-mismatch detection at pre-flight; `Esys_NV_Extend` with all three event tags (`init`, `upatch`, `unload`); pre-flight `--expect-chain` mismatch refuses extend; eventlog append atomicity; **eventlog-vs-chain replay reproduces the live NV value**; `eventlog_full` refusal; boot-restore single-event semantics (one extension regardless of set size); chain-DoS attempt by external `tpm2_nvextend` blocked by `auth_value`; swtpm under QEMU exercises the full happy path on both x86_64 and arm64 runners |
 | `t09xx` | Remote registry + label selectors: `shirudo remote add/list/rm/rename/show`, drop-in `.conf` parsing, per-user vs `--system` precedence, `--label` repeatability; `util/selector.{c,h}` grammar accepts all valid expressions (`=`, `!=`, existence, non-existence, `&&`, `||`, parens), rejects malformed inputs without unbounded recursion; selector evaluation on synthetic registry sets; depth-bound on parser; `shirudo nodes` aggregation and drift labels |
@@ -3962,17 +4047,17 @@ foo.unload.upatch` (unload path) both produce well-formed
 
 Goal: target machine can be inspected via shirudo (no LSM yet).
 
-- `util/kconfig.{c,h}` — confirms
-  `/sys/kernel/security/lsm` contains `bpf`, surfaces the kernel
-  release string. No legacy feature probing — shirudo assumes a
-  current upstream kernel (see Goals §"Bleeding-edge kernel and
-  toolchain assumed").
+- The LSM/bpffs feature probes (`/sys/kernel/security/lsm` contains
+  `bpf`, kernel release string) live in `util/preflight.{c,h}` — no
+  legacy feature probing, shirudo assumes a current upstream kernel
+  (see Goals §"Bleeding-edge kernel and toolchain assumed"). (A
+  separate `util/kconfig.{c,h}` was folded into preflight.)
 - `util/keyring.{c,h}` — raw `add_key(2)` / `keyctl(2)` syscalls
   via `syscall(__NR_keyctl, ...)` (no `libkeyutils` dep).
   Create/lookup/describe.
-- `util/kmsg.{c,h}` — `/dev/kmsg` opener with replay-window
-  semantics (record position before an operation, replay messages
-  written during it). For the failure-report `dmesg_excerpt` field.
+- A `/dev/kmsg` replay-window helper for the failure-report
+  `dmesg_excerpt` field is **deferred** (the field is not emitted in
+  MVP); when added it will be direct file I/O, no `dmesg(1)`.
 
 Verification: `t/helper/test-keyring` creates the `shirudo`
 keyring, adds an asymmetric key with the cert from phase 3,
@@ -4096,10 +4181,10 @@ the targets' shells directly.
   no external dependency.
 - `builtin-remote.c` — `remote add/list/rm/rename/show` plus
   the `--label key=value` repeatable flag on `add`.
-- `builtin-rollout.c` — the rollout flow (and rollback uses the
-  same machinery with the verb difference): resolve destinations
-  from explicit names or `--selector` (intersect with
-  `util/selector.c`), validate input artifacts, per-target SSH
+- `builtin-rollout.c` — the rollout flow (load and unload, dispatched
+  per file by the `DIRECTIVE_UNLOAD` flag; no separate rollback):
+  resolve destinations from explicit names or `--selector` (intersect
+  with `util/selector.c`), validate input artifacts, per-target SSH
   session, pre-status to capture `expected_chain`, SFTP push,
   exec `shirudo upatch load --expect-chain=...`, aggregate
   reports, return non-zero on any failure.
@@ -4182,7 +4267,7 @@ Rough order-of-magnitude effort, in person-days for a single
 experienced kernel/BPF C developer:
 
 - Phases 0–4: ~5 days. Mostly mechanical scaffolding plus the
-  OpenSSL X.509 code and the keyring/kconfig glue.
+  OpenSSL X.509 code and the keyring/preflight glue.
 - Phases 5–7: ~10 days. The LSM enforcement program needs careful
   review against threat-model.rst; gen_loader integration and
   TPM measurement each have their own complexity.
@@ -4197,9 +4282,12 @@ another on the TPM integration in phase 5–6).
 
 ## Open questions / future work (not blocking MVP)
 
-- **Reboot persistence.** Ship a `systemd/shirudo.service` unit that runs
-  `shirudo init` early in boot (`Before=basic.target`, `DefaultDependencies=no`)
-  so no unsigned BPF can be loaded before shirudo is active. Tracking item.
+- **Reboot persistence — DONE.** `systemd/shirudo.service` (target-only,
+  installed by `make install-target`) runs `shirudo init` early in boot
+  (`DefaultDependencies=no`, `After=local-fs.target`,
+  `Before=sysinit.target`, `KeyringMode=inherit`). Remaining future work:
+  an initramfs-stage `shirudo init` to enforce before local-fs is even
+  up, fully closing threat T5.
 - **Update flow.** `shirudo init --update` would re-sign a new LSM, call
   `BPF_LINK_UPDATE`, and atomically swap the program without an enforcement gap.
 - **`shirudo upgrade` workflow.** Smooth in-place upgrade when

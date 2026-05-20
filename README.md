@@ -1,61 +1,34 @@
 # shirudo
 
-shirudo ("shields", Japanese) is a BPF LSM-based security platform written
-in plain C. Once active, shirudo locks down the `bpf()` syscall so only
-**signed in-kernel BPF loader programs** can install BPF code, create maps,
-or attach links — even for `CAP_SYS_ADMIN` callers.
+shirudo ("shields", Japanese) is a BPF-based security platform for
+the agentic era. It is targeted to operate in a close loop with
+agents developing and deploying BPF live patches to target systems
+(data center fleet, K8s clusters, embedded devices, air-gapped
+systems, etc). There is deliberately no config DSL since agents
+work a lot better with code.
 
-The userspace tool is agentless: a single `shirudo` binary with git-like
-subcommands, fronted by the system's `sshd`. There is no shirudo daemon,
-no shirudo-owned listening socket, and no long-lived process on the target.
+BPF live patches (aka BPF upatches) can target the Linux kernel
+itself or user space applications. The goal is to enable on-the-fly
+security patching as well as system attack surface hardening in the
+age of Mythos/Glasswing for production systems which have longer
+patch/reboot cycles.
 
-## Status
+Once active, shirudo locks down the `bpf()` syscall on the target
+systems so only **signed in-kernel BPF loader programs** can install
+BPF code, create maps, or attach links - even for `CAP_SYS_ADMIN`
+callers in order to protect against unauthorized tampering.
 
-**Planning phase.** This repository currently contains the design (in
-`PLAN.md`), the threat model and contributor docs (in `Documentation/`),
-and one worked example (in `examples/`). No source has been committed
-yet — implementation order is documented in `PLAN.md` § "First
-implementation order".
+The userspace tool is agentless: a single `shirudo` binary with git-
+like subcommands, fronted by the system's `sshd`. There is no shirudo
+daemon, no shirudo-owned listening socket, and no long-lived process
+on the target in order to be scalable as well as lightweight to fit
+embedded devices.
 
-The design has been reviewed and is considered ready for phase 0 of
-implementation. Open questions and deferred items are tracked in
-`PLAN.md` § "Open questions / future work".
+There are two roles: operator and target. The operator can be
+integrated with agents to develop BPF upatches and to deploy them
+into the fleet of target machines.
 
-## Build/target split
+Note: for local development, operator and target roles can both
+reside on the same node as well.
 
-| Side | Holds | Produces | Talks to |
-|---|---|---|---|
-| Operator | Private signing key | Signed `.upatch` artifacts | Targets via SSH (libssh) |
-| Target   | Public X.509 cert in a kernel keyring | Nothing — applies upatches | Kernel via `bpf()` |
-
-This mirrors `git push`: artifacts flow outward from the
-credential-holder. The build/sign step lives in a separate
-`shirudo-build` binary that is **only** installed on the operator
-machine — it is the single subprocess exception in shirudo, and physically
-isolating it as a separate binary keeps the target attack surface
-minimal.
-
-## Documentation
-
-| File | For |
-|---|---|
-| `PLAN.md` | Implementation plan / source of truth design |
-| `CLAUDE.md` | Project guidance for AI-driven contribution |
-| `Documentation/architecture.rst` | Contributor-facing conceptual model |
-| `Documentation/threat-model.rst` | Adversary classes, target/operator threats, residual risks |
-| `Documentation/getting-started.rst` | Operator quickstart, troubleshooting, CVE response |
-| `Documentation/index.rst` | Doc tree index |
-| `examples/` | Worked `.upatch` examples (CVE mitigation) |
-
-## License
-
-BSD-2-Clause for userspace; the BPF programs in `bpf/` declare
-`Dual BSD/GPL` for the kernel's LSM-hook framework. See `LICENSE` for
-the full text and `PLAN.md` § "Source file headers" for the per-file
-SPDX matrix.
-
-## Reporting issues
-
-shirudo is pre-implementation. Design-level issues, threat-model gaps,
-and questions about the plan are welcome — file them where the project
-host directs you.
+*Start here for an intro:* contrib/demo.sh

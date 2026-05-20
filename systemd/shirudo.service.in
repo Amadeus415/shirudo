@@ -1,0 +1,43 @@
+# shirudo reboot-persistence unit.
+#
+# bpffs and the kernel keyring do not survive a reboot, so the BPF LSM
+# and the loaded upatch set must be re-applied on every boot. This unit
+# re-runs `shirudo init` -- which re-mounts the private bpffs, re-links
+# the cert into the keyring, re-attaches bpf2 + seal, re-applies the
+# persisted upatches, and extends the TPM chain by one boot event.
+#
+# It runs as EARLY as a filesystem-dependent service can: right after
+# local filesystems are up (so /var/lib/shirudo is readable) and inside
+# the sysinit phase, ahead of networking, container runtimes, and every
+# other potential BPF loader. The point is to have the bpf() lockdown
+# and the filesystem seal enforcing before anything unsigned can load
+# BPF or touch shirudo's state. DefaultDependencies=no drops the
+# implicit ordering-after-basic.target that would otherwise hold it back.
+#
+# Install: `make install` drops this file; enable with
+#   systemctl enable shirudo.service
+# On a target without a TPM, create /etc/shirudo/init.env containing
+#   SHIRUDO_INIT_ARGS=--no-tpm
+
+[Unit]
+Description=shirudo: bring up the BPF LSM and re-apply signed upatches
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target shutdown.target
+Conflicts=shutdown.target
+RequiresMountsFor=/var/lib/shirudo
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Use the normal per-uid kernel keyring, not a service-private one:
+# `shirudo init` links the cert into KEY_SPEC_USER_KEYRING and later
+# target-side commands search it from other processes. systemd's default
+# KeyringMode=private isolates that keyring and the cert add fails with
+# EACCES (no possession).
+KeyringMode=inherit
+EnvironmentFile=-/etc/shirudo/init.env
+ExecStart=@bindir@/shirudo init $SHIRUDO_INIT_ARGS
+
+[Install]
+WantedBy=sysinit.target

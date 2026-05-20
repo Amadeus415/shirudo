@@ -1,0 +1,57 @@
+# Build artefacts
+/build/
+/shirudo
+/shirudo-build
+/tools/shirudo-build/shirudo-build
+*.o
+*.d
+*.a
+*.so
+*.so.*
+*.upatch
+*.upatch.json
+
+# Generated headers
+vmlinux.h
+*.skel.h
+
+# Generated systemd unit (from systemd/shirudo.service.in)
+/systemd/shirudo.service
+
+# BPF-side headers copied from third_party/bpf-next at build time
+/bpf/include/
+
+# Vendored bpf-next build state (do not commit)
+/third_party/bpf-next/tools/lib/bpf/*.o
+/third_party/bpf-next/tools/lib/bpf/*.a
+/third_party/bpf-next/tools/lib/subcmd/*.o
+/third_party/bpf-next/tools/lib/subcmd/*.a
+/third_party/bpf-next/tools/bpf/bpftool/bpftool
+/third_party/bpf-next/tools/bpf/bpftool/*.o
+
+# Test results
+/t/test-results/
+/t/trash directory.*
+*.tap
+
+# Compiled test helpers (sources are tracked)
+/t/helper/*
+!/t/helper/*.c
+
+# Local config (PLAN.md "Build system": Makefile.config is a committed
+# probe file that writes the cached config.mk; util/version_id.c is
+# regenerated every build).
+.config
+config.mk
+util/version_id.c
+
+# Editor / OS noise
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Coverage / sanitisers
+*.gcda
+*.gcno
+/coverage/

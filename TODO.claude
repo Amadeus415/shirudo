@@ -1,0 +1,110 @@
+shirudo: Claude's working notes (progress + what comes next)
+============================================================
+
+Cross-session scratchpad. PLAN.md is the design source of truth;
+TODO.kernel tracks kernel/libbpf limits; Documentation/threat-model.rst
+tracks the security invariants. This file = "where are we, what's left,
+and the non-obvious gotchas." Trust the code + git log over anything
+stale here. Keep it short; prune done items.
+
+Last updated: 2026-05-20
+
+
+CURRENT STATE
+-------------
+MVP is functionally complete -- no functional stubs remain. Working:
+init (LSM bootstrap, private bpffs, sealed keyring + serial pin,
+boot-restore, TPM chain), upatch build/load/unload/list/info/get, status
+(+assets, keyring pin, --include-tpm eventlog replay), keys (both-roles),
+nodes (incl. positional names), rollout (version-id gate, --dry-run),
+remote {add,list,show,rm,rename}, eventlog cap (eventlog_full),
+shirudo.conf (eventlog.max_bytes, tpm.owner_auth), the bpf2 + seal LSMs,
+the systemd reboot unit. Build: `make`; test: `make check`.
+
+History: one squashed "shirudo: Add initial implementation" commit on the
+design-plan root (5e43896). User keeps history clean -> ASK before adding
+commits; amend into the initial commit on request.
+
+Tests (t/ TAP suite):
+  Unit (always run): t0001 json, t0002 selector, t0003 chain crypto,
+    t0004 upatch-parse.
+  Integration (opt-in, skip unless SHIRUDO_INTEGRATION=1 + root + LSM
+    attached): t1101 seal, t1102 eventlog_full, t1103 version gate,
+    t1104 payload_mismatch, t1105 sig gate, t1106 keyring-swap, t1107
+    load/unload round-trip, t1108 TPM chain, t1109 rollout/nodes libssh,
+    t1110 LSM unsigned-load deny.
+  Tallies: `make check` = 29 ok + 10 skip; SHIRUDO_INTEGRATION=1 (root,
+  on a shirudo-init'd host) = 45 ok / 0 fail (t1108 skips without a TPM).
+
+
+REMAINING WORK (none blocks MVP)
+--------------------------------
+Deferred-by-design (PLAN "Open questions / future work"):
+  - CI runner infra: REMOVED + deferred (was .github/ + ci/). Restore on
+    a privileged shirudo-capable (bpffs-xattr) + vTPM runner that builds,
+    `make install-target install-operator`, `shirudo init`, then runs
+    `make check` and the opt-in suite (SHIRUDO_INTEGRATION=1). Old
+    scripts recoverable from git history.
+  - initramfs-stage init (closes early-boot window T5); init --update /
+    upgrade workflow; TPM2_NV_Certify attestation (T8); HSM signing;
+    in-kernel LSM-denial ringbuf + status --include-audit; multi-key /
+    rotation / revocation; remote groups/wildcards; eventlog rotate.
+Test extras (low value): report-taxonomy completeness (parser_rejected /
+  lsm_denied / btf_mismatch / detach_failed / init_* not each asserted);
+  LSM *allow* side (t1110 covers deny).
+Kernel-blocked (TODO.kernel): #6 in-kernel unload detach (detach is
+  userspace -> the unload target name is not signature-bound); #9
+  lsm/key_permission needs a key_ref->struct key* kfunc (the keyring
+  serial pin is the interim mitigation).
+Residual security limits (threat-model, not shirudo bugs): on-disk binary
+  integrity (IMA/dm-verity/signed pkgs); CAP_SYS_RESOURCE exe-spoof vs
+  the seal (#12); replay/downgrade detection-not-prevention (#14);
+  keyring same-named swap (#16, mitigated by serial pin); early-boot
+  window (T5); operator-host compromise (O1).
+
+
+DONE (2026-05-20): BTF line-info / source inspection
+  shirudo build embeds the program BTF + line_info in a backward-compat
+  .upatch "extras" blob (header reserved->extra_off; struct
+  shirudo_upatch_extras; NOT signature-covered). `upatch info` dumps the
+  source from the file (offline, advisory); new `upatch get <name>` dumps
+  it from the KERNEL (loaded prog's line_info+btf_id via gen_loader, read-
+  only bpf cmds, authoritative). clang -g is hardcoded for .bpf.c; .bpf.o
+  inputs depend on the operator's -g. Tests: t0005 (file info, clang-gated,
+  no root), t1111 (get, integration). Both human + --json.
+  ALSO fixed a real build bug it exposed: the Makefile had NO header-dep
+  tracking, so growing struct shirudo_upatch (util/upatch.h) left
+  builtin-rollout.o stale -> ABI/struct-size mismatch -> stack corruption
+  -> segfault in emit_report. Added -MMD -MP + `-include $(DEPS)` to
+  Makefile.shirudo (clean removes *.d). Lesson: after a header/struct
+  change, a stale incremental build can corrupt memory; dep-tracking now
+  prevents it, but `make clean` if anything looks wrong.
+
+GOTCHAS (relearned the hard way -- keep)
+----------------------------------------
+- Dev rebuild cycle: the seal protects the installed binary + the
+  /var/lib/shirudo tree, so `make install*` fails EPERM while enforcing.
+  Cycle: `umount /var/lib/shirudo/bpffs` (drops LSM + seal + all pins) ->
+  install -> `shirudo init` (reattach + boot-restore). See
+  getting-started.rst "Developer setup".
+- upatch attach is BPF_RAW_TRACEPOINT_OPEN with a baked attach_btf_id, so
+  an upatch BPF prog must be fentry/fexit/lsm/tp_btf -- a plain kprobe
+  fails at phase link_create.
+- swtpm will not stay alive in this harness: any backgrounded/detached
+  process (run_in_background, `cmd &`, even under timeout) is killed with
+  SIGSTKFLT (exit 144); only a foreground `timeout swtpm` child survives,
+  so there's no way to drive a concurrent client. Also `pkill -f 'swtpm
+  socket'` matches its own shell. => TPM-live tests can't run here
+  (t1108 skips); they need the CI vTPM runner.
+- This box's TPM has owner auth SET (value unknown) -> NV define fails
+  TPM2_RC_BAD_AUTH (0x9a2) -> measurement stays degraded. To measure: set
+  tpm.owner_auth / SHIRUDO_TPM_OWNER_AUTH (unknown here) or clear the TPM.
+- A foreign-cert rejection reports category "keyring_missing" (ENOKEY);
+  slightly misleading vs signature_rejected. Minor, not fixed.
+
+
+Hard rules (CLAUDE.md): Opus 4.7 high-reasoning gate; no subprocesses
+except shirudo build -> shirudo-build -> clang; ALL JSON via util/json;
+minimal vetted libs; kernel coding style; `= {}` not `= {0}`;
+reverse-Christmas-tree local decls; BSD-2-Clause; no emojis; never let
+docs drift from implementation.

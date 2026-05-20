@@ -17,7 +17,10 @@ EXAMPLE_OBJS := $(EXAMPLE_SRCS:.bpf.c=.bpf.o)
 CLANG_BPF   ?= clang -target bpf -O2 -g -Wall -Wextra
 VMLINUX_H   ?= ../bpf/vmlinux.h
 BPF_LIB_DIR ?= ../bpf/lib
-BPF_NEXT    ?= ../third_party/bpf-next/tools/lib/bpf
+# Vendored BPF-side headers, populated by the top-level Makefile.
+# Falls back to the third_party submodule if a standalone make is
+# invoked here before the parent build has run.
+BPF_NEXT    ?= ../bpf/include
 
 CFLAGS_BPF := \
 	-I$(dir $(VMLINUX_H)) \

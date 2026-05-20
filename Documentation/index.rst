@@ -22,6 +22,8 @@ and source-of-truth design.
    architecture
    threat-model
    getting-started
+   upatch-spec
+   coding-style
 
 Quick orientation
 =================
@@ -33,6 +35,10 @@ Quick orientation
 - **Reviewing the design or considering shirudo for your fleet?**
   Read :doc:`threat-model`, which enumerates the adversary classes,
   target- and operator-node threats, and residual risks.
+- **Contributing C or BPF code?** :doc:`coding-style` is the kernel
+  coding-style document, copied verbatim from
+  ``third_party/bpf-next/Documentation/process/coding-style.rst``;
+  shirudo applies it to userspace too.
 
 Companion files in the repository root
 ======================================
@@ -40,6 +46,9 @@ Companion files in the repository root
 - ``PLAN.md`` — implementation plan, source-of-truth design, MVP
   scope, phase-by-phase build order, file format specs.
 - ``CLAUDE.md`` — guidance for AI-driven contribution to shirudo.
+- ``TODO.kernel`` — kernel/libbpf limitations shirudo's design bumps
+  into, with the userspace workaround for each (the docs reference
+  these by item number).
 - ``README.md`` — short overview of what shirudo is and where to look.
 - ``LICENSE`` — BSD-2-Clause (userspace). BPF programs declare
   ``Dual BSD/GPL`` (kernel LSM-hook framework requirement). Vendored

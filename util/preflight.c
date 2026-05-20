@@ -1,0 +1,221 @@
+// SPDX-License-Identifier: BSD-2-Clause
+/*
+ * Copyright (c) 2026 Authors of shirudo
+ *
+ * Pre-flight infrastructure-prerequisite gate.
+ */
+
+#include <errno.h>
+#include <fcntl.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
+#include <linux/keyctl.h>
+
+#include "loader.h"
+#include "paths.h"
+#include "preflight.h"
+
+#ifndef KEY_SPEC_USER_KEYRING
+#define KEY_SPEC_USER_KEYRING	(-4)
+#endif
+
+static struct shirudo_preflight_check *next_slot(
+		struct shirudo_preflight_result *r,
+		enum shirudo_preflight_id id, const char *name)
+{
+	struct shirudo_preflight_check *c = &r->checks[r->n++];
+
+	c->id = id;
+	c->name = name;
+	c->detail[0] = '\0';
+	return c;
+}
+
+static void pass(struct shirudo_preflight_check *c)
+{
+	c->ok = true;
+}
+
+__attribute__((format(printf, 3, 4)))
+static void fail(struct shirudo_preflight_result *r,
+		 struct shirudo_preflight_check *c, const char *fmt, ...)
+{
+	va_list ap;
+
+	c->ok = false;
+	va_start(ap, fmt);
+	vsnprintf(c->detail, sizeof(c->detail), fmt, ap);
+	va_end(ap);
+	r->n_failed++;
+}
+
+static void check_root(struct shirudo_preflight_result *r)
+{
+	struct shirudo_preflight_check *c =
+		next_slot(r, SHIRUDO_PRE_ROOT, "root");
+
+	if (geteuid() == 0)
+		pass(c);
+	else
+		fail(r, c, "must run as root (EUID=%u)",
+		     (unsigned)geteuid());
+}
+
+static bool lsm_lists_bpf(void)
+{
+	char buf[1024];
+	ssize_t n;
+	int fd;
+
+	fd = open("/sys/kernel/security/lsm", O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return false;
+	n = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	if (n <= 0)
+		return false;
+	buf[n] = '\0';
+
+	for (char *p = strtok(buf, ",\n"); p; p = strtok(NULL, ",\n"))
+		if (strcmp(p, "bpf") == 0)
+			return true;
+	return false;
+}
+
+static void check_bpf_lsm(struct shirudo_preflight_result *r)
+{
+	struct shirudo_preflight_check *c =
+		next_slot(r, SHIRUDO_PRE_BPF_LSM, "bpf_lsm_active");
+
+	if (lsm_lists_bpf())
+		pass(c);
+	else
+		fail(r, c,
+		     "/sys/kernel/security/lsm has no \"bpf\" entry "
+		     "(needs CONFIG_BPF_LSM=y, bpf in CONFIG_LSM)");
+}
+
+static bool bpffs_in_proc_filesystems(void)
+{
+	FILE *f = fopen("/proc/filesystems", "r");
+	char line[128];
+	bool found = false;
+
+	if (!f)
+		return false;
+	while (fgets(line, sizeof(line), f)) {
+		char *tab = strchr(line, '\t');
+		char *name, *nl;
+
+		if (!tab)
+			continue;
+		name = tab + 1;
+		nl = strchr(name, '\n');
+		if (nl)
+			*nl = '\0';
+		if (strcmp(name, "bpf") == 0) {
+			found = true;
+			break;
+		}
+	}
+	fclose(f);
+	return found;
+}
+
+static void check_bpffs(struct shirudo_preflight_result *r)
+{
+	struct shirudo_preflight_check *c =
+		next_slot(r, SHIRUDO_PRE_BPFFS, "bpffs_supported");
+
+	if (bpffs_in_proc_filesystems())
+		pass(c);
+	else
+		fail(r, c,
+		     "/proc/filesystems does not advertise bpf "
+		     "(needs CONFIG_BPF_FS=y)");
+}
+
+static void check_cert(struct shirudo_preflight_result *r)
+{
+	struct shirudo_preflight_check *c =
+		next_slot(r, SHIRUDO_PRE_CERT_ON_DISK, "cert_on_disk");
+	struct stat st;
+
+	if (stat(SHIRUDO_CERT_PATH, &st) == 0 &&
+	    S_ISREG(st.st_mode) && st.st_size > 0)
+		pass(c);
+	else
+		fail(r, c,
+		     "%s missing or empty (rollout the operator's cert)",
+		     SHIRUDO_CERT_PATH);
+}
+
+static void check_keyring(struct shirudo_preflight_result *r)
+{
+	struct shirudo_preflight_check *c =
+		next_slot(r, SHIRUDO_PRE_KEYRING, "kernel_keyring");
+	long ret;
+
+	ret = syscall(__NR_keyctl, KEYCTL_GET_KEYRING_ID,
+		      (long)KEY_SPEC_USER_KEYRING, 0L, 0L, 0L);
+	if (ret >= 0)
+		pass(c);
+	else
+		fail(r, c,
+		     "keyctl(GET_KEYRING_ID, USER) failed: %s "
+		     "(needs CONFIG_KEYS=y)", strerror(errno));
+}
+
+static void check_embedded_loader(struct shirudo_preflight_result *r)
+{
+	struct shirudo_preflight_check *c =
+		next_slot(r, SHIRUDO_PRE_EMBEDDED_LOADER, "embedded_loader");
+	const struct shirudo_embedded_bpf *bpf2 = shirudo_bpf2_blob();
+	const struct shirudo_embedded_bpf *seal = shirudo_seal_blob();
+	size_t bpf2_sz = bpf2 ? bpf2->size : 0;
+	size_t seal_sz = seal ? seal->size : 0;
+
+	if (bpf2_sz > 0 && seal_sz > 0)
+		pass(c);
+	else
+		fail(r, c,
+		     "embedded BPF objects missing (bpf2=%zu seal=%zu)",
+		     bpf2_sz, seal_sz);
+}
+
+static void check_tpm(struct shirudo_preflight_result *r, bool allow_no_tpm)
+{
+	struct shirudo_preflight_check *c =
+		next_slot(r, SHIRUDO_PRE_TPM, "tpm2_reachable");
+
+	if (allow_no_tpm) {
+		pass(c);
+		snprintf(c->detail, sizeof(c->detail),
+			 "skipped (--no-tpm, degraded mode)");
+		return;
+	}
+	if (access("/dev/tpmrm0", R_OK | W_OK) == 0)
+		pass(c);
+	else
+		fail(r, c,
+		     "/dev/tpmrm0: %s (pass --no-tpm for degraded mode)",
+		     strerror(errno));
+}
+
+void shirudo_preflight_run(const struct shirudo_preflight_opts *opts,
+			   struct shirudo_preflight_result *out)
+{
+	memset(out, 0, sizeof(*out));
+	check_root(out);
+	check_bpf_lsm(out);
+	check_bpffs(out);
+	check_cert(out);
+	check_keyring(out);
+	check_embedded_loader(out);
+	check_tpm(out, opts->allow_no_tpm);
+}
