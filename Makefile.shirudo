@@ -209,6 +209,8 @@ bpf/%.bpf.o: bpf/%.c bpf/vmlinux.h $(BPF_HEADERS_OUT)
 util/version_id.c:
 	@printf '  GEN     $@\n'
 	$(Q)set -eu; \
+	describe=$$(git describe --tags --always --dirty 2>/dev/null || cat VERSION); \
+	describe_c=$$(printf '%s' "$$describe" | sed 's/[\\"]/\\&/g'); \
 	rev=$$(git rev-parse HEAD 2>/dev/null || cat VERSION); \
 	dirty=$$(git diff-index --quiet HEAD 2>/dev/null || echo -dirty); \
 	cfg=$$(sha256sum config.mk Makefile.shirudo 2>/dev/null | \
@@ -220,6 +222,7 @@ util/version_id.c:
 	    echo "/* Copyright (c) 2026 Authors of shirudo */"; \
 	    echo "/* AUTO-GENERATED. Do not edit. Do not commit. */"; \
 	    echo ""; \
+	    echo "const char shirudo_version[] = \"$$describe_c\";"; \
 	    echo "const char shirudo_version_id[] = \"$$id\";"; \
 	} > $@
 

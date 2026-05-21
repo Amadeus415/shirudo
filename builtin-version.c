@@ -10,6 +10,7 @@
 
 #include "builtin.h"
 
+extern const char shirudo_version[];
 extern const char shirudo_version_id[];
 
 int cmd_version(int argc, const char **argv)
@@ -18,7 +19,7 @@ int cmd_version(int argc, const char **argv)
 		printf("%s\n", shirudo_version_id);
 		return 0;
 	}
-	printf("shirudo (development)\n");
+	printf("shirudo (%s)\n", shirudo_version);
 	printf("version-id: %s\n", shirudo_version_id);
 	return 0;
 }
