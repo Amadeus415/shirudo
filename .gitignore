@@ -2,6 +2,8 @@
 /build/
 /shirudo
 /shirudo-build
+/shirudo.tar.gz
+/shirudo-static.tar.gz
 /tools/shirudo-build/shirudo-build
 *.o
 *.d
@@ -12,7 +14,8 @@
 *.upatch.json
 
 # Generated headers
-vmlinux.h
+/vmlinux.h
+/bpf/vmlinux.h
 *.skel.h
 
 # Generated systemd unit (from systemd/shirudo.service.in)

@@ -93,6 +93,7 @@ shirudo rollback cve-2026-31431.unload.upatch prod-fleet-a prod-fleet-b ...
 | File | Purpose |
 |---|---|
 | [`cve-2026-31431.bpf.c`](cve-2026-31431.bpf.c) | Mitigates CVE-2026-31431 by refusing every userspace `socket(AF_ALG, …)` call. Hooks the BPF LSM `socket_create` hook; returns `-EPERM` when `family == AF_ALG`; allows everything else. Carries the dual `(GPL-2.0 OR BSD-2-Clause)` SPDX header required for BPF LSM programs. |
+| [`verifier-reject-null-deref.bpf.c`](verifier-reject-null-deref.bpf.c) | Negative test artifact for operator rollout paths. It compiles and packages, but intentionally dereferences a null/scalar pointer so target-side BPF payload load should fail with verifier rejection. |
 
 ## Conventions for new examples
 

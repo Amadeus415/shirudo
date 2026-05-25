@@ -158,10 +158,28 @@ Generate the key pair and self-signed cert:
 
     sudo shirudo genkey
 
-This produces:
+By default this writes the root-owned production key directory under
+``/var/lib/shirudo/keys``. For a user-owned operator key directory,
+export ``SHIRUDO_KEYS_DIR`` once in your tooling environment, or pass
+``--keys-dir`` on individual commands:
+
+.. code-block:: sh
+
+    export SHIRUDO_KEYS_DIR=~/.local/share/shirudo/keys
+    shirudo genkey
+    shirudo build fix.bpf.c -o fix.upatch
+
+``--keys-dir`` takes precedence over ``SHIRUDO_KEYS_DIR`` when both
+are set.
+
+The default command produces:
 
 - ``/var/lib/shirudo/keys/signing_key.pem`` (mode 0600, root-owned)
 - ``/var/lib/shirudo/keys/cert.der``
+
+With ``--keys-dir``, the same filenames are written under that
+directory instead. With ``SHIRUDO_KEYS_DIR`` set, they are written
+under the exported directory.
 
 Defaults are RSA-2048, SHA-256, CN ``shirudo``, 10-year validity.
 You can inspect the cert with the usual ``openssl x509 -in cert.der

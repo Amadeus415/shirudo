@@ -7,6 +7,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -164,7 +165,7 @@ static const char *pkey_algorithm(EVP_PKEY *pkey)
 	}
 }
 
-static int dump_operator_cert(X509 *cert)
+static int dump_operator_cert(X509 *cert, const char *cert_path)
 {
 	X509_NAME *subj = X509_get_subject_name(cert);
 	X509_NAME *iss  = X509_get_issuer_name(cert);
@@ -183,7 +184,7 @@ static int dump_operator_cert(X509 *cert)
 	left = days_remaining(na);
 	self_signed = (X509_NAME_cmp(subj, iss) == 0);
 
-	printf("  %s:\n", SHIRUDO_CERT_PATH);
+	printf("  %s:\n", cert_path);
 	printf("    subject:    %s\n", subj_s);
 	printf("    issuer:     %s%s\n", iss_s,
 	       self_signed ? " (self-signed)" : "");
@@ -202,7 +203,7 @@ static int dump_operator_cert(X509 *cert)
 	return 0;
 }
 
-static int compare_priv_to_cert(X509 *cert)
+static int compare_priv_to_cert(X509 *cert, const char *pkey_path)
 {
 	EVP_PKEY *priv;
 	EVP_PKEY *pub_in_cert = X509_get0_pubkey(cert);
@@ -210,17 +211,17 @@ static int compare_priv_to_cert(X509 *cert)
 	unsigned char fpr_cert[SHA256_DIGEST_LENGTH];
 	int rc = 0;
 
-	if (!path_exists(SHIRUDO_SIGNING_KEY_PATH)) {
+	if (!path_exists(pkey_path)) {
 		printf("  %s: (not present on this host -- target mode)\n",
-		       SHIRUDO_SIGNING_KEY_PATH);
+		       pkey_path);
 		return 0;
 	}
 
-	priv = read_priv_pem(SHIRUDO_SIGNING_KEY_PATH);
+	priv = read_priv_pem(pkey_path);
 	if (!priv)
 		return -1;
 
-	printf("  %s:\n", SHIRUDO_SIGNING_KEY_PATH);
+	printf("  %s:\n", pkey_path);
 	printf("    algorithm:  %s-%d\n",
 	       pkey_algorithm(priv), EVP_PKEY_get_bits(priv));
 
@@ -243,19 +244,20 @@ out:
 	return rc;
 }
 
-static int keys_dump_disk_material(void)
+static int keys_dump_disk_material(const char *cert_path,
+				   const char *pkey_path)
 {
 	X509 *cert;
 	int rc;
 
-	cert = read_cert_der(SHIRUDO_CERT_PATH);
+	cert = read_cert_der(cert_path);
 	if (!cert)
 		return 1;
 
 	printf("on-disk key material:\n");
-	rc = dump_operator_cert(cert);
+	rc = dump_operator_cert(cert, cert_path);
 	if (rc == 0)
-		rc = compare_priv_to_cert(cert);
+		rc = compare_priv_to_cert(cert, pkey_path);
 	X509_free(cert);
 	return rc ? 1 : 0;
 }
@@ -294,32 +296,55 @@ static int keys_list_keyring(key_serial_t ring)
 static void usage(void)
 {
 	fprintf(stderr,
-		"usage: shirudo keys\n"
+		"usage: shirudo keys [--keys-dir <dir>]\n"
 		"\n"
 		"  Inspect the shirudo key material this host holds. Reports\n"
 		"  the on-disk cert (%s) and signing\n"
 		"  key (%s), if present, and the\n"
 		"  \"%s\" named kernel keyring, if `shirudo init` has\n"
 		"  populated one. A host with both roles shows both sections.\n"
-		"  Local-only on either side.\n",
+		"  Local-only on either side.\n"
+		"  --keys-dir reads signing_key.pem and cert.der under <dir>\n"
+		"             instead of %s. If omitted, %s is used when set.\n",
 		SHIRUDO_CERT_PATH, SHIRUDO_SIGNING_KEY_PATH,
-		SHIRUDO_KEYRING_NAME);
+		SHIRUDO_KEYRING_NAME, SHIRUDO_KEYS_DIR,
+		SHIRUDO_KEYS_DIR_ENV);
 }
 
 int cmd_keys(int argc, const char **argv)
 {
+	const char *keys_dir_arg = NULL;
+	const char *keys_dir;
+	char pkey_path[PATH_MAX];
+	char cert_path[PATH_MAX];
 	bool shown = false;
 	key_serial_t ring;
 	int rc = 0;
 
 	for (int i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "-h") == 0 ||
+		if (strcmp(argv[i], "--keys-dir") == 0 &&
+		    i + 1 < argc) {
+			keys_dir_arg = argv[++i];
+		} else if (strncmp(argv[i], "--keys-dir=", 11) == 0) {
+			keys_dir_arg = argv[i] + 11;
+		} else if (strcmp(argv[i], "-h") == 0 ||
 		    strcmp(argv[i], "--help") == 0) {
 			usage();
 			return 0;
+		} else {
+			pr_err("keys: unknown option '%s'", argv[i]);
+			usage();
+			return 2;
 		}
-		pr_err("keys: unknown option '%s'", argv[i]);
-		usage();
+	}
+
+	keys_dir = shirudo_keys_dir_resolve(keys_dir_arg);
+
+	rc = shirudo_key_paths(keys_dir, pkey_path, sizeof(pkey_path),
+			       cert_path, sizeof(cert_path));
+	if (rc) {
+		pr_err("keys: invalid keys dir %s: %s",
+		       keys_dir, strerror(-rc));
 		return 2;
 	}
 
@@ -329,8 +354,8 @@ int cmd_keys(int argc, const char **argv)
 	 * rather than picking one mode: the on-disk cert + signing key,
 	 * then the kernel keyring once `shirudo init` has populated one.
 	 */
-	if (path_exists(SHIRUDO_CERT_PATH)) {
-		if (keys_dump_disk_material())
+	if (path_exists(cert_path)) {
+		if (keys_dump_disk_material(cert_path, pkey_path))
 			rc = 1;
 		shown = true;
 	}
@@ -352,7 +377,7 @@ int cmd_keys(int argc, const char **argv)
 		pr_err("no shirudo key material on this host: no %s and no "
 		       "\"%s\" kernel keyring -- run `shirudo genkey` "
 		       "(operator) or `shirudo init` (target)",
-		       SHIRUDO_CERT_PATH, SHIRUDO_KEYRING_NAME);
+		       cert_path, SHIRUDO_KEYRING_NAME);
 		rc = 1;
 	}
 	return rc;

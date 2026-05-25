@@ -30,22 +30,30 @@ static void usage(FILE *fp)
 		"usage:\n"
 		"  shirudo-build <input> -o <output.upatch>\n"
 		"                [--name <upatch-name>]\n"
+		"                [--keys-dir <dir>]\n"
 		"                [--key <signing_key.pem>] [--cert <cert.der>]\n"
 		"                [--vmlinux <vmlinux.h>] [--extra-cflags '<flags>']\n"
 		"\n"
 		"  shirudo-build --unload <upatch-name> -o <output.upatch>\n"
 		"                [--payload-sha256 <64-hex>]\n"
+		"                [--keys-dir <dir>]\n"
 		"                [--key <signing_key.pem>] [--cert <cert.der>]\n"
 		"\n"
 		"<input> is .bpf.c (compiled via clang) or .bpf.o.\n"
-		"--key defaults to %s\n"
-		"--cert defaults to %s\n"
+		"--keys-dir defaults key/cert to <dir>/signing_key.pem and\n"
+		"           <dir>/cert.der. If omitted, %s is used when set.\n"
+		"           Explicit --keys-dir overrides the environment;\n"
+		"           explicit --key/--cert override both.\n"
+		"--key default without --keys-dir/%s: %s\n"
+		"--cert default without --keys-dir/%s: %s\n"
 		"--vmlinux: explicit; else ./vmlinux.h, then\n"
 		"           /usr/share/shirudo/vmlinux.h.\n"
 		"--payload-sha256: 64 hex chars; if omitted, read from the local\n"
 		"                  archive /var/lib/shirudo/upatches/<name>.upatch,\n"
 		"                  else all-zero (target skips the payload check).\n",
-		SHIRUDO_SIGNING_KEY_PATH, SHIRUDO_CERT_PATH);
+		SHIRUDO_KEYS_DIR_ENV, SHIRUDO_KEYS_DIR_ENV,
+		SHIRUDO_SIGNING_KEY_PATH, SHIRUDO_KEYS_DIR_ENV,
+		SHIRUDO_CERT_PATH);
 }
 
 static int parse_hex_sha256(const char *s, uint8_t out[32])
@@ -122,6 +130,8 @@ int main(int argc, char **argv)
 	const char *pkey = SHIRUDO_SIGNING_KEY_PATH;
 	const char *payload_sha256_hex = NULL;
 	const char *cert = SHIRUDO_CERT_PATH;
+	const char *keys_dir_arg = NULL;
+	const char *keys_dir;
 	const char *vmlinux_override = NULL;
 	const char *extra_cflags = NULL;
 	uint8_t payload_sha256[32] = {};
@@ -131,8 +141,12 @@ int main(int argc, char **argv)
 	const char *name = NULL;
 	char *temp_bpf_o = NULL;
 	const char *src_path = NULL;
+	char pkey_path[PATH_MAX];
+	char cert_path[PATH_MAX];
 	char name_buf[256];
 	const char *bpf_o;
+	int pkey_explicit = 0;
+	int cert_explicit = 0;
 	int rc;
 	int i;
 
@@ -145,10 +159,16 @@ int main(int argc, char **argv)
 			output = argv[++i];
 		} else if (strcmp(a, "--name") == 0 && i + 1 < argc) {
 			name = argv[++i];
+		} else if (strcmp(a, "--keys-dir") == 0 && i + 1 < argc) {
+			keys_dir_arg = argv[++i];
+		} else if (strncmp(a, "--keys-dir=", 11) == 0) {
+			keys_dir_arg = a + 11;
 		} else if (strcmp(a, "--key") == 0 && i + 1 < argc) {
 			pkey = argv[++i];
+			pkey_explicit = 1;
 		} else if (strcmp(a, "--cert") == 0 && i + 1 < argc) {
 			cert = argv[++i];
+			cert_explicit = 1;
 		} else if (strcmp(a, "--vmlinux") == 0 && i + 1 < argc) {
 			vmlinux_override = argv[++i];
 		} else if (strcmp(a, "--extra-cflags") == 0 && i + 1 < argc) {
@@ -169,6 +189,32 @@ int main(int argc, char **argv)
 		} else {
 			pr_err("unexpected positional arg '%s'", a);
 			return 2;
+		}
+	}
+
+	keys_dir = shirudo_keys_dir_resolve(keys_dir_arg);
+
+	if (keys_dir) {
+		if (!pkey_explicit) {
+			rc = shirudo_key_path(pkey_path, sizeof(pkey_path),
+					      keys_dir,
+					      SHIRUDO_SIGNING_KEY_FILE);
+			if (rc) {
+					pr_err("invalid keys dir %s: %s",
+					       keys_dir, strerror(-rc));
+					return 2;
+				}
+			pkey = pkey_path;
+		}
+		if (!cert_explicit) {
+			rc = shirudo_key_path(cert_path, sizeof(cert_path),
+					      keys_dir, SHIRUDO_CERT_FILE);
+			if (rc) {
+					pr_err("invalid keys dir %s: %s",
+					       keys_dir, strerror(-rc));
+					return 2;
+				}
+			cert = cert_path;
 		}
 	}
 

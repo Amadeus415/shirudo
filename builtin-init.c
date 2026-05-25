@@ -115,6 +115,27 @@ static void pin_keyring_serial(key_serial_t ring)
 			SHIRUDO_KEYRING_SERIAL_PATH, strerror(-rc));
 }
 
+static void keyring_note_asymmetric(key_serial_t serial, const char *type,
+				    const char *description, void *ud)
+{
+	bool *found = ud;
+
+	(void)serial;
+	(void)description;
+	if (strcmp(type, "asymmetric") == 0)
+		*found = true;
+}
+
+static int keyring_has_cert(key_serial_t ring)
+{
+	bool found = false;
+	int rc = shirudo_keyring_list(ring, keyring_note_asymmetric, &found);
+
+	if (rc)
+		return rc;
+	return found ? 1 : 0;
+}
+
 static int init_keyring(void)
 {
 	unsigned char *der = NULL;
@@ -123,16 +144,36 @@ static int init_keyring(void)
 	int rc;
 
 	/*
-	 * Idempotent: if the keyring already exists it was created and
-	 * sealed earlier this boot, so re-adding the cert would hit the
-	 * now-read-only keyring (EACCES). Leave it as-is.
+	 * Idempotent only when the existing keyring is readable and contains
+	 * an asymmetric cert. Older failed init attempts could leave an empty,
+	 * unreadable keyring behind; replace that rather than accepting it.
 	 */
 	ring = shirudo_keyring_find(SHIRUDO_KEYRING_NAME);
 	if (ring >= 0) {
-		pr_info("keyring \"%s\" already present (serial=%d), sealed",
-			SHIRUDO_KEYRING_NAME, (int)ring);
-		pin_keyring_serial(ring);
-		return 0;
+		rc = keyring_has_cert(ring);
+		if (rc > 0) {
+			rc = shirudo_keyring_seal(ring);
+			if (rc && rc != -EACCES)
+				pr_warn("keyring \"%s\": could not seal (mutable): %s",
+					SHIRUDO_KEYRING_NAME, strerror(-rc));
+			pr_info("keyring \"%s\" already present (serial=%d), sealed",
+				SHIRUDO_KEYRING_NAME, (int)ring);
+			pin_keyring_serial(ring);
+			return 0;
+		}
+		pr_warn("keyring \"%s\" serial=%d is %s; recreating",
+			SHIRUDO_KEYRING_NAME, (int)ring,
+			rc == 0 ? "empty" : strerror(-rc));
+		rc = shirudo_keyring_unlink_from_user(ring);
+		if (rc) {
+			pr_err("unlink stale keyring \"%s\": %s",
+			       SHIRUDO_KEYRING_NAME, strerror(-rc));
+			return rc;
+		}
+	} else if (ring != -ENOKEY) {
+		pr_err("lookup keyring \"%s\": %s",
+		       SHIRUDO_KEYRING_NAME, strerror(-ring));
+		return ring;
 	}
 
 	rc = read_cert_der(&der, &der_sz);

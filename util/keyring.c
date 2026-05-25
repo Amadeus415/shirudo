@@ -28,10 +28,19 @@
 /* keyring permission bits (avoid a libkeyutils dependency). */
 #define KEY_POS_VIEW	0x01000000
 #define KEY_POS_READ	0x02000000
+#define KEY_POS_WRITE	0x04000000
 #define KEY_POS_SEARCH	0x08000000
+#define KEY_POS_LINK	0x10000000
+#define KEY_POS_SETATTR	0x20000000
 #define KEY_USR_VIEW	0x00010000
 #define KEY_USR_READ	0x00020000
+#define KEY_USR_WRITE	0x00040000
 #define KEY_USR_SEARCH	0x00080000
+#define KEY_USR_SETATTR	0x00200000
+
+#ifndef KEY_SPEC_SESSION_KEYRING
+#define KEY_SPEC_SESSION_KEYRING (-3)
+#endif
 
 static long sys_add_key(const char *type, const char *desc,
 			const void *payload, size_t plen, key_serial_t ring)
@@ -53,19 +62,52 @@ key_serial_t shirudo_keyring_find(const char *name)
 	return (key_serial_t)ret;
 }
 
+static int shirudo_keyring_make_mutable(key_serial_t keyring)
+{
+	/*
+	 * A named keyring linked only from @u is not necessarily possessed by
+	 * a systemd service process. Give root enough owner permission to
+	 * populate it; init drops write/setattr again when sealing succeeds.
+	 */
+	long perm = KEY_POS_VIEW | KEY_POS_READ | KEY_POS_WRITE |
+		    KEY_POS_SEARCH | KEY_POS_LINK | KEY_POS_SETATTR |
+		    KEY_USR_VIEW | KEY_USR_READ | KEY_USR_WRITE |
+		    KEY_USR_SEARCH | KEY_USR_SETATTR;
+
+	if (sys_keyctl(KEYCTL_SETPERM, keyring, perm, 0, 0) < 0)
+		return -errno;
+	return 0;
+}
+
 key_serial_t shirudo_keyring_open_or_create(const char *name)
 {
 	key_serial_t s = shirudo_keyring_find(name);
 	long ret;
+	int rc;
 
 	if (s != -ENOKEY)
 		return s;	/* success, or some other error */
 
 	ret = sys_add_key("keyring", name, NULL, 0,
-			  KEY_SPEC_USER_KEYRING);
+			  KEY_SPEC_SESSION_KEYRING);
 	if (ret < 0)
 		return (key_serial_t)-errno;
+
+	rc = shirudo_keyring_make_mutable((key_serial_t)ret);
+	if (rc)
+		return (key_serial_t)rc;
+
+	if (sys_keyctl(KEYCTL_LINK, ret, KEY_SPEC_USER_KEYRING, 0, 0) < 0)
+		return (key_serial_t)-errno;
+
 	return (key_serial_t)ret;
+}
+
+int shirudo_keyring_unlink_from_user(key_serial_t keyring)
+{
+	if (sys_keyctl(KEYCTL_UNLINK, keyring, KEY_SPEC_USER_KEYRING, 0, 0) < 0)
+		return -errno;
+	return 0;
 }
 
 key_serial_t shirudo_keyring_add_cert(key_serial_t keyring,

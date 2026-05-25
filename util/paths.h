@@ -8,10 +8,14 @@
 #ifndef SHIRUDO_PATHS_H
 #define SHIRUDO_PATHS_H
 
+#include <stddef.h>
+
 /* Target-side. */
 #define SHIRUDO_VAR_LIB			"/var/lib/shirudo"
 #define SHIRUDO_KEYS_DIR		SHIRUDO_VAR_LIB "/keys"
-#define SHIRUDO_CERT_PATH		SHIRUDO_KEYS_DIR "/cert.der"
+#define SHIRUDO_KEYS_DIR_ENV		"SHIRUDO_KEYS_DIR"
+#define SHIRUDO_CERT_FILE		"cert.der"
+#define SHIRUDO_CERT_PATH		SHIRUDO_KEYS_DIR "/" SHIRUDO_CERT_FILE
 #define SHIRUDO_UPATCHES_DIR		SHIRUDO_VAR_LIB "/upatches"
 #define SHIRUDO_INCOMING_DIR		SHIRUDO_VAR_LIB "/incoming"
 #define SHIRUDO_EVENTLOG_PATH		SHIRUDO_VAR_LIB "/eventlog"
@@ -29,7 +33,8 @@
 #define SHIRUDO_BPFFS_UPATCHES_DIR	SHIRUDO_BPFFS_DIR "/upatches"
 
 /* Operator-side. */
-#define SHIRUDO_SIGNING_KEY_PATH	SHIRUDO_KEYS_DIR "/signing_key.pem"
+#define SHIRUDO_SIGNING_KEY_FILE	"signing_key.pem"
+#define SHIRUDO_SIGNING_KEY_PATH	SHIRUDO_KEYS_DIR "/" SHIRUDO_SIGNING_KEY_FILE
 
 /* Inode-xattr label (PLAN.md "Target hardening in two layers", layer 2). */
 #define SHIRUDO_XATTR_NAME		"security.bpf.shirudo"
@@ -56,5 +61,12 @@
 
 /* Site config. */
 #define SHIRUDO_CONF_PATH		"/etc/shirudo/shirudo.conf"
+
+int shirudo_key_path(char *out, size_t out_sz,
+		     const char *keys_dir, const char *file);
+int shirudo_key_paths(const char *keys_dir,
+		      char *pkey_path, size_t pkey_sz,
+		      char *cert_path, size_t cert_sz);
+const char *shirudo_keys_dir_resolve(const char *keys_dir_arg);
 
 #endif /* SHIRUDO_PATHS_H */

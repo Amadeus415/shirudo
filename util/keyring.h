@@ -30,6 +30,11 @@ key_serial_t shirudo_keyring_find(const char *name);
 key_serial_t shirudo_keyring_open_or_create(const char *name);
 
 /*
+ * Unlink a keyring from @u so init can replace an incomplete stale keyring.
+ */
+int shirudo_keyring_unlink_from_user(key_serial_t keyring);
+
+/*
  * Add an X.509 cert (DER bytes) as an "asymmetric" key.
  */
 key_serial_t shirudo_keyring_add_cert(key_serial_t keyring,

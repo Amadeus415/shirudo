@@ -7,6 +7,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,27 +41,66 @@ static void openssl_complain(const char *where)
 
 static int mkdir_p_mode(const char *path, mode_t mode)
 {
-	if (mkdir(path, mode) == 0) {
-		/* defeat any caller umask */
-		if (chmod(path, mode) != 0) {
-			pr_err("chmod %s: %s", path, strerror(errno));
+	struct stat st;
+	char tmp[PATH_MAX];
+	size_t len;
+	int n;
+
+	if (!path || !*path) {
+		pr_err("mkdir: empty path");
+		return -1;
+	}
+
+	n = snprintf(tmp, sizeof(tmp), "%s", path);
+	if (n < 0 || (size_t)n >= sizeof(tmp)) {
+		pr_err("mkdir %s: path too long", path);
+		return -1;
+	}
+
+	len = strlen(tmp);
+	while (len > 1 && tmp[len - 1] == '/')
+		tmp[--len] = '\0';
+	if (strcmp(tmp, "/") == 0) {
+		pr_err("keys dir cannot be /");
+		return -1;
+	}
+
+	for (char *p = tmp + 1; *p; p++) {
+		if (*p != '/')
+			continue;
+		*p = '\0';
+		if (mkdir(tmp, mode) != 0 && errno != EEXIST) {
+			pr_err("mkdir %s: %s", tmp, strerror(errno));
 			return -1;
 		}
-		return 0;
+		*p = '/';
+		while (p[1] == '/')
+			p++;
 	}
-	if (errno == EEXIST)
-		return 0;
-	pr_err("mkdir %s: %s", path, strerror(errno));
-	return -1;
+
+	if (mkdir(tmp, mode) != 0 && errno != EEXIST) {
+		pr_err("mkdir %s: %s", tmp, strerror(errno));
+		return -1;
+	}
+	if (stat(tmp, &st) != 0) {
+		pr_err("stat %s: %s", tmp, strerror(errno));
+		return -1;
+	}
+	if (!S_ISDIR(st.st_mode)) {
+		pr_err("keys dir %s is not a directory", tmp);
+		return -1;
+	}
+	/* Defeat umask on the final key directory. */
+	if (chmod(tmp, mode) != 0) {
+		pr_err("chmod %s: %s", tmp, strerror(errno));
+		return -1;
+	}
+	return 0;
 }
 
-static int ensure_keys_dir(void)
+static int ensure_keys_dir(const char *keys_dir)
 {
-	if (mkdir_p_mode(SHIRUDO_VAR_LIB, 0700) != 0)
-		return -1;
-	if (mkdir_p_mode(SHIRUDO_KEYS_DIR, 0700) != 0)
-		return -1;
-	return 0;
+	return mkdir_p_mode(keys_dir, 0700);
 }
 
 static int path_exists(const char *p)
@@ -255,21 +295,28 @@ out:
 static void usage(void)
 {
 	fprintf(stderr,
-		"usage: shirudo genkey [--force]\n"
+		"usage: shirudo genkey [--force] [--keys-dir <dir>]\n"
 		"\n"
 		"  Generate a self-signed X.509 cert for signing .upatch\n"
 		"  loader bytes. Writes:\n"
 		"    %s\n"
 		"    %s\n"
 		"\n"
+		"  --keys-dir writes signing_key.pem and cert.der under <dir>\n"
+		"             instead of %s. If omitted, %s is used when set.\n"
 		"  Refuses if either file already exists; pass --force to\n"
 		"  overwrite.\n",
-		SHIRUDO_SIGNING_KEY_PATH, SHIRUDO_CERT_PATH);
+		SHIRUDO_SIGNING_KEY_PATH, SHIRUDO_CERT_PATH,
+		SHIRUDO_KEYS_DIR, SHIRUDO_KEYS_DIR_ENV);
 }
 
 int cmd_genkey(int argc, const char **argv)
 {
 	EVP_PKEY *pkey = NULL;
+	const char *keys_dir_arg = NULL;
+	const char *keys_dir;
+	char pkey_path[PATH_MAX];
+	char cert_path[PATH_MAX];
 	X509 *cert = NULL;
 	int force = 0;
 	int rc = 1;
@@ -278,6 +325,11 @@ int cmd_genkey(int argc, const char **argv)
 		if (strcmp(argv[i], "--force") == 0 ||
 		    strcmp(argv[i], "-f") == 0) {
 			force = 1;
+		} else if (strcmp(argv[i], "--keys-dir") == 0 &&
+			   i + 1 < argc) {
+			keys_dir_arg = argv[++i];
+		} else if (strncmp(argv[i], "--keys-dir=", 11) == 0) {
+			keys_dir_arg = argv[i] + 11;
 		} else if (strcmp(argv[i], "-h") == 0 ||
 			   strcmp(argv[i], "--help") == 0) {
 			usage();
@@ -289,26 +341,36 @@ int cmd_genkey(int argc, const char **argv)
 		}
 	}
 
-	if (geteuid() != 0) {
-		pr_err("genkey: must run as root (writes to %s)",
+	keys_dir = shirudo_keys_dir_resolve(keys_dir_arg);
+
+	rc = shirudo_key_paths(keys_dir, pkey_path, sizeof(pkey_path),
+			       cert_path, sizeof(cert_path));
+	if (rc) {
+		pr_err("genkey: invalid keys dir %s: %s",
+		       keys_dir, strerror(-rc));
+		return 1;
+	}
+
+	if (geteuid() != 0 && strcmp(keys_dir, SHIRUDO_KEYS_DIR) == 0) {
+		pr_err("genkey: default keys dir %s requires root; "
+		       "rerun with sudo or pass --keys-dir <dir>",
 		       SHIRUDO_KEYS_DIR);
 		return 1;
 	}
 
-	if (ensure_keys_dir() != 0)
+	if (ensure_keys_dir(keys_dir) != 0)
 		return 1;
 
 	if (!force) {
-		if (path_exists(SHIRUDO_SIGNING_KEY_PATH) ||
-		    path_exists(SHIRUDO_CERT_PATH)) {
+		if (path_exists(pkey_path) || path_exists(cert_path)) {
 			pr_err("genkey: %s or %s already exists; pass --force",
-			       SHIRUDO_SIGNING_KEY_PATH, SHIRUDO_CERT_PATH);
+			       pkey_path, cert_path);
 			return 1;
 		}
 	} else {
 		/* clear the way for the O_EXCL writes below */
-		unlink(SHIRUDO_SIGNING_KEY_PATH);
-		unlink(SHIRUDO_CERT_PATH);
+		unlink(pkey_path);
+		unlink(cert_path);
 	}
 
 	pkey = gen_keypair();
@@ -322,19 +384,19 @@ int cmd_genkey(int argc, const char **argv)
 	if (build_cert(cert, pkey) != 0)
 		goto out;
 
-	if (write_private_pem(pkey, SHIRUDO_SIGNING_KEY_PATH) != 0)
+	if (write_private_pem(pkey, pkey_path) != 0)
 		goto out;
-	if (write_cert_der(cert, SHIRUDO_CERT_PATH) != 0) {
-		unlink(SHIRUDO_SIGNING_KEY_PATH);
+	if (write_cert_der(cert, cert_path) != 0) {
+		unlink(pkey_path);
 		goto out;
 	}
 
 	pr_info("wrote %s (RSA-%d, mode 0600)",
-		SHIRUDO_SIGNING_KEY_PATH, ALG_RSA_BITS);
+		pkey_path, ALG_RSA_BITS);
 	pr_info("wrote %s (X.509 self-signed, %ld-day validity)",
-		SHIRUDO_CERT_PATH, VALIDITY_DAYS);
+		cert_path, VALIDITY_DAYS);
 	pr_audit("genkey: created shirudo signing material at %s",
-		 SHIRUDO_KEYS_DIR);
+		 keys_dir);
 	rc = 0;
 out:
 	if (cert)
