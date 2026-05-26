@@ -20,11 +20,23 @@ fi
 
 role=$1
 stage=$2
-version=$3
+raw_version=$3
 arch=$4
 maint=$5
 out=$6
 here=$(CDPATH= cd "$(dirname "$0")" && pwd)
+
+sanitize_deb_version()
+{
+	v=$(printf '%s' "$1" | sed 's/^v//; s/[^A-Za-z0-9.+:~-]/./g')
+	case "$v" in
+	[0-9]*) ;;
+	*) v="0~$v" ;;
+	esac
+	printf '%s\n' "$v"
+}
+
+version=$(sanitize_deb_version "$raw_version")
 
 case "$role" in
 target)

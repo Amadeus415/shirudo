@@ -1,0 +1,62 @@
+name: Build deb
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
+  pull_request:
+
+jobs:
+  deb:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out bpf-next submodule
+        run: |
+          git submodule sync -- third_party/bpf-next
+          git submodule update --init --force --depth 1 --single-branch -- third_party/bpf-next
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            clang \
+            llvm \
+            python3 \
+            pkg-config \
+            libssl-dev \
+            libssh-dev \
+            libtss2-dev \
+            libelf-dev \
+            zlib1g-dev \
+            libcurl4-openssl-dev \
+            libjson-c-dev \
+            uuid-dev \
+            dpkg-dev \
+            file
+
+      - name: Generate package BPF header
+        run: packaging/bpf/gen-vmlinux-h.sh packaging/bpf/vmlinux.h
+
+      - name: Build deb package
+        run: make BPF_VMLINUX_H=$PWD/packaging/bpf/vmlinux.h bindeb-pkg
+
+      - name: Install deb package
+        run: |
+          sudo apt-get install -y ./shirudo-target.deb
+          shirudo version
+
+      - name: Upload deb package
+        uses: actions/upload-artifact@v4
+        with:
+          name: shirudo-deb
+          path: shirudo-*.deb
+          if-no-files-found: error

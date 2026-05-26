@@ -13,6 +13,8 @@ export EXTRAVERSION NAME
 
 MAKEFLAGS += -rR --no-print-directory
 
+include Makefile.version
+
 # Output verbosity. `make V=1` shows full command lines.
 ifeq ($(V),1)
   Q =
@@ -54,7 +56,7 @@ STATIC_IMAGE_ROOT    := $(STATIC_IMAGE_STAGE)/root
 # core `shirudo` finds shirudo-build), so bindeb-pkg rebuilds with this.
 DEB_PREFIX     ?= /usr
 DEB_STAGE      ?= build/deb
-DEB_VERSION    ?= $(shell cat VERSION 2>/dev/null || echo 0.0.0)
+DEB_VERSION    ?= $(shell $(SHIRUDO_GIT_DESCRIBE) 2>/dev/null || cat VERSION)
 DEB_ARCH       ?= $(shell dpkg --print-architecture 2>/dev/null || echo amd64)
 DEB_MAINTAINER ?= $(shell git config user.name 2>/dev/null || echo shirudo) <$(shell git config user.email 2>/dev/null || echo shirudo@localhost)>
 DEB_TARGET_PKG   ?= shirudo-target.deb

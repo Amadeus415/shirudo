@@ -18,6 +18,7 @@
 # Generated headers
 /vmlinux.h
 /bpf/vmlinux.h
+/packaging/bpf/vmlinux.h
 *.skel.h
 
 # Generated systemd unit (from systemd/shirudo.service.in)

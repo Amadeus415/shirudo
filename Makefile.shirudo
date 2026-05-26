@@ -10,6 +10,8 @@
 #   4. embedded BPF        (util/loader.o, .incbin of bpf/*.bpf.o)
 #   5. link                (shirudo, shirudo-build)
 
+include Makefile.version
+
 -include config.mk
 
 # ----- toolchain --------------------------------------------------
@@ -20,6 +22,8 @@ LDFLAGS ?=
 SHIRUDO_BUNDLE_RPATH ?= 0
 CLANG   ?= clang
 BPFTOOL ?= third_party/bpf-next/tools/bpf/bpftool/bpftool
+BPF_VMLINUX_H ?=
+BPF_VMLINUX_BTF ?= /sys/kernel/btf/vmlinux
 
 SHIRUDO_LIBEXEC_DIR ?= $(libexecdir)/shirudo
 
@@ -195,9 +199,15 @@ $(BPFTOOL):
 
 # ----- phase 2: generated headers ---------------------------------
 
+ifneq ($(BPF_VMLINUX_H),)
+bpf/vmlinux.h: $(BPF_VMLINUX_H)
+	@printf '  COPY    $@\n'
+	$(Q)cp $< $@
+else
 bpf/vmlinux.h: $(BPFTOOL)
 	@printf '  GEN     $@\n'
-	$(Q)$< btf dump file /sys/kernel/btf/vmlinux format c > $@
+	$(Q)$< btf dump file $(BPF_VMLINUX_BTF) format c > $@
+endif
 
 # ----- phase 3: compile rules -------------------------------------
 
@@ -230,7 +240,7 @@ bpf/%.bpf.o: bpf/%.c bpf/vmlinux.h $(BPF_HEADERS_OUT)
 util/version_id.c:
 	@printf '  GEN     $@\n'
 	$(Q)set -eu; \
-	describe=$$(git describe --tags --always --dirty 2>/dev/null || cat VERSION); \
+	describe=$$($(SHIRUDO_GIT_DESCRIBE) 2>/dev/null || cat VERSION); \
 	describe_c=$$(printf '%s' "$$describe" | sed 's/[\\"]/\\&/g'); \
 	rev=$$(git rev-parse HEAD 2>/dev/null || cat VERSION); \
 	dirty=$$(git diff-index --quiet HEAD 2>/dev/null || echo -dirty); \
