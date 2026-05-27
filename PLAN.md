@@ -3260,6 +3260,10 @@ make install-target       # install + the systemd reboot-persistence unit
 make install-operator     # operator install: 'shirudo' + 'shirudo-build'
                           # → /usr/local/bin/shirudo
                           # → /usr/local/libexec/shirudo/shirudo-build
+
+make bindeb-pkg           # build two binary .deb packages (prefix=/usr):
+                          # → shirudo-target.deb   (shirudo + systemd unit)
+                          # → shirudo-operator.deb (shirudo + shirudo-build)
 ```
 
 Distribution packagers split into two packages:
@@ -3273,6 +3277,23 @@ A development workstation typically installs both; a production
 target installs only `shirudo`. This packaging-level split is
 load-bearing: it is what makes the "one named subprocess
 exception" property physically true on every target.
+
+The in-tree `make bindeb-pkg` target produces exactly this split
+as two binary `.deb`s (mirroring the kernel's `make bindeb-pkg`):
+`shirudo-target.deb` = the core binary + the systemd reboot unit
+(`install-target`), and `shirudo-operator.deb` = the core binary +
+`shirudo-build` + the BPF headers with `Depends: …, clang, llvm`
+and **no** systemd unit (`install-operator`). It rebuilds from clean
+with `prefix=/usr` so the libexec dispatch path compiled into the
+binary matches where the operator package installs `shirudo-build`;
+the two packages `Conflicts`/`Replaces` each other since both carry
+`/usr/bin/shirudo`. The target package's `postinst` only enables the
+unit — binary xattr-labelling is done by `shirudo init` itself
+(it seals its own `/proc/self/exe`), so no `setfattr` hook is needed.
+Dependencies are derived from the built binaries via `dpkg -S`
+(`packaging/deb/depends.sh`); a distribution maintainer wanting
+versioned/`shlibdeps`-quality dependencies and full archive policy
+would still wrap this in a proper source package.
 
 #### Why a separate binary instead of a compile-time flag
 
@@ -3440,11 +3461,17 @@ property.
 
 The shirudo project does **not** ship distribution packaging
 manifests (`.spec` files, `debian/` trees, `PKGBUILD`s,
-`APKBUILD`s) in-tree, and does not provide reference
-post-install snippets either. Packaging — including the
-`setfattr` post-install hook that satisfies Contract 1 — is
-the responsibility of each distribution's packagers, the same
-way it is for every other userspace project. shirudo's
+`APKBUILD`s) in-tree. The one convenience exception is the
+kernel-style `make bindeb-pkg`, which assembles two binary
+`.deb`s directly with `dpkg-deb` and control files generated on
+the fly (`packaging/deb/`) — it ships no `debian/` source tree
+and is **not** a substitute for distro-maintained source
+packaging (versioned `shlibdeps` dependencies, multiarch, archive
+policy remain the distribution's job). Beyond that convenience,
+packaging — including the `setfattr` post-install hook that
+satisfies Contract 1 — is the responsibility of each
+distribution's packagers, the same way it is for every other
+userspace project. shirudo's
 in-tree responsibility ends at the two contracts above; how
 they get satisfied is up to whoever maintains the distribution
 manifests.

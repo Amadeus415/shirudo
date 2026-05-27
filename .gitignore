@@ -4,6 +4,8 @@
 /shirudo-build
 /shirudo.tar.gz
 /shirudo-static.tar.gz
+/shirudo-target.deb
+/shirudo-operator.deb
 /tools/shirudo-build/shirudo-build
 *.o
 *.d
