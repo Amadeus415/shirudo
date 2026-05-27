@@ -89,6 +89,7 @@ UTIL_SRCS := \
     util/selector.c \
     util/remotes.c \
     util/malloc.c \
+    util/sysinfo.c \
     util/seal.c
 
 BUILTIN_SRCS := \

@@ -67,6 +67,24 @@ enum shirudo_json_vtype {
 	SHIRUDO_JSON_T_INT,	/* dst: int64_t *                        */
 	SHIRUDO_JSON_T_BOOL,	/* dst: int *  (0/1)                     */
 	SHIRUDO_JSON_T_OBJECT,	/* nested object -> sub[] sub-schema     */
+	SHIRUDO_JSON_T_ARRAY,	/* array -> sub[] element schema; dst is
+				 * a struct shirudo_json_array *         */
+};
+
+/*
+ * Sink for SHIRUDO_JSON_T_ARRAY: the parser dispatches each element
+ * into the field's sub[] schema (an object element against the whole
+ * sub[]; a scalar element into sub[0]), resets the sub fields' `seen`
+ * per element, then calls on_elem(ctx) so the caller can snapshot the
+ * just-parsed element out of its scratch dst buffers before the next
+ * element overwrites them. on_elem returns 0 to continue or a negative
+ * errno to abort the parse. An ARRAY field stores a pointer to this in
+ * its `dst` (so the field struct itself stays at the original layout
+ * and existing positional initializers keep compiling).
+ */
+struct shirudo_json_array {
+	int	(*on_elem)(void *ctx);
+	void	*ctx;
 };
 
 struct shirudo_json_field {
@@ -75,8 +93,8 @@ struct shirudo_json_field {
 	void				*dst;
 	size_t				dst_cap;	/* STRING only */
 	int				seen;		/* set by the parser */
-	struct shirudo_json_field	*sub;		/* OBJECT only */
-	size_t				n_sub;		/* OBJECT only */
+	struct shirudo_json_field	*sub;		/* OBJECT/ARRAY schema */
+	size_t				n_sub;		/* OBJECT/ARRAY schema */
 };
 
 /*

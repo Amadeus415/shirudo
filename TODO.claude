@@ -15,8 +15,12 @@ CURRENT STATE
 MVP is functionally complete -- no functional stubs remain. Working:
 init (LSM bootstrap, private bpffs, sealed keyring + serial pin,
 boot-restore, TPM chain), upatch build/load/unload/list/info/get, status
-(+assets, keyring pin, --include-tpm eventlog replay), keys (both-roles),
-nodes (incl. positional names), rollout (version-id gate, --dry-run),
+(+assets, keyring pin, --include-tpm eventlog replay, --include-system,
+--include-eventlog events[] dump via util/sysinfo.c), keys (both-roles),
+nodes (drift table incl. positional names; `nodes show <name> [--json]`
+= kubectl-describe-style single-node deep dive: role/labels + derived
+Conditions + system info + upatches + TPM chain + eventlog audit table,
+fetched in one SSH round-trip), rollout (version-id gate, --dry-run),
 remote {add,list,show,rm,rename}, eventlog cap (eventlog_full),
 shirudo.conf (eventlog.max_bytes, tpm.owner_auth), the bpf2 + seal LSMs,
 the systemd reboot unit. Build: `make`; test: `make check`.
@@ -26,15 +30,27 @@ design-plan root (5e43896). User keeps history clean -> ASK before adding
 commits; amend into the initial commit on request.
 
 Tests (t/ TAP suite):
-  Unit (always run): t0001 json, t0002 selector, t0003 chain crypto,
-    t0004 upatch-parse.
+  Unit (always run): t0001 json (now incl. array dispatch + the
+    discarded-object/schema-collision regression), t0002 selector,
+    t0003 chain crypto, t0004 upatch-parse, t0005 upatch-source.
   Integration (opt-in, skip unless SHIRUDO_INTEGRATION=1 + root + LSM
     attached): t1101 seal, t1102 eventlog_full, t1103 version gate,
     t1104 payload_mismatch, t1105 sig gate, t1106 keyring-swap, t1107
-    load/unload round-trip, t1108 TPM chain, t1109 rollout/nodes libssh,
-    t1110 LSM unsigned-load deny.
-  Tallies: `make check` = 29 ok + 10 skip; SHIRUDO_INTEGRATION=1 (root,
-  on a shirudo-init'd host) = 45 ok / 0 fail (t1108 skips without a TPM).
+    load/unload round-trip, t1108 TPM chain, t1109 rollout/nodes libssh
+    (now also covers `nodes show` human + --json), t1110 LSM deny,
+    t1111 upatch-get.
+  Tallies: `make check` = 39 ok + 10 skip; SHIRUDO_INTEGRATION=1 (root,
+  on a shirudo-init'd host) adds the nodes-show cases (t1108 skips
+  without a TPM).
+
+util/json.c parser now supports SHIRUDO_JSON_T_ARRAY (per-element
+sink callback via struct shirudo_json_array in the field's dst; arrays
+of scalars dispatch into sub[0], arrays of objects into the sub[]
+schema). Fixed a latent discard-path bug: an unknown object was parsed
+against the *enclosing* schema, so a nested key colliding with a typed
+declared key (e.g. assets.keyring_serial bool vs top keyring_serial
+int) caused a spurious EINVAL / could mis-dispatch -- now discarded
+objects parse against an empty schema.
 
 
 REMAINING WORK (none blocks MVP)

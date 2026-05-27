@@ -62,7 +62,12 @@ _shirudo()
 		fi
 		;;
 	nodes)
-		COMPREPLY=( $(compgen -W "--json --filter= --selector=" -- "$cur") )
+		if [[ ${COMP_WORDS[2]} == show ]]; then
+			COMPREPLY=( $(compgen -W "--json" -- "$cur") )
+		else
+			COMPREPLY=( $(compgen -W "show --json --filter= \
+				--selector=" -- "$cur") )
+		fi
 		;;
 	init)
 		COMPREPLY=( $(compgen -W "--check-only --no-tpm" -- "$cur") )

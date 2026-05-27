@@ -2,9 +2,10 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * In-tree JSON emitter. Streaming, caller-supplied buffer, automatic
- * comma placement and string escaping. The schema-callback parser is
- * still TODO; this file holds the emitter the eventlog and reports use.
+ * In-tree JSON emitter and schema-callback parser. The emitter is
+ * streaming with a caller-supplied buffer, automatic comma placement
+ * and string escaping; the parser dispatches declared keys into caller
+ * structs and parses-and-discards everything else.
  */
 
 #include <errno.h>
@@ -470,6 +471,73 @@ static int parse_array(struct pctx *c)
 	return 0;
 }
 
+/*
+ * Parse a '['-led array into a declared SHIRUDO_JSON_T_ARRAY field:
+ * each element is dispatched against f->sub[] (an object element uses
+ * the whole sub-schema; a scalar element goes to sub[0]), then the
+ * sink's on_elem(ctx) is called so the caller can copy the element out.
+ */
+static int parse_array_into(struct pctx *c, struct shirudo_json_field *f)
+{
+	struct shirudo_json_array *sink = f->dst;
+	int rc;
+
+	if (++c->depth > SHIRUDO_JSON_MAX_DEPTH)
+		return -E2BIG;
+	c->p++;				/* consume '[' */
+	skip_ws(c);
+	if (c->p < c->end && *c->p == ']') {
+		c->p++;
+		c->depth--;
+		f->seen = 1;
+		return 0;
+	}
+	for (;;) {
+		size_t i;
+
+		for (i = 0; i < f->n_sub; i++)
+			f->sub[i].seen = 0;
+		skip_ws(c);
+		if (c->p >= c->end)
+			return -EINVAL;
+		if (*c->p == '{') {
+			struct shirudo_json_field *save_f = c->fields;
+			size_t save_n = c->n_fields;
+
+			c->fields = f->sub;
+			c->n_fields = f->n_sub;
+			rc = parse_object(c);
+			c->fields = save_f;
+			c->n_fields = save_n;
+		} else {
+			/* Scalar (or nested array/object) element -> sub[0]. */
+			rc = parse_value(c, f->n_sub ? &f->sub[0] : NULL);
+		}
+		if (rc)
+			return rc;
+		if (sink && sink->on_elem) {
+			rc = sink->on_elem(sink->ctx);
+			if (rc)
+				return rc;
+		}
+		skip_ws(c);
+		if (c->p >= c->end)
+			return -EINVAL;
+		if (*c->p == ',') {
+			c->p++;
+			continue;
+		}
+		if (*c->p == ']') {
+			c->p++;
+			break;
+		}
+		return -EINVAL;
+	}
+	c->depth--;
+	f->seen = 1;
+	return 0;
+}
+
 static int lit(struct pctx *c, const char *s)
 {
 	size_t n = strlen(s);
@@ -507,28 +575,40 @@ static int parse_value(struct pctx *c, struct shirudo_json_field *f)
 	if (c->p >= c->end)
 		return -EINVAL;
 	switch (*c->p) {
-	case '{':
-		if (f) {
-			struct shirudo_json_field *save_f = c->fields;
-			size_t save_n = c->n_fields;
-			int rc;
+	case '{': {
+		struct shirudo_json_field *save_f = c->fields;
+		size_t save_n = c->n_fields;
+		int rc;
 
+		if (f) {
 			if (f->type != SHIRUDO_JSON_T_OBJECT)
 				return -EINVAL;
 			c->fields = f->sub;
 			c->n_fields = f->n_sub;
-			rc = parse_object(c);
-			c->fields = save_f;
-			c->n_fields = save_n;
-			if (rc)
-				return rc;
-			f->seen = 1;
-			return 0;
+		} else {
+			/*
+			 * Discarded object: parse with an empty schema so its
+			 * keys cannot collide with the enclosing schema and
+			 * mis-dispatch (or type-mismatch) a value into it.
+			 */
+			c->fields = NULL;
+			c->n_fields = 0;
 		}
-		return parse_object(c);
-	case '[':
+		rc = parse_object(c);
+		c->fields = save_f;
+		c->n_fields = save_n;
+		if (rc)
+			return rc;
 		if (f)
-			return -EINVAL;		/* declared scalar, got array */
+			f->seen = 1;
+		return 0;
+	}
+	case '[':
+		if (f) {
+			if (f->type != SHIRUDO_JSON_T_ARRAY)
+				return -EINVAL;	/* declared scalar, got array */
+			return parse_array_into(c, f);
+		}
 		return parse_array(c);
 	case '"':
 		if (f) {

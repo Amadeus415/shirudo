@@ -24,6 +24,13 @@ test_expect_success 'unknown keys and nested objects are skipped' '
 	printf "%s" "{\"a\":{\"b\":[1,2,3]},\"digest\":\"ff\",\"c\":true}" | ./$H | grep -q "digest=ff"
 '
 
+test_expect_success 'discarded object key colliding with schema does not mis-dispatch' '
+	out=$(printf "%s" "{\"a\":{\"digest\":123,\"type\":true},\"digest\":\"ff\",\"type\":\"init\"}" | ./$H) &&
+	echo "$out" | grep -qx "rc=0" &&
+	echo "$out" | grep -q "digest=ff" &&
+	echo "$out" | grep -q "type=init"
+'
+
 test_expect_success 'unterminated string -> EINVAL' '
 	printf "%s" "{\"digest\":\"abc" | ./$H | grep -qx "rc=-22"
 '
@@ -52,6 +59,36 @@ test_expect_success 'non-JSON garbage -> clean error, no crash' '
 
 test_expect_success 'empty object parses, no fields seen' '
 	printf "%s" "{}" | ./$H | grep -qx "rc=0"
+'
+
+test_expect_success 'string array dispatched element-by-element' '
+	out=$(printf "%s" "{\"names\":[\"alpha\",\"beta\",\"gamma\"]}" | ./$H) &&
+	echo "$out" | grep -qx "rc=0" &&
+	echo "$out" | grep -q "names=3 first_name=alpha"
+'
+
+test_expect_success 'object array dispatched into element sub-schema' '
+	out=$(printf "%s" "{\"events\":[{\"type\":\"init\",\"digest\":\"00\"},{\"type\":\"upatch_load\",\"digest\":\"ff\"}]}" | ./$H) &&
+	echo "$out" | grep -qx "rc=0" &&
+	echo "$out" | grep -q "events=2 last_type=upatch_load"
+'
+
+test_expect_success 'empty array parses, zero elements' '
+	printf "%s" "{\"names\":[]}" | ./$H | grep -q "names=0 "
+'
+
+test_expect_success 'array nested in object element, plus trailing scalars' '
+	out=$(printf "%s" "{\"events\":[{\"type\":\"init\",\"digest\":\"aa\",\"set\":[{\"name\":\"x\"}]}],\"digest\":\"top\"}" | ./$H) &&
+	echo "$out" | grep -q "digest=top" &&
+	echo "$out" | grep -q "events=1 last_type=init"
+'
+
+test_expect_success 'array element type mismatch -> EINVAL (no crash)' '
+	printf "%s" "{\"names\":[123]}" | ./$H | grep -qx "rc=-22"
+'
+
+test_expect_success 'unterminated array -> EINVAL (no crash)' '
+	printf "%s" "{\"names\":[\"a\",\"b\"" | ./$H | grep -qx "rc=-22"
 '
 
 test_done

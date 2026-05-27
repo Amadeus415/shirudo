@@ -25,7 +25,9 @@
 #include "util/eventlog.h"
 #include "util/json.h"
 #include "util/keyring.h"
+#include "util/malloc.h"
 #include "util/paths.h"
+#include "util/sysinfo.h"
 
 extern const char shirudo_version_id[];
 
@@ -134,31 +136,212 @@ static void gather_assets(struct asset_view *a)
 	a->bpffs_mounted = bpffs_is_mounted();
 }
 
+/*
+ * Projection of one eventlog line for display: enough for the compact
+ * table and the events[] JSON, not the full record (the authoritative
+ * copy stays the on-disk log, replayed by --include-tpm).
+ */
+struct ev_proj {
+	char ts[40];
+	char type[24];
+	char digest[65];
+	char set_digest[65];
+	char up_name[128];
+	char up_payload[65];
+};
+
+static int parse_event_line(const char *line, size_t len, struct ev_proj *ev)
+{
+	struct shirudo_json_field up[] = {
+		{ "name", SHIRUDO_JSON_T_STRING, ev->up_name,
+		  sizeof(ev->up_name), 0, NULL, 0 },
+		{ "payload_sha256", SHIRUDO_JSON_T_STRING, ev->up_payload,
+		  sizeof(ev->up_payload), 0, NULL, 0 },
+	};
+	struct shirudo_json_field f[] = {
+		{ "ts", SHIRUDO_JSON_T_STRING, ev->ts, sizeof(ev->ts),
+		  0, NULL, 0 },
+		{ "type", SHIRUDO_JSON_T_STRING, ev->type, sizeof(ev->type),
+		  0, NULL, 0 },
+		{ "digest", SHIRUDO_JSON_T_STRING, ev->digest,
+		  sizeof(ev->digest), 0, NULL, 0 },
+		{ "set_digest", SHIRUDO_JSON_T_STRING, ev->set_digest,
+		  sizeof(ev->set_digest), 0, NULL, 0 },
+		{ "upatch", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, up, 2 },
+	};
+
+	*ev = (struct ev_proj){};
+	return shirudo_json_parse(line, len, f, sizeof(f) / sizeof(f[0]));
+}
+
+/* Slurp the whole eventlog. 0 with buf/len set, or -errno (buf == NULL). */
+static int read_eventlog(char **buf, size_t *len)
+{
+	struct stat st;
+	ssize_t got;
+	int fd, rc = 0;
+
+	*buf = NULL;
+	*len = 0;
+	fd = open(SHIRUDO_EVENTLOG_PATH, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+	if (fstat(fd, &st) != 0 || st.st_size > (off_t)SHIRUDO_JSON_MAX_BYTES) {
+		rc = fd < 0 ? -errno : -EFBIG;
+		close(fd);
+		return rc;
+	}
+	*buf = xmalloc((size_t)st.st_size + 1);
+	if (!*buf) {
+		close(fd);
+		return -ENOMEM;
+	}
+	got = read(fd, *buf, (size_t)st.st_size);
+	close(fd);
+	if (got != st.st_size) {
+		xfree(*buf, (size_t)st.st_size + 1);
+		*buf = NULL;
+		return -EIO;
+	}
+	(*buf)[got] = '\0';
+	*len = (size_t)st.st_size + 1;
+	return 0;
+}
+
+/* Emit the eventlog as a JSON "events":[...] array (projected fields). */
+static void emit_eventlog_events(struct shirudo_json_emit *e)
+{
+	char *save, *line, *buf;
+	size_t len;
+
+	shirudo_json_arr_open(e, "events");
+	if (read_eventlog(&buf, &len) != 0) {
+		shirudo_json_arr_close(e);
+		return;
+	}
+	for (line = strtok_r(buf, "\n", &save); line;
+	     line = strtok_r(NULL, "\n", &save)) {
+		struct ev_proj ev;
+
+		shirudo_json_obj_open(e);
+		if (parse_event_line(line, strlen(line), &ev) != 0) {
+			shirudo_json_kv_string(e, "type", "unparseable");
+			shirudo_json_obj_close(e);
+			continue;
+		}
+		shirudo_json_kv_string(e, "ts", ev.ts);
+		shirudo_json_kv_string(e, "type", ev.type);
+		shirudo_json_kv_string(e, "digest", ev.digest);
+		if (ev.set_digest[0])
+			shirudo_json_kv_string(e, "set_digest", ev.set_digest);
+		if (ev.up_name[0]) {
+			shirudo_json_obj_open_key(e, "upatch");
+			shirudo_json_kv_string(e, "name", ev.up_name);
+			shirudo_json_kv_string(e, "payload_sha256",
+					       ev.up_payload);
+			shirudo_json_obj_close(e);
+		}
+		shirudo_json_obj_close(e);
+	}
+	xfree(buf, len);
+	shirudo_json_arr_close(e);
+}
+
+/* One-line human detail for an eventlog row. */
+static void event_detail(const struct ev_proj *ev, char *out, size_t cap)
+{
+	if (ev->up_name[0])
+		snprintf(out, cap, "%s payload=%.12s..", ev->up_name,
+			 ev->up_payload);
+	else if (ev->set_digest[0])
+		snprintf(out, cap, "set_digest=%.12s..", ev->set_digest);
+	else
+		out[0] = '\0';
+}
+
+/* Compact TIME/TYPE/DIGEST/DETAIL table, read from the local log. */
+static void print_eventlog_table(void)
+{
+	char *save, *line, *buf;
+	size_t len;
+
+	if (read_eventlog(&buf, &len) != 0)
+		return;
+	printf("  eventlog entries:\n");
+	printf("    %-20s %-13s %-13s %s\n", "TIME", "TYPE", "DIGEST",
+	       "DETAIL");
+	for (line = strtok_r(buf, "\n", &save); line;
+	     line = strtok_r(NULL, "\n", &save)) {
+		char detail[256];
+		struct ev_proj ev;
+
+		if (parse_event_line(line, strlen(line), &ev) != 0) {
+			printf("    %-20s %-13s %-13s\n", "?", "unparseable",
+			       "");
+			continue;
+		}
+		event_detail(&ev, detail, sizeof(detail));
+		printf("    %-20s %-13s %-13.12s %s\n", ev.ts, ev.type,
+		       ev.digest[0] ? ev.digest : "-", detail);
+	}
+	xfree(buf, len);
+}
+
+static void print_system_human(const struct shirudo_sysinfo *si)
+{
+	printf("  system info:\n");
+	printf("    %-18s %s\n", "hostname", si->hostname);
+	printf("    %-18s %s\n", "os", si->os_pretty);
+	printf("    %-18s %s\n", "kernel", si->kernel_release);
+	printf("    %-18s %s\n", "architecture", si->machine);
+	if (si->nproc > 0)
+		printf("    %-18s %ld\n", "cpus", si->nproc);
+	if (si->mem_total_kb > 0)
+		printf("    %-18s %ld kB\n", "memory", si->mem_total_kb);
+	if (si->uptime_sec >= 0)
+		printf("    %-18s %ldd %ldh %ldm\n", "uptime",
+		       si->uptime_sec / 86400, (si->uptime_sec % 86400) / 3600,
+		       (si->uptime_sec % 3600) / 60);
+	if (si->machine_id[0])
+		printf("    %-18s %s\n", "machine-id", si->machine_id);
+	if (si->boot_id[0])
+		printf("    %-18s %s\n", "boot-id", si->boot_id);
+}
+
 static void usage(void)
 {
-	fprintf(stderr, "usage: shirudo status [--json] [--include-tpm]\n");
+	fprintf(stderr, "usage: shirudo status [--json] [--include-tpm] "
+		"[--include-system] [--include-eventlog]\n");
 }
 
 int cmd_status(int argc, const char **argv)
 {
 	bool json = false, include_tpm = false;
+	bool include_system = false, include_eventlog = false;
 	bool lsm_attached, keyring_present, is_operator, cert_present, is_target;
 	key_serial_t keyring_serial, keyring_pinned;
+	struct shirudo_sysinfo sysi = {};
 	struct asset_view assets;
 	struct dirent **ups = NULL;
 	uint8_t chain[SHIRUDO_CHAIN_DIGEST_LEN];
 	char chain_hex[2 * SHIRUDO_CHAIN_DIGEST_LEN + 1];
 	char nv_index[16];
+	char *json_buf = NULL;
+	size_t json_cap = 0;
 	long ev_entries = 0, ev_bytes = 0;
 	int chain_rc = 0, ev_rc = -ENOENT;
 	int match = -1;		/* -1 unknown, 0 mismatch, 1 match */
-	int n_ups, i, fd;
+	int n_ups, i, fd, ret = 0;
 
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--json") == 0)
 			json = true;
 		else if (strcmp(argv[i], "--include-tpm") == 0)
 			include_tpm = true;
+		else if (strcmp(argv[i], "--include-system") == 0)
+			include_system = true;
+		else if (strcmp(argv[i], "--include-eventlog") == 0)
+			include_eventlog = true;
 		else if (strcmp(argv[i], "-h") == 0 ||
 			 strcmp(argv[i], "--help") == 0) {
 			usage();
@@ -169,6 +352,12 @@ int cmd_status(int argc, const char **argv)
 			return 2;
 		}
 	}
+
+	/* The events[] array lives under tpm.eventlog, so it needs that. */
+	if (include_eventlog)
+		include_tpm = true;
+	if (include_system)
+		shirudo_sysinfo_gather(&sysi);
 
 	fd = bpf_obj_get(SHIRUDO_LSM_LINK_PIN);
 	lsm_attached = fd >= 0;
@@ -208,8 +397,25 @@ int cmd_status(int argc, const char **argv)
 	}
 
 	if (json) {
-		char buf[16384];
-		struct shirudo_json_emit e = { .buf = buf, .cap = sizeof(buf) };
+		struct shirudo_json_emit e;
+
+		/*
+		 * The events[] dump re-emits one object per logged line, so
+		 * size the buffer to the on-disk log plus headroom for the
+		 * fixed fields; 16 KiB covers the no-eventlog case.
+		 */
+		json_cap = 16384;
+		if (include_eventlog && ev_rc == 0)
+			json_cap = 65536 + 3 * (size_t)ev_bytes;
+		if (json_cap > SHIRUDO_JSON_MAX_BYTES)
+			json_cap = SHIRUDO_JSON_MAX_BYTES;
+		json_buf = xmalloc(json_cap);
+		if (!json_buf) {
+			fprintf(stderr, "status: out of memory\n");
+			ret = 1;
+			goto out;
+		}
+		e = (struct shirudo_json_emit){ .buf = json_buf, .cap = json_cap };
 
 		shirudo_json_obj_open(&e);
 		shirudo_json_kv_int(&e, "schema", 1);
@@ -256,6 +462,8 @@ int cmd_status(int argc, const char **argv)
 			shirudo_json_kv_null(&e, "incoming");
 		shirudo_json_kv_bool(&e, "bpffs_mounted", assets.bpffs_mounted);
 		shirudo_json_obj_close(&e);
+		if (include_system)
+			shirudo_sysinfo_emit_json(&e, &sysi);
 		if (include_tpm) {
 			shirudo_json_obj_open_key(&e, "tpm");
 			shirudo_json_kv_string(&e, "nv_index", nv_index);
@@ -273,6 +481,8 @@ int cmd_status(int argc, const char **argv)
 			shirudo_json_kv_int(&e, "entries",
 					    ev_rc == 0 ? ev_entries : 0);
 			shirudo_json_kv_int(&e, "bytes", ev_rc == 0 ? ev_bytes : 0);
+			if (include_eventlog)
+				emit_eventlog_events(&e);
 			shirudo_json_obj_close(&e);
 			shirudo_json_obj_close(&e);
 		}
@@ -282,7 +492,7 @@ int cmd_status(int argc, const char **argv)
 			fprintf(stderr, "status: json encode failed: %s\n",
 				strerror(-e.err));
 		else
-			printf("%s\n", buf);
+			printf("%s\n", json_buf);
 	} else {
 		printf("shirudo status\n");
 		printf("  version-id:      %s\n", shirudo_version_id);
@@ -354,10 +564,17 @@ int cmd_status(int argc, const char **argv)
 			else
 				printf("  eventlog:        absent\n");
 		}
+		if (include_system)
+			print_system_human(&sysi);
+		if (include_eventlog)
+			print_eventlog_table();
 	}
 
+out:
 	for (i = 0; i < n_ups; i++)
-		free(ups[i]);
+		free(ups[i]);		/* scandir-owned: libc free, not xfree */
 	free(ups);
-	return 0;
+	if (json_buf)
+		xfree(json_buf, json_cap);
+	return ret;
 }

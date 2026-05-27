@@ -3,7 +3,8 @@
 # Copyright (c) 2026 Authors of shirudo
 #
 # t1109 -- rollout/nodes over libssh against a loopback target: nodes
-# reaches it and reports it attached; rollout --dry-run pre-flights and
+# reaches it and reports it attached; nodes show renders a per-node
+# describe and a structured --json; rollout --dry-run pre-flights and
 # reports ok-dryrun (the version gate passes when operator == target);
 # a bogus --expect-version-id is refused. All --dry-run, so no SFTP
 # upload and no remote load -- non-mutating. Uses a temp remote registry.
@@ -26,6 +27,19 @@ trap 'rm -rf "$XDG"' EXIT
 
 test_expect_success 'nodes reaches the loopback target over libssh' '
 	"$SHIRUDO_BIN" nodes lo 2>/dev/null | grep -E "^lo[[:space:]]" | grep -q yes
+'
+
+test_expect_success 'nodes show renders a describe for the loopback target' '
+	out=$("$SHIRUDO_BIN" nodes show lo 2>/dev/null) &&
+	echo "$out" | grep -q "^Name:" &&
+	echo "$out" | grep -q "Reachable:" &&
+	echo "$out" | grep -q "Conditions:" &&
+	echo "$out" | grep -q "System Info:"
+'
+
+test_expect_success 'nodes show --json is structured and reachable' '
+	"$SHIRUDO_BIN" nodes show --json lo 2>/dev/null |
+		grep -q "\"reachable\":true"
 '
 
 test_expect_success 'rollout --dry-run pre-flights over libssh (ok-dryrun)' '
