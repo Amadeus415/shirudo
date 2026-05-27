@@ -17,8 +17,13 @@ installed, one command produces a signed `.upatch` from BPF
 source:
 
 ```sh
-shirudo build examples/cve-2026-31431.bpf.c -o cve-2026-31431.upatch
+shirudo build examples/cve-2026-31431.bpf.c
+# -> writes examples/cve-2026-31431.bpf.upatch next to the source
 ```
+
+`-o` is optional: with it omitted, the output defaults to the
+input path with the trailing `.c`/`.o` replaced by `.upatch`.
+Pass `-o <path>` only to write the artifact somewhere else.
 
 `shirudo build` holds the **single subprocess exception** in
 shirudo (PLAN.md §"Goals & non-goals"): the core `shirudo`
@@ -46,7 +51,8 @@ You can then hand the resulting `.bpf.o` to `shirudo build`
 straight to gen_loader + sign + package):
 
 ```sh
-shirudo build examples/cve-2026-31431.bpf.o -o cve-2026-31431.upatch
+shirudo build examples/cve-2026-31431.bpf.o
+# -> writes examples/cve-2026-31431.bpf.upatch
 ```
 
 For **operator-authored upatches outside this tree** that
@@ -72,8 +78,8 @@ shirudo build my-upatch.bpf.o -o my-upatch.upatch
 On the operator machine (which holds the signing key):
 
 ```sh
-shirudo build examples/cve-2026-31431.bpf.c -o cve-2026-31431.upatch
-shirudo rollout cve-2026-31431.upatch prod-fleet-a prod-fleet-b ...
+shirudo build examples/cve-2026-31431.bpf.c
+shirudo rollout examples/cve-2026-31431.bpf.upatch prod-fleet-a prod-fleet-b ...
 ```
 
 `shirudo build` compiles, runs gen_loader, signs, and packages
@@ -84,8 +90,9 @@ operator-only `shirudo-build` binary.
 To roll back when the upstream kernel fix has landed:
 
 ```sh
-shirudo build --unload cve-2026-31431 -o cve-2026-31431.unload.upatch
-shirudo rollback cve-2026-31431.unload.upatch prod-fleet-a prod-fleet-b ...
+shirudo build --unload cve-2026-31431
+# -> writes cve-2026-31431.unload.upatch in the current directory
+shirudo rollout cve-2026-31431.unload.upatch prod-fleet-a prod-fleet-b ...
 ```
 
 ## Index

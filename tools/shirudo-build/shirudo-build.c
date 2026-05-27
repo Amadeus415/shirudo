@@ -28,18 +28,23 @@ static void usage(FILE *fp)
 {
 	fprintf(fp,
 		"usage:\n"
-		"  shirudo-build <input> -o <output.upatch>\n"
+		"  shirudo-build <input> [-o <output.upatch>]\n"
 		"                [--name <upatch-name>]\n"
 		"                [--keys-dir <dir>]\n"
 		"                [--key <signing_key.pem>] [--cert <cert.der>]\n"
 		"                [--vmlinux <vmlinux.h>] [--extra-cflags '<flags>']\n"
 		"\n"
-		"  shirudo-build --unload <upatch-name> -o <output.upatch>\n"
+		"  shirudo-build --unload <upatch-name> [-o <output.upatch>]\n"
 		"                [--payload-sha256 <64-hex>]\n"
 		"                [--keys-dir <dir>]\n"
 		"                [--key <signing_key.pem>] [--cert <cert.der>]\n"
 		"\n"
 		"<input> is .bpf.c (compiled via clang) or .bpf.o.\n"
+		"-o defaults to <input> with a trailing .c/.o replaced by\n"
+		"   .upatch (foo/bar.bpf.c -> foo/bar.bpf.upatch), written\n"
+		"   next to the input; for --unload it defaults to\n"
+		"   <name>.unload.upatch in the current directory. Pass -o\n"
+		"   only to write somewhere else.\n"
 		"--keys-dir defaults key/cert to <dir>/signing_key.pem and\n"
 		"           <dir>/cert.der. If omitted, %s is used when set.\n"
 		"           Explicit --keys-dir overrides the environment;\n"
@@ -100,6 +105,26 @@ static int ends_with(const char *s, const char *suf)
 	return ns >= nf && strcmp(s + ns - nf, suf) == 0;
 }
 
+/*
+ * Default output path when -o is omitted: strip a trailing .c or .o
+ * and append .upatch, keeping the directory and any .bpf stem, so
+ * foo/bar.bpf.c lands at foo/bar.bpf.upatch next to its input.
+ */
+static int derive_output(const char *input, char *buf, size_t buf_sz)
+{
+	size_t stem = strlen(input);
+	int len;
+
+	if (stem > 2 && (strcmp(input + stem - 2, ".c") == 0 ||
+			 strcmp(input + stem - 2, ".o") == 0))
+		stem -= 2;
+
+	len = snprintf(buf, buf_sz, "%.*s.upatch", (int)stem, input);
+	if (len < 0 || (size_t)len >= buf_sz)
+		return -ENAMETOOLONG;
+	return 0;
+}
+
 static int compile_to_temp(const char *source, const char *vmlinux_h,
 			   const char *extra_cflags, char **out_path)
 {
@@ -143,6 +168,7 @@ int main(int argc, char **argv)
 	const char *src_path = NULL;
 	char pkey_path[PATH_MAX];
 	char cert_path[PATH_MAX];
+	char output_buf[PATH_MAX];
 	char name_buf[256];
 	const char *bpf_o;
 	int pkey_explicit = 0;
@@ -218,12 +244,6 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (!output) {
-		pr_err("missing -o <output>");
-		usage(stderr);
-		return 2;
-	}
-
 	if (access(pkey, R_OK) != 0) {
 		pr_err("signing key not readable: %s: %s",
 		       pkey, strerror(errno));
@@ -277,6 +297,19 @@ int main(int argc, char **argv)
 			}
 		}
 
+		if (!output) {
+			int len = snprintf(output_buf, sizeof(output_buf),
+					   "%s.unload.upatch", unload_name);
+
+			if (len < 0 || (size_t)len >= sizeof(output_buf)) {
+				pr_err("derived output path too long for '%s'",
+				       unload_name);
+				return 1;
+			}
+			output = output_buf;
+			pr_info("writing %s (no -o given)", output);
+		}
+
 		return shirudo_build_package_unload(unload_name,
 						    payload_sha256,
 						    output, pkey, cert)
@@ -311,6 +344,17 @@ int main(int argc, char **argv)
 	} else {
 		pr_err("input must be .bpf.c or .bpf.o");
 		return 2;
+	}
+
+	if (!output) {
+		rc = derive_output(input, output_buf, sizeof(output_buf));
+		if (rc) {
+			pr_err("cannot derive output path from %s: %s",
+			       input, strerror(-rc));
+			return 1;
+		}
+		output = output_buf;
+		pr_info("writing %s (no -o given)", output);
 	}
 
 	if (!name)
