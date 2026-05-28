@@ -14,6 +14,7 @@
 #include "builtin.h"
 #include "util/harden.h"
 #include "util/log.h"
+#include "util/similar.h"
 
 /*
  * Which side a command runs on. The operator holds the signing key and
@@ -126,8 +127,33 @@ int main(int argc, const char **argv)
 
 	c = find_cmd(argv[1]);
 	if (!c) {
-		fprintf(stderr, "shirudo: unknown subcommand '%s'\n", argv[1]);
-		cmd_help(0, NULL);
+		struct shirudo_suggestion sugg[4];
+		const char *names[sizeof(commands) / sizeof(commands[0])];
+		size_t i, n;
+		int max_dist, len;
+
+		fprintf(stderr,
+			"'%s' is not a shirudo command.\n"
+			"See 'shirudo help'.\n", argv[1]);
+
+		/*
+		 * Edit-distance threshold: a quarter is too tight for short
+		 * inputs and "anything goes" for long ones, so cap at 3.
+		 */
+		len = (int)strlen(argv[1]);
+		max_dist = len / 2 + 1;
+		if (max_dist > 3)
+			max_dist = 3;
+
+		for (i = 0; i < commands_n; i++)
+			names[i] = commands[i].name;
+		n = shirudo_suggest(argv[1], names, commands_n, max_dist,
+				    sugg, sizeof(sugg) / sizeof(sugg[0]));
+		if (n) {
+			fprintf(stderr, "\nDid you mean one of:\n");
+			for (i = 0; i < n; i++)
+				fprintf(stderr, "\t%s\n", sugg[i].name);
+		}
 		return 1;
 	}
 
