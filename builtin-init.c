@@ -29,6 +29,7 @@
 #include "util/chain.h"
 #include "util/config.h"
 #include "util/eventlog.h"
+#include "util/help.h"
 #include "util/json.h"
 #include "util/keyring.h"
 #include "util/loader.h"
@@ -795,13 +796,28 @@ static int chain_extend_init(const struct restore_entry *set, size_t n,
 	return 0;
 }
 
+static const struct shirudo_help_item init_options[] = {
+	{ "--check-only", "run the pre-flight only; never touch kernel state" },
+	{ "--no-tpm",     "proceed without TPM (degraded mode)" },
+};
+
+static const struct shirudo_help_section init_help_sections[] = {
+	{ "options:", init_options,
+	  sizeof(init_options) / sizeof(init_options[0]) },
+};
+
+static const struct shirudo_help init_help = {
+	.usage      = "shirudo init [--check-only] [--no-tpm]",
+	.summary    = "Bootstrap the BPF LSM on this target. Idempotent; safe "
+		      "to re-run.\nThe pinned link survives the process exit.",
+	.sections   = init_help_sections,
+	.n_sections = sizeof(init_help_sections) /
+		      sizeof(init_help_sections[0]),
+};
+
 static void usage(void)
 {
-	fprintf(stderr,
-		"usage: shirudo init [--check-only] [--no-tpm]\n"
-		"\n"
-		"  --check-only   run pre-flight only; never touch kernel state\n"
-		"  --no-tpm       proceed without TPM (degraded mode)\n");
+	fprintf(stderr, "usage: %s\n", init_help.usage);
 }
 
 int cmd_init(int argc, const char **argv)
@@ -818,9 +834,8 @@ int cmd_init(int argc, const char **argv)
 			check_only = true;
 		} else if (strcmp(a, "--no-tpm") == 0) {
 			opts.allow_no_tpm = true;
-		} else if (strcmp(a, "-h") == 0 ||
-			   strcmp(a, "--help") == 0) {
-			usage();
+		} else if (shirudo_is_help(a)) {
+			shirudo_print_help(&init_help);
 			return 0;
 		} else {
 			pr_err("init: unknown option '%s'", a);

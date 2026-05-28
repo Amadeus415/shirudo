@@ -13,6 +13,7 @@
 
 #include "builtin.h"
 #include "util/harden.h"
+#include "util/help.h"
 #include "util/log.h"
 #include "util/similar.h"
 
@@ -124,6 +125,9 @@ int main(int argc, const char **argv)
 		cmd_help(0, NULL);
 		return 1;
 	}
+	/* Top-level --help / -h are equivalent to the `help` subcommand. */
+	if (shirudo_is_help(argv[1]))
+		return cmd_help(0, NULL);
 
 	c = find_cmd(argv[1]);
 	if (!c) {

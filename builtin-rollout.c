@@ -24,6 +24,7 @@
 
 #include "builtin.h"
 #include "util/chain.h"
+#include "util/help.h"
 #include "util/json.h"
 #include "util/log.h"
 #include "util/malloc.h"
@@ -406,6 +407,35 @@ static int emit_report(const char *path, bool dry_run,
 	return 0;
 }
 
+static const struct shirudo_help_item rollout_options[] = {
+	{ "--selector=<expr>",       "select targets by label expression" },
+	{ "--expect-chain=<hex>",    "pin the expected NV chain (auto-derived if omitted)" },
+	{ "--expect-version-id=<x>", "pin the expected target SHIRUDO_VERSION_ID" },
+	{ "--no-precheck",           "skip the pre-flight chain/version check" },
+	{ "--no-version-check",      "skip just the version-id half of pre-flight" },
+	{ "--report=<path>",         "emit aggregate JSON report ('-' = stdout)" },
+	{ "--dry-run",               "pre-flight only; no SFTP upload, no load" },
+	{ "--sudo",                  "wrap the remote shirudo invocation in sudo" },
+};
+
+static const struct shirudo_help_section rollout_help_sections[] = {
+	{ "options:", rollout_options,
+	  sizeof(rollout_options) / sizeof(rollout_options[0]) },
+};
+
+static const struct shirudo_help rollout_help = {
+	.usage   = "shirudo rollout <upatch>... { <name>... | --selector=<expr> } [options]",
+	.summary = "Push one or more signed .upatch files to one or more "
+		   "registered remotes\nvia SFTP, then apply each over an "
+		   "SSH exec channel. A LOAD upatch runs\n`upatch load` on "
+		   "the target; an UNLOAD directive runs `upatch unload`.",
+	.sections   = rollout_help_sections,
+	.n_sections = sizeof(rollout_help_sections) /
+		      sizeof(rollout_help_sections[0]),
+	.footer  = "Literal user@host arguments are refused; targets must be "
+		   "registered\nfirst with `shirudo remote add`.",
+};
+
 int cmd_rollout(int argc, const char **argv)
 {
 	const char *report = NULL, *expect_override = NULL, *selexpr = NULL;
@@ -424,7 +454,10 @@ int cmd_rollout(int argc, const char **argv)
 	for (i = 1; i < (size_t)argc; i++) {
 		const char *a = argv[i];
 
-		if (strncmp(a, "--report=", 9) == 0)
+		if (shirudo_is_help(a)) {
+			shirudo_print_help(&rollout_help);
+			return 0;
+		} else if (strncmp(a, "--report=", 9) == 0)
 			report = a + 9;
 		else if (strncmp(a, "--selector=", 11) == 0)
 			selexpr = a + 11;

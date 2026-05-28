@@ -23,6 +23,7 @@
 #include "builtin.h"
 #include "util/chain.h"
 #include "util/eventlog.h"
+#include "util/help.h"
 #include "util/json.h"
 #include "util/keyring.h"
 #include "util/malloc.h"
@@ -308,10 +309,31 @@ static void print_system_human(const struct shirudo_sysinfo *si)
 		printf("    %-18s %s\n", "boot-id", si->boot_id);
 }
 
+static const struct shirudo_help_item status_options[] = {
+	{ "--json",             "machine-readable JSON output" },
+	{ "--include-tpm",      "read the live NV chain and replay the eventlog" },
+	{ "--include-system",   "add a `system` block (hostname, kernel, arch, cpus, ...)" },
+	{ "--include-eventlog", "dump eventlog entries (implies --include-tpm)" },
+};
+
+static const struct shirudo_help_section status_help_sections[] = {
+	{ "options:", status_options,
+	  sizeof(status_options) / sizeof(status_options[0]) },
+};
+
+static const struct shirudo_help status_help = {
+	.usage      = "shirudo status [--json] [--include-tpm] "
+		      "[--include-system] [--include-eventlog]",
+	.summary    = "Local readiness + state report. Auto-detects target "
+		      "vs operator role.\nSafe to run before `shirudo init`.",
+	.sections   = status_help_sections,
+	.n_sections = sizeof(status_help_sections) /
+		      sizeof(status_help_sections[0]),
+};
+
 static void usage(void)
 {
-	fprintf(stderr, "usage: shirudo status [--json] [--include-tpm] "
-		"[--include-system] [--include-eventlog]\n");
+	fprintf(stderr, "usage: %s\n", status_help.usage);
 }
 
 int cmd_status(int argc, const char **argv)
@@ -342,9 +364,8 @@ int cmd_status(int argc, const char **argv)
 			include_system = true;
 		else if (strcmp(argv[i], "--include-eventlog") == 0)
 			include_eventlog = true;
-		else if (strcmp(argv[i], "-h") == 0 ||
-			 strcmp(argv[i], "--help") == 0) {
-			usage();
+		else if (shirudo_is_help(argv[i])) {
+			shirudo_print_help(&status_help);
 			return 0;
 		} else {
 			fprintf(stderr, "status: unknown option '%s'\n", argv[i]);

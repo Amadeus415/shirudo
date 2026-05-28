@@ -23,6 +23,7 @@
 #include <openssl/x509v3.h>
 
 #include "builtin.h"
+#include "util/help.h"
 #include "util/log.h"
 #include "util/paths.h"
 
@@ -292,22 +293,34 @@ out:
 	return rc;
 }
 
+static const struct shirudo_help_item genkey_options[] = {
+	{ "--force, -f",      "overwrite an existing key/cert (refused otherwise)" },
+	{ "--keys-dir <dir>", "write signing_key.pem + cert.der under <dir> "
+			      "instead of the default" },
+};
+
+static const struct shirudo_help_section genkey_help_sections[] = {
+	{ "options:", genkey_options,
+	  sizeof(genkey_options) / sizeof(genkey_options[0]) },
+};
+
+static const struct shirudo_help genkey_help = {
+	.usage   = "shirudo genkey [--force] [--keys-dir <dir>]",
+	.summary = "Generate a self-signed X.509 cert + RSA-2048 private key "
+		   "for signing\n.upatch loader bytes. Operator-only.",
+	.sections   = genkey_help_sections,
+	.n_sections = sizeof(genkey_help_sections) /
+		      sizeof(genkey_help_sections[0]),
+	.footer  = "Default output paths:\n"
+		   "  " SHIRUDO_SIGNING_KEY_PATH "\n"
+		   "  " SHIRUDO_CERT_PATH "\n"
+		   "If unset on the command line, the " SHIRUDO_KEYS_DIR_ENV
+		   " environment variable\noverrides the default directory.",
+};
+
 static void usage(void)
 {
-	fprintf(stderr,
-		"usage: shirudo genkey [--force] [--keys-dir <dir>]\n"
-		"\n"
-		"  Generate a self-signed X.509 cert for signing .upatch\n"
-		"  loader bytes. Writes:\n"
-		"    %s\n"
-		"    %s\n"
-		"\n"
-		"  --keys-dir writes signing_key.pem and cert.der under <dir>\n"
-		"             instead of %s. If omitted, %s is used when set.\n"
-		"  Refuses if either file already exists; pass --force to\n"
-		"  overwrite.\n",
-		SHIRUDO_SIGNING_KEY_PATH, SHIRUDO_CERT_PATH,
-		SHIRUDO_KEYS_DIR, SHIRUDO_KEYS_DIR_ENV);
+	fprintf(stderr, "usage: %s\n", genkey_help.usage);
 }
 
 int cmd_genkey(int argc, const char **argv)
@@ -330,9 +343,8 @@ int cmd_genkey(int argc, const char **argv)
 			keys_dir_arg = argv[++i];
 		} else if (strncmp(argv[i], "--keys-dir=", 11) == 0) {
 			keys_dir_arg = argv[i] + 11;
-		} else if (strcmp(argv[i], "-h") == 0 ||
-			   strcmp(argv[i], "--help") == 0) {
-			usage();
+		} else if (shirudo_is_help(argv[i])) {
+			shirudo_print_help(&genkey_help);
 			return 0;
 		} else {
 			pr_err("genkey: unknown option '%s'", argv[i]);

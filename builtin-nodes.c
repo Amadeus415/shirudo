@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "builtin.h"
+#include "util/help.h"
 #include "util/json.h"
 #include "util/log.h"
 #include "util/malloc.h"
@@ -106,6 +107,34 @@ static const char *match_str(const struct node_state *s)
 }
 
 /* ---- shirudo nodes show <name>: per-node describe ----------------- */
+
+static const struct shirudo_help_item nodes_subcmds[] = {
+	{ "show", "kubectl-describe-style per-node deep dive: show [--json] <name>..." },
+};
+
+static const struct shirudo_help_item nodes_options[] = {
+	{ "--json",            "machine-readable drift table" },
+	{ "--filter=<glob>",   "filter remotes by name (shell-glob)" },
+	{ "--selector=<expr>", "filter by label expression (k=v, !k, &&, ||, ...)" },
+};
+
+static const struct shirudo_help_section nodes_help_sections[] = {
+	{ "subcommands:", nodes_subcmds,
+	  sizeof(nodes_subcmds) / sizeof(nodes_subcmds[0]) },
+	{ "options (drift-table form):", nodes_options,
+	  sizeof(nodes_options) / sizeof(nodes_options[0]) },
+};
+
+static const struct shirudo_help nodes_help = {
+	.usage      = "shirudo nodes [show] [<name>...] [--json] [--filter=<glob>] [--selector=<expr>]",
+	.summary    = "Operator-side fleet observability over registered "
+		      "remotes. Bare\n`shirudo nodes` prints the drift table; "
+		      "`shirudo nodes show <name>` runs a\nper-node deep dive.",
+	.sections   = nodes_help_sections,
+	.n_sections = sizeof(nodes_help_sections) /
+		      sizeof(nodes_help_sections[0]),
+};
+
 
 /* Projection of one eventlog event, parsed out of the fetched status. */
 struct ev_row {
@@ -686,9 +715,8 @@ static int cmd_nodes_show(int argc, const char **argv)
 
 		if (strcmp(a, "--json") == 0) {
 			json = true;
-		} else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
-			printf("usage: shirudo nodes show [--json] "
-			       "<name>...\n");
+		} else if (shirudo_is_help(a)) {
+			shirudo_print_help(&nodes_help);
 			return 0;
 		} else if (a[0] == '-') {
 			fprintf(stderr, "nodes show: unknown option '%s'\n", a);
@@ -782,6 +810,10 @@ done:
 
 int cmd_nodes(int argc, const char **argv)
 {
+	if (argc >= 2 && shirudo_is_help(argv[1])) {
+		shirudo_print_help(&nodes_help);
+		return 0;
+	}
 	if (argc >= 2 && strcmp(argv[1], "show") == 0)
 		return cmd_nodes_show(argc, argv);
 
@@ -803,9 +835,8 @@ int cmd_nodes(int argc, const char **argv)
 			filter = a + 9;
 		else if (strncmp(a, "--selector=", 11) == 0)
 			selexpr = a + 11;
-		else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
-			fprintf(stderr, "usage: shirudo nodes [<name>...] "
-				"[--json] [--filter=<glob>] [--selector=<expr>]\n");
+		else if (shirudo_is_help(a)) {
+			shirudo_print_help(&nodes_help);
 			return 0;
 		} else if (a[0] == '-') {
 			fprintf(stderr, "nodes: unknown option '%s'\n", a);

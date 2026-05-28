@@ -30,6 +30,7 @@
 #include "util/chain.h"
 #include "util/config.h"
 #include "util/eventlog.h"
+#include "util/help.h"
 #include "util/json.h"
 #include "util/keyring.h"
 #include "util/log.h"
@@ -1958,12 +1959,34 @@ out:
 	return rc;
 }
 
+static const struct shirudo_help_item upatch_subcmds[] = {
+	{ "load",   "load a signed .upatch into the target kernel (target-only)" },
+	{ "unload", "apply a signed UNLOAD directive (forward chain extension)" },
+	{ "list",   "list persisted + bpffs-pinned upatches on this host" },
+	{ "info",   "describe a .upatch file (any host; offline, no kernel state)" },
+	{ "get",    "dump source of a loaded upatch from the target kernel (BTF line_info)" },
+};
+
+static const struct shirudo_help_section upatch_help_sections[] = {
+	{ "subcommands:", upatch_subcmds,
+	  sizeof(upatch_subcmds) / sizeof(upatch_subcmds[0]) },
+};
+
+static const struct shirudo_help upatch_help = {
+	.usage      = "shirudo upatch <subcommand> [<args>...]",
+	.summary    = "Manage signed BPF programs (.upatch). load/unload are "
+		      "target-only;\nlist/info/get are read-only and run on "
+		      "either side.",
+	.sections   = upatch_help_sections,
+	.n_sections = sizeof(upatch_help_sections) /
+		      sizeof(upatch_help_sections[0]),
+};
+
 int cmd_upatch(int argc, const char **argv)
 {
-	if (argc < 2) {
-		fprintf(stderr,
-			"usage: shirudo upatch {info|load|unload|list|get} ...\n");
-		return 2;
+	if (argc < 2 || shirudo_is_help(argv[1])) {
+		shirudo_print_help(&upatch_help);
+		return argc < 2 ? 2 : 0;
 	}
 	if (strcmp(argv[1], "info") == 0)
 		return cmd_upatch_info(argc - 1, argv + 1);
@@ -1976,6 +1999,9 @@ int cmd_upatch(int argc, const char **argv)
 	if (strcmp(argv[1], "get") == 0)
 		return cmd_upatch_get(argc - 1, argv + 1);
 
-	fprintf(stderr, "shirudo upatch: unknown subcommand '%s'\n", argv[1]);
+	shirudo_help_unknown_subcommand("shirudo upatch", argv[1],
+					upatch_subcmds,
+					sizeof(upatch_subcmds) /
+					sizeof(upatch_subcmds[0]));
 	return 2;
 }

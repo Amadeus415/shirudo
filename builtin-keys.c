@@ -25,6 +25,7 @@
 #include <openssl/x509.h>
 
 #include "builtin.h"
+#include "util/help.h"
 #include "util/keyring.h"
 #include "util/log.h"
 #include "util/paths.h"
@@ -293,22 +294,34 @@ static int keys_list_keyring(key_serial_t ring)
 	return 0;
 }
 
+static const struct shirudo_help_item keys_options[] = {
+	{ "--keys-dir <dir>", "read signing_key.pem + cert.der from <dir>" },
+};
+
+static const struct shirudo_help_section keys_help_sections[] = {
+	{ "options:", keys_options,
+	  sizeof(keys_options) / sizeof(keys_options[0]) },
+};
+
+static const struct shirudo_help keys_help = {
+	.usage   = "shirudo keys [--keys-dir <dir>]",
+	.summary = "Inspect the shirudo key material this host holds: the "
+		   "on-disk cert and\nsigning key (if present) and the "
+		   "\"" SHIRUDO_KEYRING_NAME "\" named kernel keyring (if "
+		   "init'd).\nLocal-only on either side.",
+	.sections   = keys_help_sections,
+	.n_sections = sizeof(keys_help_sections) /
+		      sizeof(keys_help_sections[0]),
+	.footer  = "Default paths:\n"
+		   "  " SHIRUDO_CERT_PATH "\n"
+		   "  " SHIRUDO_SIGNING_KEY_PATH "\n"
+		   "Or set the " SHIRUDO_KEYS_DIR_ENV
+		   " environment variable.",
+};
+
 static void usage(void)
 {
-	fprintf(stderr,
-		"usage: shirudo keys [--keys-dir <dir>]\n"
-		"\n"
-		"  Inspect the shirudo key material this host holds. Reports\n"
-		"  the on-disk cert (%s) and signing\n"
-		"  key (%s), if present, and the\n"
-		"  \"%s\" named kernel keyring, if `shirudo init` has\n"
-		"  populated one. A host with both roles shows both sections.\n"
-		"  Local-only on either side.\n"
-		"  --keys-dir reads signing_key.pem and cert.der under <dir>\n"
-		"             instead of %s. If omitted, %s is used when set.\n",
-		SHIRUDO_CERT_PATH, SHIRUDO_SIGNING_KEY_PATH,
-		SHIRUDO_KEYRING_NAME, SHIRUDO_KEYS_DIR,
-		SHIRUDO_KEYS_DIR_ENV);
+	fprintf(stderr, "usage: %s\n", keys_help.usage);
 }
 
 int cmd_keys(int argc, const char **argv)
@@ -327,9 +340,8 @@ int cmd_keys(int argc, const char **argv)
 			keys_dir_arg = argv[++i];
 		} else if (strncmp(argv[i], "--keys-dir=", 11) == 0) {
 			keys_dir_arg = argv[i] + 11;
-		} else if (strcmp(argv[i], "-h") == 0 ||
-		    strcmp(argv[i], "--help") == 0) {
-			usage();
+		} else if (shirudo_is_help(argv[i])) {
+			shirudo_print_help(&keys_help);
 			return 0;
 		} else {
 			pr_err("keys: unknown option '%s'", argv[i]);

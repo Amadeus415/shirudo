@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include "builtin.h"
+#include "util/help.h"
 #include "util/log.h"
 #include "util/remotes.h"
 
@@ -446,12 +447,40 @@ static int cmd_rename(int argc, const char **argv)
 	return 0;
 }
 
+static const struct shirudo_help_item remote_subcmds[] = {
+	{ "list",   "list all registered remotes (default if omitted)" },
+	{ "add",    "register a new remote: add <name> <[user@]host[:port]> [--label k=v ...]" },
+	{ "show",   "describe one remote in detail: show <name>" },
+	{ "rm",     "unregister a remote: rm <name>" },
+	{ "rename", "rename a remote: rename <old> <new>" },
+};
+
+static const struct shirudo_help_section remote_help_sections[] = {
+	{ "subcommands:", remote_subcmds,
+	  sizeof(remote_subcmds) / sizeof(remote_subcmds[0]) },
+};
+
+static const struct shirudo_help remote_help = {
+	.usage      = "shirudo remote [<subcommand>] [<args>...]",
+	.summary    = "Manage the operator-local remote registry. Bare\n"
+		      "`shirudo remote` lists all registered remotes.",
+	.sections   = remote_help_sections,
+	.n_sections = sizeof(remote_help_sections) /
+		      sizeof(remote_help_sections[0]),
+	.footer     = "Labels and other registry metadata never leave the "
+		      "operator -- they\nare not pushed to targets.",
+};
+
 int cmd_remote(int argc, const char **argv)
 {
 	/* Bare `shirudo remote` lists the registered remotes (most common
 	 * use); explicit `list` keeps working. */
 	if (argc < 2)
 		return cmd_list(argc, argv);
+	if (shirudo_is_help(argv[1])) {
+		shirudo_print_help(&remote_help);
+		return 0;
+	}
 	if (strcmp(argv[1], "add") == 0)
 		return cmd_add(argc - 1, argv + 1);
 	if (strcmp(argv[1], "list") == 0)
@@ -463,8 +492,9 @@ int cmd_remote(int argc, const char **argv)
 	if (strcmp(argv[1], "rename") == 0)
 		return cmd_rename(argc - 1, argv + 1);
 
-	fprintf(stderr, "shirudo remote: unknown subcommand '%s'\n"
-		"usage: shirudo remote [list|add|show|rm|rename] ...\n",
-		argv[1]);
+	shirudo_help_unknown_subcommand("shirudo remote", argv[1],
+					remote_subcmds,
+					sizeof(remote_subcmds) /
+					sizeof(remote_subcmds[0]));
 	return 2;
 }
