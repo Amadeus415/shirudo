@@ -31,17 +31,18 @@ systemdunitdir ?= /usr/lib/systemd/system
 export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdir \
        systemdunitdir
 
-.PHONY: all help shirudo-build installer static-image install install-target \
-        install-operator bindeb-pkg clean distclean check test examples config
+.PHONY: all help shirudo-build install install-target \
+        install-operator bindeb-pkg bintar-pkg clean distclean check test \
+        examples config
 
-INSTALLER_TARBALL ?= shirudo.tar.gz
-INSTALLER_STAGE   ?= build/shirudo-installer
-INSTALLER_ROOT    := $(INSTALLER_STAGE)/root
-INSTALLER_BUNDLE_LIBS ?= 0
+INSTALLER_TARBALL    ?= shirudo.tar.gz
+INSTALLER_STAGE      ?= build/shirudo-installer
+INSTALLER_ROOT       := $(INSTALLER_STAGE)/root
 INSTALLER_PRIVATE_LIBDIR ?= $(libdir)/shirudo
 
 STATIC_IMAGE_TARBALL ?= shirudo-static.tar.gz
 STATIC_IMAGE_STAGE   ?= build/shirudo-static-image
+STATIC_IMAGE_ROOT    := $(STATIC_IMAGE_STAGE)/root
 
 # Debian packaging (make bindeb-pkg). Distro packages live under /usr,
 # not /usr/local, and that prefix is baked into the binary (it is how the
@@ -77,11 +78,6 @@ shirudo make targets (run from the repo root):
     make shirudo-build     build the operator-only artifact builder
                            (compile + sign .upatch; ships in the operator
                            package, never to a target)
-    make prefix=/usr installer
-                           build ./shirudo.tar.gz target-host installer
-    make prefix=/usr static-image
-                           build ./shirudo-static.tar.gz with private
-                           shared libraries for target-host install
     make clean             remove build artifacts
     make distclean         clean and drop the cached config.mk
 
@@ -101,11 +97,16 @@ shirudo make targets (run from the repo root):
     make install-operator  install + shirudo-build + BPF headers
                            (operator host)
 
-  Package
-    make bindeb-pkg        build shirudo-target.deb (binary + systemd unit,
-                           for target nodes) and shirudo-operator.deb
-                           (binary + shirudo-build, no unit, for operators).
+  Package   (each rebuilds; pick by target environment)
+    make bindeb-pkg        Two binary .deb's for Debian/Ubuntu targets:
+                           shirudo-target.deb (binary + systemd unit) and
+                           shirudo-operator.deb (binary + shirudo-build).
                            Rebuilds from clean with prefix=/usr.
+    make bintar-pkg        Two distro-agnostic target-installer tarballs:
+                           shirudo.tar.gz (expects system libssh/libtss2/
+                           libcrypto on the target) and shirudo-static.tar.gz
+                           (bundles those libs via rpath; for embedded,
+                           legacy, or minimal targets).
 
   Other
     make examples          build the examples/ tree
@@ -124,33 +125,51 @@ help:
 shirudo-build: config
 	+$(Q)$(MAKE) -f Makefile.shirudo shirudo-build
 
-installer: config packaging/tar/install.sh packaging/tar/bundle-libs.sh
-	@printf '  STAGE   $(INSTALLER_STAGE)\n'
+# Build two target-installer tarballs (kernel-style `bin*-pkg`):
+#   shirudo.tar.gz         -- expects system libssh/libtss2/libcrypto on
+#                             the target (any distro with matching ABI).
+#   shirudo-static.tar.gz  -- bundles those libs into lib/shirudo/ via
+#                             $ORIGIN-relative rpath, for embedded / legacy
+#                             / minimal targets where the system libs are
+#                             missing or too old.
+# Each tarball contains a staged install-target tree under root/ plus an
+# install.sh wrapper. The two flavors need different binary builds (the
+# bundled one carries an rpath), so the recipe rebuilds the binary
+# between them.
+bintar-pkg: config packaging/tar/install.sh packaging/tar/bundle-libs.sh
+	@printf '  STAGE   $(INSTALLER_STAGE)  (system libs)\n'
 	$(Q)rm -rf $(INSTALLER_STAGE) $(INSTALLER_TARBALL)
 	$(Q)rm -f shirudo
 	$(Q)install -d $(INSTALLER_STAGE) $(dir $(INSTALLER_TARBALL))
 	+$(Q)$(MAKE) -f Makefile.shirudo \
 	    LDFLAGS='$(LDFLAGS)' \
-	    SHIRUDO_BUNDLE_RPATH=$(INSTALLER_BUNDLE_LIBS) \
+	    SHIRUDO_BUNDLE_RPATH=0 \
 	    DESTDIR=$(abspath $(INSTALLER_ROOT)) \
 	    install-target
-	$(Q)if [ "$(INSTALLER_BUNDLE_LIBS)" = "1" ]; then \
-	    packaging/tar/bundle-libs.sh \
-	        "$(abspath $(INSTALLER_ROOT)$(bindir)/shirudo)" \
-	        "$(abspath $(INSTALLER_ROOT)$(INSTALLER_PRIVATE_LIBDIR))"; \
-	fi
 	$(Q)install -m 0755 packaging/tar/install.sh $(INSTALLER_STAGE)/install.sh
 	$(Q)install -m 0644 LICENSE README.md VERSION $(INSTALLER_STAGE)/
 	@printf '  TAR     $(INSTALLER_TARBALL)\n'
 	$(Q)tar -C $(dir $(INSTALLER_STAGE)) -czf $(INSTALLER_TARBALL) \
 	    $(notdir $(INSTALLER_STAGE))
-	@printf 'shirudo: wrote %s\n' "$(INSTALLER_TARBALL)"
-
-static-image:
-	+$(Q)$(MAKE) installer \
-	    INSTALLER_BUNDLE_LIBS=1 \
-	    INSTALLER_TARBALL=$(STATIC_IMAGE_TARBALL) \
-	    INSTALLER_STAGE=$(STATIC_IMAGE_STAGE)
+	@printf '  STAGE   $(STATIC_IMAGE_STAGE)  (bundled libs)\n'
+	$(Q)rm -rf $(STATIC_IMAGE_STAGE) $(STATIC_IMAGE_TARBALL)
+	$(Q)rm -f shirudo
+	$(Q)install -d $(STATIC_IMAGE_STAGE) $(dir $(STATIC_IMAGE_TARBALL))
+	+$(Q)$(MAKE) -f Makefile.shirudo \
+	    LDFLAGS='$(LDFLAGS)' \
+	    SHIRUDO_BUNDLE_RPATH=1 \
+	    DESTDIR=$(abspath $(STATIC_IMAGE_ROOT)) \
+	    install-target
+	$(Q)packaging/tar/bundle-libs.sh \
+	    "$(abspath $(STATIC_IMAGE_ROOT)$(bindir)/shirudo)" \
+	    "$(abspath $(STATIC_IMAGE_ROOT)$(INSTALLER_PRIVATE_LIBDIR))"
+	$(Q)install -m 0755 packaging/tar/install.sh \
+	    $(STATIC_IMAGE_STAGE)/install.sh
+	$(Q)install -m 0644 LICENSE README.md VERSION $(STATIC_IMAGE_STAGE)/
+	@printf '  TAR     $(STATIC_IMAGE_TARBALL)\n'
+	$(Q)tar -C $(dir $(STATIC_IMAGE_STAGE)) -czf $(STATIC_IMAGE_TARBALL) \
+	    $(notdir $(STATIC_IMAGE_STAGE))
+	@printf 'shirudo: wrote $(INSTALLER_TARBALL) and $(STATIC_IMAGE_TARBALL)\n'
 
 # Build two .deb packages (kernel-style `make bindeb-pkg`):
 #   shirudo-target.deb   -- shirudo + the systemd reboot unit (target node)
