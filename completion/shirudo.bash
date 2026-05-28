@@ -59,6 +59,10 @@ _shirudo()
 			local subs
 			subs=$("$bin" remote --list-cmds 2>/dev/null)
 			COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
+		elif [[ $sub == label && cword -eq 3 ]]; then
+			local subs
+			subs=$("$bin" remote label --list-cmds 2>/dev/null)
+			COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
 		elif [[ $cur == -* ]]; then
 			case "$sub" in
 			add)
@@ -67,6 +71,10 @@ _shirudo()
 			list)
 				COMPREPLY=( $(compgen -W "--json \
 					--filter= --selector=" -- "$cur") )
+				;;
+			label)
+				COMPREPLY=( $(compgen -W "--filter= \
+					--selector=" -- "$cur") )
 				;;
 			esac
 		fi

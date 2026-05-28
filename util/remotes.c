@@ -17,6 +17,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "log.h"
 #include "malloc.h"
@@ -82,6 +84,111 @@ static int labels_add(struct shirudo_labels *l, const char *k, const char *v)
 	if (!it[l->n].key || !it[l->n].val)
 		return -ENOMEM;
 	l->n++;
+	return 0;
+}
+
+int shirudo_labels_set(struct shirudo_labels *l, const char *key,
+		       const char *val)
+{
+	size_t i;
+	int rc;
+
+	for (i = 0; i < l->n; i++) {
+		if (strcmp(l->items[i].key, key) == 0) {
+			char *new_val = xstrdup(val);
+
+			if (!new_val)
+				return -ENOMEM;
+			xstrfree(l->items[i].val);
+			l->items[i].val = new_val;
+			return 0;
+		}
+	}
+	rc = labels_add(l, key, val);
+	if (rc == 0)
+		qsort(l->items, l->n, sizeof(l->items[0]), label_cmp);
+	return rc;
+}
+
+int shirudo_labels_remove(struct shirudo_labels *l, const char *key)
+{
+	size_t i;
+
+	for (i = 0; i < l->n; i++) {
+		if (strcmp(l->items[i].key, key) == 0) {
+			xstrfree(l->items[i].key);
+			xstrfree(l->items[i].val);
+			memmove(&l->items[i], &l->items[i + 1],
+				(l->n - i - 1) * sizeof(l->items[0]));
+			l->n--;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+void shirudo_labels_clear(struct shirudo_labels *l)
+{
+	size_t i;
+
+	for (i = 0; i < l->n; i++) {
+		xstrfree(l->items[i].key);
+		xstrfree(l->items[i].val);
+	}
+	xfree(l->items, l->n * sizeof(l->items[0]));
+	l->items = NULL;
+	l->n = 0;
+}
+
+int shirudo_remote_write_conf(const char *path,
+			      const struct shirudo_remote *r)
+{
+	char tmp[1024];
+	char ts[32];
+	struct tm tm;
+	time_t when;
+	FILE *f;
+	size_t i;
+
+	if ((size_t)snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= sizeof(tmp))
+		return -ENAMETOOLONG;
+
+	f = fopen(tmp, "w");
+	if (!f)
+		return -errno;
+
+	/*
+	 * Preserve the original registration timestamp on rewrite; only
+	 * synthesize one (using now) if the in-memory remote has no time
+	 * (i.e. legacy conf without `created =`).
+	 */
+	when = r->added > 0 ? r->added : time(NULL);
+	gmtime_r(&when, &tm);
+	strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
+
+	fprintf(f, "# shirudo remote: %s\n", r->name);
+	fprintf(f, "created = %s\n", ts);
+	fprintf(f, "host = %s\n", r->host);
+	fprintf(f, "user = %s\n", r->user);
+	fprintf(f, "port = %d\n", r->port);
+	if (r->labels) {
+		for (i = 0; i < r->labels->n; i++)
+			fprintf(f, "label.%s = %s\n",
+				r->labels->items[i].key,
+				r->labels->items[i].val);
+	}
+	if (fflush(f) != 0 || fclose(f) != 0) {
+		int e = errno;
+
+		unlink(tmp);
+		return -e;
+	}
+	if (rename(tmp, path) != 0) {
+		int e = errno;
+
+		unlink(tmp);
+		return -e;
+	}
 	return 0;
 }
 

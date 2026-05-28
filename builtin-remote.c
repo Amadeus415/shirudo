@@ -23,6 +23,7 @@
 #include "util/help.h"
 #include "util/log.h"
 #include "util/macros.h"
+#include "util/malloc.h"
 #include "util/remotes.h"
 #include "util/selector.h"
 #include "util/timefmt.h"
@@ -207,12 +208,15 @@ static int conf_path(const char *name, char *buf, size_t cap)
 	return 0;
 }
 
+static int cmd_label(int argc, const char **argv);
+
 static const struct shirudo_help_item remote_subcmds[] = {
 	{ "list",   "list registered remotes (default; supports --filter / --selector)" },
 	{ "add",    "register a new remote: add <name> <[user@]host[:port]> [--label k=v ...]" },
 	{ "show",   "describe one remote in detail: show <name>" },
 	{ "rm",     "unregister a remote: rm <name>" },
 	{ "rename", "rename a remote: rename <old> <new>" },
+	{ "label",  "mutate labels: label {add,rm,clear} ..." },
 };
 
 static const struct shirudo_help_item remote_list_options[] = {
@@ -289,6 +293,75 @@ static const struct shirudo_help remote_rename_help = {
 "Examples:\n"
 "  shirudo remote rename old-prod-01 prod-edge-01\n"
 "  shirudo remote rename node5 db-replica-5",
+};
+
+static const struct shirudo_help_item remote_label_subcmds[] = {
+	{ "add",   "set or update one or more labels (key=value); overwrite on collision" },
+	{ "rm",    "remove one or more labels by key (no-op warning if absent)" },
+	{ "clear", "remove every label (endpoint and timestamp preserved)" },
+};
+
+static const struct shirudo_help_section remote_label_help_sections[] = {
+	{ "subcommands:", remote_label_subcmds,
+	  ARRAY_SIZE(remote_label_subcmds) },
+};
+
+static const struct shirudo_help remote_label_help = {
+	.usage      = "shirudo remote label <subcommand> "
+		      "{ <name> | --filter=<glob> | --selector=<expr> } [<args>...]",
+	.summary    = "Mutate labels on one or more registered remotes. Strict "
+		      "key->value:\nsetting an existing key overwrites it. "
+		      "Local-only -- labels never leave\nthe operator. Either "
+		      "name a single target positionally, OR select many\n"
+		      "with --filter / --selector (mutually exclusive).",
+	.sections   = remote_label_help_sections,
+	.n_sections = ARRAY_SIZE(remote_label_help_sections),
+	.footer     =
+"Examples:\n"
+"  shirudo remote label add prod-edge-01 tier=edge env=production\n"
+"  shirudo remote label rm  prod-edge-01 tier\n"
+"  shirudo remote label clear prod-edge-01\n"
+"  shirudo remote label add --filter='prod-*' tier=canary\n"
+"  shirudo remote label rm  --selector='env=staging' env",
+};
+
+static const struct shirudo_help remote_label_add_help = {
+	.usage   = "shirudo remote label add { <name> | --filter=<glob> | "
+		   "--selector=<expr> } <k=v>...",
+	.summary = "Set or update one or more labels. Strict key->value:\n"
+		   "if a key already exists its value is overwritten. "
+		   "Both operands\n(target and labels) are required.",
+	.footer  =
+"Examples:\n"
+"  shirudo remote label add prod-edge-01 tier=edge env=production\n"
+"  shirudo remote label add prod-edge-01 region=us-east-1\n"
+"  shirudo remote label add --filter='prod-*' tier=canary\n"
+"  shirudo remote label add --selector='env=staging' tier=canary",
+};
+
+static const struct shirudo_help remote_label_rm_help = {
+	.usage   = "shirudo remote label rm { <name> | --filter=<glob> | "
+		   "--selector=<expr> } <key>...",
+	.summary = "Remove one or more labels by key. Missing keys are a\n"
+		   "warning, not an error (the operation is idempotent).",
+	.footer  =
+"Examples:\n"
+"  shirudo remote label rm prod-edge-01 tier\n"
+"  shirudo remote label rm prod-edge-01 tier env\n"
+"  shirudo remote label rm --filter='prod-*' tier\n"
+"  shirudo remote label rm --selector='env=staging' env",
+};
+
+static const struct shirudo_help remote_label_clear_help = {
+	.usage   = "shirudo remote label clear { <name> | --filter=<glob> | "
+		   "--selector=<expr> }",
+	.summary = "Remove every label on the matched remote(s). Endpoint\n"
+		   "and registration timestamp are preserved.",
+	.footer  =
+"Examples:\n"
+"  shirudo remote label clear prod-edge-01\n"
+"  shirudo remote label clear --filter='decommissioned-*'\n"
+"  shirudo remote label clear --selector='tier=canary'",
 };
 
 static int cmd_add(int argc, const char **argv)
@@ -645,6 +718,468 @@ static int cmd_rename(int argc, const char **argv)
 	return 0;
 }
 
+/*
+ * Match operands describe what to mutate; selection operands describe
+ * who to mutate. Both label leaves (add/rm) take 1+ match operand;
+ * clear takes none. Selection is a single name (positional) XOR a
+ * predicate form (--filter / --selector, possibly combined).
+ */
+struct label_op {
+	const char	**match;	/* k=v (add) or k (rm); n entries */
+	size_t		n_match;
+	const char	*name;		/* positional single target, or NULL */
+	const char	*filter;	/* shell-glob over registry names */
+	const char	*selector;	/* label expression */
+	const char	*verb;		/* "add" / "rm" / "clear" -- for diags */
+};
+
+/*
+ * Parse argv for the label add/rm/clear leaves. <accept_match>: true
+ * for add/rm (which take 1+ match operand), false for clear. Help
+ * is handled by the caller before reaching here. Returns 0/2.
+ */
+static int parse_label_args(int argc, const char **argv,
+			    struct label_op *op, bool accept_match,
+			    const struct shirudo_help *help)
+{
+	const char **match;
+	size_t cap = 16, n = 0;
+	int i;
+
+	op->name = NULL;
+	op->filter = NULL;
+	op->selector = NULL;
+	op->match = NULL;
+	op->n_match = 0;
+
+	match = xmalloc(cap * sizeof(*match));
+	if (!match)
+		return 2;
+
+	for (i = 1; i < argc; i++) {
+		const char *a = argv[i];
+
+		if (strncmp(a, "--filter=", 9) == 0) {
+			op->filter = a + 9;
+		} else if (strncmp(a, "--selector=", 11) == 0) {
+			op->selector = a + 11;
+		} else if (a[0] == '-') {
+			pr_err("remote label %s: unknown option '%s'",
+			       op->verb, a);
+			xfree(match, cap * sizeof(*match));
+			return 2;
+		} else {
+			/*
+			 * First positional: if predicate-form isn't in play
+			 * yet, treat as target name. Else everything is a
+			 * match operand.
+			 */
+			if (!op->name && !op->filter && !op->selector &&
+			    n == 0) {
+				op->name = a;
+			} else {
+				if (n == cap) {
+					void *p = xreallocarray(match, cap,
+								cap * 2,
+								sizeof(*match));
+					if (!p) {
+						xfree(match, cap *
+						      sizeof(*match));
+						return 2;
+					}
+					match = p;
+					cap *= 2;
+				}
+				match[n++] = a;
+			}
+		}
+	}
+
+	if (op->name && (op->filter || op->selector)) {
+		pr_err("remote label %s: pass either <name> or "
+		       "--filter/--selector, not both", op->verb);
+		xfree(match, cap * sizeof(*match));
+		return 2;
+	}
+	if (!op->name && !op->filter && !op->selector) {
+		shirudo_print_help(help);
+		xfree(match, cap * sizeof(*match));
+		return 2;
+	}
+	if (accept_match && n == 0) {
+		shirudo_print_help(help);
+		xfree(match, cap * sizeof(*match));
+		return 2;
+	}
+	if (!accept_match && n > 0) {
+		pr_err("remote label %s: unexpected positional argument '%s'",
+		       op->verb, match[0]);
+		xfree(match, cap * sizeof(*match));
+		return 2;
+	}
+
+	op->match = match;
+	op->n_match = n;
+	return 0;
+}
+
+static void free_label_op(struct label_op *op, size_t cap)
+{
+	if (op->match)
+		xfree(op->match, cap * sizeof(*op->match));
+}
+
+/*
+ * Resolve op->name / op->filter / op->selector into the subset of
+ * <remotes> that should be mutated. Indices are appended to *idx (heap-
+ * allocated; caller frees with xfree). Returns 0 on success (with at
+ * least one match), -ENOENT if no remote matches, or -errno on a hard
+ * failure. The caller-provided <sel_out> receives the parsed selector
+ * (NULL if op->selector is NULL); caller frees with
+ * shirudo_selector_free().
+ */
+static int label_resolve_matches(const struct label_op *op,
+				 const struct shirudo_remote *remotes,
+				 size_t n_remotes, size_t **idx,
+				 size_t *n_idx, size_t *idx_cap,
+				 struct shirudo_selector **sel_out)
+{
+	struct shirudo_selector *sel = NULL;
+	size_t cap = 16, n = 0;
+	size_t *out;
+	size_t i;
+
+	*sel_out = NULL;
+	*idx = NULL;
+	*n_idx = 0;
+	*idx_cap = 0;
+
+	if (op->selector) {
+		sel = shirudo_selector_parse(op->selector);
+		if (!sel) {
+			pr_err("remote label %s: invalid --selector expression",
+			       op->verb);
+			return -EINVAL;
+		}
+	}
+	out = xmalloc(cap * sizeof(*out));
+	if (!out) {
+		shirudo_selector_free(sel);
+		return -ENOMEM;
+	}
+
+	if (op->name) {
+		for (i = 0; i < n_remotes; i++) {
+			if (strcmp(remotes[i].name, op->name) == 0) {
+				out[n++] = i;
+				break;
+			}
+		}
+		if (n == 0) {
+			pr_err("remote label %s: no such remote '%s'",
+			       op->verb, op->name);
+			xfree(out, cap * sizeof(*out));
+			shirudo_selector_free(sel);
+			return -ENOENT;
+		}
+	} else {
+		for (i = 0; i < n_remotes; i++) {
+			if (op->filter &&
+			    fnmatch(op->filter, remotes[i].name, 0) != 0)
+				continue;
+			if (sel &&
+			    !shirudo_selector_match(sel, remotes[i].labels))
+				continue;
+			if (n == cap) {
+				void *p = xreallocarray(out, cap, cap * 2,
+							sizeof(*out));
+				if (!p) {
+					xfree(out, cap * sizeof(*out));
+					shirudo_selector_free(sel);
+					return -ENOMEM;
+				}
+				out = p;
+				cap *= 2;
+			}
+			out[n++] = i;
+		}
+		if (n == 0) {
+			pr_err("remote label %s: no remote matches "
+			       "--filter / --selector", op->verb);
+			xfree(out, cap * sizeof(*out));
+			shirudo_selector_free(sel);
+			return -ENOENT;
+		}
+	}
+
+	*idx = out;
+	*n_idx = n;
+	*idx_cap = cap;
+	*sel_out = sel;
+	return 0;
+}
+
+/* Common rewrite path: form the user-dir conf path and write canonical. */
+static int label_rewrite(const struct shirudo_remote *r, const char *verb)
+{
+	char path[1024];
+	int rc;
+
+	if (conf_path(r->name, path, sizeof(path)))
+		return -ENAMETOOLONG;
+	if (access(path, F_OK) != 0) {
+		pr_err("remote label %s: no user-registered remote '%s' "
+		       "(a /etc remote is not modifiable here)", verb, r->name);
+		return -ENOENT;
+	}
+	rc = shirudo_remote_write_conf(path, r);
+	if (rc)
+		pr_err("remote label %s: write %s: %s", verb, path,
+		       strerror(-rc));
+	return rc;
+}
+
+static int cmd_label_add(int argc, const char **argv)
+{
+	struct shirudo_remote *remotes = NULL;
+	struct shirudo_selector *sel = NULL;
+	struct label_op op = { .verb = "add" };
+	size_t n_remotes = 0, *idx = NULL, n_idx = 0, idx_cap = 0;
+	size_t cap_match;
+	int ret = 0;
+	size_t i, j;
+
+	if (argc > 1 && shirudo_is_help(argv[1])) {
+		shirudo_print_help(&remote_label_add_help);
+		return 0;
+	}
+	if (parse_label_args(argc, argv, &op, true, &remote_label_add_help))
+		return 2;
+	cap_match = op.n_match;
+
+	for (i = 0; i < op.n_match; i++) {
+		const char *eq = strchr(op.match[i], '=');
+
+		if (!eq || eq == op.match[i]) {
+			pr_err("remote label add: malformed label '%s' "
+			       "(want key=value)", op.match[i]);
+			free_label_op(&op, cap_match);
+			return 2;
+		}
+	}
+
+	shirudo_remotes_load_all(&remotes, &n_remotes);
+	if (n_remotes == 0) {
+		pr_err("remote label add: no remotes registered");
+		free_label_op(&op, cap_match);
+		return 1;
+	}
+
+	if (label_resolve_matches(&op, remotes, n_remotes, &idx, &n_idx,
+				  &idx_cap, &sel) != 0) {
+		ret = 1;
+		goto out;
+	}
+
+	for (i = 0; i < n_idx; i++) {
+		struct shirudo_remote *r = &remotes[idx[i]];
+		size_t before = shirudo_labels_count(r->labels);
+		int rc;
+
+		for (j = 0; j < op.n_match; j++) {
+			char key[128];
+			const char *eq = strchr(op.match[j], '=');
+			size_t klen = (size_t)(eq - op.match[j]);
+
+			if (klen >= sizeof(key))
+				klen = sizeof(key) - 1;
+			memcpy(key, op.match[j], klen);
+			key[klen] = '\0';
+
+			if (shirudo_labels_set(r->labels, key, eq + 1) != 0) {
+				pr_err("remote label add: out of memory");
+				ret = 1;
+				goto out;
+			}
+		}
+		rc = label_rewrite(r, "add");
+		if (rc) {
+			ret = 1;
+			continue;
+		}
+		printf("remote label: %s", r->name);
+		for (j = 0; j < op.n_match; j++)
+			printf(" +%s", op.match[j]);
+		printf("  (%zu label%s; was %zu)\n",
+		       shirudo_labels_count(r->labels),
+		       shirudo_labels_count(r->labels) == 1 ? "" : "s",
+		       before);
+	}
+
+out:
+	xfree(idx, idx_cap * sizeof(*idx));
+	shirudo_selector_free(sel);
+	shirudo_remotes_free(remotes, n_remotes);
+	free_label_op(&op, cap_match);
+	return ret;
+}
+
+static int cmd_label_rm(int argc, const char **argv)
+{
+	struct shirudo_remote *remotes = NULL;
+	struct shirudo_selector *sel = NULL;
+	struct label_op op = { .verb = "rm" };
+	size_t n_remotes = 0, *idx = NULL, n_idx = 0, idx_cap = 0;
+	size_t cap_match;
+	int ret = 0;
+	size_t i, j;
+
+	if (argc > 1 && shirudo_is_help(argv[1])) {
+		shirudo_print_help(&remote_label_rm_help);
+		return 0;
+	}
+	if (parse_label_args(argc, argv, &op, true, &remote_label_rm_help))
+		return 2;
+	cap_match = op.n_match;
+
+	shirudo_remotes_load_all(&remotes, &n_remotes);
+	if (n_remotes == 0) {
+		pr_err("remote label rm: no remotes registered");
+		free_label_op(&op, cap_match);
+		return 1;
+	}
+	if (label_resolve_matches(&op, remotes, n_remotes, &idx, &n_idx,
+				  &idx_cap, &sel) != 0) {
+		ret = 1;
+		goto out;
+	}
+
+	for (i = 0; i < n_idx; i++) {
+		struct shirudo_remote *r = &remotes[idx[i]];
+		size_t before = shirudo_labels_count(r->labels);
+		size_t removed = 0;
+		int rc;
+
+		for (j = 0; j < op.n_match; j++) {
+			int hit = shirudo_labels_remove(r->labels, op.match[j]);
+
+			if (hit) {
+				removed++;
+			} else {
+				pr_warn("remote label rm: %s: no such label "
+					"'%s' (no change)", r->name, op.match[j]);
+			}
+		}
+		if (removed == 0) {
+			printf("remote label: %s  (unchanged; %zu label%s)\n",
+			       r->name, before, before == 1 ? "" : "s");
+			continue;
+		}
+		rc = label_rewrite(r, "rm");
+		if (rc) {
+			ret = 1;
+			continue;
+		}
+		printf("remote label: %s", r->name);
+		for (j = 0; j < op.n_match; j++)
+			printf(" -%s", op.match[j]);
+		printf("  (%zu label%s; was %zu)\n",
+		       shirudo_labels_count(r->labels),
+		       shirudo_labels_count(r->labels) == 1 ? "" : "s",
+		       before);
+	}
+
+out:
+	xfree(idx, idx_cap * sizeof(*idx));
+	shirudo_selector_free(sel);
+	shirudo_remotes_free(remotes, n_remotes);
+	free_label_op(&op, cap_match);
+	return ret;
+}
+
+static int cmd_label_clear(int argc, const char **argv)
+{
+	struct shirudo_remote *remotes = NULL;
+	struct shirudo_selector *sel = NULL;
+	struct label_op op = { .verb = "clear" };
+	size_t n_remotes = 0, *idx = NULL, n_idx = 0, idx_cap = 0;
+	int ret = 0;
+	size_t i;
+
+	if (argc > 1 && shirudo_is_help(argv[1])) {
+		shirudo_print_help(&remote_label_clear_help);
+		return 0;
+	}
+	if (parse_label_args(argc, argv, &op, false,
+			     &remote_label_clear_help))
+		return 2;
+
+	shirudo_remotes_load_all(&remotes, &n_remotes);
+	if (n_remotes == 0) {
+		pr_err("remote label clear: no remotes registered");
+		free_label_op(&op, 0);
+		return 1;
+	}
+	if (label_resolve_matches(&op, remotes, n_remotes, &idx, &n_idx,
+				  &idx_cap, &sel) != 0) {
+		ret = 1;
+		goto out;
+	}
+
+	for (i = 0; i < n_idx; i++) {
+		struct shirudo_remote *r = &remotes[idx[i]];
+		size_t before = shirudo_labels_count(r->labels);
+		int rc;
+
+		if (before == 0) {
+			printf("remote label: %s  (already empty)\n", r->name);
+			continue;
+		}
+		shirudo_labels_clear(r->labels);
+		rc = label_rewrite(r, "clear");
+		if (rc) {
+			ret = 1;
+			continue;
+		}
+		printf("remote label: %s cleared  (was %zu label%s)\n",
+		       r->name, before, before == 1 ? "" : "s");
+	}
+
+out:
+	xfree(idx, idx_cap * sizeof(*idx));
+	shirudo_selector_free(sel);
+	shirudo_remotes_free(remotes, n_remotes);
+	free_label_op(&op, 0);
+	return ret;
+}
+
+static int cmd_label(int argc, const char **argv)
+{
+	const char *canonical;
+
+	if (argc < 2 || shirudo_is_help(argv[1])) {
+		shirudo_print_help(&remote_label_help);
+		return argc < 2 ? 2 : 0;
+	}
+	if (shirudo_is_list_cmds(argv[1])) {
+		shirudo_print_subcmd_list(remote_label_subcmds,
+					  ARRAY_SIZE(remote_label_subcmds));
+		return 0;
+	}
+	canonical = shirudo_resolve_subcommand("shirudo remote label", argv[1],
+					       remote_label_subcmds,
+					       ARRAY_SIZE(remote_label_subcmds));
+	if (!canonical)
+		return 2;
+	if (strcmp(canonical, "add") == 0)
+		return cmd_label_add(argc - 1, argv + 1);
+	if (strcmp(canonical, "rm") == 0)
+		return cmd_label_rm(argc - 1, argv + 1);
+	if (strcmp(canonical, "clear") == 0)
+		return cmd_label_clear(argc - 1, argv + 1);
+	return 2;	/* unreachable */
+}
+
 int cmd_remote(int argc, const char **argv)
 {
 	const char *canonical;
@@ -690,5 +1225,7 @@ int cmd_remote(int argc, const char **argv)
 		return cmd_rm(argc - 1, argv + 1);
 	if (strcmp(canonical, "rename") == 0)
 		return cmd_rename(argc - 1, argv + 1);
+	if (strcmp(canonical, "label") == 0)
+		return cmd_label(argc - 1, argv + 1);
 	return 2;	/* unreachable: resolve returned a non-matching name */
 }

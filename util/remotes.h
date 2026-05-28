@@ -56,4 +56,24 @@ size_t shirudo_labels_count(const struct shirudo_labels *l);
 void shirudo_labels_at(const struct shirudo_labels *l, size_t i,
 		       const char **key, const char **val);
 
+/*
+ * Set <key>=<val>; overwrite the existing value if the key is already
+ * present (strict key->value semantics; no multimap). Returns 0/-errno.
+ */
+int shirudo_labels_set(struct shirudo_labels *l, const char *key,
+		       const char *val);
+
+/* Remove <key>. Returns 1 if removed, 0 if absent. */
+int shirudo_labels_remove(struct shirudo_labels *l, const char *key);
+
+/* Remove every label. */
+void shirudo_labels_clear(struct shirudo_labels *l);
+
+/*
+ * Write a remote's canonical .conf to <path>. Atomic (writes to
+ * <path>.tmp then renames). Returns 0/-errno.
+ */
+int shirudo_remote_write_conf(const char *path,
+			      const struct shirudo_remote *r);
+
 #endif /* SHIRUDO_REMOTES_H */
