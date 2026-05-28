@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "log.h"
 #include "malloc.h"
@@ -138,6 +139,11 @@ static int parse_conf(const char *dir, const char *fname,
 			r.user = strdup(val);
 		} else if (strcmp(key, "port") == 0) {
 			r.port = atoi(val);
+		} else if (strcmp(key, "created") == 0) {
+			struct tm tm = {};
+
+			if (strptime(val, "%Y-%m-%dT%H:%M:%SZ", &tm))
+				r.added = timegm(&tm);
 		} else if (strncmp(key, "label.", 6) == 0) {
 			if (labels_add(labels, key + 6, val)) {
 				rc = -ENOMEM;
@@ -148,6 +154,17 @@ static int parse_conf(const char *dir, const char *fname,
 	fclose(f);
 	if (rc)
 		goto fail;
+	/*
+	 * Legacy remotes (registered before `created =` existed) have no
+	 * timestamp in the conf -- fall back to the file's mtime so AGE
+	 * is still meaningful, just approximate.
+	 */
+	if (r.added == 0) {
+		struct stat st;
+
+		if (stat(path, &st) == 0)
+			r.added = st.st_mtime;
+	}
 	if (!r.host) {
 		pr_warn("remote %s: no host=, skipping", r.name);
 		rc = 0;

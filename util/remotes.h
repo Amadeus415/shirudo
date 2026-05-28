@@ -9,6 +9,7 @@
 #define SHIRUDO_REMOTES_H
 
 #include <stddef.h>
+#include <time.h>
 
 struct shirudo_labels;
 
@@ -18,6 +19,12 @@ struct shirudo_remote {
 	char		*user;
 	int		port;
 	struct shirudo_labels	*labels;
+	/*
+	 * When this remote was first registered: the `created = <ISO-8601 UTC>`
+	 * line written by `shirudo remote add`, or -- for entries from before
+	 * that field existed -- the conf file's mtime as a best-effort fallback.
+	 */
+	time_t		added;
 };
 
 int shirudo_remotes_load_all(struct shirudo_remote **out, size_t *n);

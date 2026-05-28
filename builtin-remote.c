@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "builtin.h"
@@ -198,7 +199,16 @@ static int cmd_add(int argc, const char **argv)
 		pr_err("remote add: open %s: %s", path, strerror(errno));
 		return 1;
 	}
-	fprintf(f, "# shirudo remote: %s\n", name);
+	{
+		char ts[32];
+		struct tm tm;
+		time_t now = time(NULL);
+
+		gmtime_r(&now, &tm);
+		strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
+		fprintf(f, "# shirudo remote: %s\n", name);
+		fprintf(f, "created = %s\n", ts);
+	}
 	fprintf(f, "host = %s\n", host);
 	fprintf(f, "user = %s\n", user);
 	fprintf(f, "port = %d\n", port);
@@ -233,6 +243,29 @@ static void print_labels_inline(const struct shirudo_remote *r)
 	}
 }
 
+/* kubectl-style compact age: largest unit (s/m/h/d). */
+static void format_age(time_t added, char *buf, size_t cap)
+{
+	time_t now = time(NULL);
+	long s;
+
+	if (added <= 0) {
+		snprintf(buf, cap, "?");
+		return;
+	}
+	s = (long)(now - added);
+	if (s < 0)
+		s = 0;
+	if (s < 60)
+		snprintf(buf, cap, "%lds", s);
+	else if (s < 3600)
+		snprintf(buf, cap, "%ldm", s / 60);
+	else if (s < 86400)
+		snprintf(buf, cap, "%ldh", s / 3600);
+	else
+		snprintf(buf, cap, "%ldd", s / 86400);
+}
+
 static int cmd_list(int argc, const char **argv)
 {
 	struct shirudo_remote *remotes;
@@ -246,13 +279,15 @@ static int cmd_list(int argc, const char **argv)
 		shirudo_remotes_free(remotes, n);
 		return 0;
 	}
-	printf("%-20s  %-28s  %s\n", "NAME", "DESTINATION", "LABELS");
+	printf("%-20s  %-28s  %-6s  %s\n", "NAME", "DESTINATION", "AGE",
+	       "LABELS");
 	for (i = 0; i < n; i++) {
-		char dest[300];
+		char dest[300], age[32];
 
 		snprintf(dest, sizeof(dest), "%s@%s:%d", remotes[i].user,
 			 remotes[i].host, remotes[i].port);
-		printf("%-20s  %-28s  ", remotes[i].name, dest);
+		format_age(remotes[i].added, age, sizeof(age));
+		printf("%-20s  %-28s  %-6s  ", remotes[i].name, dest, age);
 		print_labels_inline(&remotes[i]);
 		printf("\n");
 	}
