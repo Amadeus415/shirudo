@@ -277,40 +277,6 @@ static int cmd_add(int argc, const char **argv)
 	return 0;
 }
 
-static void print_labels_inline(const struct shirudo_remote *r)
-{
-	/*
-	 * Compact-column budget: keep a remote-list row scannable even when
-	 * a node carries many or long labels. Past 16 chars of joined
-	 * "k1=v1,k2=v2,..." we cut the field with a "[...]" marker; the
-	 * full list is one `shirudo remote show <name>` away.
-	 */
-	enum { LABELS_INLINE_MAX = 16 };
-	char buf[256];
-	size_t nl = shirudo_labels_count(r->labels), k, off = 0;
-
-	if (nl == 0) {
-		printf("-");
-		return;
-	}
-	buf[0] = '\0';
-	for (k = 0; k < nl && off < sizeof(buf); k++) {
-		const char *key, *val;
-		int n;
-
-		shirudo_labels_at(r->labels, k, &key, &val);
-		n = snprintf(buf + off, sizeof(buf) - off, "%s%s=%s",
-			     k ? "," : "", key, val);
-		if (n < 0 || (size_t)n >= sizeof(buf) - off)
-			break;
-		off += (size_t)n;
-	}
-	if (off > LABELS_INLINE_MAX)
-		printf("%.*s[...]", LABELS_INLINE_MAX, buf);
-	else
-		printf("%s", buf);
-}
-
 /* kubectl-style compact age: largest unit (s/m/h/d). */
 static void format_age(time_t added, char *buf, size_t cap)
 {
@@ -381,14 +347,12 @@ static int cmd_list(int argc, const char **argv)
 		if (sel && !shirudo_selector_match(sel, remotes[i].labels))
 			continue;
 		if (shown == 0)
-			printf("%-20s  %-28s  %-6s  %s\n", "NAME",
-			       "DESTINATION", "AGE", "LABELS");
+			printf("%-20s  %-28s  %s\n", "NAME",
+			       "DESTINATION", "AGE");
 		snprintf(dest, sizeof(dest), "%s@%s:%d", remotes[i].user,
 			 remotes[i].host, remotes[i].port);
 		format_age(remotes[i].added, age, sizeof(age));
-		printf("%-20s  %-28s  %-6s  ", remotes[i].name, dest, age);
-		print_labels_inline(&remotes[i]);
-		printf("\n");
+		printf("%-20s  %-28s  %s\n", remotes[i].name, dest, age);
 		shown++;
 	}
 	if (shown == 0)
