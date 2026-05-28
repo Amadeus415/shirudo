@@ -104,6 +104,7 @@ BUILTIN_SRCS := \
     builtin-genkey.c \
     builtin-status.c \
     builtin-keys.c \
+    builtin-config.c \
     builtin-upatch.c \
     builtin-rollout.c \
     builtin-nodes.c \

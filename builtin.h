@@ -30,5 +30,6 @@ int shirudo_upatch_apply(const char *path);
 int cmd_status(int argc, const char **argv);
 int cmd_version(int argc, const char **argv);
 int cmd_keys(int argc, const char **argv);
+int cmd_config(int argc, const char **argv);
 
 #endif /* SHIRUDO_BUILTIN_H */

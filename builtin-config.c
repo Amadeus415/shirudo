@@ -1,0 +1,99 @@
+// SPDX-License-Identifier: BSD-2-Clause
+/*
+ * Copyright (c) 2026 Authors of shirudo
+ *
+ * `shirudo config` -- dump the effective shirudo.conf. When the file
+ * is absent, prints the defaults that would apply, in the same syntax
+ * so the output is usable as a starting-point template (modulo the
+ * redacted secret).
+ */
+
+#include <errno.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "builtin.h"
+#include "util/config.h"
+#include "util/help.h"
+#include "util/log.h"
+#include "util/macros.h"
+#include "util/paths.h"
+
+static const struct shirudo_help config_help = {
+	.usage   = "shirudo config",
+	.summary = "Print the effective shirudo configuration in shirudo.conf "
+		   "syntax.\nWhen " SHIRUDO_CONF_PATH " is absent, prints "
+		   "the defaults.\nLocal-only.",
+};
+
+static void usage(void)
+{
+	fprintf(stderr, "usage: %s\n", config_help.usage);
+}
+
+int cmd_config(int argc, const char **argv)
+{
+	struct shirudo_config cfg;
+	bool file_present;
+	int rc;
+	int i;
+
+	for (i = 1; i < argc; i++) {
+		if (shirudo_is_help(argv[i])) {
+			shirudo_print_help(&config_help);
+			return 0;
+		}
+		pr_err("config: unknown option '%s'", argv[i]);
+		usage();
+		return 2;
+	}
+
+	file_present = access(SHIRUDO_CONF_PATH, F_OK) == 0;
+	rc = shirudo_config_load(&cfg);
+	if (rc && rc != -ENOENT) {
+		pr_err("config: load %s: %s",
+		       SHIRUDO_CONF_PATH, strerror(-rc));
+		return 1;
+	}
+
+	if (file_present)
+		printf("# shirudo config (effective, loaded from %s)\n\n",
+		       SHIRUDO_CONF_PATH);
+	else
+		printf("# shirudo config (no %s present; defaults shown)\n\n",
+		       SHIRUDO_CONF_PATH);
+
+	printf("# Eventlog cap; 0 = unlimited. When the log would exceed this,\n"
+	       "# the state-changing op refuses with category: eventlog_full.\n");
+	printf("eventlog.max_bytes = %lu\n\n", cfg.eventlog_max_bytes);
+
+	printf("# TPM owner-hierarchy password used at NV-index define time.\n"
+	       "# Empty by default (works on fresh TPMs, swtpm, most cloud VMs);\n"
+	       "# set on TPMs whose owner auth was already provisioned by\n"
+	       "# another tool. Literal string, or `hex:<even hex>` for a\n"
+	       "# binary auth value. May also be supplied via the\n"
+	       "# SHIRUDO_TPM_OWNER_AUTH env var; that override wins.\n");
+	if (cfg.tpm_owner_auth_len > 0) {
+		const char *env = getenv("SHIRUDO_TPM_OWNER_AUTH");
+
+		printf("# tpm.owner_auth = (set, %zu bytes; redacted%s)\n\n",
+		       cfg.tpm_owner_auth_len,
+		       env ? "; from $SHIRUDO_TPM_OWNER_AUTH"
+			   : "; from " SHIRUDO_CONF_PATH);
+	} else {
+		printf("# tpm.owner_auth = (unset)\n\n");
+	}
+
+	printf("# `shirudo nodes` ICMP probe budget per target. Best-effort\n"
+	       "# unprivileged dgram ICMP -- the drift table still renders\n"
+	       "# (with PING = n/a) when the probe is blocked or the operator\n"
+	       "# gid isn't in net.ipv4.ping_group_range.\n");
+	printf("nodes.icmp_timeout_ms = %u\n", cfg.nodes_icmp_timeout_ms);
+	printf("nodes.icmp_probes = %u\n", cfg.nodes_icmp_probes);
+
+	return 0;
+}

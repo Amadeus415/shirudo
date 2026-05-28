@@ -60,6 +60,7 @@ static const struct cmd commands[] = {
 	{ "keys",	cmd_keys,	GROUP_LOCAL,	"inspect cert / keyring contents" },
 	{ "version",	cmd_version,	GROUP_LOCAL,	"print version and SHIRUDO_VERSION_ID" },
 
+	{ "config",	cmd_config,	GROUP_GENERAL,	"print the effective shirudo.conf (defaults if absent)" },
 	{ "help",	cmd_help,	GROUP_GENERAL,	"show this list" },
 };
 
