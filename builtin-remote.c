@@ -10,6 +10,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <fnmatch.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +24,7 @@
 #include "util/log.h"
 #include "util/macros.h"
 #include "util/remotes.h"
+#include "util/selector.h"
 
 struct kv {
 	const char	*key;	/* points at "key=value" */
@@ -119,6 +121,50 @@ static int conf_path(const char *name, char *buf, size_t cap)
 		return -ENAMETOOLONG;
 	return 0;
 }
+
+static const struct shirudo_help_item remote_subcmds[] = {
+	{ "list",   "list registered remotes (default; supports --filter / --selector)" },
+	{ "add",    "register a new remote: add <name> <[user@]host[:port]> [--label k=v ...]" },
+	{ "show",   "describe one remote in detail: show <name>" },
+	{ "rm",     "unregister a remote: rm <name>" },
+	{ "rename", "rename a remote: rename <old> <new>" },
+};
+
+static const struct shirudo_help_item remote_list_options[] = {
+	{ "--filter=<glob>",   "match remotes by name (shell-glob, fnmatch(3))" },
+	{ "--selector=<expr>", "match by label expression (k=v, !k, &&, ||, ...)" },
+};
+
+static const struct shirudo_help_section remote_help_sections[] = {
+	{ "subcommands:", remote_subcmds,
+	  ARRAY_SIZE(remote_subcmds) },
+	{ "options (list form):", remote_list_options,
+	  ARRAY_SIZE(remote_list_options) },
+};
+
+static const struct shirudo_help remote_help = {
+	.usage      = "shirudo remote [<subcommand>] [<args>...]",
+	.summary    = "Manage the operator-local remote registry. Bare\n"
+		      "`shirudo remote` (or `remote list`) lists registered\n"
+		      "remotes, optionally filtered by --filter / --selector.",
+	.sections   = remote_help_sections,
+	.n_sections = ARRAY_SIZE(remote_help_sections),
+	.footer     =
+"--filter=<glob> matches the registry name via shell-glob (fnmatch(3)):\n"
+"  shirudo remote --filter='prod-*'\n"
+"  shirudo remote --filter='*-edge-?\?'\n"
+"  shirudo remote --filter='db[0-9][0-9]'\n"
+"\n"
+"--selector=<expr> matches the remote's labels:\n"
+"  atoms: k=v, k!=v, k (exists), !k (absent)\n"
+"  combine with &&, ||, (), where && binds tighter than ||\n"
+"  shirudo remote --selector='env=production'\n"
+"  shirudo remote --selector='env=prod && tier=edge'\n"
+"  shirudo remote --selector=\"(role=db || role=cache) && env!=staging\"\n"
+"\n"
+"--filter and --selector intersect. Labels and other registry metadata\n"
+"never leave the operator -- they are not pushed to targets.",
+};
 
 static int cmd_add(int argc, const char **argv)
 {
@@ -288,31 +334,68 @@ static void format_age(time_t added, char *buf, size_t cap)
 
 static int cmd_list(int argc, const char **argv)
 {
-	struct shirudo_remote *remotes;
-	size_t n, i;
+	const char *filter = NULL, *selexpr = NULL;
+	struct shirudo_selector *sel = NULL;
+	struct shirudo_remote *remotes = NULL;
+	size_t n = 0, i, shown = 0;
+	int ret = 0;
 
-	(void)argc;
-	(void)argv;
+	for (i = 1; i < (size_t)argc; i++) {
+		const char *a = argv[i];
+
+		if (shirudo_is_help(a)) {
+			shirudo_print_help(&remote_help);
+			return 0;
+		}
+		if (strncmp(a, "--filter=", 9) == 0)
+			filter = a + 9;
+		else if (strncmp(a, "--selector=", 11) == 0)
+			selexpr = a + 11;
+		else {
+			pr_err("remote list: unexpected argument '%s'", a);
+			return 2;
+		}
+	}
+
+	if (selexpr) {
+		sel = shirudo_selector_parse(selexpr);
+		if (!sel) {
+			pr_err("remote list: invalid --selector expression");
+			return 2;
+		}
+	}
+
 	shirudo_remotes_load_all(&remotes, &n);
 	if (n == 0) {
 		printf("(no remotes registered)\n");
-		shirudo_remotes_free(remotes, n);
-		return 0;
+		goto out;
 	}
-	printf("%-20s  %-28s  %-6s  %s\n", "NAME", "DESTINATION", "AGE",
-	       "LABELS");
+
 	for (i = 0; i < n; i++) {
 		char dest[300], age[32];
 
+		if (filter && fnmatch(filter, remotes[i].name, 0) != 0)
+			continue;
+		if (sel && !shirudo_selector_match(sel, remotes[i].labels))
+			continue;
+		if (shown == 0)
+			printf("%-20s  %-28s  %-6s  %s\n", "NAME",
+			       "DESTINATION", "AGE", "LABELS");
 		snprintf(dest, sizeof(dest), "%s@%s:%d", remotes[i].user,
 			 remotes[i].host, remotes[i].port);
 		format_age(remotes[i].added, age, sizeof(age));
 		printf("%-20s  %-28s  %-6s  ", remotes[i].name, dest, age);
 		print_labels_inline(&remotes[i]);
 		printf("\n");
+		shown++;
 	}
+	if (shown == 0)
+		printf("(no remotes match --filter / --selector)\n");
+
+out:
 	shirudo_remotes_free(remotes, n);
-	return 0;
+	shirudo_selector_free(sel);
+	return ret;
 }
 
 /*
@@ -450,29 +533,6 @@ static int cmd_rename(int argc, const char **argv)
 	return 0;
 }
 
-static const struct shirudo_help_item remote_subcmds[] = {
-	{ "list",   "list all registered remotes (default if omitted)" },
-	{ "add",    "register a new remote: add <name> <[user@]host[:port]> [--label k=v ...]" },
-	{ "show",   "describe one remote in detail: show <name>" },
-	{ "rm",     "unregister a remote: rm <name>" },
-	{ "rename", "rename a remote: rename <old> <new>" },
-};
-
-static const struct shirudo_help_section remote_help_sections[] = {
-	{ "subcommands:", remote_subcmds,
-	  ARRAY_SIZE(remote_subcmds) },
-};
-
-static const struct shirudo_help remote_help = {
-	.usage      = "shirudo remote [<subcommand>] [<args>...]",
-	.summary    = "Manage the operator-local remote registry. Bare\n"
-		      "`shirudo remote` lists all registered remotes.",
-	.sections   = remote_help_sections,
-	.n_sections = ARRAY_SIZE(remote_help_sections),
-	.footer     = "Labels and other registry metadata never leave the "
-		      "operator -- they\nare not pushed to targets.",
-};
-
 int cmd_remote(int argc, const char **argv)
 {
 	const char *canonical;
@@ -487,6 +547,13 @@ int cmd_remote(int argc, const char **argv)
 		shirudo_print_help(&remote_help);
 		return 0;
 	}
+	/*
+	 * `shirudo remote --filter=...` / `--selector=...` -- the user
+	 * supplied list-form options without the verb. Route straight to
+	 * cmd_list (which itself parses these).
+	 */
+	if (argv[1][0] == '-')
+		return cmd_list(argc, argv);
 	/*
 	 * Tolerant resolution: 'remotes', 'li', 'ad', etc. all resolve as
 	 * long as the match is unique (see util/similar.c).

@@ -134,6 +134,21 @@ static const struct shirudo_help nodes_help = {
 		      "`shirudo nodes show <name>` runs a\nper-node deep dive.",
 	.sections   = nodes_help_sections,
 	.n_sections = ARRAY_SIZE(nodes_help_sections),
+	.footer     =
+"--filter=<glob> matches the registry name via shell-glob (fnmatch(3)):\n"
+"  shirudo nodes --filter='prod-*'\n"
+"  shirudo nodes --filter='*-edge-?\?'\n"
+"  shirudo nodes --filter='db[0-9][0-9]'\n"
+"\n"
+"--selector=<expr> matches the remote's labels:\n"
+"  atoms: k=v, k!=v, k (exists), !k (absent)\n"
+"  combine with &&, ||, (), where && binds tighter than ||\n"
+"  shirudo nodes --selector='env=production'\n"
+"  shirudo nodes --selector='env=prod && tier=edge'\n"
+"  shirudo nodes --selector=\"(role=db || role=cache) && env!=staging\"\n"
+"\n"
+"Positional names, --filter and --selector intersect; an empty match\n"
+"set is an error.",
 };
 
 
