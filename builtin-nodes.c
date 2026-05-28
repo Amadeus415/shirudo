@@ -1017,8 +1017,8 @@ static int kmod_recent_cmp(const void *a, const void *b)
 }
 
 /*
- * Recent-15 chronological list, tail-style: oldest of the 15 at top,
- * newest at bottom. Each row is
+ * Recent-N list in reverse-chronological order: newest at top, oldest
+ * at bottom. Each row is
  *   [<loaded_at>]  <name> (<size>, refs=N, <age> since boot)
  * Computed on the operator side from the target-shipped loaded_at +
  * since_boot_sec; failures stay as `?` rather than crowd the table.
