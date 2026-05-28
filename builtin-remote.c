@@ -295,11 +295,18 @@ static int cmd_list(int argc, const char **argv)
 	return 0;
 }
 
+/*
+ * `shirudo remote show <name>` -- describe one registry entry, in the
+ * same `kubectl describe`-style layout as `shirudo nodes show <name>`
+ * (which is registry header + live target sections). show is local
+ * registry only: no SSH probe, no remote sections. The trailing hint
+ * points operators at `nodes show` when they want live state.
+ */
 static int cmd_show(int argc, const char **argv)
 {
 	struct shirudo_remote *remotes;
+	const struct shirudo_remote *r = NULL;
 	size_t n, i, k, nl;
-	int found = 0;
 
 	if (argc < 2) {
 		fprintf(stderr, "usage: shirudo remote show <name>\n");
@@ -307,33 +314,58 @@ static int cmd_show(int argc, const char **argv)
 	}
 	shirudo_remotes_load_all(&remotes, &n);
 	for (i = 0; i < n; i++) {
-		if (strcmp(remotes[i].name, argv[1]) != 0)
-			continue;
-		found = 1;
-		printf("%s:\n", remotes[i].name);
-		printf("  host:   %s\n", remotes[i].host);
-		printf("  user:   %s\n", remotes[i].user);
-		printf("  port:   %d\n", remotes[i].port);
-		nl = shirudo_labels_count(remotes[i].labels);
-		if (nl == 0) {
-			printf("  labels: (none)\n");
-		} else {
-			printf("  labels:\n");
-			for (k = 0; k < nl; k++) {
-				const char *key, *val;
-
-				shirudo_labels_at(remotes[i].labels, k, &key,
-						  &val);
-				printf("    %s = %s\n", key, val);
-			}
+		if (strcmp(remotes[i].name, argv[1]) == 0) {
+			r = &remotes[i];
+			break;
 		}
-		break;
 	}
-	shirudo_remotes_free(remotes, n);
-	if (!found) {
+	if (!r) {
+		shirudo_remotes_free(remotes, n);
 		pr_err("remote show: no such remote '%s'", argv[1]);
 		return 1;
 	}
+
+	{
+		char endpoint[320], created[32] = "unknown", age[32];
+
+		shirudo_remote_endpoint(r, endpoint, sizeof(endpoint));
+		if (r->added > 0) {
+			struct tm tm;
+
+			gmtime_r(&r->added, &tm);
+			strftime(created, sizeof(created),
+				 "%Y-%m-%dT%H:%M:%SZ", &tm);
+		}
+		format_age(r->added, age, sizeof(age));
+
+		printf("Name:              %s\n", r->name);
+		printf("Endpoint:          %s\n", endpoint);
+		printf("Role:              target (registered)\n");
+		printf("Created:           %s\n", created);
+		printf("Age:               %s\n", age);
+		if (r->path)
+			printf("Config:            %s\n", r->path);
+
+		nl = shirudo_labels_count(r->labels);
+		printf("Labels:            ");
+		if (!nl) {
+			printf("<none>\n");
+		} else {
+			for (k = 0; k < nl; k++) {
+				const char *key, *val;
+
+				shirudo_labels_at(r->labels, k, &key, &val);
+				printf("%s%s=%s\n",
+				       k ? "                   " : "",
+				       key, val);
+			}
+		}
+
+		printf("\nRun `shirudo nodes show %s` for live state from "
+		       "the target.\n", r->name);
+	}
+
+	shirudo_remotes_free(remotes, n);
 	return 0;
 }
 

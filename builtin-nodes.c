@@ -420,14 +420,6 @@ static const char *role_str(const struct node_detail *d)
 	return "unknown";
 }
 
-static void endpoint_str(const struct shirudo_remote *r, char *buf, size_t cap)
-{
-	if (r->user && r->user[0])
-		snprintf(buf, cap, "%s@%s:%d", r->user, r->host, r->port);
-	else
-		snprintf(buf, cap, "%s:%d", r->host, r->port);
-}
-
 static void ev_detail(const struct ev_row *ev, char *out, size_t cap)
 {
 	if (ev->up_name[0])
@@ -460,7 +452,7 @@ static void print_describe(const struct node_detail *d)
 	char endpoint[320];
 	size_t nl, nc, i;
 
-	endpoint_str(r, endpoint, sizeof(endpoint));
+	shirudo_remote_endpoint(r, endpoint, sizeof(endpoint));
 
 	printf("Name:              %s\n", r->name);
 	printf("Endpoint:          %s\n", endpoint);
@@ -573,7 +565,7 @@ static void emit_node_json(struct shirudo_json_emit *e,
 	char endpoint[320];
 	size_t nl, i;
 
-	endpoint_str(d->r, endpoint, sizeof(endpoint));
+	shirudo_remote_endpoint(d->r, endpoint, sizeof(endpoint));
 	shirudo_json_obj_open(e);
 	shirudo_json_kv_string(e, "name", d->r->name);
 	shirudo_json_kv_string(e, "endpoint", endpoint);

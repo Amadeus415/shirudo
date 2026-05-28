@@ -25,10 +25,20 @@ struct shirudo_remote {
 	 * that field existed -- the conf file's mtime as a best-effort fallback.
 	 */
 	time_t		added;
+	/* The .conf path this entry was loaded from (per-user or /etc). */
+	char		*path;
 };
 
 int shirudo_remotes_load_all(struct shirudo_remote **out, size_t *n);
 void shirudo_remotes_free(struct shirudo_remote *list, size_t n);
+
+/*
+ * "user@host:port" (or "host:port" if user is empty), bounded by cap.
+ * Single source of truth: `shirudo remote show` and `shirudo nodes show`
+ * both render through this so the endpoint format never drifts.
+ */
+void shirudo_remote_endpoint(const struct shirudo_remote *r,
+			     char *buf, size_t cap);
 
 /*
  * Per-user remotes.d directory ($XDG_CONFIG_HOME/shirudo/remotes.d, else

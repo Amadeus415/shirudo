@@ -165,6 +165,11 @@ static int parse_conf(const char *dir, const char *fname,
 		if (stat(path, &st) == 0)
 			r.added = st.st_mtime;
 	}
+	r.path = strdup(path);
+	if (!r.path) {
+		rc = -ENOMEM;
+		goto fail;
+	}
 	if (!r.host) {
 		pr_warn("remote %s: no host=, skipping", r.name);
 		rc = 0;
@@ -185,6 +190,7 @@ fail:
 	free(r.name);
 	free(r.host);
 	free(r.user);
+	free(r.path);
 	if (labels) {
 		size_t i;
 
@@ -275,6 +281,7 @@ void shirudo_remotes_free(struct shirudo_remote *list, size_t n)
 		free(list[i].name);
 		free(list[i].host);
 		free(list[i].user);
+		free(list[i].path);
 		if (list[i].labels) {
 			for (j = 0; j < list[i].labels->n; j++) {
 				free(list[i].labels->items[j].key);
@@ -285,4 +292,13 @@ void shirudo_remotes_free(struct shirudo_remote *list, size_t n)
 		}
 	}
 	free(list);
+}
+
+void shirudo_remote_endpoint(const struct shirudo_remote *r,
+			     char *buf, size_t cap)
+{
+	if (r->user && r->user[0])
+		snprintf(buf, cap, "%s@%s:%d", r->user, r->host, r->port);
+	else
+		snprintf(buf, cap, "%s:%d", r->host, r->port);
 }
