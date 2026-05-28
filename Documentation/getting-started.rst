@@ -286,7 +286,7 @@ it:
         --label shirudo.nodes.location=us-east-1 \
         --label shirudo.nodes.role=database
 
-``--label key=value`` is repeatable and attaches Kubernetes-style
+``--label key=value`` is repeatable and attaches plain key=value
 labels for selector-based fleet operations (see step 9). Common
 conventions: namespace your keys (``shirudo.nodes.type``,
 ``team.foo``, …); keep values simple
@@ -297,9 +297,33 @@ The entry lives at ``~/.config/shirudo/remotes.d/prod-a.conf`` (or
 plain text — ``host = ...``, ``user = ...``, ``port = ...``, one
 ``label.<key> = <value>`` line per label — and contains no
 secrets. Authentication still flows through ssh-agent and
-``~/.ssh/known_hosts``. To modify labels later, edit the conf
-file directly; shirudo intentionally doesn't provide a
-``set-label`` subcommand.
+``~/.ssh/known_hosts``.
+
+To mutate labels after registration, use the dedicated
+``shirudo remote label`` sub-router (strict key→value semantics —
+re-adding an existing key overwrites; ``rm`` of a missing key is
+a warning, not an error):
+
+.. code-block:: sh
+
+    # add or update labels (idempotent; overwrite on collision)
+    shirudo remote label add prod-a region=us-east-1 tier=primary
+
+    # remove specific labels
+    shirudo remote label rm prod-a tier
+
+    # nuke all labels (endpoint and timestamp preserved)
+    shirudo remote label clear prod-a
+
+    # fleet form: --filter (registry-name glob) and/or
+    # --selector (label expression) instead of a positional name
+    shirudo remote label add --filter='prod-*' tier=canary
+    shirudo remote label rm  --selector='env=staging' env
+
+Editing the conf text by hand still works — the file format is
+the canonical one — but the subcommands rewrite atomically
+(``<conf>.tmp`` + ``rename(2)``) so concurrent reads always see
+a consistent file.
 
 Make sure ``target-a.prod.example.com``'s host key is already in
 your ``~/.ssh/known_hosts`` (``ssh-keyscan -H target-a.prod.example.com
