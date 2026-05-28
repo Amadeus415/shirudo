@@ -159,6 +159,16 @@ struct node_detail {
 	struct ev_row	ev_scratch;
 	struct ev_row	*events;
 	size_t		n_ev, cap_ev;
+
+	/* Mirrors shirudo status's `assets` sub-object. */
+	struct {
+		char	root[80];
+		int	cert, signing_key, keyring_serial;
+		int	eventlog, bpffs_mounted;
+		int64_t	eventlog_bytes;
+		int64_t	upatches, incoming;
+		int	upatches_seen, incoming_seen;
+	} ats;
 };
 
 static int up_on_elem(void *ctx)
@@ -242,6 +252,25 @@ static int parse_node_detail(const char *out, size_t len,
 		{ "bytes", SHIRUDO_JSON_T_INT, &d->ev_bytes, 0, 0, NULL, 0 },
 		{ "events", SHIRUDO_JSON_T_ARRAY, &ev_sink, 0, 0, ev_elem, 5 },
 	};
+	struct shirudo_json_field assets_sub[] = {
+		{ "root", SHIRUDO_JSON_T_STRING, d->ats.root,
+		  sizeof(d->ats.root), 0, NULL, 0 },
+		{ "cert", SHIRUDO_JSON_T_BOOL, &d->ats.cert, 0, 0, NULL, 0 },
+		{ "signing_key", SHIRUDO_JSON_T_BOOL, &d->ats.signing_key,
+		  0, 0, NULL, 0 },
+		{ "keyring_serial", SHIRUDO_JSON_T_BOOL, &d->ats.keyring_serial,
+		  0, 0, NULL, 0 },
+		{ "eventlog", SHIRUDO_JSON_T_BOOL, &d->ats.eventlog,
+		  0, 0, NULL, 0 },
+		{ "eventlog_bytes", SHIRUDO_JSON_T_INT, &d->ats.eventlog_bytes,
+		  0, 0, NULL, 0 },
+		{ "upatches", SHIRUDO_JSON_T_INT, &d->ats.upatches,
+		  0, 0, NULL, 0 },
+		{ "incoming", SHIRUDO_JSON_T_INT, &d->ats.incoming,
+		  0, 0, NULL, 0 },
+		{ "bpffs_mounted", SHIRUDO_JSON_T_BOOL, &d->ats.bpffs_mounted,
+		  0, 0, NULL, 0 },
+	};
 	struct shirudo_json_field tpm_sub[] = {
 		{ "nv_index", SHIRUDO_JSON_T_STRING, d->nv_index,
 		  sizeof(d->nv_index), 0, NULL, 0 },
@@ -297,6 +326,8 @@ static int parse_node_detail(const char *out, size_t len,
 		{ "upatches_loaded", SHIRUDO_JSON_T_ARRAY, &up_sink, 0, 0,
 		  up_elem, 1 },
 		{ "system", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, sys_sub, 10 },
+		{ "assets", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, assets_sub,
+		  ARRAY_SIZE(assets_sub) },
 		{ "tpm", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, tpm_sub, 4 },
 	};
 	int rc;
@@ -309,6 +340,8 @@ static int parse_node_detail(const char *out, size_t len,
 	d->ksm_seen = top[7].seen;
 	d->chain_seen = tpm_sub[1].seen;
 	d->cm_seen = tpm_sub[2].seen;
+	d->ats.upatches_seen = assets_sub[6].seen;
+	d->ats.incoming_seen = assets_sub[7].seen;
 	return 0;
 }
 
@@ -675,6 +708,34 @@ static void print_describe(const struct node_detail *d)
 						      : "-", detail);
 		}
 	}
+
+	printf("\nAssets (%s):\n",
+	       d->ats.root[0] ? d->ats.root : "/var/lib/shirudo");
+	printf("  %-22s %s\n", "keys/cert.der",
+	       d->ats.cert ? "present" : "absent");
+	printf("  %-22s %s\n", "keys/signing_key.pem",
+	       d->ats.signing_key ? "present" : "absent");
+	printf("  %-22s %s\n", "keyring.serial",
+	       d->ats.keyring_serial ? "present" : "absent");
+	if (d->ats.eventlog)
+		printf("  %-22s present (%lld bytes)\n", "eventlog",
+		       (long long)d->ats.eventlog_bytes);
+	else
+		printf("  %-22s absent\n", "eventlog");
+	if (!d->ats.upatches_seen)
+		printf("  %-22s absent\n", "upatches/");
+	else
+		printf("  %-22s %lld .upatch\n", "upatches/",
+		       (long long)d->ats.upatches);
+	if (!d->ats.incoming_seen)
+		printf("  %-22s absent\n", "incoming/");
+	else if (d->ats.incoming == 0)
+		printf("  %-22s empty\n", "incoming/");
+	else
+		printf("  %-22s %lld staged\n", "incoming/",
+		       (long long)d->ats.incoming);
+	printf("  %-22s %s\n", "bpffs/",
+	       d->ats.bpffs_mounted ? "mounted" : "not mounted");
 	printf("\n");
 }
 
@@ -791,6 +852,28 @@ static void emit_node_json(struct shirudo_json_emit *e,
 		}
 		shirudo_json_arr_close(e);
 		shirudo_sysinfo_emit_json(e, &d->sys);
+		shirudo_json_obj_open_key(e, "assets");
+		shirudo_json_kv_string(e, "root",
+				       d->ats.root[0] ? d->ats.root
+						      : "/var/lib/shirudo");
+		shirudo_json_kv_bool(e, "cert", d->ats.cert);
+		shirudo_json_kv_bool(e, "signing_key", d->ats.signing_key);
+		shirudo_json_kv_bool(e, "keyring_serial",
+				     d->ats.keyring_serial);
+		shirudo_json_kv_bool(e, "eventlog", d->ats.eventlog);
+		shirudo_json_kv_int(e, "eventlog_bytes",
+				    d->ats.eventlog_bytes);
+		if (d->ats.upatches_seen)
+			shirudo_json_kv_int(e, "upatches", d->ats.upatches);
+		else
+			shirudo_json_kv_null(e, "upatches");
+		if (d->ats.incoming_seen)
+			shirudo_json_kv_int(e, "incoming", d->ats.incoming);
+		else
+			shirudo_json_kv_null(e, "incoming");
+		shirudo_json_kv_bool(e, "bpffs_mounted",
+				     d->ats.bpffs_mounted);
+		shirudo_json_obj_close(e);	/* assets */
 		shirudo_json_obj_open_key(e, "tpm");
 		shirudo_json_kv_string(e, "nv_index", d->nv_index);
 		if (d->chain_seen)
