@@ -20,8 +20,11 @@
 
 #include <bpf/bpf.h>
 
+#include <time.h>
+
 #include "builtin.h"
 #include "util/chain.h"
+#include "util/conditions.h"
 #include "util/eventlog.h"
 #include "util/help.h"
 #include "util/json.h"
@@ -30,6 +33,7 @@
 #include "util/malloc.h"
 #include "util/paths.h"
 #include "util/sysinfo.h"
+#include "util/timefmt.h"
 
 extern const char shirudo_version_id[];
 
@@ -269,8 +273,8 @@ static void print_eventlog_table(void)
 
 	if (read_eventlog(&buf, &len) != 0)
 		return;
-	printf("  eventlog entries:\n");
-	printf("    %-20s %-13s %-13s %s\n", "TIME", "TYPE", "DIGEST",
+	printf("Eventlog (audit trail):\n");
+	printf("  %-20s %-13s %-13s %s\n", "TIME", "TYPE", "DIGEST",
 	       "DETAIL");
 	for (line = strtok_r(buf, "\n", &save); line;
 	     line = strtok_r(NULL, "\n", &save)) {
@@ -278,36 +282,45 @@ static void print_eventlog_table(void)
 		struct ev_proj ev;
 
 		if (parse_event_line(line, strlen(line), &ev) != 0) {
-			printf("    %-20s %-13s %-13s\n", "?", "unparseable",
+			printf("  %-20s %-13s %-13s\n", "?", "unparseable",
 			       "");
 			continue;
 		}
 		event_detail(&ev, detail, sizeof(detail));
-		printf("    %-20s %-13s %-13.12s %s\n", ev.ts, ev.type,
+		printf("  %-20s %-13s %-13.12s %s\n", ev.ts, ev.type,
 		       ev.digest[0] ? ev.digest : "-", detail);
 	}
 	xfree(buf, len);
 }
 
+/*
+ * Same shape `shirudo nodes show` renders -- "System Info:" header,
+ * 2-space indent, 16-col label column. Caller prints any preceding
+ * blank line, this prints the section starting with the header.
+ */
 static void print_system_human(const struct shirudo_sysinfo *si)
 {
-	printf("  system info:\n");
-	printf("    %-18s %s\n", "hostname", si->hostname);
-	printf("    %-18s %s\n", "os", si->os_pretty);
-	printf("    %-18s %s\n", "kernel", si->kernel_release);
-	printf("    %-18s %s\n", "architecture", si->machine);
+	printf("\nSystem Info:\n");
+	printf("  %-16s %s\n", "OS:", si->os_pretty);
+	printf("  %-16s %s\n", "Kernel:", si->kernel_release);
+	if (si->kernel_version[0])
+		printf("  %-16s %s\n", "Kernel Version:", si->kernel_version);
+	printf("  %-16s %s\n", "Architecture:", si->machine);
 	if (si->nproc > 0)
-		printf("    %-18s %ld\n", "cpus", si->nproc);
+		printf("  %-16s %ld\n", "CPUs:", si->nproc);
 	if (si->mem_total_kb > 0)
-		printf("    %-18s %ld kB\n", "memory", si->mem_total_kb);
+		printf("  %-16s %ld kB\n", "Memory:", si->mem_total_kb);
 	if (si->uptime_sec >= 0)
-		printf("    %-18s %ldd %ldh %ldm\n", "uptime",
-		       si->uptime_sec / 86400, (si->uptime_sec % 86400) / 3600,
+		printf("  %-16s %ldd %ldh %ldm\n", "Uptime:",
+		       si->uptime_sec / 86400,
+		       (si->uptime_sec % 86400) / 3600,
 		       (si->uptime_sec % 3600) / 60);
+	if (si->hostname[0])
+		printf("  %-16s %s\n", "Hostname:", si->hostname);
 	if (si->machine_id[0])
-		printf("    %-18s %s\n", "machine-id", si->machine_id);
+		printf("  %-16s %s\n", "Machine ID:", si->machine_id);
 	if (si->boot_id[0])
-		printf("    %-18s %s\n", "boot-id", si->boot_id);
+		printf("  %-16s %s\n", "Boot ID:", si->boot_id);
 }
 
 static const struct shirudo_help_item status_options[] = {
@@ -335,6 +348,107 @@ static const struct shirudo_help status_help = {
 static void usage(void)
 {
 	fprintf(stderr, "usage: %s\n", status_help.usage);
+}
+
+/*
+ * "If this upatch is loaded, when was it last loaded and what was its
+ * payload digest?" map built from one pass over the on-disk eventlog.
+ * Used by the Upatches loaded section so the operator sees the same
+ * NAME / PAYLOAD-SHA256 / APPLIED columns `nodes show` renders.
+ */
+struct upatch_load_info {
+	char	name[128];
+	char	payload[65];
+	char	ts[40];
+};
+
+static size_t scan_eventlog_loads(struct upatch_load_info *out, size_t cap)
+{
+	char *buf = NULL, *line, *save;
+	size_t len = 0, n = 0;
+
+	if (read_eventlog(&buf, &len) != 0)
+		return 0;
+	for (line = strtok_r(buf, "\n", &save); line && n <= cap;
+	     line = strtok_r(NULL, "\n", &save)) {
+		struct ev_proj ev;
+		size_t k;
+
+		if (parse_event_line(line, strlen(line), &ev) != 0)
+			continue;
+		if (strcmp(ev.type, "upatch_load") != 0)
+			continue;
+		for (k = 0; k < n; k++)
+			if (strcmp(out[k].name, ev.up_name) == 0)
+				break;
+		if (k == n) {
+			if (n >= cap)
+				continue;
+			n++;
+		}
+		snprintf(out[k].name, sizeof(out[k].name), "%s", ev.up_name);
+		snprintf(out[k].payload, sizeof(out[k].payload), "%s",
+			 ev.up_payload);
+		snprintf(out[k].ts, sizeof(out[k].ts), "%s", ev.ts);
+	}
+	xfree(buf, len);
+	return n;
+}
+
+static const struct upatch_load_info *find_load(
+	const struct upatch_load_info *loads, size_t n, const char *name)
+{
+	size_t i;
+
+	for (i = 0; i < n; i++)
+		if (strcmp(loads[i].name, name) == 0)
+			return &loads[i];
+	return NULL;
+}
+
+/*
+ * Convert local probes into the shared conditions input. `shirudo
+ * status` always runs on-host, so reachable/parsed are trivially
+ * true; that gives the shared verdict / Conditions block the same
+ * meaning here as in `shirudo nodes show`.
+ */
+static void local_cond_input(struct shirudo_conditions_input *in,
+			     int lsm_attached, int keyring_present,
+			     int64_t keyring_serial,
+			     int64_t keyring_serial_pinned,
+			     int ks_seen, int ksp_seen, int ksm_seen,
+			     int ks_matches,
+			     int chain_seen, int chain_matches, int cm_seen,
+			     const char *nv_index)
+{
+	*in = (struct shirudo_conditions_input){
+		.reachable		= true,
+		.parsed			= true,
+		.lsm_attached		= lsm_attached,
+		.keyring_present	= keyring_present,
+		.keyring_serial		= keyring_serial,
+		.keyring_serial_pinned	= keyring_serial_pinned,
+		.keyring_serial_matches	= ks_matches,
+		.ks_seen		= ks_seen,
+		.ksp_seen		= ksp_seen,
+		.ksm_seen		= ksm_seen,
+		.chain_seen		= chain_seen,
+		.chain_matches		= chain_matches,
+		.cm_seen		= cm_seen,
+		.nv_index		= nv_index,
+	};
+}
+
+/* Compose roles like nodes show: "target", "operator", or both. */
+static const char *roles_str(int is_target, int is_operator)
+{
+	if (is_target && is_operator)
+		return "target, operator";
+	if (is_operator)
+		return "operator";
+	if (is_target)
+		return "target";
+	return "none";
 }
 
 int cmd_status(int argc, const char **argv)
@@ -444,6 +558,38 @@ int cmd_status(int argc, const char **argv)
 		shirudo_json_kv_string(&e, "version_id", shirudo_version_id);
 		shirudo_json_kv_bool(&e, "is_target", is_target);
 		shirudo_json_kv_bool(&e, "is_operator", is_operator);
+		{
+			struct shirudo_conditions_input cin;
+			struct shirudo_condition conds[SHIRUDO_CONDITIONS_MAX];
+			size_t nc, ci;
+
+			local_cond_input(&cin, lsm_attached, keyring_present,
+				keyring_serial,
+				keyring_pinned >= 1 ? keyring_pinned : 0,
+				keyring_present, keyring_pinned >= 1,
+				keyring_present && keyring_pinned >= 1,
+				keyring_present && keyring_pinned >= 1 &&
+					keyring_serial == keyring_pinned,
+				include_tpm && chain_rc == 0,
+				match == 1, match >= 0,
+				include_tpm ? nv_index : NULL);
+			shirudo_json_kv_string(&e, "status",
+					       shirudo_status_verdict(&cin));
+			nc = shirudo_conditions(&cin, conds,
+						ARRAY_SIZE(conds));
+			shirudo_json_arr_open(&e, "conditions");
+			for (ci = 0; ci < nc; ci++) {
+				shirudo_json_obj_open(&e);
+				shirudo_json_kv_string(&e, "type",
+						       conds[ci].type);
+				shirudo_json_kv_string(&e, "status",
+						       conds[ci].status);
+				shirudo_json_kv_string(&e, "detail",
+						       conds[ci].detail);
+				shirudo_json_obj_close(&e);
+			}
+			shirudo_json_arr_close(&e);
+		}
 		shirudo_json_kv_bool(&e, "lsm_attached", lsm_attached);
 		shirudo_json_kv_bool(&e, "keyring_present", keyring_present);
 		if (keyring_present)
@@ -516,80 +662,150 @@ int cmd_status(int argc, const char **argv)
 		else
 			printf("%s\n", json_buf);
 	} else {
-		printf("shirudo status\n");
-		printf("  version-id:      %s\n", shirudo_version_id);
-		printf("  role:            target=%s operator=%s\n",
-		       is_target ? "yes" : "no", is_operator ? "yes" : "no");
-		printf("  lsm:             %s\n",
-		       lsm_attached ? "attached" : "not attached");
-		if (keyring_present)
-			printf("  keyring:         present (%s, serial=%d)\n",
-			       SHIRUDO_KEYRING_NAME, (int)keyring_serial);
+		struct shirudo_conditions_input cin;
+		struct shirudo_condition conds[SHIRUDO_CONDITIONS_MAX];
+		struct upatch_load_info loads[256];
+		size_t nc, n_loads;
+		char hostname[256] = "?";
+		char reason[160];
+		const char *verdict;
+
+		local_cond_input(&cin, lsm_attached, keyring_present,
+			keyring_serial,
+			keyring_pinned >= 1 ? keyring_pinned : 0,
+			keyring_present, keyring_pinned >= 1,
+			keyring_present && keyring_pinned >= 1,
+			keyring_present && keyring_pinned >= 1 &&
+				keyring_serial == keyring_pinned,
+			include_tpm && chain_rc == 0,
+			match == 1, match >= 0,
+			include_tpm ? nv_index : NULL);
+		verdict = shirudo_status_verdict(&cin);
+		shirudo_status_reason(&cin, reason, sizeof(reason));
+		nc = shirudo_conditions(&cin, conds, ARRAY_SIZE(conds));
+		n_loads = scan_eventlog_loads(loads, ARRAY_SIZE(loads));
+		(void)gethostname(hostname, sizeof(hostname));
+		hostname[sizeof(hostname) - 1] = '\0';
+
+		printf("Host:              %s\n", hostname);
+		printf("Roles:             %s\n",
+		       roles_str(is_target, is_operator));
+		if (reason[0])
+			printf("Status:            %s  (%s)\n", verdict,
+			       reason);
 		else
-			printf("  keyring:         missing\n");
-		if (keyring_pinned == -ENOENT)
-			printf("  keyring pin:     none\n");
+			printf("Status:            %s\n", verdict);
+		printf("Version-ID:        %s\n", shirudo_version_id);
+
+		printf("\n");
+		shirudo_conditions_print(conds, nc);
+
+		printf("\nKeyring (%s):\n", SHIRUDO_KEYRING_NAME);
+		if (keyring_present)
+			printf("  %-22s %lld\n", "Serial:",
+			       (long long)keyring_serial);
+		else
+			printf("  %-22s %s\n", "Serial:",
+			       "absent  (operator host, or `shirudo init` "
+			       "not yet run)");
+		if (keyring_pinned == (key_serial_t)-ENOENT)
+			printf("  %-22s %s\n", "Pinned serial:",
+			       "(none recorded)");
 		else if (keyring_pinned < 0)
-			printf("  keyring pin:     unreadable (%s)\n",
+			printf("  %-22s unreadable (%s)\n", "Pinned serial:",
 			       strerror(-keyring_pinned));
 		else
-			printf("  keyring pin:     serial=%d%s\n",
-			       (int)keyring_pinned, !keyring_present ? "" :
+			printf("  %-22s %lld%s\n", "Pinned serial:",
+			       (long long)keyring_pinned, !keyring_present ? "" :
 			       keyring_serial == keyring_pinned ?
-			       " (matches)" : " (MISMATCH -- swapped?)");
-		printf("  cert:            %s\n",
-		       cert_present ? "present" : "absent");
-		if (is_operator)
-			printf("  signing key:     present\n");
-		printf("  upatches loaded: %d\n", n_ups);
-		for (i = 0; i < n_ups; i++)
-			printf("    %s\n", ups[i]->d_name);
-		printf("  assets (%s):\n", SHIRUDO_VAR_LIB);
-		printf("    %-20s %s\n", "keys/cert.der",
-		       assets.cert ? "present" : "absent");
-		printf("    %-20s %s\n", "keys/signing_key.pem",
-		       assets.signing_key ? "present" : "absent");
-		printf("    %-20s %s\n", "keyring.serial",
-		       assets.keyring_serial ? "present" : "absent");
-		if (assets.eventlog)
-			printf("    %-20s present (%ld bytes)\n", "eventlog",
-			       assets.eventlog_bytes);
-		else
-			printf("    %-20s absent\n", "eventlog");
-		if (assets.n_upatches < 0)
-			printf("    %-20s absent\n", "upatches/");
-		else
-			printf("    %-20s %d .upatch\n", "upatches/",
-			       assets.n_upatches);
-		if (assets.n_incoming < 0)
-			printf("    %-20s absent\n", "incoming/");
-		else if (assets.n_incoming == 0)
-			printf("    %-20s empty\n", "incoming/");
-		else
-			printf("    %-20s %d staged\n", "incoming/",
-			       assets.n_incoming);
-		printf("    %-20s %s\n", "bpffs/",
-		       assets.bpffs_mounted ? "mounted" : "not mounted");
+				       "  (matches)" :
+				       "  (MISMATCH -- swapped?)");
+
+		if (include_system)
+			print_system_human(&sysi);
+
+		printf("\nUpatches loaded (%d):\n", n_ups);
+		if (n_ups > 0) {
+			printf("  %-30s %-18s %s\n", "NAME", "PAYLOAD-SHA256",
+			       "APPLIED");
+			for (i = 0; i < n_ups; i++) {
+				const struct upatch_load_info *li =
+					find_load(loads, n_loads,
+						  ups[i]->d_name);
+				char age[16] = "?";
+				char pay[20];
+
+				if (li) {
+					struct tm tm = {};
+
+					snprintf(pay, sizeof(pay), "%.16s..",
+						 li->payload);
+					if (strptime(li->ts,
+						     "%Y-%m-%dT%H:%M:%SZ",
+						     &tm))
+						shirudo_format_duration(
+							(long)(time(NULL) -
+							       timegm(&tm)),
+							age, sizeof(age));
+				} else {
+					snprintf(pay, sizeof(pay), "-");
+				}
+				printf("  %-30s %-18s %s\n",
+				       ups[i]->d_name, pay, age);
+			}
+		}
+
 		if (include_tpm) {
-			printf("  tpm chain:       ");
+			printf("\nTPM Measurement:\n");
+			printf("  %-18s %s\n", "NV index:", nv_index);
 			if (chain_rc == 0)
-				printf("%s\n", chain_hex);
+				printf("  %-18s %s\n", "Chain:", chain_hex);
 			else
-				printf("unavailable (no TPM / index undefined)\n");
-			printf("  chain vs log:    %s\n",
+				printf("  %-18s %s\n", "Chain:",
+				       "unavailable (no TPM / index "
+				       "undefined)");
+			printf("  %-18s %s\n", "Chain vs eventlog:",
 			       match < 0 ? "n/a" :
 			       match ? "matches" : "MISMATCH (tamper?)");
 			if (ev_rc == 0)
-				printf("  eventlog:        %s (%ld entries, "
-				       "%ld bytes)\n", SHIRUDO_EVENTLOG_PATH,
+				printf("  %-18s %s  (%ld entries, %ld bytes)\n",
+				       "Eventlog:", SHIRUDO_EVENTLOG_PATH,
 				       ev_entries, ev_bytes);
 			else
-				printf("  eventlog:        absent\n");
+				printf("  %-18s absent\n", "Eventlog:");
 		}
-		if (include_system)
-			print_system_human(&sysi);
-		if (include_eventlog)
+
+		if (include_eventlog) {
+			printf("\n");
 			print_eventlog_table();
+		}
+
+		printf("\nAssets (%s):\n", SHIRUDO_VAR_LIB);
+		printf("  %-22s %s\n", "keys/cert.der",
+		       assets.cert ? "present" : "absent");
+		printf("  %-22s %s\n", "keys/signing_key.pem",
+		       assets.signing_key ? "present" : "absent");
+		printf("  %-22s %s\n", "keyring.serial",
+		       assets.keyring_serial ? "present" : "absent");
+		if (assets.eventlog)
+			printf("  %-22s present (%ld bytes)\n", "eventlog",
+			       assets.eventlog_bytes);
+		else
+			printf("  %-22s absent\n", "eventlog");
+		if (assets.n_upatches < 0)
+			printf("  %-22s absent\n", "upatches/");
+		else
+			printf("  %-22s %d .upatch\n", "upatches/",
+			       assets.n_upatches);
+		if (assets.n_incoming < 0)
+			printf("  %-22s absent\n", "incoming/");
+		else if (assets.n_incoming == 0)
+			printf("  %-22s empty\n", "incoming/");
+		else
+			printf("  %-22s %d staged\n", "incoming/",
+			       assets.n_incoming);
+		printf("  %-22s %s\n", "bpffs/",
+		       assets.bpffs_mounted ? "mounted" : "not mounted");
 	}
 
 out:

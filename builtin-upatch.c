@@ -51,12 +51,12 @@ static void dump_source(const char *name, uint32_t name_len,
 {
 	uint32_t i = 0, ln = 1, start;
 
-	printf("  source (%.*s):\n", (int)name_len, name);
+	printf("Source (%.*s):\n", (int)name_len, name);
 	while (i < src_len) {
 		start = i;
 		while (i < src_len && src[i] != '\n')
 			i++;
-		printf("    %4u  %.*s\n", ln, (int)(i - start), src + start);
+		printf("  %4u  %.*s\n", ln, (int)(i - start), src + start);
 		if (i < src_len)
 			i++;		/* consume the newline */
 		ln++;
@@ -194,35 +194,41 @@ static int cmd_upatch_info(int argc, const char **argv)
 		goto out;
 	}
 
-	printf("%s:\n", path);
-	printf("  name:           %s\n", name);
-	printf("  type:           %s\n", flag_str(&u));
-	printf("  version:        %u\n", u.hdr.version);
-	printf("  payload-sha256: ");
+	printf("File:                  %s\n", path);
+	printf("Name:                  %s\n", name);
+	printf("Type:                  %s\n", flag_str(&u));
+	printf("Version:               %u\n", u.hdr.version);
+	printf("Payload SHA256:        ");
 	print_sha256_hex(u.hdr.payload_sha256);
 	printf("\n");
-	printf("  loader-insns:   off=%u len=%u\n",
+	printf("File size:             %zu bytes\n", u.map_size);
+
+	printf("\nLoader:\n");
+	printf("  %-22s off=%u len=%u\n", "Instructions:",
 	       u.hdr.loader_insns_off, u.hdr.loader_insns_len);
-	printf("  signature:      off=%u len=%u\n",
-	       u.hdr.signature_off, u.hdr.signature_len);
+	printf("  %-22s %u\n", "Log buffer size:", u.hdr.log_buf_sz);
 	if (u.hdr.metadata_len)
-		printf("  metadata:       off=%u len=%u\n",
+		printf("  %-22s off=%u len=%u\n", "Metadata:",
 		       u.hdr.metadata_off, u.hdr.metadata_len);
 	else
-		printf("  metadata:       (none)\n");
+		printf("  %-22s (none)\n", "Metadata:");
 	if (u.hdr.data_len)
-		printf("  data:           off=%u len=%u\n",
+		printf("  %-22s off=%u len=%u\n", "Data:",
 		       u.hdr.data_off, u.hdr.data_len);
 	else
-		printf("  data:           (none)\n");
-	printf("  log-buf-size:   %u\n", u.hdr.log_buf_sz);
-	printf("  file-size:      %zu bytes\n", u.map_size);
+		printf("  %-22s (none)\n", "Data:");
+
+	printf("\nSignature:\n");
+	printf("  %-22s %u\n", "Offset:", u.hdr.signature_off);
+	printf("  %-22s %u bytes\n", "Length:", u.hdr.signature_len);
+
+	printf("\n");
 	if (shirudo_upatch_has_source(&u))
 		dump_source(u.source_name, u.source_name_len,
 			    u.source, u.source_len);
 	else
-		printf("  source:         (none -- built from a .bpf.o, or "
-		       "older format)\n");
+		printf("Source:                (none -- built from a .bpf.o, "
+		       "or older format)\n");
 	ret = 0;
 out:
 	shirudo_upatch_close(&u);

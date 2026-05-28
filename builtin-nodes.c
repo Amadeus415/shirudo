@@ -19,6 +19,7 @@
 #include <time.h>
 
 #include "builtin.h"
+#include "util/conditions.h"
 #include "util/config.h"
 #include "util/help.h"
 #include "util/icmp.h"
@@ -347,80 +348,32 @@ static void fetch_node(const struct shirudo_remote *r,
 	xfree(out, len);
 }
 
-struct cond {
-	const char	*type;
-	const char	*status;
-	char		detail[192];
-};
-
-/* Derive the security-operator health conditions from a parsed node. */
-static size_t compute_conditions(const struct node_detail *d,
-				 struct cond *c, size_t max)
+/*
+ * Adapt the per-node detail into the flat input shirudo_conditions()
+ * expects. The two sit on the same security-relevant fields so the
+ * fetched (SSH) view and the local `shirudo status` view share one
+ * verdict / Conditions code path.
+ */
+static void node_detail_to_cond_input(const struct node_detail *d,
+				      struct shirudo_conditions_input *in)
 {
-	size_t n = 0;
-
-	if (n < max) {
-		c[n].type = "LsmAttached";
-		c[n].status = d->lsm_attached ? "OK" : "ALERT";
-		snprintf(c[n].detail, sizeof(c[n].detail), "%s",
-			 d->lsm_attached ? "lsm/bpf link present and pinned"
-					 : "lsm/bpf absent -- enforcement OFF");
-		n++;
-	}
-	if (n < max) {
-		c[n].type = "KeyringSealed";
-		if (!d->keyring_present) {
-			c[n].status = "WARN";
-			snprintf(c[n].detail, sizeof(c[n].detail),
-				 "shirudo keyring absent (not init'd?)");
-		} else if (d->ksm_seen && !d->keyring_serial_matches) {
-			c[n].status = "ALERT";
-			snprintf(c[n].detail, sizeof(c[n].detail),
-				 "pin serial=%lld != live serial=%lld (swapped?)",
-				 (long long)d->keyring_serial_pinned,
-				 (long long)d->keyring_serial);
-		} else {
-			c[n].status = "OK";
-			snprintf(c[n].detail, sizeof(c[n].detail),
-				 "serial=%lld, %s", (long long)d->keyring_serial,
-				 d->ksp_seen ? "pin matches"
-					     : "no pin recorded");
-		}
-		n++;
-	}
-	if (n < max) {
-		c[n].type = "ChainIntact";
-		if (!d->chain_seen) {
-			c[n].status = "WARN";
-			snprintf(c[n].detail, sizeof(c[n].detail),
-				 "no TPM chain (degraded / --no-tpm)");
-		} else if (d->cm_seen && d->chain_matches) {
-			c[n].status = "OK";
-			snprintf(c[n].detail, sizeof(c[n].detail),
-				 "live NV chain == eventlog replay");
-		} else if (d->cm_seen) {
-			c[n].status = "ALERT";
-			snprintf(c[n].detail, sizeof(c[n].detail),
-				 "live NV chain != eventlog replay (tamper?)");
-		} else {
-			c[n].status = "WARN";
-			snprintf(c[n].detail, sizeof(c[n].detail),
-				 "chain present, replay not evaluated");
-		}
-		n++;
-	}
-	if (n < max) {
-		c[n].type = "TpmMeasured";
-		c[n].status = d->chain_seen ? "OK" : "WARN";
-		if (d->chain_seen)
-			snprintf(c[n].detail, sizeof(c[n].detail),
-				 "NV index %s readable", d->nv_index);
-		else
-			snprintf(c[n].detail, sizeof(c[n].detail),
-				 "not measured");
-		n++;
-	}
-	return n;
+	*in = (struct shirudo_conditions_input){
+		.reachable		= d->reachable,
+		.parsed			= d->parsed,
+		.unreach		= d->unreach,
+		.lsm_attached		= d->lsm_attached,
+		.keyring_present	= d->keyring_present,
+		.keyring_serial		= d->keyring_serial,
+		.keyring_serial_pinned	= d->keyring_serial_pinned,
+		.keyring_serial_matches	= d->keyring_serial_matches,
+		.ks_seen		= d->ks_seen,
+		.ksp_seen		= d->ksp_seen,
+		.ksm_seen		= d->ksm_seen,
+		.chain_seen		= d->chain_seen,
+		.chain_matches		= d->chain_matches,
+		.cm_seen		= d->cm_seen,
+		.nv_index		= d->nv_index,
+	};
 }
 
 static const char *role_str(const struct node_detail *d)
@@ -481,58 +434,30 @@ static const struct ev_row *last_upatch_event(const struct node_detail *d)
 }
 
 /*
- * Aggregate "health" verdict for the STATUS column / Status: line.
- * Severity order (worst -> best) so a single label tells operators
- * what to look at; the full Conditions block gives the breakdown.
+ * Thin wrappers so existing call sites stay terse. `node_detail`
+ * carries a registry pointer; we use that to short-circuit "?" for
+ * a skipped slot, then delegate to the shared verdict logic.
  */
-static const char *status_str(const struct node_detail *d)
+static const char *nd_status(const struct node_detail *d)
 {
+	struct shirudo_conditions_input in;
+
 	if (!d->r)
 		return "?";
-	if (!d->reachable)
-		return "unreachable";
-	if (!d->parsed)
-		return "unparseable";
-	if ((d->cm_seen && !d->chain_matches) ||
-	    (d->ksm_seen && !d->keyring_serial_matches))
-		return "tampered";
-	if (!d->lsm_attached)
-		return "lsm-off";
-	if (!d->keyring_present)
-		return "init-pending";
-	if (!d->chain_seen)
-		return "degraded";
-	return "ok";
+	node_detail_to_cond_input(d, &in);
+	return shirudo_status_verdict(&in);
 }
 
-/*
- * Short parenthetical reason (without parens) for the non-ok statuses,
- * surfaced inline on the `nodes show` Status: line. Empty when status
- * is ok (no extra noise) or unreachable (the SSH error already says
- * what happened).
- */
-static void status_reason(const struct node_detail *d, char *buf, size_t cap)
+static void nd_status_reason(const struct node_detail *d, char *buf, size_t cap)
 {
-	const char *s = status_str(d);
+	struct shirudo_conditions_input in;
 
-	buf[0] = '\0';
-	if (strcmp(s, "unreachable") == 0) {
-		if (d->unreach)
-			snprintf(buf, cap, "%s", d->unreach);
-	} else if (strcmp(s, "unparseable") == 0) {
-		snprintf(buf, cap, "status JSON unparseable");
-	} else if (strcmp(s, "tampered") == 0) {
-		if (d->cm_seen && !d->chain_matches)
-			snprintf(buf, cap, "live NV chain != eventlog replay");
-		else
-			snprintf(buf, cap, "keyring serial swap detected");
-	} else if (strcmp(s, "lsm-off") == 0) {
-		snprintf(buf, cap, "LSM not attached -- enforcement OFF");
-	} else if (strcmp(s, "init-pending") == 0) {
-		snprintf(buf, cap, "target hasn't been `shirudo init`'d");
-	} else if (strcmp(s, "degraded") == 0) {
-		snprintf(buf, cap, "no TPM chain (unmeasured)");
+	if (!d->r) {
+		buf[0] = '\0';
+		return;
 	}
+	node_detail_to_cond_input(d, &in);
+	shirudo_status_reason(&in, buf, cap);
 }
 
 /*
@@ -573,7 +498,7 @@ static void upatches_summary(const struct node_detail *d, char *buf, size_t cap)
 static void print_describe(const struct node_detail *d)
 {
 	const struct shirudo_remote *r = d->r;
-	struct cond conds[4];
+	struct shirudo_condition conds[4];
 	char endpoint[320];
 	size_t nl, nc, i;
 
@@ -583,9 +508,9 @@ static void print_describe(const struct node_detail *d)
 	printf("Endpoint:          %s\n", endpoint);
 	{
 		char reason[160];
-		const char *s = status_str(d);
+		const char *s = nd_status(d);
 
-		status_reason(d, reason, sizeof(reason));
+		nd_status_reason(d, reason, sizeof(reason));
 		if (d->reachable && d->parsed) {
 			printf("Role:              %s\n", role_str(d));
 			printf("Reachable:         yes\n");
@@ -660,12 +585,14 @@ static void print_describe(const struct node_detail *d)
 		return;
 	}
 
-	nc = compute_conditions(d, conds, 4);
-	printf("\nConditions:\n");
-	printf("  %-16s %-7s %s\n", "TYPE", "STATUS", "DETAIL");
-	for (i = 0; i < nc; i++)
-		printf("  %-16s %-7s %s\n", conds[i].type, conds[i].status,
-		       conds[i].detail);
+	{
+		struct shirudo_conditions_input in;
+
+		node_detail_to_cond_input(d, &in);
+		nc = shirudo_conditions(&in, conds, ARRAY_SIZE(conds));
+	}
+	printf("\n");
+	shirudo_conditions_print(conds, nc);
 
 	printf("\nAddresses:\n");
 	printf("  %-12s %s\n", "Endpoint:", endpoint);
@@ -762,7 +689,7 @@ static void emit_node_json(struct shirudo_json_emit *e,
 	shirudo_json_kv_string(e, "name", d->r->name);
 	shirudo_json_kv_string(e, "endpoint", endpoint);
 	shirudo_json_kv_bool(e, "reachable", d->reachable);
-	shirudo_json_kv_string(e, "status", status_str(d));
+	shirudo_json_kv_string(e, "status", nd_status(d));
 	if (!d->reachable || !d->parsed)
 		shirudo_json_kv_string(e, "error",
 				       d->unreach ? d->unreach
@@ -796,8 +723,12 @@ static void emit_node_json(struct shirudo_json_emit *e,
 	shirudo_json_obj_close(e);
 
 	if (d->reachable && d->parsed) {
-		struct cond conds[4];
-		size_t nc = compute_conditions(d, conds, 4);
+		struct shirudo_conditions_input cin;
+		struct shirudo_condition conds[4];
+		size_t nc;
+
+		node_detail_to_cond_input(d, &cin);
+		nc = shirudo_conditions(&cin, conds, ARRAY_SIZE(conds));
 
 		shirudo_json_kv_string(e, "role", role_str(d));
 		shirudo_json_arr_open(e, "conditions");
@@ -1164,7 +1095,7 @@ int cmd_nodes(int argc, const char **argv)
 			else
 				shirudo_json_kv_null(&e, "rtt_us");
 			shirudo_json_obj_close(&e);
-			shirudo_json_kv_string(&e, "status", status_str(s));
+			shirudo_json_kv_string(&e, "status", nd_status(s));
 			if (s->reachable && s->parsed) {
 				shirudo_json_kv_int(&e, "uptime_seconds",
 					(int64_t)s->sys.uptime_sec);
@@ -1236,7 +1167,7 @@ int cmd_nodes(int argc, const char **argv)
 			       ping_str(s->icmp_status, s->icmp_rtt_us,
 					pb, sizeof(pb)),
 			       s->reachable ? "yes" : "no",
-			       status_str(s),
+			       nd_status(s),
 			       ut, up);
 		}
 	}

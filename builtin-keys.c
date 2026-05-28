@@ -29,6 +29,7 @@
 #include "util/keyring.h"
 #include "util/log.h"
 #include "util/macros.h"
+#include "util/malloc.h"
 #include "util/paths.h"
 
 static void openssl_complain(const char *where)
@@ -110,6 +111,22 @@ static long days_remaining(const ASN1_TIME *not_after)
 	return days;
 }
 
+/*
+ * Format an "Expires in:" value: "9y 213d" / "182d" / "EXPIRED 3 days ago".
+ * Keeps the same expired-on-negative convention as days_remaining().
+ */
+static void format_expires_in(long days, char *out, size_t out_sz)
+{
+	if (days < 0) {
+		snprintf(out, out_sz, "EXPIRED %ld days ago", -days);
+		return;
+	}
+	if (days >= 365)
+		snprintf(out, out_sz, "%ldy %ldd", days / 365, days % 365);
+	else
+		snprintf(out, out_sz, "%ldd", days);
+}
+
 static int compute_cert_fpr(X509 *c, unsigned char fpr[SHA256_DIGEST_LENGTH])
 {
 	unsigned int n = SHA256_DIGEST_LENGTH;
@@ -148,7 +165,7 @@ out:
 
 static void print_fpr(const char *label, const unsigned char *fpr)
 {
-	printf("    %s: SHA256:", label);
+	printf("  %-22s SHA256:", label);
 	for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
 		printf("%02x", fpr[i]);
 	printf("\n");
@@ -175,7 +192,7 @@ static int dump_operator_cert(X509 *cert, const char *cert_path)
 	const ASN1_TIME *na = X509_get0_notAfter(cert);
 	EVP_PKEY *pub = X509_get0_pubkey(cert);
 	unsigned char fpr[SHA256_DIGEST_LENGTH];
-	char subj_s[256], iss_s[256], nb_s[32], na_s[32];
+	char subj_s[256], iss_s[256], nb_s[32], na_s[32], exp_s[48];
 	long left;
 	int self_signed;
 
@@ -184,28 +201,25 @@ static int dump_operator_cert(X509 *cert, const char *cert_path)
 	asn1_time_to_iso(nb, nb_s, sizeof(nb_s));
 	asn1_time_to_iso(na, na_s, sizeof(na_s));
 	left = days_remaining(na);
+	format_expires_in(left, exp_s, sizeof(exp_s));
 	self_signed = (X509_NAME_cmp(subj, iss) == 0);
 
-	printf("  %s:\n", cert_path);
-	printf("    subject:    %s\n", subj_s);
-	printf("    issuer:     %s%s\n", iss_s,
-	       self_signed ? " (self-signed)" : "");
-	printf("    notBefore:  %s\n", nb_s);
-	if (left < 0)
-		printf("    notAfter:   %s  (EXPIRED %ld days ago)\n",
-		       na_s, -left);
-	else
-		printf("    notAfter:   %s  (%ld days remaining)\n",
-		       na_s, left);
+	printf("Cert (%s):\n", cert_path);
+	printf("  %-22s %s\n", "Subject:", subj_s);
+	printf("  %-22s %s%s\n", "Issuer:", iss_s,
+	       self_signed ? "  (self-signed)" : "");
 	if (pub)
-		printf("    public-key: %s-%d\n",
+		printf("  %-22s %s-%d\n", "Public-key:",
 		       pkey_algorithm(pub), EVP_PKEY_get_bits(pub));
 	if (compute_cert_fpr(cert, fpr) == 0)
-		print_fpr("cert-sha256", fpr);
+		print_fpr("Fingerprint:", fpr);
+	printf("  %-22s %s\n", "Valid from:", nb_s);
+	printf("  %-22s %s\n", "Valid until:", na_s);
+	printf("  %-22s %s\n", "Expires in:", exp_s);
 	return 0;
 }
 
-static int compare_priv_to_cert(X509 *cert, const char *pkey_path)
+static int dump_signing_key(X509 *cert, const char *pkey_path)
 {
 	EVP_PKEY *priv;
 	EVP_PKEY *pub_in_cert = X509_get0_pubkey(cert);
@@ -214,8 +228,9 @@ static int compare_priv_to_cert(X509 *cert, const char *pkey_path)
 	int rc = 0;
 
 	if (!path_exists(pkey_path)) {
-		printf("  %s: (not present on this host -- target mode)\n",
-		       pkey_path);
+		printf("Signing key (%s):\n", pkey_path);
+		printf("  %-22s %s\n", "Present:",
+		       "no  (target host -- private key lives on the operator)");
 		return 0;
 	}
 
@@ -223,8 +238,9 @@ static int compare_priv_to_cert(X509 *cert, const char *pkey_path)
 	if (!priv)
 		return -1;
 
-	printf("  %s:\n", pkey_path);
-	printf("    algorithm:  %s-%d\n",
+	printf("Signing key (%s):\n", pkey_path);
+	printf("  %-22s %s\n", "Present:", "yes");
+	printf("  %-22s %s-%d\n", "Algorithm:",
 	       pkey_algorithm(priv), EVP_PKEY_get_bits(priv));
 
 	if (compute_spki_fpr(priv, fpr_priv) != 0 ||
@@ -232,12 +248,14 @@ static int compare_priv_to_cert(X509 *cert, const char *pkey_path)
 		rc = -1;
 		goto out;
 	}
-	print_fpr("spki-sha256", fpr_priv);
+	print_fpr("SPKI fingerprint:", fpr_priv);
 
 	if (memcmp(fpr_priv, fpr_cert, SHA256_DIGEST_LENGTH) == 0) {
-		printf("    cert-match: OK (signing key matches cert)\n");
+		printf("  %-22s %s\n", "Cert match:",
+		       "OK  (signing key matches cert)");
 	} else {
-		printf("    cert-match: MISMATCH (private key does NOT match cert)\n");
+		printf("  %-22s %s\n", "Cert match:",
+		       "MISMATCH  (private key does NOT match cert)");
 		pr_warn("keys: private key and cert have different public keys");
 		rc = -1;
 	}
@@ -256,43 +274,97 @@ static int keys_dump_disk_material(const char *cert_path,
 	if (!cert)
 		return 1;
 
-	printf("on-disk key material:\n");
 	rc = dump_operator_cert(cert, cert_path);
-	if (rc == 0)
-		rc = compare_priv_to_cert(cert, pkey_path);
+	if (rc == 0) {
+		printf("\n");
+		rc = dump_signing_key(cert, pkey_path);
+	}
 	X509_free(cert);
 	return rc ? 1 : 0;
 }
 
-struct list_ctx {
-	int count;
+struct list_row {
+	key_serial_t	serial;
+	char		*type;
+	char		*description;
 };
 
-static void print_key(key_serial_t serial, const char *type,
-		      const char *description, void *ud)
+#define LIST_ROW_CAP	256
+
+struct list_ctx {
+	struct list_row	rows[LIST_ROW_CAP];
+	int		count;
+};
+
+static void collect_key(key_serial_t serial, const char *type,
+			const char *description, void *ud)
 {
 	struct list_ctx *c = ud;
 
-	printf("  serial=%-10d type=%-10s %s\n",
-	       (int)serial, type, description);
+	if (c->count >= LIST_ROW_CAP)
+		return;
+	c->rows[c->count].serial = serial;
+	c->rows[c->count].type = xstrdup(type);
+	c->rows[c->count].description = xstrdup(description);
 	c->count++;
 }
 
 static int keys_list_keyring(key_serial_t ring)
 {
 	struct list_ctx c = {};
-	int rc;
+	key_serial_t pin;
+	int rc, i;
 
-	printf("target keyring \"%s\" (serial=%d):\n",
-	       SHIRUDO_KEYRING_NAME, (int)ring);
-	rc = shirudo_keyring_list(ring, print_key, &c);
+	printf("Keyring (%s):\n", SHIRUDO_KEYRING_NAME);
+	printf("  %-22s %d\n", "Serial:", (int)ring);
+
+	pin = shirudo_keyring_read_pinned_serial();
+	if (pin >= 1) {
+		const char *match = pin == ring ? "matches" : "MISMATCH";
+
+		printf("  %-22s %d  (%s)\n", "Pinned serial:",
+		       (int)pin, match);
+		if (pin != ring)
+			pr_warn("keyring serial pin %d != live serial %d "
+				"(swap?)", (int)pin, (int)ring);
+	} else if (pin == (key_serial_t)-ENOENT) {
+		printf("  %-22s %s\n", "Pinned serial:",
+		       "(none recorded)");
+	} else {
+		printf("  %-22s read error: %s\n", "Pinned serial:",
+		       strerror(-pin));
+	}
+
+	rc = shirudo_keyring_list(ring, collect_key, &c);
 	if (rc) {
 		pr_err("keyring list: %s", strerror(-rc));
-		return 1;
+		goto out;
 	}
+	printf("  Members (%d):\n", c.count);
 	if (c.count == 0)
-		printf("  (empty)\n");
-	return 0;
+		printf("    (empty)\n");
+	for (i = 0; i < c.count; i++)
+		printf("    serial=%-10d  type=%-10s  %s\n",
+		       (int)c.rows[i].serial,
+		       c.rows[i].type ? c.rows[i].type : "?",
+		       c.rows[i].description ? c.rows[i].description : "?");
+out:
+	for (i = 0; i < c.count; i++) {
+		xstrfree(c.rows[i].type);
+		xstrfree(c.rows[i].description);
+	}
+	return rc ? 1 : 0;
+}
+
+static void keyring_absent(key_serial_t rc)
+{
+	printf("Keyring (%s):\n", SHIRUDO_KEYRING_NAME);
+	if (rc == (key_serial_t)-ENOKEY)
+		printf("  %-22s %s\n", "Present:",
+		       "no  (operator host, or `shirudo init` not yet run)");
+	else
+		printf("  %-22s lookup error: %s\n", "Present:",
+		       strerror(-rc));
 }
 
 static const struct shirudo_help_item keys_options[] = {
@@ -314,7 +386,7 @@ static const struct shirudo_help keys_help = {
 	.n_sections = ARRAY_SIZE(keys_help_sections),
 	.footer  = "Default paths:\n"
 		   "  " SHIRUDO_CERT_PATH "\n"
-		   "  " SHIRUDO_SIGNING_KEY_PATH "\n"
+		   "  " SHIRUDO_SIGNING_KEY_PATH "\n\n"
 		   "Or set the " SHIRUDO_KEYS_DIR_ENV
 		   " environment variable.",
 };
@@ -379,9 +451,15 @@ int cmd_keys(int argc, const char **argv)
 		if (keys_list_keyring(ring))
 			rc = 1;
 		shown = true;
-	} else if (ring != -ENOKEY) {
-		pr_err("keyring \"%s\" lookup: %s",
-		       SHIRUDO_KEYRING_NAME, strerror(-ring));
+	} else if (ring == -ENOKEY) {
+		if (shown) {
+			printf("\n");
+			keyring_absent(ring);
+		}
+	} else {
+		if (shown)
+			printf("\n");
+		keyring_absent(ring);
 		rc = 1;
 	}
 

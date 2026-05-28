@@ -7,7 +7,14 @@ tracks the security invariants. This file = "where are we, what's left,
 and the non-obvious gotchas." Trust the code + git log over anything
 stale here. Keep it short; prune done items.
 
-Last updated: 2026-05-20
+Last updated: 2026-05-28
+
+Recent: `shirudo status`, `shirudo keys`, and `shirudo upatch info` have
+all been converted to the same kubectl-describe-style output as
+`shirudo nodes show <name>` / `shirudo remote show <name>`. The Conditions
+block + Status verdict are now factored into util/conditions.{c,h} and
+shared between `nodes show` (SSH-fetched) and `shirudo status` (local).
+`shirudo init` left as-is per request.
 
 
 CURRENT STATE
