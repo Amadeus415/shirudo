@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "builtin.h"
 #include "util/config.h"
@@ -30,105 +31,22 @@
 #include "util/selector.h"
 #include "util/ssh.h"
 #include "util/sysinfo.h"
+#include "util/timefmt.h"
 
-#define NODE_CMD	"shirudo status --json --include-tpm"
 #define SHOW_CMD \
 	"shirudo status --json --include-tpm --include-system --include-eventlog"
 
-struct node_state {
-	const char			*name;
-	bool				reachable;
-	enum shirudo_icmp_status	icmp_status;
-	uint64_t			icmp_rtt_us;
-	char				version_id[80];
-	int				lsm_attached;
-	char				chain[80];	/* "" if absent/null */
-	int				chain_seen;
-	int				matches;	/* -1 unknown, 0/1 */
-};
-
-static void query_node(const struct shirudo_remote *r,
-		       const struct shirudo_config *cfg,
-		       struct node_state *st)
-{
-	struct shirudo_ssh_session *sess;
-	char *out = NULL;
-	size_t len = 0;
-	int rc;
-
-	st->name = r->name;
-	st->matches = -1;
-
-	st->icmp_status = shirudo_icmp_ping(r->host,
-					    cfg->nodes_icmp_timeout_ms,
-					    cfg->nodes_icmp_probes,
-					    &st->icmp_rtt_us, NULL, 0);
-
-	sess = shirudo_ssh_connect(r->user, r->host, r->port);
-	if (!sess)
-		return;
-	rc = shirudo_ssh_exec(sess, NODE_CMD, &out, &len);
-	shirudo_ssh_close(sess);
-	if (rc < 0 || !out) {
-		xfree(out, len);
-		return;
-	}
-
-	{
-		struct shirudo_json_field tpm[] = {
-			{ "chain", SHIRUDO_JSON_T_STRING, st->chain,
-			  sizeof(st->chain), 0, NULL, 0 },
-			{ "chain_matches_eventlog", SHIRUDO_JSON_T_BOOL,
-			  &st->matches, 0, 0, NULL, 0 },
-		};
-		struct shirudo_json_field top[] = {
-			{ "version_id", SHIRUDO_JSON_T_STRING, st->version_id,
-			  sizeof(st->version_id), 0, NULL, 0 },
-			{ "lsm_attached", SHIRUDO_JSON_T_BOOL, &st->lsm_attached,
-			  0, 0, NULL, 0 },
-			{ "tpm", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, tpm, 2 },
-		};
-
-		if (shirudo_json_parse(out, len, top, ARRAY_SIZE(top)) == 0) {
-			st->reachable = true;
-			st->chain_seen = tpm[0].seen;
-			if (!tpm[1].seen)
-				st->matches = -1;
-		} else {
-			pr_warn("nodes: %s: unparseable status JSON", r->name);
-		}
-	}
-	xfree(out, len);
-}
-
-static const char *short_chain(const struct node_state *s, char *buf, size_t n)
-{
-	if (!s->reachable)
-		return "-";
-	if (!s->chain_seen)
-		return "no-tpm";
-	snprintf(buf, n, "%.16s..", s->chain);
-	return buf;
-}
-
-static const char *match_str(const struct node_state *s)
-{
-	if (!s->reachable || s->matches < 0)
-		return "?";
-	return s->matches ? "ok" : "MISMATCH";
-}
-
 /*
- * Compact PING column: best-RTT in ms when OK, a short status word
- * otherwise. Kept narrow to scan a fleet table; the per-node deep
- * dive (`shirudo nodes show`) prints the full reachability stanza.
+ * Compact PING column for the drift table: best-RTT in ms when OK,
+ * a short status word otherwise. The per-node `shirudo nodes show`
+ * stanza prints the full picture.
  */
-static const char *ping_str(const struct node_state *s, char *buf, size_t n)
+static const char *ping_str(enum shirudo_icmp_status st, uint64_t rtt_us,
+			    char *buf, size_t n)
 {
-	switch (s->icmp_status) {
+	switch (st) {
 	case SHIRUDO_ICMP_OK:
-		snprintf(buf, n, "%.1fms",
-			 (double)s->icmp_rtt_us / 1000.0);
+		snprintf(buf, n, "%.1fms", (double)rtt_us / 1000.0);
 		return buf;
 	case SHIRUDO_ICMP_TIMEOUT:
 		return "blocked";
@@ -527,17 +445,128 @@ static void ev_detail(const struct ev_row *ev, char *out, size_t cap)
 		out[0] = '\0';
 }
 
-/* Payload of the most recent load of <name>, or NULL if not in the log. */
-static const char *loaded_payload(const struct node_detail *d, const char *name)
+/* Most recent upatch_load event for <name>, or NULL. */
+static const struct ev_row *last_load_event_for(const struct node_detail *d,
+						const char *name)
 {
 	size_t i = d->n_ev;
 
 	while (i--) {
-		if (strcmp(d->events[i].type, "upatch_load") == 0 &&
-		    strcmp(d->events[i].up_name, name) == 0)
-			return d->events[i].up_payload;
+		const struct ev_row *e = &d->events[i];
+
+		if (strcmp(e->type, "upatch_load") == 0 &&
+		    strcmp(e->up_name, name) == 0)
+			return e;
 	}
 	return NULL;
+}
+
+/*
+ * Most recent upatch_load OR upatch_unload event on this node, or
+ * NULL if none. Eventlog is appended chronologically, so iterating
+ * backwards yields most-recent-first.
+ */
+static const struct ev_row *last_upatch_event(const struct node_detail *d)
+{
+	size_t i = d->n_ev;
+
+	while (i--) {
+		const struct ev_row *e = &d->events[i];
+
+		if (strcmp(e->type, "upatch_load") == 0 ||
+		    strcmp(e->type, "upatch_unload") == 0)
+			return e;
+	}
+	return NULL;
+}
+
+/*
+ * Aggregate "health" verdict for the STATUS column / Status: line.
+ * Severity order (worst -> best) so a single label tells operators
+ * what to look at; the full Conditions block gives the breakdown.
+ */
+static const char *status_str(const struct node_detail *d)
+{
+	if (!d->r)
+		return "?";
+	if (!d->reachable)
+		return "unreachable";
+	if (!d->parsed)
+		return "unparseable";
+	if ((d->cm_seen && !d->chain_matches) ||
+	    (d->ksm_seen && !d->keyring_serial_matches))
+		return "tampered";
+	if (!d->lsm_attached)
+		return "lsm-off";
+	if (!d->keyring_present)
+		return "init-pending";
+	if (!d->chain_seen)
+		return "degraded";
+	return "ok";
+}
+
+/*
+ * Short parenthetical reason (without parens) for the non-ok statuses,
+ * surfaced inline on the `nodes show` Status: line. Empty when status
+ * is ok (no extra noise) or unreachable (the SSH error already says
+ * what happened).
+ */
+static void status_reason(const struct node_detail *d, char *buf, size_t cap)
+{
+	const char *s = status_str(d);
+
+	buf[0] = '\0';
+	if (strcmp(s, "unreachable") == 0) {
+		if (d->unreach)
+			snprintf(buf, cap, "%s", d->unreach);
+	} else if (strcmp(s, "unparseable") == 0) {
+		snprintf(buf, cap, "status JSON unparseable");
+	} else if (strcmp(s, "tampered") == 0) {
+		if (d->cm_seen && !d->chain_matches)
+			snprintf(buf, cap, "live NV chain != eventlog replay");
+		else
+			snprintf(buf, cap, "keyring serial swap detected");
+	} else if (strcmp(s, "lsm-off") == 0) {
+		snprintf(buf, cap, "LSM not attached -- enforcement OFF");
+	} else if (strcmp(s, "init-pending") == 0) {
+		snprintf(buf, cap, "target hasn't been `shirudo init`'d");
+	} else if (strcmp(s, "degraded") == 0) {
+		snprintf(buf, cap, "no TPM chain (unmeasured)");
+	}
+}
+
+/*
+ * Fleet-table UPATCHES cell: live-loaded count, plus the verb / name /
+ * age of the most recent upatch_load or upatch_unload event. The verb
+ * matters -- "2 (unload:old-x, 3d)" means "2 currently loaded, last
+ * change was unloading old-x 3 days ago," which reads differently from
+ * "2 (load:cve-..., 3d)".
+ */
+static void upatches_summary(const struct node_detail *d, char *buf, size_t cap)
+{
+	const struct ev_row *last = last_upatch_event(d);
+	const char *verb;
+	char age[16] = "?";
+	char nm[20];
+
+	if (!last) {
+		snprintf(buf, cap, "%zu", d->n_up);
+		return;
+	}
+	{
+		struct tm tm = {};
+
+		if (strptime(last->ts, "%Y-%m-%dT%H:%M:%SZ", &tm))
+			shirudo_format_duration(
+				(long)(time(NULL) - timegm(&tm)),
+				age, sizeof(age));
+	}
+	verb = strcmp(last->type, "upatch_unload") == 0 ? "unload" : "load";
+	if (strlen(last->up_name) > 14)
+		snprintf(nm, sizeof(nm), "%.14s..", last->up_name);
+	else
+		snprintf(nm, sizeof(nm), "%s", last->up_name);
+	snprintf(buf, cap, "%zu (%s:%s, %s)", d->n_up, verb, nm, age);
 }
 
 /* kubectl-describe-style report for one node. */
@@ -552,17 +581,31 @@ static void print_describe(const struct node_detail *d)
 
 	printf("Name:              %s\n", r->name);
 	printf("Endpoint:          %s\n", endpoint);
-	if (d->reachable && d->parsed) {
-		printf("Role:              %s\n", role_str(d));
-		printf("Reachable:         yes\n");
-		printf("Version-ID:        %s\n", d->version_id);
-	} else {
-		printf("Role:              target (registered)\n");
-		printf("Reachable:         %s\n",
-		       d->reachable ? "yes (status JSON unparseable)"
-				    : "NO");
-		if (d->unreach)
-			printf("Reason:            %s\n", d->unreach);
+	{
+		char reason[160];
+		const char *s = status_str(d);
+
+		status_reason(d, reason, sizeof(reason));
+		if (d->reachable && d->parsed) {
+			printf("Role:              %s\n", role_str(d));
+			printf("Reachable:         yes\n");
+			if (reason[0])
+				printf("Status:            %s  (%s)\n",
+				       s, reason);
+			else
+				printf("Status:            %s\n", s);
+			printf("Version-ID:        %s\n", d->version_id);
+		} else {
+			printf("Role:              target (registered)\n");
+			printf("Reachable:         %s\n",
+			       d->reachable ? "yes (status JSON unparseable)"
+					    : "NO");
+			if (reason[0])
+				printf("Status:            %s  (%s)\n",
+				       s, reason);
+			else
+				printf("Status:            %s\n", s);
+		}
 	}
 
 	nl = shirudo_labels_count(r->labels);
@@ -651,12 +694,29 @@ static void print_describe(const struct node_detail *d)
 
 	printf("\nUpatches loaded (%zu):\n", d->n_up);
 	if (d->n_up) {
-		printf("  %-30s %s\n", "NAME", "PAYLOAD-SHA256");
+		printf("  %-30s %-18s %s\n", "NAME", "PAYLOAD-SHA256",
+		       "APPLIED");
 		for (i = 0; i < d->n_up; i++) {
-			const char *p = loaded_payload(d, d->upatches[i]);
+			const struct ev_row *ev =
+				last_load_event_for(d, d->upatches[i]);
+			char age[16] = "?";
+			char pay[20];
 
-			printf("  %-30s %.16s%s\n", d->upatches[i],
-			       p ? p : "-", p ? ".." : "");
+			if (ev) {
+				struct tm tm = {};
+
+				snprintf(pay, sizeof(pay), "%.16s..",
+					 ev->up_payload);
+				if (strptime(ev->ts, "%Y-%m-%dT%H:%M:%SZ",
+					     &tm))
+					shirudo_format_duration(
+						(long)(time(NULL) -
+						       timegm(&tm)),
+						age, sizeof(age));
+			} else {
+				snprintf(pay, sizeof(pay), "-");
+			}
+			printf("  %-30s %-18s %s\n", d->upatches[i], pay, age);
 		}
 	}
 
@@ -702,6 +762,7 @@ static void emit_node_json(struct shirudo_json_emit *e,
 	shirudo_json_kv_string(e, "name", d->r->name);
 	shirudo_json_kv_string(e, "endpoint", endpoint);
 	shirudo_json_kv_bool(e, "reachable", d->reachable);
+	shirudo_json_kv_string(e, "status", status_str(d));
 	if (!d->reachable || !d->parsed)
 		shirudo_json_kv_string(e, "error",
 				       d->unreach ? d->unreach
@@ -749,7 +810,13 @@ static void emit_node_json(struct shirudo_json_emit *e,
 		}
 		shirudo_json_arr_close(e);
 
-		shirudo_json_obj_open_key(e, "status");
+		/*
+		 * Full parsed status report from the target. The top-level
+		 * "status" key (above) holds the aggregate verdict; this
+		 * "report" object holds the raw fields the verdict derives
+		 * from -- conditions, version-id, keyring/tpm details, etc.
+		 */
+		shirudo_json_obj_open_key(e, "report");
 		shirudo_json_kv_string(e, "version_id", d->version_id);
 		shirudo_json_kv_bool(e, "is_target", d->is_target);
 		shirudo_json_kv_bool(e, "is_operator", d->is_operator);
@@ -774,8 +841,23 @@ static void emit_node_json(struct shirudo_json_emit *e,
 		shirudo_json_kv_bool(e, "signing_key_present",
 				     d->signing_key_present);
 		shirudo_json_arr_open(e, "upatches_loaded");
-		for (i = 0; i < d->n_up; i++)
-			shirudo_json_str(e, d->upatches[i]);
+		for (i = 0; i < d->n_up; i++) {
+			const struct ev_row *ev =
+				last_load_event_for(d, d->upatches[i]);
+
+			shirudo_json_obj_open(e);
+			shirudo_json_kv_string(e, "name", d->upatches[i]);
+			if (ev) {
+				shirudo_json_kv_string(e, "payload_sha256",
+						       ev->up_payload);
+				shirudo_json_kv_string(e, "applied_ts",
+						       ev->ts);
+			} else {
+				shirudo_json_kv_null(e, "payload_sha256");
+				shirudo_json_kv_null(e, "applied_ts");
+			}
+			shirudo_json_obj_close(e);
+		}
 		shirudo_json_arr_close(e);
 		shirudo_sysinfo_emit_json(e, &d->sys);
 		shirudo_json_obj_open_key(e, "tpm");
@@ -965,7 +1047,7 @@ int cmd_nodes(int argc, const char **argv)
 	const char *filter = NULL, *selexpr = NULL;
 	struct shirudo_remote *remotes = NULL;
 	struct shirudo_selector *sel = NULL;
-	struct node_state *nodes = NULL;
+	struct node_detail *nodes = NULL;
 	size_t n_remotes = 0, n = 0, i;
 	bool json = false;
 	int ret = 0;
@@ -1031,7 +1113,7 @@ int cmd_nodes(int argc, const char **argv)
 			continue;
 		if (sel && !shirudo_selector_match(sel, remotes[i].labels))
 			continue;
-		query_node(&remotes[i], &cfg, &nodes[n]);
+		fetch_node(&remotes[i], &cfg, &nodes[n]);
 		n++;
 	}
 
@@ -1043,44 +1125,83 @@ int cmd_nodes(int argc, const char **argv)
 	}
 
 	if (json) {
-		char buf[64 * 1024];
-		struct shirudo_json_emit e = { .buf = buf, .cap = sizeof(buf) };
+		/*
+		 * Size by total events + slack so even a fleet with long
+		 * eventlogs fits without reallocs. Heap-allocated because a
+		 * static 64 KiB buffer would be undersized for a hundred
+		 * nodes with non-trivial event histories.
+		 */
+		size_t cap = 65536;
+		struct shirudo_json_emit e;
+		char *buf;
 
+		for (i = 0; i < n; i++)
+			cap += 4096 + 3 * (size_t)nodes[i].ev_bytes;
+		if (cap > SHIRUDO_JSON_MAX_BYTES)
+			cap = SHIRUDO_JSON_MAX_BYTES;
+		buf = xmalloc(cap);
+		if (!buf) {
+			ret = 1;
+			goto out;
+		}
+		e = (struct shirudo_json_emit){ .buf = buf, .cap = cap };
 		shirudo_json_obj_open(&e);
 		shirudo_json_kv_int(&e, "schema", 1);
 		shirudo_json_arr_open(&e, "nodes");
 		for (i = 0; i < n; i++) {
-			struct node_state *s = &nodes[i];
+			struct node_detail *s = &nodes[i];
+			const struct ev_row *last = last_upatch_event(s);
 
 			shirudo_json_obj_open(&e);
-			shirudo_json_kv_string(&e, "name", s->name);
+			shirudo_json_kv_string(&e, "name", s->r->name);
 			shirudo_json_kv_bool(&e, "reachable", s->reachable);
 			shirudo_json_obj_open_key(&e, "icmp");
 			shirudo_json_kv_bool(&e, "ok",
-					     s->icmp_status == SHIRUDO_ICMP_OK);
+				s->icmp_status == SHIRUDO_ICMP_OK);
 			if (s->icmp_status == SHIRUDO_ICMP_OK)
 				shirudo_json_kv_int(&e, "rtt_us",
-						    (int64_t)s->icmp_rtt_us);
+					(int64_t)s->icmp_rtt_us);
 			else
 				shirudo_json_kv_null(&e, "rtt_us");
 			shirudo_json_obj_close(&e);
-			if (s->reachable) {
+			shirudo_json_kv_string(&e, "status", status_str(s));
+			if (s->reachable && s->parsed) {
+				shirudo_json_kv_int(&e, "uptime_seconds",
+					(int64_t)s->sys.uptime_sec);
 				shirudo_json_kv_bool(&e, "lsm_attached",
-						     s->lsm_attached);
+					s->lsm_attached);
 				shirudo_json_kv_string(&e, "version_id",
-						       s->version_id);
+					s->version_id);
 				if (s->chain_seen)
 					shirudo_json_kv_string(&e, "chain",
-							       s->chain);
+						s->chain);
 				else
 					shirudo_json_kv_null(&e, "chain");
-				if (s->matches < 0)
-					shirudo_json_kv_null(&e,
-						"chain_matches_eventlog");
-				else
+				if (s->cm_seen)
 					shirudo_json_kv_bool(&e,
 						"chain_matches_eventlog",
-						s->matches);
+						s->chain_matches);
+				else
+					shirudo_json_kv_null(&e,
+						"chain_matches_eventlog");
+				shirudo_json_obj_open_key(&e, "upatches");
+				shirudo_json_kv_int(&e, "count",
+					(int64_t)s->n_up);
+				if (last) {
+					shirudo_json_obj_open_key(&e, "last");
+					shirudo_json_kv_string(&e, "verb",
+						strcmp(last->type,
+						       "upatch_unload") == 0
+						? "unload" : "load");
+					shirudo_json_kv_string(&e, "name",
+						last->up_name);
+					shirudo_json_kv_string(&e, "ts",
+						last->ts);
+					shirudo_json_obj_close(&e);
+				} else {
+					shirudo_json_kv_null(&e, "last");
+				}
+				shirudo_json_obj_close(&e);
 			}
 			shirudo_json_obj_close(&e);
 		}
@@ -1093,27 +1214,36 @@ int cmd_nodes(int argc, const char **argv)
 		} else {
 			printf("%s\n", buf);
 		}
+		xfree(buf, cap);
 	} else {
-		printf("%-20s %-9s %-4s %-8s %-18s %-10s %s\n",
-		       "NODE", "PING", "SSH", "LSM", "CHAIN", "VERSION",
-		       "CHAIN/LOG");
+		printf("%-20s %-9s %-4s %-13s %-7s %s\n",
+		       "NODE", "PING", "SSH", "STATUS", "UPTIME", "UPATCHES (LAST)");
 		for (i = 0; i < n; i++) {
-			struct node_state *s = &nodes[i];
-			char cb[24], pb[16];
+			struct node_detail *s = &nodes[i];
+			char pb[16], up[64], ut[16];
 
-			printf("%-20s %-9s %-4s %-8s %-18s %-10.8s %s\n",
-			       s->name,
-			       ping_str(s, pb, sizeof(pb)),
+			if (s->reachable && s->parsed) {
+				shirudo_format_duration(
+					(long)s->sys.uptime_sec,
+					ut, sizeof(ut));
+				upatches_summary(s, up, sizeof(up));
+			} else {
+				snprintf(ut, sizeof(ut), "-");
+				snprintf(up, sizeof(up), "-");
+			}
+			printf("%-20s %-9s %-4s %-13s %-7s %s\n",
+			       s->r->name,
+			       ping_str(s->icmp_status, s->icmp_rtt_us,
+					pb, sizeof(pb)),
 			       s->reachable ? "yes" : "no",
-			       !s->reachable ? "-" :
-				 s->lsm_attached ? "attached" : "DETACHED",
-			       short_chain(s, cb, sizeof(cb)),
-			       s->reachable ? s->version_id : "-",
-			       match_str(s));
+			       status_str(s),
+			       ut, up);
 		}
 	}
 
 out:
+	for (i = 0; i < (size_t)n_remotes; i++)
+		node_detail_free(&nodes[i]);
 	xfree(nodes, (size_t)n_remotes * sizeof(*nodes));
 	shirudo_remotes_free(remotes, n_remotes);
 	shirudo_selector_free(sel);

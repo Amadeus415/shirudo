@@ -93,6 +93,7 @@ UTIL_SRCS := \
     util/similar.c \
     util/help.c \
     util/icmp.c \
+    util/timefmt.c \
     util/seal.c
 
 BUILTIN_SRCS := \

@@ -25,6 +25,7 @@
 #include "util/macros.h"
 #include "util/remotes.h"
 #include "util/selector.h"
+#include "util/timefmt.h"
 
 struct kv {
 	const char	*key;	/* points at "key=value" */
@@ -381,27 +382,18 @@ static int cmd_add(int argc, const char **argv)
 	return 0;
 }
 
-/* kubectl-style compact age: largest unit (s/m/h/d). */
+/*
+ * "When was this remote registered?" displayed in the AGE column;
+ * delegates to the shared duration formatter so AGE here, UPTIME in
+ * `nodes`, and the upatch-applied age all read the same.
+ */
 static void format_age(time_t added, char *buf, size_t cap)
 {
-	time_t now = time(NULL);
-	long s;
-
-	if (added <= 0) {
+	if (added <= 0)
 		snprintf(buf, cap, "?");
-		return;
-	}
-	s = (long)(now - added);
-	if (s < 0)
-		s = 0;
-	if (s < 60)
-		snprintf(buf, cap, "%lds", s);
-	else if (s < 3600)
-		snprintf(buf, cap, "%ldm", s / 60);
-	else if (s < 86400)
-		snprintf(buf, cap, "%ldh", s / 3600);
 	else
-		snprintf(buf, cap, "%ldd", s / 86400);
+		shirudo_format_duration((long)(time(NULL) - added), buf,
+					cap);
 }
 
 static int cmd_list(int argc, const char **argv)

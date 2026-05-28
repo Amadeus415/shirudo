@@ -276,6 +276,14 @@ int shirudo_remotes_user_dir(char *buf, size_t cap)
 	return -1;
 }
 
+static int remote_name_cmp(const void *a, const void *b)
+{
+	const struct shirudo_remote *ra = a;
+	const struct shirudo_remote *rb = b;
+
+	return strcmp(ra->name, rb->name);
+}
+
 int shirudo_remotes_load_all(struct shirudo_remote **out, size_t *n)
 {
 	char user_dir[1024];
@@ -286,6 +294,14 @@ int shirudo_remotes_load_all(struct shirudo_remote **out, size_t *n)
 	if (shirudo_remotes_user_dir(user_dir, sizeof(user_dir)) == 0)
 		load_dir(user_dir, out, n);		/* user dir wins */
 	load_dir("/etc/shirudo/remotes.d", out, n);
+	/*
+	 * scandir alphasorts each dir, but the user-then-system concat
+	 * is not globally sorted. Final pass guarantees `shirudo remote`
+	 * and `shirudo nodes` (and any future consumer) see one
+	 * deterministic alphabetical order by registry name.
+	 */
+	if (*n > 1)
+		qsort(*out, *n, sizeof(**out), remote_name_cmp);
 	return 0;
 }
 
