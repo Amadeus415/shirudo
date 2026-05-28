@@ -16,6 +16,7 @@
  */
 
 #include <errno.h>
+#include <fnmatch.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -409,6 +410,7 @@ static int emit_report(const char *path, bool dry_run,
 }
 
 static const struct shirudo_help_item rollout_options[] = {
+	{ "--filter=<glob>",         "select targets by name (shell-glob, fnmatch(3))" },
 	{ "--selector=<expr>",       "select targets by label expression" },
 	{ "--expect-chain=<hex>",    "pin the expected NV chain (auto-derived if omitted)" },
 	{ "--expect-version-id=<x>", "pin the expected target SHIRUDO_VERSION_ID" },
@@ -425,21 +427,39 @@ static const struct shirudo_help_section rollout_help_sections[] = {
 };
 
 static const struct shirudo_help rollout_help = {
-	.usage   = "shirudo rollout <upatch>... { <name>... | --selector=<expr> } [options]",
+	.usage   = "shirudo rollout <upatch>... { <name>... | --filter=<glob> | --selector=<expr> } [options]",
 	.summary = "Push one or more signed .upatch files to one or more "
 		   "registered remotes\nvia SFTP, then apply each over an "
 		   "SSH exec channel. A LOAD upatch runs\n`upatch load` on "
 		   "the target; an UNLOAD directive runs `upatch unload`.",
 	.sections   = rollout_help_sections,
 	.n_sections = ARRAY_SIZE(rollout_help_sections),
-	.footer  = "Literal user@host arguments are refused; targets must be "
-		   "registered\nfirst with `shirudo remote add`.",
+	.footer  =
+"--filter=<glob> matches the registry name via shell-glob (fnmatch(3)):\n"
+"  shirudo rollout foo.upatch --filter='prod-*'\n"
+"  shirudo rollout foo.upatch --filter='*-edge-?\?'\n"
+"  shirudo rollout foo.upatch --filter='db[0-9][0-9]'\n"
+"\n"
+"--selector=<expr> matches the remote's labels:\n"
+"  atoms: k=v, k!=v, k (exists), !k (absent)\n"
+"  combine with &&, ||, (), where && binds tighter than ||\n"
+"  shirudo rollout foo.upatch --selector='env=production'\n"
+"  shirudo rollout foo.upatch --selector='env=prod && tier=edge'\n"
+"  shirudo rollout foo.upatch --selector=\"(role=db || role=cache) && env!=staging\"\n"
+"\n"
+"Rollout has two selection forms, mutually exclusive:\n"
+"  - positional <name>... (each must be a registered remote)\n"
+"  - the predicate form, --filter and/or --selector. When both are\n"
+"    given they intersect (a remote must satisfy both).\n"
+"An empty match set is an error. Literal user@host arguments are\n"
+"refused; targets must be registered first with `shirudo remote add`.",
 };
 
 int cmd_rollout(int argc, const char **argv)
 {
 	const char *report = NULL, *expect_override = NULL, *selexpr = NULL;
 	const char *expect_version_override = NULL, *expect_version_id;
+	const char *filter = NULL;
 	bool dry_run = false, no_precheck = false, sudo = false;
 	bool no_version_check = false;
 	const char *files[MAX_FILES], *names[MAX_FILES];
@@ -459,6 +479,8 @@ int cmd_rollout(int argc, const char **argv)
 			return 0;
 		} else if (strncmp(a, "--report=", 9) == 0)
 			report = a + 9;
+		else if (strncmp(a, "--filter=", 9) == 0)
+			filter = a + 9;
 		else if (strncmp(a, "--selector=", 11) == 0)
 			selexpr = a + 11;
 		else if (strncmp(a, "--expect-chain=", 15) == 0)
@@ -557,15 +579,33 @@ int cmd_rollout(int argc, const char **argv)
 	expect_version_id = expect_version_override ? expect_version_override
 						    : shirudo_version_id;
 
-	if (selexpr) {
-		for (i = 0; i < n_remotes; i++)
-			if (shirudo_selector_match(sel, remotes[i].labels))
-				apply_target(&remotes[i], files, is_unload,
-					     nfiles, expect_override,
-					     expect_version_id, no_version_check,
-					     no_precheck, dry_run, sudo,
-					     &res[n++]);
-	} else {
+	/*
+	 * Rollout has two forms: an explicit positional <name>... list, or
+	 * a predicate form combining --filter and/or --selector. The two
+	 * forms are mutually exclusive (a positional name list is already
+	 * unambiguous; mixing it with predicates would invite the "I named
+	 * X but my filter excluded it, did it run?" footgun). Inside the
+	 * predicate form, --filter and --selector intersect.
+	 *
+	 * Bare rollout with no selection is rejected; rollout is
+	 * destructive and must never silently target every registered
+	 * remote.
+	 */
+	if (nnames && (filter || selexpr)) {
+		pr_err("rollout: <name>... and --filter/--selector are "
+		       "mutually exclusive -- pick the named form or the "
+		       "predicate form");
+		ret = 2;
+		goto out;
+	}
+	if (!nnames && !filter && !selexpr) {
+		pr_err("rollout: need a target -- one of <name>..., "
+		       "--filter, or --selector");
+		ret = 2;
+		goto out;
+	}
+
+	if (nnames) {
 		for (j = 0; j < nnames; j++) {
 			struct shirudo_remote *r = NULL;
 
@@ -585,11 +625,24 @@ int cmd_rollout(int argc, const char **argv)
 				     no_version_check, no_precheck, dry_run,
 				     sudo, &res[n++]);
 		}
+	} else {
+		for (i = 0; i < n_remotes; i++) {
+			if (filter &&
+			    fnmatch(filter, remotes[i].name, 0) != 0)
+				continue;
+			if (sel &&
+			    !shirudo_selector_match(sel, remotes[i].labels))
+				continue;
+			apply_target(&remotes[i], files, is_unload, nfiles,
+				     expect_override, expect_version_id,
+				     no_version_check, no_precheck, dry_run,
+				     sudo, &res[n++]);
+		}
 	}
 
 	if (n == 0) {
-		pr_err("rollout: %s matched zero registered remotes",
-		       selexpr ? "selector" : "name set");
+		pr_err("rollout: name/filter/selector matched zero "
+		       "registered remotes");
 		ret = 1;
 		goto out;
 	}

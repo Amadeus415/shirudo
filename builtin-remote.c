@@ -162,8 +162,10 @@ static const struct shirudo_help remote_help = {
 "  shirudo remote --selector='env=prod && tier=edge'\n"
 "  shirudo remote --selector=\"(role=db || role=cache) && env!=staging\"\n"
 "\n"
-"--filter and --selector intersect. Labels and other registry metadata\n"
-"never leave the operator -- they are not pushed to targets.",
+"--filter and --selector may be combined; when both are given a remote\n"
+"must satisfy both to be listed (intersection). Labels and other\n"
+"registry metadata never leave the operator -- they are not pushed to\n"
+"targets.",
 };
 
 static int cmd_add(int argc, const char **argv)

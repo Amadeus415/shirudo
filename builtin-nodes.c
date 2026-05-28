@@ -128,7 +128,8 @@ static const struct shirudo_help_section nodes_help_sections[] = {
 };
 
 static const struct shirudo_help nodes_help = {
-	.usage      = "shirudo nodes [show] [<name>...] [--json] [--filter=<glob>] [--selector=<expr>]",
+	.usage      = "shirudo nodes [list] [--json] [--filter=<glob>] [--selector=<expr>]\n"
+		      "       shirudo nodes show [--json] <name>...",
 	.summary    = "Operator-side fleet observability over registered "
 		      "remotes. Bare\n`shirudo nodes` prints the drift table; "
 		      "`shirudo nodes show <name>` runs a\nper-node deep dive.",
@@ -147,8 +148,9 @@ static const struct shirudo_help nodes_help = {
 "  shirudo nodes --selector='env=prod && tier=edge'\n"
 "  shirudo nodes --selector=\"(role=db || role=cache) && env!=staging\"\n"
 "\n"
-"Positional names, --filter and --selector intersect; an empty match\n"
-"set is an error.",
+"--filter and --selector may be combined; when both are given a remote\n"
+"must satisfy both to be queried (intersection). An empty match set is\n"
+"an error. Use `shirudo nodes show <name>` for a per-node deep dive.",
 };
 
 
@@ -831,39 +833,32 @@ int cmd_nodes(int argc, const char **argv)
 		return 0;
 	}
 	/*
-	 * `nodes` is mixed: argv[1] may be a sub-subcommand ("show"/"list")
-	 * OR a positional remote name. Only treat it as a subcommand when
-	 * it tolerantly resolves to one of the declared sub-subs; otherwise
-	 * fall through to the drift-table parser so `shirudo nodes <name>`
-	 * keeps working. Doesn't print a diagnostic because the fallthrough
-	 * still needs to succeed for the registered-name case.
+	 * Resolve a non-flag argv[1] against the sub-sub list. `show`
+	 * branches off; `list` is just the drift-table form (skip the
+	 * verb). An unrecognised non-flag argv[1] errors out with a
+	 * "Did you mean: show / list" diagnostic -- there's no longer a
+	 * `nodes <name>` positional form (use `nodes show <name>` for a
+	 * per-node deep dive, --filter/--selector for the table).
 	 */
 	if (argc >= 2 && argv[1][0] != '-') {
-		const char *names[] = { "list", "show" };
-		size_t m[ARRAY_SIZE(names)];
-		size_t n = shirudo_resolve(argv[1], names,
-					   ARRAY_SIZE(names), m,
-					   ARRAY_SIZE(m));
+		const char *canonical = shirudo_resolve_subcommand(
+			"shirudo nodes", argv[1], nodes_subcmds,
+			ARRAY_SIZE(nodes_subcmds));
 
-		if (n == 1 && strcmp(names[m[0]], "show") == 0)
+		if (!canonical)
+			return 2;
+		if (strcmp(canonical, "show") == 0)
 			return cmd_nodes_show(argc, argv);
-		if (n == 1 && strcmp(names[m[0]], "list") == 0) {
-			/*
-			 * `nodes list ...` is just the drift-table form;
-			 * skip the verb so the existing parser sees the
-			 * options/names that follow.
-			 */
-			argc--;
-			argv++;
-		}
+		/* canonical == "list" */
+		argc--;
+		argv++;
 	}
 
 	const char *filter = NULL, *selexpr = NULL;
 	struct shirudo_remote *remotes = NULL;
 	struct shirudo_selector *sel = NULL;
 	struct node_state *nodes = NULL;
-	const char *names[256];
-	size_t n_remotes = 0, n = 0, nnames = 0, i, j;
+	size_t n_remotes = 0, n = 0, i;
 	bool json = false;
 	int ret = 0;
 
@@ -879,13 +874,16 @@ int cmd_nodes(int argc, const char **argv)
 		else if (shirudo_is_help(a)) {
 			shirudo_print_help(&nodes_help);
 			return 0;
-		} else if (a[0] == '-') {
-			fprintf(stderr, "nodes: unknown option '%s'\n", a);
-			return 2;
-		} else if (nnames < ARRAY_SIZE(names)) {
-			names[nnames++] = a;	/* positional remote name */
 		} else {
-			fprintf(stderr, "nodes: too many names\n");
+			/*
+			 * Bare positional names are no longer accepted for
+			 * the drift table -- use `shirudo nodes show <name>`
+			 * for a per-node view, or --filter / --selector to
+			 * narrow the table.
+			 */
+			fprintf(stderr, "nodes: unexpected argument '%s' "
+				"(use `shirudo nodes show <name>` or "
+				"--filter/--selector)\n", a);
 			return 2;
 		}
 	}
@@ -905,23 +903,6 @@ int cmd_nodes(int argc, const char **argv)
 		return 1;
 	}
 
-	/* Positional names must be registered (exact match), like rollout. */
-	for (j = 0; j < nnames; j++) {
-		bool found = false;
-
-		for (i = 0; i < n_remotes; i++)
-			if (strcmp(remotes[i].name, names[j]) == 0) {
-				found = true;
-				break;
-			}
-		if (!found) {
-			pr_err("nodes: '%s' is not a registered remote", names[j]);
-			shirudo_remotes_free(remotes, n_remotes);
-			shirudo_selector_free(sel);
-			return 1;
-		}
-	}
-
 	nodes = xcalloc(n_remotes, sizeof(*nodes));
 	if (!nodes) {
 		shirudo_remotes_free(remotes, n_remotes);
@@ -930,21 +911,10 @@ int cmd_nodes(int argc, const char **argv)
 	}
 
 	/*
-	 * Select, then query each match sequentially. Names, --filter and
-	 * --selector all intersect (PLAN.md "Subcommands" / nodes).
+	 * Select. --filter and --selector intersect when both are given;
+	 * with neither, the table covers every registered remote.
 	 */
 	for (i = 0; i < n_remotes; i++) {
-		if (nnames) {
-			bool named = false;
-
-			for (j = 0; j < nnames; j++)
-				if (strcmp(remotes[i].name, names[j]) == 0) {
-					named = true;
-					break;
-				}
-			if (!named)
-				continue;
-		}
 		if (filter && fnmatch(filter, remotes[i].name, 0) != 0)
 			continue;
 		if (sel && !shirudo_selector_match(sel, remotes[i].labels))
@@ -954,7 +924,7 @@ int cmd_nodes(int argc, const char **argv)
 	}
 
 	if (n == 0) {
-		pr_err("nodes: name/filter/selector matched zero "
+		pr_err("nodes: --filter/--selector matched zero "
 		       "registered remotes");
 		ret = 1;
 		goto out;
