@@ -231,10 +231,12 @@ static int cmd_add(int argc, const char **argv)
 
 static void print_labels_inline(const struct shirudo_remote *r)
 {
-	/* Compact-column budget: keep a remote-list row scannable even when
+	/*
+	 * Compact-column budget: keep a remote-list row scannable even when
 	 * a node carries many or long labels. Past 16 chars of joined
 	 * "k1=v1,k2=v2,..." we cut the field with a "[...]" marker; the
-	 * full list is one `shirudo remote show <name>` away. */
+	 * full list is one `shirudo remote show <name>` away.
+	 */
 	enum { LABELS_INLINE_MAX = 16 };
 	char buf[256];
 	size_t nl = shirudo_labels_count(r->labels), k, off = 0;
@@ -475,16 +477,20 @@ int cmd_remote(int argc, const char **argv)
 {
 	const char *canonical;
 
-	/* Bare `shirudo remote` lists the registered remotes (most common
-	 * use); explicit `list` keeps working. */
+	/*
+	 * Bare `shirudo remote` lists the registered remotes (most common
+	 * use); explicit `list` keeps working.
+	 */
 	if (argc < 2)
 		return cmd_list(argc, argv);
 	if (shirudo_is_help(argv[1])) {
 		shirudo_print_help(&remote_help);
 		return 0;
 	}
-	/* Tolerant resolution: 'remotes', 'li', 'ad', etc. all resolve as
-	 * long as the match is unique (see util/similar.c). */
+	/*
+	 * Tolerant resolution: 'remotes', 'li', 'ad', etc. all resolve as
+	 * long as the match is unique (see util/similar.c).
+	 */
 	canonical = shirudo_resolve_subcommand("shirudo remote", argv[1],
 					       remote_subcmds,
 					       ARRAY_SIZE(remote_subcmds));

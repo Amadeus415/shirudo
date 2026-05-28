@@ -36,10 +36,12 @@ void shirudo_print_help(const struct shirudo_help *h)
 
 		if (s->n_items == 0)
 			continue;
-		/* Per-section column width: align the summaries under the
+		/*
+		 * Per-section column width: align the summaries under the
 		 * longest name + a 2-char gutter. Computing it here so an
 		 * "Options:" section with --include-eventlog reads as
-		 * cleanly as a "Subcommands:" section with `add`/`rm`. */
+		 * cleanly as a "Subcommands:" section with `add`/`rm`.
+		 */
 		for (j = 0; j < s->n_items; j++) {
 			size_t l = strlen(s->items[j].name);
 

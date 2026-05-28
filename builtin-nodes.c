@@ -833,9 +833,11 @@ int cmd_nodes(int argc, const char **argv)
 		if (n == 1 && strcmp(names[m[0]], "show") == 0)
 			return cmd_nodes_show(argc, argv);
 		if (n == 1 && strcmp(names[m[0]], "list") == 0) {
-			/* `nodes list ...` is just the drift-table form;
+			/*
+			 * `nodes list ...` is just the drift-table form;
 			 * skip the verb so the existing parser sees the
-			 * options/names that follow. */
+			 * options/names that follow.
+			 */
 			argc--;
 			argv++;
 		}

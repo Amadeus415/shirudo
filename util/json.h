@@ -67,8 +67,7 @@ enum shirudo_json_vtype {
 	SHIRUDO_JSON_T_INT,	/* dst: int64_t *                        */
 	SHIRUDO_JSON_T_BOOL,	/* dst: int *  (0/1)                     */
 	SHIRUDO_JSON_T_OBJECT,	/* nested object -> sub[] sub-schema     */
-	SHIRUDO_JSON_T_ARRAY,	/* array -> sub[] element schema; dst is
-				 * a struct shirudo_json_array *         */
+	SHIRUDO_JSON_T_ARRAY,	/* sub[] schema; dst = shirudo_json_array * */
 };
 
 /*
