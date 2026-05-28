@@ -32,6 +32,8 @@
 #include "util/keyring.h"
 #include "util/malloc.h"
 #include "util/paths.h"
+#include "util/kmodules.h"
+#include "util/kmsg.h"
 #include "util/sysinfo.h"
 #include "util/timefmt.h"
 
@@ -324,10 +326,12 @@ static void print_system_human(const struct shirudo_sysinfo *si)
 }
 
 static const struct shirudo_help_item status_options[] = {
-	{ "--json",             "machine-readable JSON output" },
-	{ "--include-tpm",      "read the live NV chain and replay the eventlog" },
-	{ "--include-system",   "add a `system` block (hostname, kernel, arch, cpus, ...)" },
-	{ "--include-eventlog", "dump eventlog entries (implies --include-tpm)" },
+	{ "--json",                 "machine-readable JSON output" },
+	{ "--include-tpm",          "read the live NV chain and replay the eventlog" },
+	{ "--include-system",       "add a `system` block (hostname, kernel, arch, cpus, ...)" },
+	{ "--include-eventlog",     "dump eventlog entries (implies --include-tpm)" },
+	{ "--include-kernel-log",   "last 15 lines of the kernel ring buffer" },
+	{ "--include-modules",      "loaded kernel modules + dependency tree" },
 };
 
 static const struct shirudo_help_section status_help_sections[] = {
@@ -337,7 +341,8 @@ static const struct shirudo_help_section status_help_sections[] = {
 
 static const struct shirudo_help status_help = {
 	.usage      = "shirudo status [--json] [--include-tpm] "
-		      "[--include-system] [--include-eventlog]",
+		      "[--include-system] [--include-eventlog]\n"
+		      "                       [--include-kernel-log] [--include-modules]",
 	.summary    = "Local readiness + state report. Auto-detects target "
 		      "vs operator role.\nSafe to run before `shirudo init`.",
 	.sections   = status_help_sections,
@@ -455,6 +460,7 @@ int cmd_status(int argc, const char **argv)
 {
 	bool json = false, include_tpm = false;
 	bool include_system = false, include_eventlog = false;
+	bool include_kernel_log = false, include_modules = false;
 	bool lsm_attached, keyring_present, is_operator, cert_present, is_target;
 	key_serial_t keyring_serial, keyring_pinned;
 	struct shirudo_sysinfo sysi = {};
@@ -479,6 +485,10 @@ int cmd_status(int argc, const char **argv)
 			include_system = true;
 		else if (strcmp(argv[i], "--include-eventlog") == 0)
 			include_eventlog = true;
+		else if (strcmp(argv[i], "--include-kernel-log") == 0)
+			include_kernel_log = true;
+		else if (strcmp(argv[i], "--include-modules") == 0)
+			include_modules = true;
 		else if (shirudo_is_help(argv[i])) {
 			shirudo_print_help(&status_help);
 			return 0;
@@ -654,6 +664,53 @@ int cmd_status(int argc, const char **argv)
 			shirudo_json_obj_close(&e);
 			shirudo_json_obj_close(&e);
 		}
+		if (include_kernel_log) {
+			struct shirudo_kmsg_record recs[15];
+			int nr = shirudo_kmsg_tail(recs, ARRAY_SIZE(recs));
+			int j;
+
+			shirudo_json_arr_open(&e, "kernel_log");
+			for (j = 0; j < nr; j++) {
+				shirudo_json_obj_open(&e);
+				shirudo_json_kv_string(&e, "ts", recs[j].ts);
+				shirudo_json_kv_string(&e, "msg", recs[j].msg);
+				shirudo_json_obj_close(&e);
+			}
+			shirudo_json_arr_close(&e);
+		}
+		if (include_modules) {
+			struct shirudo_kmod_set ks = {};
+			int mrc = shirudo_kmodules_read(&ks);
+			size_t mi;
+
+			shirudo_json_arr_open(&e, "modules");
+			if (mrc == 0) {
+				for (mi = 0; mi < ks.n; mi++) {
+					const struct shirudo_kmod *m =
+						&ks.mods[mi];
+					uint16_t di;
+
+					shirudo_json_obj_open(&e);
+					shirudo_json_kv_string(&e, "name",
+							       m->name);
+					shirudo_json_kv_int(&e, "size",
+							    (int64_t)m->size);
+					shirudo_json_kv_int(&e, "refcount",
+							    m->refcount);
+					shirudo_json_arr_open(&e, "deps");
+					for (di = 0; di < m->n_deps; di++) {
+						size_t dk = ks.deps[m->deps_off
+								    + di];
+						shirudo_json_str(&e,
+							ks.mods[dk].name);
+					}
+					shirudo_json_arr_close(&e);
+					shirudo_json_obj_close(&e);
+				}
+			}
+			shirudo_json_arr_close(&e);
+			shirudo_kmodules_free(&ks);
+		}
 		shirudo_json_obj_close(&e);
 
 		if (e.err)
@@ -806,6 +863,33 @@ int cmd_status(int argc, const char **argv)
 			       assets.n_incoming);
 		printf("  %-22s %s\n", "bpffs/",
 		       assets.bpffs_mounted ? "mounted" : "not mounted");
+
+		if (include_kernel_log) {
+			struct shirudo_kmsg_record recs[15];
+			int nr = shirudo_kmsg_tail(recs, ARRAY_SIZE(recs));
+			int j;
+
+			printf("\nKernel log (last %zu lines):\n",
+			       ARRAY_SIZE(recs));
+			if (nr <= 0)
+				printf("  (unavailable)\n");
+			else
+				for (j = 0; j < nr; j++)
+					printf("  [%s]  %s\n", recs[j].ts,
+					       recs[j].msg);
+		}
+		if (include_modules) {
+			struct shirudo_kmod_set ks = {};
+			int mrc = shirudo_kmodules_read(&ks);
+
+			printf("\nLoaded modules (%zu):\n",
+			       mrc == 0 ? ks.n : (size_t)0);
+			if (mrc != 0)
+				printf("  (unavailable: %s)\n", strerror(-mrc));
+			else
+				shirudo_kmodules_print_tree(&ks);
+			shirudo_kmodules_free(&ks);
+		}
 	}
 
 out:

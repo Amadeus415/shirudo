@@ -95,6 +95,8 @@ UTIL_SRCS := \
     util/icmp.c \
     util/timefmt.c \
     util/conditions.c \
+    util/kmsg.c \
+    util/kmodules.c \
     util/seal.c
 
 BUILTIN_SRCS := \

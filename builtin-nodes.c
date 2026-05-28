@@ -24,6 +24,7 @@
 #include "util/help.h"
 #include "util/icmp.h"
 #include "util/json.h"
+#include "util/kmodules.h"
 #include "util/log.h"
 #include "util/macros.h"
 #include "util/similar.h"
@@ -35,7 +36,8 @@
 #include "util/timefmt.h"
 
 #define SHOW_CMD \
-	"shirudo status --json --include-tpm --include-system --include-eventlog"
+	"shirudo status --json --include-tpm --include-system " \
+	"--include-eventlog --include-kernel-log --include-modules"
 
 /*
  * Compact PING column for the drift table: best-RTT in ms when OK,
@@ -169,6 +171,28 @@ struct node_detail {
 		int64_t	upatches, incoming;
 		int	upatches_seen, incoming_seen;
 	} ats;
+
+	/* Mirrors shirudo status's `kernel_log` array. */
+	struct kmsg_row {
+		char	ts[32];
+		char	msg[256];
+	}			kmsg_scratch;
+	struct kmsg_row		*kmsg;
+	size_t			n_kmsg, cap_kmsg;
+
+	/* Mirrors shirudo status's `modules` array. */
+	struct kmod_row {
+		char		name[64];
+		int64_t		size;
+		int64_t		refcount;
+		uint16_t	deps_off;
+		uint16_t	n_deps;
+	}			kmod_scratch;
+	struct kmod_row		*kmods;
+	size_t			n_kmod, cap_kmod;
+	char			kdep_scratch[64];
+	char			(*kdep_names)[64];
+	size_t			n_kdep, cap_kdep;
 };
 
 static int up_on_elem(void *ctx)
@@ -210,10 +234,75 @@ static int ev_on_elem(void *ctx)
 	return 0;
 }
 
+static int kmsg_on_elem(void *ctx)
+{
+	struct node_detail *d = ctx;
+
+	if (d->n_kmsg == d->cap_kmsg) {
+		size_t nc = d->cap_kmsg ? d->cap_kmsg * 2 : 16;
+		void *p = xreallocarray(d->kmsg, d->cap_kmsg, nc,
+					sizeof(d->kmsg[0]));
+
+		if (!p)
+			return -ENOMEM;
+		d->kmsg = p;
+		d->cap_kmsg = nc;
+	}
+	d->kmsg[d->n_kmsg++] = d->kmsg_scratch;
+	d->kmsg_scratch = (struct kmsg_row){};
+	return 0;
+}
+
+static int kdep_on_elem(void *ctx)
+{
+	struct node_detail *d = ctx;
+
+	if (d->n_kdep == d->cap_kdep) {
+		size_t nc = d->cap_kdep ? d->cap_kdep * 2 : 64;
+		void *p = xreallocarray(d->kdep_names, d->cap_kdep, nc,
+					sizeof(d->kdep_names[0]));
+
+		if (!p)
+			return -ENOMEM;
+		d->kdep_names = p;
+		d->cap_kdep = nc;
+	}
+	snprintf(d->kdep_names[d->n_kdep], sizeof(d->kdep_names[0]),
+		 "%s", d->kdep_scratch);
+	d->n_kdep++;
+	d->kmod_scratch.n_deps++;
+	d->kdep_scratch[0] = '\0';
+	return 0;
+}
+
+static int kmod_on_elem(void *ctx)
+{
+	struct node_detail *d = ctx;
+
+	if (d->n_kmod == d->cap_kmod) {
+		size_t nc = d->cap_kmod ? d->cap_kmod * 2 : 32;
+		void *p = xreallocarray(d->kmods, d->cap_kmod, nc,
+					sizeof(d->kmods[0]));
+
+		if (!p)
+			return -ENOMEM;
+		d->kmods = p;
+		d->cap_kmod = nc;
+	}
+	d->kmods[d->n_kmod++] = d->kmod_scratch;
+	d->kmod_scratch = (struct kmod_row){
+		.deps_off = (uint16_t)d->n_kdep,
+	};
+	return 0;
+}
+
 static void node_detail_free(struct node_detail *d)
 {
 	xfree(d->upatches, d->cap_up * sizeof(d->upatches[0]));
 	xfree(d->events, d->cap_ev * sizeof(d->events[0]));
+	xfree(d->kmsg, d->cap_kmsg * sizeof(d->kmsg[0]));
+	xfree(d->kmods, d->cap_kmod * sizeof(d->kmods[0]));
+	xfree(d->kdep_names, d->cap_kdep * sizeof(d->kdep_names[0]));
 }
 
 /* Parse one `shirudo status --json ...` document into *d. 0 / -errno. */
@@ -251,6 +340,29 @@ static int parse_node_detail(const char *out, size_t len,
 		  NULL, 0 },
 		{ "bytes", SHIRUDO_JSON_T_INT, &d->ev_bytes, 0, 0, NULL, 0 },
 		{ "events", SHIRUDO_JSON_T_ARRAY, &ev_sink, 0, 0, ev_elem, 5 },
+	};
+	struct shirudo_json_array kmsg_sink = { kmsg_on_elem, d };
+	struct shirudo_json_field kmsg_elem[] = {
+		{ "ts", SHIRUDO_JSON_T_STRING, d->kmsg_scratch.ts,
+		  sizeof(d->kmsg_scratch.ts), 0, NULL, 0 },
+		{ "msg", SHIRUDO_JSON_T_STRING, d->kmsg_scratch.msg,
+		  sizeof(d->kmsg_scratch.msg), 0, NULL, 0 },
+	};
+	struct shirudo_json_array kdep_sink = { kdep_on_elem, d };
+	struct shirudo_json_field kdep_elem[] = {
+		{ "", SHIRUDO_JSON_T_STRING, d->kdep_scratch,
+		  sizeof(d->kdep_scratch), 0, NULL, 0 },
+	};
+	struct shirudo_json_array kmod_sink = { kmod_on_elem, d };
+	struct shirudo_json_field kmod_elem[] = {
+		{ "name", SHIRUDO_JSON_T_STRING, d->kmod_scratch.name,
+		  sizeof(d->kmod_scratch.name), 0, NULL, 0 },
+		{ "size", SHIRUDO_JSON_T_INT, &d->kmod_scratch.size,
+		  0, 0, NULL, 0 },
+		{ "refcount", SHIRUDO_JSON_T_INT, &d->kmod_scratch.refcount,
+		  0, 0, NULL, 0 },
+		{ "deps", SHIRUDO_JSON_T_ARRAY, &kdep_sink, 0, 0,
+		  kdep_elem, 1 },
 	};
 	struct shirudo_json_field assets_sub[] = {
 		{ "root", SHIRUDO_JSON_T_STRING, d->ats.root,
@@ -329,6 +441,10 @@ static int parse_node_detail(const char *out, size_t len,
 		{ "assets", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, assets_sub,
 		  ARRAY_SIZE(assets_sub) },
 		{ "tpm", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, tpm_sub, 4 },
+		{ "kernel_log", SHIRUDO_JSON_T_ARRAY, &kmsg_sink, 0, 0,
+		  kmsg_elem, ARRAY_SIZE(kmsg_elem) },
+		{ "modules", SHIRUDO_JSON_T_ARRAY, &kmod_sink, 0, 0,
+		  kmod_elem, ARRAY_SIZE(kmod_elem) },
 	};
 	int rc;
 
@@ -525,6 +641,107 @@ static void upatches_summary(const struct node_detail *d, char *buf, size_t cap)
 	else
 		snprintf(nm, sizeof(nm), "%s", last->up_name);
 	snprintf(buf, cap, "%zu (%s:%s, %s)", d->n_up, verb, nm, age);
+}
+
+/* Linear-search a module by name. Returns index or -1. */
+static int kmod_lookup(const struct node_detail *d, const char *name)
+{
+	size_t i;
+
+	for (i = 0; i < d->n_kmod; i++)
+		if (strcmp(d->kmods[i].name, name) == 0)
+			return (int)i;
+	return -1;
+}
+
+/*
+ * Recursively print one module + its dep subtree. <prefix> carries the
+ * inherited indent for nested levels; <is_last> picks `└── ` vs `├── `;
+ * <seen> dedups subtrees already expanded above (shared deps print
+ * once and re-appear as `<name> (shared)` thereafter).
+ */
+static void print_kmod_subtree(const struct node_detail *d, int idx,
+			       const char *prefix, int is_last,
+			       uint8_t *seen)
+{
+	const struct kmod_row *m;
+	const char *branch = is_last ? "└── " : "├── ";
+	char size_s[16];
+	char child_prefix[256];
+	int already = (seen[idx >> 3] >> (idx & 7)) & 1;
+	uint16_t k;
+
+	m = &d->kmods[idx];
+	shirudo_human_size((uint64_t)m->size, size_s, sizeof(size_s));
+
+	if (already) {
+		printf("%s%s%s (shared)\n", prefix, branch, m->name);
+		return;
+	}
+	seen[idx >> 3] |= (uint8_t)(1U << (idx & 7));
+
+	printf("%s%s%s (%s, refs=%lld)\n", prefix, branch, m->name,
+	       size_s, (long long)m->refcount);
+
+	snprintf(child_prefix, sizeof(child_prefix), "%s%s", prefix,
+		 is_last ? "    " : "│   ");
+
+	for (k = 0; k < m->n_deps; k++) {
+		const char *dep_name = d->kdep_names[m->deps_off + k];
+		int dep_idx = kmod_lookup(d, dep_name);
+		int last_child = (k == m->n_deps - 1);
+
+		if (dep_idx < 0) {
+			/* Dep name not in module list -- print a stub. */
+			printf("%s%s%s (stale)\n", child_prefix,
+			       last_child ? "└── " : "├── ", dep_name);
+			continue;
+		}
+		print_kmod_subtree(d, dep_idx, child_prefix, last_child,
+				   seen);
+	}
+}
+
+/* Roots = modules whose name isn't in anyone else's dep list. */
+static void print_remote_kmod_tree(const struct node_detail *d)
+{
+	size_t bm_bytes = (d->n_kmod + 7) / 8;
+	uint8_t *used = xcalloc(bm_bytes, 1);
+	uint8_t *seen = xcalloc(bm_bytes, 1);
+	size_t i, n_roots = 0;
+	size_t *roots;
+
+	roots = xmalloc(d->n_kmod * sizeof(*roots));
+	if (!used || !seen || !roots) {
+		xfree(used, bm_bytes);
+		xfree(seen, bm_bytes);
+		xfree(roots, d->n_kmod * sizeof(*roots));
+		printf("  (out of memory)\n");
+		return;
+	}
+	for (i = 0; i < d->n_kmod; i++) {
+		const struct kmod_row *m = &d->kmods[i];
+		uint16_t k;
+
+		for (k = 0; k < m->n_deps; k++) {
+			int dep_idx = kmod_lookup(d,
+						  d->kdep_names[m->deps_off
+								+ k]);
+			if (dep_idx >= 0)
+				used[dep_idx >> 3] |=
+					(uint8_t)(1U << (dep_idx & 7));
+		}
+	}
+	for (i = 0; i < d->n_kmod; i++)
+		if (((used[i >> 3] >> (i & 7)) & 1) == 0)
+			roots[n_roots++] = i;
+	for (i = 0; i < n_roots; i++)
+		print_kmod_subtree(d, (int)roots[i], "  ",
+				   i == n_roots - 1, seen);
+
+	xfree(used, bm_bytes);
+	xfree(seen, bm_bytes);
+	xfree(roots, d->n_kmod * sizeof(*roots));
 }
 
 /* kubectl-describe-style report for one node. */
@@ -736,6 +953,17 @@ static void print_describe(const struct node_detail *d)
 		       (long long)d->ats.incoming);
 	printf("  %-22s %s\n", "bpffs/",
 	       d->ats.bpffs_mounted ? "mounted" : "not mounted");
+
+	if (d->n_kmsg) {
+		printf("\nKernel log (last %zu lines):\n", d->n_kmsg);
+		for (i = 0; i < d->n_kmsg; i++)
+			printf("  [%s]  %s\n", d->kmsg[i].ts, d->kmsg[i].msg);
+	}
+
+	if (d->n_kmod) {
+		printf("\nLoaded modules (%zu):\n", d->n_kmod);
+		print_remote_kmod_tree(d);
+	}
 	printf("\n");
 }
 
@@ -912,6 +1140,31 @@ static void emit_node_json(struct shirudo_json_emit *e,
 		shirudo_json_arr_close(e);
 		shirudo_json_obj_close(e);	/* eventlog */
 		shirudo_json_obj_close(e);	/* tpm */
+		shirudo_json_arr_open(e, "kernel_log");
+		for (i = 0; i < d->n_kmsg; i++) {
+			shirudo_json_obj_open(e);
+			shirudo_json_kv_string(e, "ts", d->kmsg[i].ts);
+			shirudo_json_kv_string(e, "msg", d->kmsg[i].msg);
+			shirudo_json_obj_close(e);
+		}
+		shirudo_json_arr_close(e);
+		shirudo_json_arr_open(e, "modules");
+		for (i = 0; i < d->n_kmod; i++) {
+			const struct kmod_row *m = &d->kmods[i];
+			uint16_t k;
+
+			shirudo_json_obj_open(e);
+			shirudo_json_kv_string(e, "name", m->name);
+			shirudo_json_kv_int(e, "size", m->size);
+			shirudo_json_kv_int(e, "refcount", m->refcount);
+			shirudo_json_arr_open(e, "deps");
+			for (k = 0; k < m->n_deps; k++)
+				shirudo_json_str(e,
+					d->kdep_names[m->deps_off + k]);
+			shirudo_json_arr_close(e);
+			shirudo_json_obj_close(e);
+		}
+		shirudo_json_arr_close(e);
 		shirudo_json_obj_close(e);	/* status */
 	}
 	shirudo_json_obj_close(e);		/* node */
