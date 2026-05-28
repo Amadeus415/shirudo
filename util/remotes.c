@@ -56,6 +56,19 @@ void shirudo_labels_at(const struct shirudo_labels *l, size_t i,
 	*val = l->items[i].val;
 }
 
+/*
+ * Sort labels alphabetically by key in the loader so every consumer
+ * (`remote list`, `remote show`, `nodes show` human + --json, ...) sees
+ * a stable order without each having to sort independently.
+ */
+static int label_cmp(const void *a, const void *b)
+{
+	const struct shirudo_label *la = a;
+	const struct shirudo_label *lb = b;
+
+	return strcmp(la->key, lb->key);
+}
+
 static int labels_add(struct shirudo_labels *l, const char *k, const char *v)
 {
 	struct shirudo_label *it = xreallocarray(l->items, l->n, l->n + 1,
@@ -170,6 +183,9 @@ static int parse_conf(const char *dir, const char *fname,
 		rc = -ENOMEM;
 		goto fail;
 	}
+	if (labels->n)
+		qsort(labels->items, labels->n, sizeof(labels->items[0]),
+		      label_cmp);
 	if (!r.host) {
 		pr_warn("remote %s: no host=, skipping", r.name);
 		rc = 0;
