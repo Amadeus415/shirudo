@@ -1153,8 +1153,8 @@ static void print_describe(const struct node_detail *d, bool show_full,
 		printf("  %-14s n/a  (DNS resolution failed)\n", "ICMP:");
 		break;
 	case SHIRUDO_ICMP_NO_PRIVILEGE:
-		printf("  %-14s n/a  (operator gid not in "
-		       "net.ipv4.ping_group_range)\n", "ICMP:");
+		printf("  %-14s n/a  (no CAP_NET_RAW and operator gid not "
+		       "in net.ipv4.ping_group_range)\n", "ICMP:");
 		break;
 	case SHIRUDO_ICMP_DISABLED:
 		printf("  %-14s off  (disabled in shirudo.conf: "

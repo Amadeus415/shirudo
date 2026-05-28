@@ -2,11 +2,21 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Unprivileged ICMPv4 echo. We rely on Linux's dgram ICMP support
- * (SOCK_DGRAM + IPPROTO_ICMP, gated by net.ipv4.ping_group_range) so
- * no CAP_NET_RAW is needed. The kernel rewrites the ICMP `id` to the
- * socket's source port in both directions, so correlation is by
- * sequence number alone.
+ * Best-effort ICMP echo (v4 + v6). Like iputils ping we try an
+ * unprivileged dgram ICMP socket first (SOCK_DGRAM + IPPROTO_ICMP[V6],
+ * gated by net.ipv4.ping_group_range, no CAP_NET_RAW needed) and fall
+ * back to a raw ICMP socket when that is refused -- which a root
+ * operator gets via CAP_NET_RAW without any sysctl change. Only when
+ * neither works do we report NO_PRIVILEGE.
+ *
+ * The two socket types differ in two ways we must handle:
+ *   - id: a dgram socket has the kernel rewrite the ICMP `id` to the
+ *     socket's source port in both directions, so we correlate by
+ *     sequence alone; a raw socket leaves `id` untouched, so we stamp
+ *     our pid and match it (raw sockets also see unrelated ICMP).
+ *   - receive framing / checksum: a raw IPv4 socket prepends the IP
+ *     header on recv and does not compute the ICMP checksum on send;
+ *     dgram sockets and raw ICMPv6 do neither (v6 kernel-fills csum).
  */
 
 #include <arpa/inet.h>
@@ -16,6 +26,7 @@
 #include <netinet/ip_icmp.h>
 #include <netinet/icmp6.h>
 #include <poll.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -37,6 +48,27 @@ static uint64_t rtt_us(const struct timespec *a, const struct timespec *b)
 	return (uint64_t)(s * 1000000 + ns / 1000);
 }
 
+/*
+ * Internet checksum (RFC 1071). Needed only for the raw IPv4 path: the
+ * kernel fills the ICMP checksum for dgram sockets and for raw ICMPv6,
+ * but a raw IPv4 ICMP socket sends the transport payload verbatim.
+ */
+static uint16_t in_cksum(const void *data, size_t len)
+{
+	const uint16_t *p = data;
+	uint32_t sum = 0;
+
+	while (len > 1) {
+		sum += *p++;
+		len -= 2;
+	}
+	if (len)
+		sum += *(const uint8_t *)p;
+	while (sum >> 16)
+		sum = (sum & 0xffff) + (sum >> 16);
+	return (uint16_t)~sum;
+}
+
 enum shirudo_icmp_status shirudo_icmp_ping(const char *host,
 					   unsigned timeout_ms,
 					   unsigned probes,
@@ -47,11 +79,13 @@ enum shirudo_icmp_status shirudo_icmp_ping(const char *host,
 		.ai_family = AF_UNSPEC,
 		.ai_socktype = SOCK_DGRAM,
 	};
-	struct addrinfo *res = NULL;
 	enum shirudo_icmp_status best = SHIRUDO_ICMP_TIMEOUT;
+	uint16_t ident = (uint16_t)(getpid() & 0xffff);
 	uint64_t best_rtt = UINT64_MAX;
 	int gai, fd, save_errno, proto;
 	uint8_t echo_type, reply_type;
+	struct addrinfo *res = NULL;
+	bool raw = false;
 	unsigned p;
 	int af;
 
@@ -88,6 +122,18 @@ enum shirudo_icmp_status shirudo_icmp_ping(const char *host,
 	}
 
 	fd = socket(af, SOCK_DGRAM, proto);
+	if (fd < 0 && (errno == EACCES || errno == EPERM ||
+		       errno == EPROTONOSUPPORT)) {
+		/*
+		 * No unprivileged dgram ICMP (gid not in
+		 * net.ipv4.ping_group_range, or no ping-socket support):
+		 * fall back to a raw ICMP socket, which CAP_NET_RAW (e.g. a
+		 * root operator) grants without touching any sysctl.
+		 */
+		fd = socket(af, SOCK_RAW, proto);
+		if (fd >= 0)
+			raw = true;
+	}
 	if (fd < 0) {
 		save_errno = errno;
 		freeaddrinfo(res);
@@ -117,6 +163,18 @@ enum shirudo_icmp_status shirudo_icmp_ping(const char *host,
 
 		pkt.type = echo_type;
 		pkt.seq = htons(want_seq);
+		if (raw) {
+			/*
+			 * Raw sockets do not rewrite `id`; stamp it so we
+			 * can pick our own replies out of all the ICMP the
+			 * socket sees. IPv4 needs the checksum filled too
+			 * (set last, over the finished header); IPv6 is
+			 * kernel-computed.
+			 */
+			pkt.id = htons(ident);
+			if (af == AF_INET)
+				pkt.checksum = in_cksum(&pkt, sizeof(pkt));
+		}
 		clock_gettime(CLOCK_MONOTONIC, &t0);
 		s = sendto(fd, &pkt, sizeof(pkt), 0, res->ai_addr,
 			   res->ai_addrlen);
@@ -140,11 +198,12 @@ enum shirudo_icmp_status shirudo_icmp_ping(const char *host,
 		pfd.fd = fd;
 		pfd.events = POLLIN;
 		for (;;) {
-			struct timespec now;
+			uint16_t got_seq, got_id;
 			int waited_ms, remaining;
+			struct timespec now;
 			char reply[128];
+			size_t off;
 			ssize_t r;
-			uint16_t got_seq;
 
 			clock_gettime(CLOCK_MONOTONIC, &now);
 			waited_ms = (int)(rtt_us(&t0, &now) / 1000);
@@ -163,9 +222,24 @@ enum shirudo_icmp_status shirudo_icmp_ping(const char *host,
 			r = recv(fd, reply, sizeof(reply), 0);
 			if (r < (ssize_t)sizeof(pkt))
 				continue;
-			if ((uint8_t)reply[0] != reply_type)
+			/*
+			 * A raw IPv4 socket hands us the IP header ahead of
+			 * the ICMP message; everything else (dgram, raw
+			 * ICMPv6) starts at offset 0.
+			 */
+			off = 0;
+			if (raw && af == AF_INET)
+				off = ((size_t)(uint8_t)reply[0] & 0x0f) * 4;
+			if (r < (ssize_t)(off + sizeof(pkt)))
 				continue;
-			memcpy(&got_seq, reply + 6, 2);
+			if ((uint8_t)reply[off] != reply_type)
+				continue;
+			if (raw) {
+				memcpy(&got_id, reply + off + 4, 2);
+				if (ntohs(got_id) != ident)
+					continue;
+			}
+			memcpy(&got_seq, reply + off + 6, 2);
 			if (ntohs(got_seq) != want_seq)
 				continue;
 			clock_gettime(CLOCK_MONOTONIC, &t1);

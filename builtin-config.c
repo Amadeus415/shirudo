@@ -108,12 +108,14 @@ int cmd_config(int argc, const char **argv)
 		printf("# tpm.tcti = (unset -- using device:/dev/tpmrm0)\n\n");
 	}
 
-	printf("# `shirudo nodes` ICMP probe budget per target. Best-effort\n"
-	       "# unprivileged dgram ICMP -- the drift table still renders\n"
-	       "# (with PING = n/a) when the probe is blocked or the operator\n"
-	       "# gid isn't in net.ipv4.ping_group_range. Set\n"
-	       "# nodes.icmp_probes = 0 to disable ICMP probing entirely\n"
-	       "# (no socket opened; PING column shows `off`).\n");
+	printf("# `shirudo nodes` ICMP probe budget per target. Best-effort:\n"
+	       "# tries an unprivileged dgram ICMP socket, then falls back to\n"
+	       "# a raw socket (CAP_NET_RAW, e.g. a root operator). The drift\n"
+	       "# table still renders (with PING = n/a) when neither is allowed\n"
+	       "# (no CAP_NET_RAW and the operator gid isn't in\n"
+	       "# net.ipv4.ping_group_range). Set nodes.icmp_probes = 0 to\n"
+	       "# disable ICMP probing entirely (no socket opened; PING column\n"
+	       "# shows `off`).\n");
 	printf("nodes.icmp_timeout_ms = %u\n", cfg.nodes_icmp_timeout_ms);
 	printf("nodes.icmp_probes = %u\n\n", cfg.nodes_icmp_probes);
 

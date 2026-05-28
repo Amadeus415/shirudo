@@ -1430,10 +1430,13 @@ bpffs.remount_if_lax = yes
 # Default: 16.
 fleet.parallel = 16
 
-# `shirudo nodes` ICMP probe budget per target. Best-effort
-# unprivileged dgram ICMP (no CAP_NET_RAW; operator gid must be
-# in net.ipv4.ping_group_range) -- the drift table still renders
-# (with PING = n/a) when the probe is blocked. Set
+# `shirudo nodes` ICMP probe budget per target. Best-effort, like
+# iputils ping: try an unprivileged dgram ICMP socket (operator gid
+# in net.ipv4.ping_group_range, no CAP_NET_RAW), then fall back to a
+# raw ICMP socket (CAP_NET_RAW, e.g. a root operator) -- shirudo never
+# writes the sysctl itself. The drift table still renders (with
+# PING = n/a) when neither is permitted, or when the probe is
+# blocked. Set
 # nodes.icmp_probes = 0 to disable ICMP entirely (no socket
 # opened, PING column shows `off`, `shirudo nodes show` renders
 # `ICMP: off (disabled in shirudo.conf: nodes.icmp_probes = 0)`);

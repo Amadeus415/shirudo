@@ -2,11 +2,12 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Best-effort unprivileged ICMP echo (v4 + v6 via getaddrinfo), used
- * by `shirudo nodes` to tell "host up" apart from "SSH broken". No
- * CAP_NET_RAW is required, but the operator must be in
- * net.ipv4.ping_group_range (covers v4 and v6) -- when the dgram ICMP
- * socket can't be opened we report NO_PRIVILEGE rather than silently
+ * Best-effort ICMP echo (v4 + v6 via getaddrinfo), used by `shirudo
+ * nodes` to tell "host up" apart from "SSH broken". Tries an
+ * unprivileged dgram ICMP socket first (needs the operator gid in
+ * net.ipv4.ping_group_range, no CAP_NET_RAW) and falls back to a raw
+ * ICMP socket (CAP_NET_RAW, e.g. a root operator). Only when neither
+ * is permitted do we report NO_PRIVILEGE, rather than silently
  * degrading to TCP-probing.
  */
 
@@ -20,7 +21,7 @@ enum shirudo_icmp_status {
 	SHIRUDO_ICMP_TIMEOUT,		/* no reply within budget (firewalled) */
 	SHIRUDO_ICMP_NO_ROUTE,		/* destination unreachable */
 	SHIRUDO_ICMP_DNS_FAIL,		/* getaddrinfo could not resolve */
-	SHIRUDO_ICMP_NO_PRIVILEGE,	/* not in net.ipv4.ping_group_range */
+	SHIRUDO_ICMP_NO_PRIVILEGE,	/* no dgram (ping_group_range) nor raw (CAP_NET_RAW) */
 	SHIRUDO_ICMP_DISABLED,		/* nodes.icmp_probes = 0 (off by config) */
 	SHIRUDO_ICMP_ERROR,		/* other (logged via pr_warn) */
 };

@@ -31,9 +31,10 @@ struct shirudo_config {
 	 */
 	char		tpm_tcti[SHIRUDO_TPM_TCTI_MAX];
 	/*
-	 * Per-target ICMP probe budget for `shirudo nodes`. Best-effort
-	 * unprivileged dgram ICMP; an operator without the right
-	 * net.ipv4.ping_group_range still sees the table with PING = n/a.
+	 * Per-target ICMP probe budget for `shirudo nodes`. Best-effort:
+	 * unprivileged dgram ICMP, falling back to a raw socket
+	 * (CAP_NET_RAW); an operator with neither still sees the table
+	 * with PING = n/a.
 	 */
 	unsigned int	nodes_icmp_timeout_ms;	/* default 1000 */
 	unsigned int	nodes_icmp_probes;	/* default 1 */
