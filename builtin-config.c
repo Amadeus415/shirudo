@@ -90,6 +90,24 @@ int cmd_config(int argc, const char **argv)
 		printf("# tpm.owner_auth = (unset)\n\n");
 	}
 
+	printf("# TCTI override for the TPM library connection. Empty (default)\n"
+	       "# means the kernel resource manager at `device:/dev/tpmrm0`.\n"
+	       "# Set to `swtpm:host=<addr>,port=<port>` for a software TPM\n"
+	       "# emulator (dev/CI without real hardware); see\n"
+	       "# Documentation/getting-started.rst \"TPM in development\"\n"
+	       "# for a worked recipe. Pre-flight skips the /dev/tpmrm0 check\n"
+	       "# when this is set. The SHIRUDO_TPM_TCTI env var overrides\n"
+	       "# this in turn.\n");
+	if (cfg.tpm_tcti[0]) {
+		const char *env = getenv("SHIRUDO_TPM_TCTI");
+
+		printf("tpm.tcti = %s  # from %s\n\n", cfg.tpm_tcti,
+		       env && *env ? "$SHIRUDO_TPM_TCTI"
+				   : SHIRUDO_CONF_PATH);
+	} else {
+		printf("# tpm.tcti = (unset -- using device:/dev/tpmrm0)\n\n");
+	}
+
 	printf("# `shirudo nodes` ICMP probe budget per target. Best-effort\n"
 	       "# unprivileged dgram ICMP -- the drift table still renders\n"
 	       "# (with PING = n/a) when the probe is blocked or the operator\n"

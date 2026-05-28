@@ -1178,17 +1178,87 @@ TPM in development
 Three options, easiest first:
 
 - ``--no-tpm`` — LSM enforces, chain is not measured. Fine for most work.
-- **swtpm** — a software TPM 2.0. Start it, then point shirudo at it
-  with ``SHIRUDO_TPM_TCTI`` for ``init``/``status``:
+- **swtpm** — a software TPM 2.0 emulator, recommended for any dev
+  or CI environment without real hardware. Point shirudo at it via
+  ``SHIRUDO_TPM_TCTI`` and the same NV-extend chain that drives a
+  real TPM works against the emulator:
 
   .. code-block:: sh
 
-      mkdir -p /tmp/swtpm-dev
-      swtpm socket --tpm2 --tpmstate dir=/tmp/swtpm-dev,mode=0700 \
-          --server type=tcp,port=2321 --ctrl type=tcp,port=2322 \
-          --flags startup-clear &
+      # 1) install (Debian/Ubuntu; equivalents exist on RHEL/Fedora)
+      sudo apt install swtpm swtpm-tools
+
+      # 2) one-time state dir (persists across restarts of swtpm; nuke
+      #    it to wipe TPM state and start over)
+      STATE=/tmp/swtpm-dev
+      mkdir -p "$STATE"
+      chmod 0700 "$STATE"
+      swtpm_setup --tpm2 --tpm-state "$STATE" \
+          --create-ek-cert --create-platform-cert --overwrite
+
+      # 3) start swtpm in the background; TCP socket TCTI is the
+      #    simplest path and needs no kernel module
+      swtpm socket --tpm2 --tpmstate dir="$STATE",mode=0700 \
+          --server type=tcp,port=2321 \
+          --ctrl   type=tcp,port=2322,terminate \
+          --flags startup-clear \
+          --log file=/tmp/swtpm-dev.log,level=20 \
+          --daemon
+
+      # 4) point shirudo at it. Two equivalent ways -- pick whichever
+      #    fits the workflow:
+      #
+      #    a) per-shell, via env (good for one-shot dev runs):
+      #
       export SHIRUDO_TPM_TCTI='swtpm:host=127.0.0.1,port=2321'
-      sudo -E shirudo init        # defines the NV index, extends the chain
+      sudo -E shirudo init                  # defines NV index, extends chain
+      sudo -E shirudo status --include-tpm  # shows NV chain + eventlog
+      #
+      #    b) persistent, via the global config (good for CI runners or
+      #       a dev host that always uses swtpm). The shirudo.conf key
+      #       is `tpm.tcti`; verify with `shirudo config`:
+      #
+      sudo mkdir -p /etc/shirudo
+      printf 'tpm.tcti = swtpm:host=127.0.0.1,port=2321\n' | \
+          sudo tee /etc/shirudo/shirudo.conf
+      shirudo config | grep tpm.tcti
+      sudo shirudo init                     # no -E needed; config wins
+      sudo shirudo status --include-tpm
+
+      # The pre-flight check honors either source automatically -- no
+      # --no-tpm needed. SHIRUDO_TPM_TCTI takes precedence when both
+      # the env var and the config file set the key, so you can
+      # temporarily redirect a host with a configured swtpm to a
+      # second instance for one ad-hoc run.
+
+  Teardown is the inverse:
+
+  .. code-block:: sh
+
+      # stop swtpm (the --ctrl ... terminate above makes a TPM2 shutdown
+      # propagate to swtpm's exit; otherwise pkill is the hammer)
+      pkill -f 'swtpm socket' || true
+
+      # forget the state (wipes the NV index, the chain, the EK)
+      rm -rf "$STATE"
+      unset SHIRUDO_TPM_TCTI
+
+  Notes on the recipe:
+
+  * The override is **dev-only** -- when SHIRUDO_TPM_TCTI is set the
+    pre-flight skips the ``/dev/tpmrm0`` access check. The
+    operator-side chain expectation still rejects any value a fake
+    TPM produces, so a malicious target swapping in a controlled
+    swtpm cannot manufacture a "matches" verdict against a real
+    operator-pinned ``--expect-chain``.
+  * swtpm's owner hierarchy auth is empty by default; if you later
+    want to test the ``tpm.owner_auth`` path, take ownership with
+    ``tpm2_changeauth -c o '<new-auth>'`` first and set
+    ``SHIRUDO_TPM_OWNER_AUTH`` (or the ``tpm.owner_auth`` config
+    key) before running ``shirudo init``.
+  * The recipe works identically for CI -- pin the ``$STATE`` dir
+    in the runner's workspace and the chain survives across the
+    ``init`` / ``upatch load`` / ``upatch unload`` cycle in one job.
 
 - **A real/virtual hardware TPM** at ``/dev/tpmrm0`` (the default). If
   its owner hierarchy auth is set (common on cloud vTPMs), ``init``

@@ -119,6 +119,16 @@ int shirudo_config_load(struct shirudo_config *cfg)
 					cfg->eventlog_max_bytes = v;
 			} else if (strcmp(key, "tpm.owner_auth") == 0) {
 				set_owner_auth(cfg, val);
+			} else if (strcmp(key, "tpm.tcti") == 0) {
+				size_t l = strlen(val);
+
+				if (l >= sizeof(cfg->tpm_tcti))
+					pr_warn("config: tpm.tcti too long "
+						"(ignored)");
+				else
+					snprintf(cfg->tpm_tcti,
+						 sizeof(cfg->tpm_tcti),
+						 "%s", val);
 			} else if (strcmp(key, "nodes.icmp_timeout_ms") == 0) {
 				unsigned long v;
 				char *end;
@@ -155,6 +165,23 @@ int shirudo_config_load(struct shirudo_config *cfg)
 	env = getenv("SHIRUDO_TPM_OWNER_AUTH");
 	if (env)
 		set_owner_auth(cfg, env);
+
+	/*
+	 * TCTI env override -- mirrors the pre-existing
+	 * SHIRUDO_TPM_TCTI behaviour in util/tpm.c so the env wins
+	 * over the on-disk config (handy when the conf file is shared
+	 * but a single dev run wants swtpm).
+	 */
+	env = getenv("SHIRUDO_TPM_TCTI");
+	if (env && *env) {
+		size_t l = strlen(env);
+
+		if (l < sizeof(cfg->tpm_tcti))
+			snprintf(cfg->tpm_tcti, sizeof(cfg->tpm_tcti),
+				 "%s", env);
+		else
+			pr_warn("SHIRUDO_TPM_TCTI too long (ignored)");
+	}
 
 	return rc;
 }

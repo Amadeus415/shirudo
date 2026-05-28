@@ -13,6 +13,7 @@
 #include <tss2/tss2_esys.h>
 #include <tss2/tss2_tctildr.h>
 
+#include "config.h"
 #include "log.h"
 #include "malloc.h"
 #include "paths.h"
@@ -42,15 +43,24 @@ int shirudo_tpm_open(struct shirudo_tpm **out)
 	setenv("TSS2_LOG", "all+none", 0);
 
 	/*
-	 * Default to the kernel resource manager. SHIRUDO_TPM_TCTI
-	 * overrides the TCTI string (e.g. "swtpm:host=...,port=...")
-	 * for VMs/CI whose /dev/tpmrm0 is owner-provisioned and for
-	 * tests against swtpm. Redirecting the TCTI on a target cannot
-	 * defeat the operator-side guarantee: the operator verifies the
-	 * chain value against a locally-computed expectation, so a fake
-	 * TPM produces values the check rejects.
+	 * Default to the kernel resource manager. Precedence:
+	 *   1. SHIRUDO_TPM_TCTI env var (highest)
+	 *   2. tpm.tcti in /etc/shirudo/shirudo.conf
+	 *   3. compiled-in default `device:/dev/tpmrm0`
+	 * Override is for VMs/CI whose /dev/tpmrm0 is
+	 * owner-provisioned and for tests against swtpm. Redirecting
+	 * the TCTI on a target cannot defeat the operator-side
+	 * guarantee: the operator verifies the chain value against a
+	 * locally-computed expectation, so a fake TPM produces values
+	 * the check rejects.
 	 */
 	tcti = getenv("SHIRUDO_TPM_TCTI");
+	if (!tcti || !*tcti) {
+		struct shirudo_config cfg = {};
+
+		if (shirudo_config_load(&cfg) == 0 && cfg.tpm_tcti[0])
+			tcti = cfg.tpm_tcti;
+	}
 	if (!tcti || !*tcti)
 		tcti = "device:/dev/tpmrm0";
 

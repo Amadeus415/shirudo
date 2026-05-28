@@ -16,6 +16,7 @@
 
 #include <linux/keyctl.h>
 
+#include "config.h"
 #include "loader.h"
 #include "paths.h"
 #include "preflight.h"
@@ -199,11 +200,37 @@ static void check_tpm(struct shirudo_preflight_result *r, bool allow_no_tpm)
 			 "skipped (--no-tpm, degraded mode)");
 		return;
 	}
+	/*
+	 * Either SHIRUDO_TPM_TCTI env or tpm.tcti in shirudo.conf
+	 * redirects the TCTI string consumed by util/tpm.c (e.g.
+	 * "swtpm:host=127.0.0.1,port=2321" for a socket-backed
+	 * software TPM in dev/CI). When set, the kernel resource
+	 * manager isn't in play -- the device check would spuriously
+	 * refuse a perfectly valid swtpm setup. Trust the override and
+	 * let TPM-open report any real connectivity problem; the
+	 * operator-side chain expectation still rejects any value a
+	 * fake TPM produces, so this is a dev convenience, not a
+	 * security relaxation. shirudo_config_load consults the env
+	 * after the file, so checking cfg.tpm_tcti is sufficient.
+	 */
+	{
+		struct shirudo_config cfg = {};
+
+		if (shirudo_config_load(&cfg) == 0 && cfg.tpm_tcti[0]) {
+			pass(c);
+			snprintf(c->detail, sizeof(c->detail),
+				 "TCTI override: %s", cfg.tpm_tcti);
+			return;
+		}
+	}
 	if (access("/dev/tpmrm0", R_OK | W_OK) == 0)
 		pass(c);
 	else
 		fail(r, c,
-		     "/dev/tpmrm0: %s (pass --no-tpm for degraded mode)",
+		     "/dev/tpmrm0: %s (pass --no-tpm for degraded mode, or "
+		     "set tpm.tcti = swtpm:host=...,port=... in "
+		     "/etc/shirudo/shirudo.conf -- or SHIRUDO_TPM_TCTI -- "
+		     "for swtpm)",
 		     strerror(errno));
 }
 

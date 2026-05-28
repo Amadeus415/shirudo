@@ -11,6 +11,7 @@
 #include <stddef.h>
 
 #define SHIRUDO_OWNER_AUTH_MAX	256
+#define SHIRUDO_TPM_TCTI_MAX	256
 
 struct shirudo_config {
 	unsigned long	eventlog_max_bytes;	/* 0 = unlimited */
@@ -20,6 +21,15 @@ struct shirudo_config {
 	 */
 	char		tpm_owner_auth[SHIRUDO_OWNER_AUTH_MAX];
 	size_t		tpm_owner_auth_len;
+	/*
+	 * TCTI override for util/tpm.c. Empty (default) means
+	 * `device:/dev/tpmrm0`. A non-empty value (e.g.
+	 * `swtpm:host=127.0.0.1,port=2321`) redirects to a
+	 * software TPM for dev/CI. The pre-flight skips the
+	 * /dev/tpmrm0 check when the override is set. The
+	 * SHIRUDO_TPM_TCTI env var overrides this in turn.
+	 */
+	char		tpm_tcti[SHIRUDO_TPM_TCTI_MAX];
 	/*
 	 * Per-target ICMP probe budget for `shirudo nodes`. Best-effort
 	 * unprivileged dgram ICMP; an operator without the right
