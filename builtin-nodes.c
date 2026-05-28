@@ -1216,7 +1216,7 @@ int cmd_nodes(int argc, const char **argv)
 		}
 		xfree(buf, cap);
 	} else {
-		printf("%-20s %-9s %-4s %-13s %-7s %s\n",
+		printf("%-20s %-9s %-6s %-14s %-7s %s\n",
 		       "NODE", "PING", "SSH", "STATUS", "UPTIME", "UPATCHES (LAST)");
 		for (i = 0; i < n; i++) {
 			struct node_detail *s = &nodes[i];
@@ -1231,7 +1231,7 @@ int cmd_nodes(int argc, const char **argv)
 				snprintf(ut, sizeof(ut), "-");
 				snprintf(up, sizeof(up), "-");
 			}
-			printf("%-20s %-9s %-4s %-13s %-7s %s\n",
+			printf("%-20s %-9s %-6s %-14s %-7s %s\n",
 			       s->r->name,
 			       ping_str(s->icmp_status, s->icmp_rtt_us,
 					pb, sizeof(pb)),
