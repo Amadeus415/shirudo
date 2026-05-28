@@ -34,6 +34,7 @@
 #include "util/paths.h"
 #include "util/kmodules.h"
 #include "util/kmsg.h"
+#include "util/format.h"
 #include "util/sysinfo.h"
 #include "util/timefmt.h"
 
@@ -310,8 +311,31 @@ static void print_system_human(const struct shirudo_sysinfo *si)
 	printf("  %-16s %s\n", "Architecture:", si->machine);
 	if (si->nproc > 0)
 		printf("  %-16s %ld\n", "CPUs:", si->nproc);
-	if (si->mem_total_kb > 0)
-		printf("  %-16s %ld kB\n", "Memory:", si->mem_total_kb);
+	if (si->mem_total_kb > 0) {
+		char tot[16], used[16];
+
+		shirudo_human_size((uint64_t)si->mem_total_kb * 1024,
+				   tot, sizeof(tot));
+		if (si->mem_avail_kb >= 0 &&
+		    si->mem_avail_kb <= si->mem_total_kb) {
+			shirudo_human_size(
+				(uint64_t)(si->mem_total_kb -
+					   si->mem_avail_kb) * 1024,
+				used, sizeof(used));
+			printf("  %-16s %s/%s\n", "Memory:", used, tot);
+		} else {
+			printf("  %-16s %s\n", "Memory:", tot);
+		}
+	}
+	if (si->disk_total_kb > 0) {
+		char tot[16], used[16];
+
+		shirudo_human_size((uint64_t)si->disk_total_kb * 1024,
+				   tot, sizeof(tot));
+		shirudo_human_size((uint64_t)si->disk_used_kb * 1024,
+				   used, sizeof(used));
+		printf("  %-16s %s/%s\n", "Disk:", used, tot);
+	}
 	if (si->uptime_sec >= 0)
 		printf("  %-16s %ldd %ldh %ldm\n", "Uptime:",
 		       si->uptime_sec / 86400,

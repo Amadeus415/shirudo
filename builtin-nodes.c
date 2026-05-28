@@ -22,6 +22,7 @@
 #include "util/conditions.h"
 #include "util/config.h"
 #include "util/help.h"
+#include "util/format.h"
 #include "util/icmp.h"
 #include "util/json.h"
 #include "util/kmodules.h"
@@ -430,6 +431,12 @@ static int parse_node_detail(const char *out, size_t len,
 		{ "nproc", SHIRUDO_JSON_T_INT, &d->sys.nproc, 0, 0, NULL, 0 },
 		{ "mem_total_kb", SHIRUDO_JSON_T_INT, &d->sys.mem_total_kb,
 		  0, 0, NULL, 0 },
+		{ "mem_avail_kb", SHIRUDO_JSON_T_INT, &d->sys.mem_avail_kb,
+		  0, 0, NULL, 0 },
+		{ "disk_total_kb", SHIRUDO_JSON_T_INT, &d->sys.disk_total_kb,
+		  0, 0, NULL, 0 },
+		{ "disk_used_kb", SHIRUDO_JSON_T_INT, &d->sys.disk_used_kb,
+		  0, 0, NULL, 0 },
 		{ "uptime_seconds", SHIRUDO_JSON_T_INT, &d->sys.uptime_sec,
 		  0, 0, NULL, 0 },
 	};
@@ -456,7 +463,8 @@ static int parse_node_detail(const char *out, size_t len,
 		  &d->signing_key_present, 0, 0, NULL, 0 },
 		{ "upatches_loaded", SHIRUDO_JSON_T_ARRAY, &up_sink, 0, 0,
 		  up_elem, 1 },
-		{ "system", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, sys_sub, 10 },
+		{ "system", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, sys_sub,
+		  ARRAY_SIZE(sys_sub) },
 		{ "assets", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, assets_sub,
 		  ARRAY_SIZE(assets_sub) },
 		{ "tpm", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, tpm_sub, 4 },
@@ -469,6 +477,15 @@ static int parse_node_detail(const char *out, size_t len,
 	};
 
 	d->kmod_scratch.since_boot_sec = INT64_MIN;
+	/*
+	 * Sentinels for nullable integer sys fields. Zero is legitimate
+	 * (e.g. 0 KiB of MemAvailable on an oom box), so the schema
+	 * parser's "leave untouched on null" semantics need a negative
+	 * default to distinguish "not reported" from "reported as 0".
+	 */
+	d->sys.mem_avail_kb = -1;
+	d->sys.disk_total_kb = -1;
+	d->sys.disk_used_kb = -1;
 	int rc;
 
 	rc = shirudo_json_parse(out, len, top, ARRAY_SIZE(top));
@@ -961,8 +978,31 @@ static void print_describe(const struct node_detail *d, bool show_full)
 	printf("  %-16s %s\n", "Architecture:", d->sys.machine);
 	if (d->sys.nproc > 0)
 		printf("  %-16s %ld\n", "CPUs:", d->sys.nproc);
-	if (d->sys.mem_total_kb > 0)
-		printf("  %-16s %ld kB\n", "Memory:", d->sys.mem_total_kb);
+	if (d->sys.mem_total_kb > 0) {
+		char tot[16], used[16];
+
+		shirudo_human_size((uint64_t)d->sys.mem_total_kb * 1024,
+				   tot, sizeof(tot));
+		if (d->sys.mem_avail_kb >= 0 &&
+		    d->sys.mem_avail_kb <= d->sys.mem_total_kb) {
+			shirudo_human_size(
+				(uint64_t)(d->sys.mem_total_kb -
+					   d->sys.mem_avail_kb) * 1024,
+				used, sizeof(used));
+			printf("  %-16s %s/%s\n", "Memory:", used, tot);
+		} else {
+			printf("  %-16s %s\n", "Memory:", tot);
+		}
+	}
+	if (d->sys.disk_total_kb > 0 && d->sys.disk_used_kb >= 0) {
+		char tot[16], used[16];
+
+		shirudo_human_size((uint64_t)d->sys.disk_total_kb * 1024,
+				   tot, sizeof(tot));
+		shirudo_human_size((uint64_t)d->sys.disk_used_kb * 1024,
+				   used, sizeof(used));
+		printf("  %-16s %s/%s\n", "Disk:", used, tot);
+	}
 	if (d->sys.uptime_sec >= 0)
 		printf("  %-16s %ldd %ldh %ldm\n", "Uptime:",
 		       d->sys.uptime_sec / 86400,

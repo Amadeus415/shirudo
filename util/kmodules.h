@@ -53,10 +53,4 @@ void shirudo_kmodules_print_tree(const struct shirudo_kmod_set *set);
 void shirudo_kmodules_print_recent(const struct shirudo_kmod_set *set,
 				   size_t last_n, int64_t boot_sec);
 
-/*
- * Format a size in human units (16K, 1.8M, ...) into <out>. The form
- * `shirudo_human_size` is exposed so the JSON path can share it.
- */
-void shirudo_human_size(uint64_t bytes, char *out, size_t out_cap);
-
 #endif /* SHIRUDO_UTIL_KMODULES_H */

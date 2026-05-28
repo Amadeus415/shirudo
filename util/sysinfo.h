@@ -20,7 +20,15 @@ struct shirudo_sysinfo {
 	char	boot_id[64];		/* /proc boot_id */
 	long	nproc;			/* online CPUs, -1 if unknown */
 	long	mem_total_kb;		/* total RAM in KiB, -1 if unknown */
+	long	mem_avail_kb;		/* MemAvailable in KiB, -1 if unknown */
 	long	uptime_sec;		/* seconds since boot, -1 if unknown */
+	/*
+	 * Root-filesystem capacity, statvfs("/"). "Used" is total minus the
+	 * non-reserved free space (matches `df` row's Used column). -1 when
+	 * the statvfs call failed.
+	 */
+	long	disk_total_kb;
+	long	disk_used_kb;
 };
 
 /* Fill *si; missing values become "" (strings) or -1 (numbers). */
