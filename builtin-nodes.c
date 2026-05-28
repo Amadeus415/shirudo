@@ -43,7 +43,7 @@
 	"--include-eventlog --include-kernel-log --include-modules"
 
 /*
- * Compact PING column for the drift table: best-RTT in ms when OK,
+ * Compact ICMP column for the drift table: best-RTT in ms when OK,
  * a short status word otherwise. The per-node `shirudo nodes show`
  * stanza prints the full picture.
  */
@@ -2155,7 +2155,7 @@ int cmd_nodes(int argc, const char **argv)
 		xfree(buf, cap);
 	} else {
 		printf("%-20s %-9s %-6s %-14s %-7s %s\n",
-		       "NODE", "PING", "SSH", "STATUS", "UPTIME", "UPATCHES (LAST)");
+		       "NODE", "ICMP", "SSH", "STATUS", "UPTIME", "UPATCHES (LAST)");
 		for (i = 0; i < n; i++) {
 			struct node_detail *s = &nodes[i];
 			char pb[16], up[64], ut[16];
