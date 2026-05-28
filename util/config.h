@@ -37,7 +37,19 @@ struct shirudo_config {
 	 */
 	unsigned int	nodes_icmp_timeout_ms;	/* default 1000 */
 	unsigned int	nodes_icmp_probes;	/* default 1 */
+	/*
+	 * Per-`shirudo nodes show <name>` display caps. Operator-side
+	 * only: the operator asks the target to ship this many kernel-
+	 * log records, and truncates the (unbounded) module-load list
+	 * to this many rows. 0 disables the section entirely (the
+	 * corresponding --include-* flag is dropped from the target's
+	 * status invocation). Both default to 10; max 100.
+	 */
+	unsigned int	nodes_kernel_log_lines;		/* default 10, 0=off */
+	unsigned int	nodes_module_loads_lines;	/* default 10, 0=off */
 };
+
+#define SHIRUDO_NODES_RECENT_MAX	100
 
 /*
  * Load shirudo.conf into <cfg>, applying defaults first. A missing file

@@ -90,6 +90,8 @@ int shirudo_config_load(struct shirudo_config *cfg)
 	*cfg = (struct shirudo_config){};	/* defaults: all zero */
 	cfg->nodes_icmp_timeout_ms = 1000;	/* 1s per probe */
 	cfg->nodes_icmp_probes = 1;
+	cfg->nodes_kernel_log_lines = 10;
+	cfg->nodes_module_loads_lines = 10;
 
 	f = fopen(SHIRUDO_CONF_PATH, "r");
 	if (!f) {
@@ -153,6 +155,34 @@ int shirudo_config_load(struct shirudo_config *cfg)
 						val);
 				else
 					cfg->nodes_icmp_probes = (unsigned int)v;
+			} else if (strcmp(key, "nodes.kernel_log_lines") == 0) {
+				unsigned long v;
+				char *end;
+
+				v = strtoul(val, &end, 0);
+				if (*end != '\0' ||
+				    v > SHIRUDO_NODES_RECENT_MAX)
+					pr_warn("config: nodes.kernel_log_lines:"
+						" bad value '%s' (ignored;"
+						" must be 0..%d, 0=disabled)",
+						val, SHIRUDO_NODES_RECENT_MAX);
+				else
+					cfg->nodes_kernel_log_lines =
+						(unsigned int)v;
+			} else if (strcmp(key, "nodes.module_loads_lines") == 0) {
+				unsigned long v;
+				char *end;
+
+				v = strtoul(val, &end, 0);
+				if (*end != '\0' ||
+				    v > SHIRUDO_NODES_RECENT_MAX)
+					pr_warn("config: nodes.module_loads_lines:"
+						" bad value '%s' (ignored;"
+						" must be 0..%d, 0=disabled)",
+						val, SHIRUDO_NODES_RECENT_MAX);
+				else
+					cfg->nodes_module_loads_lines =
+						(unsigned int)v;
 			} else {
 				pr_warn("config: unknown key '%s' (ignored)",
 					key);

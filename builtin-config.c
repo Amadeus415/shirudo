@@ -115,7 +115,17 @@ int cmd_config(int argc, const char **argv)
 	       "# nodes.icmp_probes = 0 to disable ICMP probing entirely\n"
 	       "# (no socket opened; PING column shows `off`).\n");
 	printf("nodes.icmp_timeout_ms = %u\n", cfg.nodes_icmp_timeout_ms);
-	printf("nodes.icmp_probes = %u\n", cfg.nodes_icmp_probes);
+	printf("nodes.icmp_probes = %u\n\n", cfg.nodes_icmp_probes);
+
+	printf("# Per-`shirudo nodes show <name>` display caps. The operator\n"
+	       "# asks the target to ship this many kernel-log records and\n"
+	       "# truncates the (unbounded) module-load list to this many\n"
+	       "# rows. A value of 0 disables that section entirely (the\n"
+	       "# corresponding --include-* flag is dropped). Range 0..100,\n"
+	       "# 0=disabled. Defaults: 10 each.\n");
+	printf("nodes.kernel_log_lines = %u\n", cfg.nodes_kernel_log_lines);
+	printf("nodes.module_loads_lines = %u\n",
+	       cfg.nodes_module_loads_lines);
 
 	return 0;
 }

@@ -30,6 +30,7 @@
 #include "builtin.h"
 #include "util/chain.h"
 #include "util/conditions.h"
+#include "util/config.h"
 #include "util/eventlog.h"
 #include "util/help.h"
 #include "util/json.h"
@@ -362,7 +363,8 @@ static const struct shirudo_help_item status_options[] = {
 	{ "--include-tpm",          "read the live NV chain and replay the eventlog" },
 	{ "--include-system",       "add a `system` block (hostname, kernel, arch, cpus, ...)" },
 	{ "--include-eventlog",     "dump eventlog entries (implies --include-tpm)" },
-	{ "--include-kernellog",    "last 10 lines of the kernel ring buffer" },
+	{ "--include-kernellog[=N]","last N lines of the kernel ring buffer "
+				    "(default 10, max 100)" },
 	{ "--include-modules",      "loaded kernel modules (10 most recent; --show-full for tree)" },
 	{ "--show-full",            "opt into a full dump: implies every --include-* flag and "
 				    "expands the loaded-modules dependency tree" },
@@ -376,7 +378,7 @@ static const struct shirudo_help_section status_help_sections[] = {
 static const struct shirudo_help status_help = {
 	.usage      = "shirudo status [--json] [--include-tpm] "
 		      "[--include-system] [--include-eventlog]\n"
-		      "                       [--include-kernellog] "
+		      "                       [--include-kernellog[=N]] "
 		      "[--include-modules] [--show-full]",
 	.summary    = "Local readiness + state report. Auto-detects target "
 		      "vs operator role.\nSafe to run before `shirudo init`.",
@@ -495,6 +497,7 @@ int cmd_status(int argc, const char **argv)
 	bool include_system = false, include_eventlog = false;
 	bool include_kernel_log = false, include_modules = false;
 	bool show_full = false;
+	unsigned int kernel_log_lines = 10;
 	bool lsm_attached, keyring_present, is_operator, cert_present, is_target;
 	key_serial_t keyring_serial, keyring_pinned;
 	struct shirudo_sysinfo sysi = {};
@@ -519,8 +522,23 @@ int cmd_status(int argc, const char **argv)
 			include_system = true;
 		else if (strcmp(argv[i], "--include-eventlog") == 0)
 			include_eventlog = true;
-		else if (strcmp(argv[i], "--include-kernellog") == 0)
+		else if (strcmp(argv[i], "--include-kernellog") == 0) {
 			include_kernel_log = true;
+		} else if (strncmp(argv[i], "--include-kernellog=", 20) == 0) {
+			unsigned long v;
+			char *end;
+
+			v = strtoul(argv[i] + 20, &end, 0);
+			if (*end != '\0' || v < 1 ||
+			    v > SHIRUDO_NODES_RECENT_MAX) {
+				fprintf(stderr, "status: --include-kernellog=N "
+					"must be 1..%d\n",
+					SHIRUDO_NODES_RECENT_MAX);
+				return 2;
+			}
+			include_kernel_log = true;
+			kernel_log_lines = (unsigned int)v;
+		}
 		else if (strcmp(argv[i], "--include-modules") == 0)
 			include_modules = true;
 		else if (strcmp(argv[i], "--show-full") == 0)
@@ -605,7 +623,7 @@ int cmd_status(int argc, const char **argv)
 		if (include_eventlog && ev_rc == 0)
 			json_cap = 65536 + 3 * (size_t)ev_bytes;
 		if (include_kernel_log)
-			json_cap += 8192;
+			json_cap += (size_t)kernel_log_lines * 1024 + 4096;
 		if (include_modules)
 			json_cap += 64 * 1024;
 		if (json_cap > SHIRUDO_JSON_MAX_BYTES)
@@ -723,8 +741,11 @@ int cmd_status(int argc, const char **argv)
 			shirudo_json_obj_close(&e);
 		}
 		if (include_kernel_log) {
-			struct shirudo_kmsg_record recs[10];
-			int nr = shirudo_kmsg_tail(recs, ARRAY_SIZE(recs));
+			size_t bytes = (size_t)kernel_log_lines *
+				       sizeof(struct shirudo_kmsg_record);
+			struct shirudo_kmsg_record *recs = xmalloc(bytes);
+			int nr = recs ? shirudo_kmsg_tail(recs, kernel_log_lines)
+				      : -ENOMEM;
 			int j;
 
 			shirudo_json_arr_open(&e, "kernel_log");
@@ -735,6 +756,7 @@ int cmd_status(int argc, const char **argv)
 				shirudo_json_obj_close(&e);
 			}
 			shirudo_json_arr_close(&e);
+			xfree(recs, bytes);
 		}
 		if (include_modules) {
 			struct shirudo_kmod_set ks = {};
@@ -931,18 +953,22 @@ int cmd_status(int argc, const char **argv)
 		       assets.bpffs_mounted ? "mounted" : "not mounted");
 
 		if (include_kernel_log) {
-			struct shirudo_kmsg_record recs[10];
-			int nr = shirudo_kmsg_tail(recs, ARRAY_SIZE(recs));
+			size_t bytes = (size_t)kernel_log_lines *
+				       sizeof(struct shirudo_kmsg_record);
+			struct shirudo_kmsg_record *recs = xmalloc(bytes);
+			int nr = recs ? shirudo_kmsg_tail(recs, kernel_log_lines)
+				      : -ENOMEM;
 			int j;
 
-			printf("\nKernel log (last %zu lines, newest first):\n",
-			       ARRAY_SIZE(recs));
+			printf("\nKernel log (last %u lines, newest first):\n",
+			       kernel_log_lines);
 			if (nr <= 0)
 				printf("  (unavailable)\n");
 			else
 				for (j = nr; j-- > 0;)
 					printf("  [%s]  %s\n", recs[j].ts,
 					       recs[j].msg);
+			xfree(recs, bytes);
 		}
 		if (include_modules) {
 			struct shirudo_kmod_set ks = {};

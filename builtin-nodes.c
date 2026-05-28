@@ -38,9 +38,28 @@
 #include "util/upatch.h"
 #include "util/upatch_table.h"
 
-#define SHOW_CMD \
-	"shirudo status --json --include-tpm --include-system " \
-	"--include-eventlog --include-kernellog --include-modules"
+/*
+ * Per-call command builder: kernel-log and modules sections are each
+ * operator-side configurable (nodes.kernel_log_lines /
+ * nodes.module_loads_lines). A value of 0 disables the section
+ * entirely -- the corresponding --include-* flag is dropped so the
+ * target doesn't gather/ship that data at all. Buffer is bounded:
+ * the longest form is ~130 bytes.
+ */
+static void build_show_cmd(char *out, size_t cap,
+			   const struct shirudo_config *cfg)
+{
+	char kl[40] = "", mod[20] = "";
+
+	if (cfg->nodes_kernel_log_lines > 0)
+		snprintf(kl, sizeof(kl), " --include-kernellog=%u",
+			 cfg->nodes_kernel_log_lines);
+	if (cfg->nodes_module_loads_lines > 0)
+		snprintf(mod, sizeof(mod), " --include-modules");
+	snprintf(out, cap,
+		 "shirudo status --json --include-tpm --include-system "
+		 "--include-eventlog%s%s", kl, mod);
+}
 
 /*
  * Compact ICMP column for the drift table: best-RTT in ms when OK,
@@ -683,6 +702,7 @@ static void fetch_node(const struct shirudo_remote *r,
 	struct shirudo_ssh_session *sess;
 	char *out = NULL;
 	size_t len = 0;
+	char cmd[256];
 	int rc;
 
 	d->r = r;
@@ -697,7 +717,8 @@ static void fetch_node(const struct shirudo_remote *r,
 		d->unreach = "ssh connect failed";
 		return;
 	}
-	rc = shirudo_ssh_exec(sess, SHOW_CMD, &out, &len);
+	build_show_cmd(cmd, sizeof(cmd), cfg);
+	rc = shirudo_ssh_exec(sess, cmd, &out, &len);
 	shirudo_ssh_close(sess);
 	if (rc < 0 || !out) {
 		xfree(out, len);
@@ -1062,7 +1083,8 @@ static void print_remote_kmod_recent(const struct node_detail *d, size_t last_n)
 }
 
 /* Describe-style report for one node. */
-static void print_describe(const struct node_detail *d, bool show_full)
+static void print_describe(const struct node_detail *d, bool show_full,
+			   const struct shirudo_config *cfg)
 {
 	const struct shirudo_remote *r = d->r;
 	struct shirudo_condition conds[4];
@@ -1317,7 +1339,7 @@ static void print_describe(const struct node_detail *d, bool show_full)
 	}
 
 	if (d->n_kmod) {
-		size_t last = 10;
+		size_t last = cfg->nodes_module_loads_lines;
 		size_t shown = d->n_kmod < last ? d->n_kmod : last;
 
 		printf("\nLoaded modules (total %zu, last %zu loads, "
@@ -1854,32 +1876,30 @@ static int cmd_nodes_show(int argc, const char **argv)
 		return 0;
 	}
 
-	{
-		struct shirudo_config cfg;
+	struct shirudo_config cfg;
 
-		shirudo_config_load(&cfg);
-		nodes = xcalloc(nnames, sizeof(*nodes));
-		if (!nodes) {
-			shirudo_remotes_free(remotes, n_remotes);
-			return 1;
-		}
-		for (j = 0; j < nnames; j++) {
-			const struct shirudo_remote *r = NULL;
+	shirudo_config_load(&cfg);
+	nodes = xcalloc(nnames, sizeof(*nodes));
+	if (!nodes) {
+		shirudo_remotes_free(remotes, n_remotes);
+		return 1;
+	}
+	for (j = 0; j < nnames; j++) {
+		const struct shirudo_remote *r = NULL;
 
-			for (i = 0; i < n_remotes; i++)
-				if (strcmp(remotes[i].name,
-					   names[j]) == 0) {
-					r = &remotes[i];
-					break;
-				}
-			if (!r) {
-				pr_err("nodes show: '%s' is not a "
-				       "registered remote", names[j]);
-				ret = 1;
-				continue;	/* skipped: r stays NULL */
+		for (i = 0; i < n_remotes; i++)
+			if (strcmp(remotes[i].name,
+				   names[j]) == 0) {
+				r = &remotes[i];
+				break;
 			}
-			fetch_node(r, &cfg, &nodes[j]);
+		if (!r) {
+			pr_err("nodes show: '%s' is not a "
+			       "registered remote", names[j]);
+			ret = 1;
+			continue;	/* skipped: r stays NULL */
 		}
+		fetch_node(r, &cfg, &nodes[j]);
 	}
 
 	if (upatches_mode) {
@@ -1925,7 +1945,7 @@ static int cmd_nodes_show(int argc, const char **argv)
 	} else {
 		for (j = 0; j < nnames; j++)
 			if (nodes[j].r)
-				print_describe(&nodes[j], show_full);
+				print_describe(&nodes[j], show_full, &cfg);
 	}
 
 done:

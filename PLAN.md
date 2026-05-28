@@ -1444,6 +1444,17 @@ nodes.icmp_probes = 1
 # Per-probe timeout in milliseconds. Default: 1000.
 nodes.icmp_timeout_ms = 1000
 
+# Per-`shirudo nodes show <name>` display caps. The operator asks
+# the target to ship this many kernel-log records (via
+# `--include-kernellog=N` on the target-side `shirudo status`), and
+# truncates the (unbounded) module-load list to this many rows. A
+# value of 0 disables that section entirely: the corresponding
+# `--include-*` flag is dropped from the SSH command, so the target
+# does not gather or ship that data and the section is omitted from
+# the report. Type: 0..100, 0=disabled. Defaults: 10 each.
+nodes.kernel_log_lines = 10
+nodes.module_loads_lines = 10
+
 # Default report path template for rollout when --report
 # is not given on the CLI. The literal token "{rollout_id}" is
 # substituted with the UUID shirudo generated; "{ts}" is the
