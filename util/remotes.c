@@ -315,8 +315,18 @@ void shirudo_remotes_free(struct shirudo_remote *list, size_t n)
 void shirudo_remote_endpoint(const struct shirudo_remote *r,
 			     char *buf, size_t cap)
 {
+	/*
+	 * IPv6 literals carry colons inside the address; bracket them on
+	 * display so the port suffix never gets read into the host. The
+	 * conf file stores the bare address (no brackets); we add them
+	 * back when emitting an endpoint string.
+	 */
+	int is_ipv6 = r->host && strchr(r->host, ':') != NULL;
+
 	if (r->user && r->user[0])
-		snprintf(buf, cap, "%s@%s:%d", r->user, r->host, r->port);
+		snprintf(buf, cap, is_ipv6 ? "%s@[%s]:%d" : "%s@%s:%d",
+			 r->user, r->host, r->port);
 	else
-		snprintf(buf, cap, "%s:%d", r->host, r->port);
+		snprintf(buf, cap, is_ipv6 ? "[%s]:%d" : "%s:%d",
+			 r->host, r->port);
 }

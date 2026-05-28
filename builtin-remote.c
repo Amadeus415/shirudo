@@ -45,13 +45,28 @@ static bool name_ok(const char *name)
 }
 
 /* Parse [user@]host[:port]; defaults user=root, port=22. 0 / -1. */
+/*
+ * Parse `[user@]host[:port]` where host may be an IPv4 literal, a DNS
+ * name, or an IPv6 literal. IPv6 forms:
+ *   [2001:db8::1]:22   -- bracketed; brackets stripped on storage
+ *   [2001:db8::1]      -- bracketed, default port 22
+ *   2001:db8::1        -- bare; default port 22 (any >=2-colon string)
+ *
+ * Bare IPv6 with a port-like trailing segment (e.g. `2001:db8::1:2222`)
+ * is genuinely ambiguous between "address ending in :2222" and
+ * "address plus port 2222" -- we reject it (-2) so the user can
+ * disambiguate with brackets.
+ *
+ * Returns 0 ok, -1 malformed, -2 ambiguous IPv6+port.
+ */
 static int parse_dest(const char *dest, char *user, size_t ulen,
 		      char *host, size_t hlen, int *port)
 {
 	const char *at = strchr(dest, '@');
 	const char *hp = at ? at + 1 : dest;
-	const char *colon = strrchr(hp, ':');
+	const char *q;
 	size_t hostlen;
+	int colons = 0;
 
 	*port = 22;
 	if (at) {
@@ -65,19 +80,88 @@ static int parse_dest(const char *dest, char *user, size_t ulen,
 		snprintf(user, ulen, "root");
 	}
 
-	if (colon && colon[1]) {
-		long p;
-		char *end;
+	/* Bracketed IPv6 literal: "[addr]" or "[addr]:port". */
+	if (*hp == '[') {
+		const char *rbr = strchr(hp, ']');
 
-		p = strtol(colon + 1, &end, 10);
-		if (*end == '\0' && p > 0 && p < 65536) {
+		if (!rbr || rbr == hp + 1)
+			return -1;
+		hostlen = (size_t)(rbr - (hp + 1));
+		if (hostlen >= hlen)
+			return -1;
+		memcpy(host, hp + 1, hostlen);
+		host[hostlen] = '\0';
+		if (rbr[1] == '\0')
+			return 0;
+		if (rbr[1] != ':' || rbr[2] == '\0')
+			return -1;
+		{
+			long p;
+			char *end;
+
+			p = strtol(rbr + 2, &end, 10);
+			if (*end != '\0' || p <= 0 || p >= 65536)
+				return -1;
 			*port = (int)p;
-			hostlen = (size_t)(colon - hp);
-		} else {
-			hostlen = strlen(hp);	/* colon belongs to host */
 		}
-	} else {
+		return 0;
+	}
+
+	/* Count colons to disambiguate bare IPv6 from IPv4/DNS. */
+	for (q = hp; *q; q++)
+		if (*q == ':')
+			colons++;
+
+	if (colons >= 2) {
+		/*
+		 * Bare IPv6. If the trailing segment is two-or-more decimal
+		 * digits in port range (1..65535) the input is ambiguous --
+		 * could be the address itself or address+port. Reject and
+		 * point the user at brackets.
+		 */
+		const char *last_colon = strrchr(hp, ':');
+		const char *tail = last_colon + 1;
+		size_t taillen = strlen(tail);
+		size_t k;
+		int all_digits = taillen > 0;
+
+		for (k = 0; k < taillen; k++)
+			if (tail[k] < '0' || tail[k] > '9') {
+				all_digits = 0;
+				break;
+			}
+		if (all_digits && taillen >= 2) {
+			long v = strtol(tail, NULL, 10);
+
+			if (v >= 1 && v < 65536)
+				return -2;
+		}
 		hostlen = strlen(hp);
+		if (hostlen >= hlen)
+			return -1;
+		memcpy(host, hp, hostlen);
+		host[hostlen] = '\0';
+		return 0;
+	}
+
+	/* 0 or 1 colon: IPv4 literal or DNS name, with optional ":port". */
+	{
+		const char *colon = strrchr(hp, ':');
+
+		if (colon && colon[1]) {
+			long p;
+			char *end;
+
+			p = strtol(colon + 1, &end, 10);
+			if (*end == '\0' && p > 0 && p < 65536) {
+				*port = (int)p;
+				hostlen = (size_t)(colon - hp);
+			} else {
+				hostlen = strlen(hp);
+			}
+		} else {
+			hostlen = strlen(hp);
+		}
 	}
 	if (hostlen == 0 || hostlen >= hlen)
 		return -1;
@@ -191,8 +275,16 @@ static int cmd_add(int argc, const char **argv)
 		       "(allowed: alnum . _ -, no leading dot)", name);
 		return 2;
 	}
-	if (parse_dest(dest, user, sizeof(user), host, sizeof(host),
-		       &port) != 0) {
+	rc = parse_dest(dest, user, sizeof(user), host, sizeof(host),
+			&port);
+	if (rc == -2) {
+		pr_err("remote add: '%s' is ambiguous (looks like an IPv6 "
+		       "address with a trailing port). Use brackets: "
+		       "[addr]:port for the port form, or [addr] if you really "
+		       "mean the bare address.", dest);
+		return 2;
+	}
+	if (rc != 0) {
 		pr_err("remote add: cannot parse destination '%s'", dest);
 		return 2;
 	}
@@ -272,8 +364,20 @@ static int cmd_add(int argc, const char **argv)
 		pr_err("remote add: write %s: %s", path, strerror(errno));
 		return 1;
 	}
-	pr_info("remote add: %s -> %s@%s:%d (%d label%s) [%s]", name, user,
-		host, port, nlabels, nlabels == 1 ? "" : "s", path);
+	{
+		/*
+		 * Bracket IPv6 hosts on display so the confirmation matches
+		 * what `shirudo remote show <name>` will render and stays
+		 * unambiguous for the user.
+		 */
+		struct shirudo_remote tmp = { .user = user, .host = host,
+					      .port = port };
+		char endpoint[320];
+
+		shirudo_remote_endpoint(&tmp, endpoint, sizeof(endpoint));
+		pr_info("remote add: %s -> %s (%d label%s) [%s]", name, endpoint,
+			nlabels, nlabels == 1 ? "" : "s", path);
+	}
 	return 0;
 }
 

@@ -14,6 +14,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/ip_icmp.h>
+#include <netinet/icmp6.h>
 #include <poll.h>
 #include <stdio.h>
 #include <string.h>
@@ -43,14 +44,16 @@ enum shirudo_icmp_status shirudo_icmp_ping(const char *host,
 					   char *resolved, size_t resolved_cap)
 {
 	struct addrinfo hints = {
-		.ai_family = AF_INET,
+		.ai_family = AF_UNSPEC,
 		.ai_socktype = SOCK_DGRAM,
 	};
 	struct addrinfo *res = NULL;
 	enum shirudo_icmp_status best = SHIRUDO_ICMP_TIMEOUT;
 	uint64_t best_rtt = UINT64_MAX;
-	int gai, fd, save_errno;
+	int gai, fd, save_errno, proto;
+	uint8_t echo_type, reply_type;
 	unsigned p;
+	int af;
 
 	if (resolved && resolved_cap)
 		resolved[0] = '\0';
@@ -59,13 +62,28 @@ enum shirudo_icmp_status shirudo_icmp_ping(const char *host,
 	if (gai != 0 || !res)
 		return SHIRUDO_ICMP_DNS_FAIL;
 
-	if (resolved && resolved_cap) {
-		struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
-
-		inet_ntop(AF_INET, &sin->sin_addr, resolved, resolved_cap);
+	af = res->ai_family;
+	if (af == AF_INET6) {
+		proto = IPPROTO_ICMPV6;
+		echo_type = ICMP6_ECHO_REQUEST;	/* 128 */
+		reply_type = ICMP6_ECHO_REPLY;	/* 129 */
+	} else {
+		proto = IPPROTO_ICMP;
+		echo_type = ICMP_ECHO;		/* 8 */
+		reply_type = ICMP_ECHOREPLY;	/* 0 */
 	}
 
-	fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
+	if (resolved && resolved_cap) {
+		const void *sa;
+
+		if (af == AF_INET6)
+			sa = &((struct sockaddr_in6 *)res->ai_addr)->sin6_addr;
+		else
+			sa = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
+		inet_ntop(af, sa, resolved, resolved_cap);
+	}
+
+	fd = socket(af, SOCK_DGRAM, proto);
 	if (fd < 0) {
 		save_errno = errno;
 		freeaddrinfo(res);
@@ -87,12 +105,13 @@ enum shirudo_icmp_status shirudo_icmp_ping(const char *host,
 			uint16_t checksum;	/* kernel fills */
 			uint16_t id;		/* kernel rewrites */
 			uint16_t seq;
-		} pkt = { .type = ICMP_ECHO };
+		} pkt = { 0 };
 		uint16_t want_seq = (uint16_t)p;
 		struct timespec t0, t1;
 		struct pollfd pfd;
 		ssize_t s;
 
+		pkt.type = echo_type;
 		pkt.seq = htons(want_seq);
 		clock_gettime(CLOCK_MONOTONIC, &t0);
 		s = sendto(fd, &pkt, sizeof(pkt), 0, res->ai_addr,
@@ -140,7 +159,7 @@ enum shirudo_icmp_status shirudo_icmp_ping(const char *host,
 			r = recv(fd, reply, sizeof(reply), 0);
 			if (r < (ssize_t)sizeof(pkt))
 				continue;
-			if ((uint8_t)reply[0] != ICMP_ECHOREPLY)
+			if ((uint8_t)reply[0] != reply_type)
 				continue;
 			memcpy(&got_seq, reply + 6, 2);
 			if (ntohs(got_seq) != want_seq)
