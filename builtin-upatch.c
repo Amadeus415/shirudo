@@ -102,6 +102,77 @@ static int print_sha256_hex(const unsigned char hash[32])
 	return 0;
 }
 
+static const struct shirudo_help upatch_info_help = {
+	.usage   = "shirudo upatch info [--json] <file.upatch>",
+	.summary = "Describe a .upatch file: header, signature, payload "
+		   "digest,\nand (if the build embedded it) the full C "
+		   "source. Offline -- no\nkernel state read, runs on any "
+		   "host. For source as actually loaded\n(authoritative, "
+		   "via kernel BTF line_info) use `shirudo upatch get`.",
+	.footer  =
+"Examples:\n"
+"  shirudo upatch info cve-2026-31431.upatch\n"
+"  shirudo upatch info --json /var/lib/shirudo/upatches/foo.upatch",
+};
+
+static const struct shirudo_help upatch_list_help = {
+	.usage   = "shirudo upatch list [--json]",
+	.summary = "List upatches on this host. Shows the persisted set\n"
+		   "(under /var/lib/shirudo/upatches/, survives reboot) "
+		   "alongside the\nbpffs-pinned active set (loaded now). "
+		   "Drift in either direction\n(persisted-but-not-loaded "
+		   "or loaded-but-not-persisted) is flagged.",
+	.footer  =
+"Examples:\n"
+"  shirudo upatch list\n"
+"  shirudo upatch list --json | jq",
+};
+
+static const struct shirudo_help upatch_load_help = {
+	.usage   = "shirudo upatch load [--expect-chain=<hex>] "
+		   "[--expect-version-id=<hex>]\n"
+		   "                       [--no-precheck] [--no-version-check] "
+		   "[--report=<path>]\n"
+		   "                       <file.upatch>",
+	.summary = "Load a signed LOAD .upatch into the target kernel: verify "
+		   "the\nsignature, run the loader, pin the resulting link, "
+		   "and extend the\nTPM NV chain. Target-only.",
+	.footer  =
+"Examples:\n"
+"  shirudo upatch load cve-2026-31431.upatch\n"
+"  shirudo upatch load --expect-chain=$(...) foo.upatch\n"
+"  shirudo upatch load --report=- foo.upatch | jq",
+};
+
+static const struct shirudo_help upatch_unload_help = {
+	.usage   = "shirudo upatch unload [--expect-chain=<hex>] "
+		   "[--expect-version-id=<hex>]\n"
+		   "                       [--no-precheck] [--no-version-check] "
+		   "[--report=<path>]\n"
+		   "                       <unload-directive.upatch>",
+	.summary = "Apply a signed UNLOAD directive: detach the named upatch,\n"
+		   "remove its pin, and extend the TPM NV chain forward "
+		   "(unloads\nmove the chain forward, never roll it back). "
+		   "Target-only.",
+	.footer  =
+"Examples:\n"
+"  shirudo upatch unload cve-2026-31431.unload.upatch\n"
+"  shirudo upatch unload --report=- foo.unload.upatch | jq",
+};
+
+static const struct shirudo_help upatch_get_help = {
+	.usage   = "shirudo upatch get <name>",
+	.summary = "Dump source of a loaded upatch from the target kernel,\n"
+		   "via the BPF prog's BTF line_info installed by the signed "
+		   "loader.\nAuthoritative (reads what is actually loaded), "
+		   "but shows only the\nsparse instruction-tagged lines "
+		   "`clang -g` recorded -- not the\nfull .c. For the build-"
+		   "time-embedded full source see\n`shirudo upatch info`.",
+	.footer  =
+"Examples:\n"
+"  shirudo upatch get cve-2026-31431",
+};
+
 static int cmd_upatch_info(int argc, const char **argv)
 {
 	char name[SHIRUDO_UPATCH_NAME_MAX + 1];	/* not NUL-term on disk */
@@ -113,10 +184,8 @@ static int cmd_upatch_info(int argc, const char **argv)
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--json") == 0)
 			json = true;
-		else if (strcmp(argv[i], "-h") == 0 ||
-			 strcmp(argv[i], "--help") == 0) {
-			fprintf(stderr,
-				"usage: shirudo upatch info [--json] <file.upatch>\n");
+		else if (shirudo_is_help(argv[i])) {
+			shirudo_print_help(&upatch_info_help);
 			return 0;
 		} else if (argv[i][0] == '-') {
 			fprintf(stderr, "upatch info: unknown option '%s'\n",
@@ -131,8 +200,7 @@ static int cmd_upatch_info(int argc, const char **argv)
 		}
 	}
 	if (!path) {
-		fprintf(stderr,
-			"usage: shirudo upatch info [--json] <file.upatch>\n");
+		shirudo_print_help(&upatch_info_help);
 		return 2;
 	}
 
@@ -272,9 +340,8 @@ static int cmd_upatch_list(int argc, const char **argv)
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--json") == 0)
 			json = true;
-		else if (strcmp(argv[i], "-h") == 0 ||
-			 strcmp(argv[i], "--help") == 0) {
-			fprintf(stderr, "usage: shirudo upatch list [--json]\n");
+		else if (shirudo_is_help(argv[i])) {
+			shirudo_print_help(&upatch_list_help);
 			return 0;
 		} else {
 			fprintf(stderr, "upatch list: unknown option '%s'\n",
@@ -1406,6 +1473,7 @@ static int persist_upatch(const char *src, const char *name)
  * Returns 0 on success, 2 on a usage error (message already printed).
  */
 static int parse_op_args(int argc, const char **argv, const char *verb,
+			 const struct shirudo_help *help,
 			 const char **file, const char **expect_chain,
 			 const char **expect_version_id, bool *no_precheck,
 			 bool *no_version_check, const char **report)
@@ -1444,10 +1512,7 @@ static int parse_op_args(int argc, const char **argv, const char *verb,
 		}
 	}
 	if (!*file) {
-		fprintf(stderr, "usage: shirudo upatch %s "
-			"[--expect-chain=<hex>] [--expect-version-id=<hex>] "
-			"[--no-precheck] [--no-version-check] "
-			"[--report=<path>] <file.upatch>\n", verb);
+		shirudo_print_help(help);
 		return 2;
 	}
 	return 0;
@@ -1501,9 +1566,14 @@ static int cmd_upatch_load(int argc, const char **argv)
 	bool no_precheck, no_version_check, have_id = false;
 	int rc, ret = 1;
 
-	rc = parse_op_args(argc, argv, "load", &file, &expect_chain,
-			   &expect_version_id, &no_precheck, &no_version_check,
-			   &report);
+	for (int i = 1; i < argc; i++)
+		if (shirudo_is_help(argv[i])) {
+			shirudo_print_help(&upatch_load_help);
+			return 0;
+		}
+	rc = parse_op_args(argc, argv, "load", &upatch_load_help,
+			   &file, &expect_chain, &expect_version_id,
+			   &no_precheck, &no_version_check, &report);
 	if (rc)
 		return rc;
 	rep.path = file;
@@ -1591,9 +1661,14 @@ static int cmd_upatch_unload(int argc, const char **argv)
 	bool no_precheck, no_version_check;
 	int rc, ret = 1;
 
-	rc = parse_op_args(argc, argv, "unload", &file, &expect_chain,
-			   &expect_version_id, &no_precheck, &no_version_check,
-			   &report);
+	for (int i = 1; i < argc; i++)
+		if (shirudo_is_help(argv[i])) {
+			shirudo_print_help(&upatch_unload_help);
+			return 0;
+		}
+	rc = parse_op_args(argc, argv, "unload", &upatch_unload_help,
+			   &file, &expect_chain, &expect_version_id,
+			   &no_precheck, &no_version_check, &report);
 	if (rc)
 		return rc;
 	rep.path = file;
@@ -1862,8 +1937,8 @@ static int cmd_upatch_get(int argc, const char **argv)
 	int link_fd = -1, prog_fd = -1, rc = 1, i;
 
 	for (i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-			fprintf(stderr, "usage: shirudo upatch get <name>\n");
+		if (shirudo_is_help(argv[i])) {
+			shirudo_print_help(&upatch_get_help);
 			return 0;
 		} else if (argv[i][0] == '-') {
 			fprintf(stderr, "upatch get: unknown option '%s'\n",
@@ -1878,7 +1953,7 @@ static int cmd_upatch_get(int argc, const char **argv)
 		}
 	}
 	if (!want) {
-		fprintf(stderr, "usage: shirudo upatch get <name>\n");
+		shirudo_print_help(&upatch_get_help);
 		return 2;
 	}
 	if (!safe_upatch_name(want)) {
@@ -1995,6 +2070,11 @@ int cmd_upatch(int argc, const char **argv)
 	if (argc < 2 || shirudo_is_help(argv[1])) {
 		shirudo_print_help(&upatch_help);
 		return argc < 2 ? 2 : 0;
+	}
+	if (shirudo_is_list_cmds(argv[1])) {
+		shirudo_print_subcmd_list(upatch_subcmds,
+					  ARRAY_SIZE(upatch_subcmds));
+		return 0;
 	}
 	canonical = shirudo_resolve_subcommand("shirudo upatch", argv[1],
 					       upatch_subcmds,

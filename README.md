@@ -3,8 +3,8 @@
 shirudo ("shields", Japanese) is a BPF-based security platform for
 the agentic era. It is targeted to operate in a close loop with
 agents developing and deploying BPF live patches to target systems
-(data center fleet, K8s clusters, embedded devices, air-gapped
-systems, etc). There is deliberately no config DSL since agents
+(data center fleet, Kubernetes clusters, embedded devices,
+air-gapped systems, etc). There is deliberately no config DSL since agents
 work a lot better with code.
 
 BPF live patches (aka BPF upatches) can target the Linux kernel

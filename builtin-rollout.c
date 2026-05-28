@@ -519,11 +519,7 @@ int cmd_rollout(int argc, const char **argv)
 	}
 
 	if (nfiles == 0) {
-		fprintf(stderr, "usage: shirudo rollout <file.upatch>... "
-			"{ <name>... | --selector=<expr> } [--report=<path>] "
-			"[--expect-chain=<hex>] [--expect-version-id=<hex>] "
-			"[--no-precheck] [--no-version-check] [--sudo] "
-			"[--dry-run]\n");
+		shirudo_print_help(&rollout_help);
 		return 2;
 	}
 	if (selexpr && nnames) {

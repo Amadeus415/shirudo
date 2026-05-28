@@ -41,7 +41,7 @@ struct shirudo_kmod_set {
 int  shirudo_kmodules_read(struct shirudo_kmod_set *set);
 void shirudo_kmodules_free(struct shirudo_kmod_set *set);
 
-/* Render as an ASCII tree with the kubectl-describe 2-space indent. */
+/* Render as an ASCII tree with the describe-style 2-space indent. */
 void shirudo_kmodules_print_tree(const struct shirudo_kmod_set *set);
 
 /*

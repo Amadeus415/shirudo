@@ -253,6 +253,44 @@ static const struct shirudo_help remote_help = {
 "targets.",
 };
 
+static const struct shirudo_help remote_show_help = {
+	.usage   = "shirudo remote show <name>",
+	.summary = "Describe one registered remote: endpoint, labels, "
+		   "registration\ntimestamp, age, and the on-disk config "
+		   "path. Local-only -- no SSH probe.\n<name> is the "
+		   "operator-local registry name, not the host/IP.\nFor "
+		   "live target state see `shirudo nodes show <name>`.",
+	.footer  =
+"Examples:\n"
+"  shirudo remote show prod-edge-01\n"
+"  shirudo remote show staging-db-1",
+};
+
+static const struct shirudo_help remote_rm_help = {
+	.usage   = "shirudo remote rm <name>",
+	.summary = "Unregister a remote from the operator-local registry.\n"
+		   "Removes only the local .conf file -- the target is not "
+		   "touched\nand keeps whatever shirudo state it had. "
+		   "Re-register with\n`shirudo remote add` to manage it "
+		   "again.",
+	.footer  =
+"Examples:\n"
+"  shirudo remote rm decommissioned-edge-99\n"
+"  shirudo remote rm test-vm",
+};
+
+static const struct shirudo_help remote_rename_help = {
+	.usage   = "shirudo remote rename <old> <new>",
+	.summary = "Rename a registered remote: rename the local .conf "
+		   "from\n<old>.conf to <new>.conf. The target is not "
+		   "touched; labels,\nendpoint and registration timestamp "
+		   "are preserved.",
+	.footer  =
+"Examples:\n"
+"  shirudo remote rename old-prod-01 prod-edge-01\n"
+"  shirudo remote rename node5 db-replica-5",
+};
+
 static int cmd_add(int argc, const char **argv)
 {
 	char user[256], host[256], path[1024], dir[1024];
@@ -462,10 +500,10 @@ out:
 
 /*
  * `shirudo remote show <name>` -- describe one registry entry, in the
- * same `kubectl describe`-style layout as `shirudo nodes show <name>`
- * (which is registry header + live target sections). show is local
- * registry only: no SSH probe, no remote sections. The trailing hint
- * points operators at `nodes show` when they want live state.
+ * same describe-style layout as `shirudo nodes show <name>` (which is
+ * registry header + live target sections). show is local registry
+ * only: no SSH probe, no remote sections. The trailing hint points
+ * operators at `nodes show` when they want live state.
  */
 static int cmd_show(int argc, const char **argv)
 {
@@ -473,8 +511,12 @@ static int cmd_show(int argc, const char **argv)
 	const struct shirudo_remote *r = NULL;
 	size_t n, i, k, nl;
 
+	if (argc > 1 && shirudo_is_help(argv[1])) {
+		shirudo_print_help(&remote_show_help);
+		return 0;
+	}
 	if (argc < 2) {
-		fprintf(stderr, "usage: shirudo remote show <name>\n");
+		shirudo_print_help(&remote_show_help);
 		return 2;
 	}
 	shirudo_remotes_load_all(&remotes, &n);
@@ -538,8 +580,12 @@ static int cmd_rm(int argc, const char **argv)
 {
 	char path[1024];
 
+	if (argc > 1 && shirudo_is_help(argv[1])) {
+		shirudo_print_help(&remote_rm_help);
+		return 0;
+	}
 	if (argc < 2) {
-		fprintf(stderr, "usage: shirudo remote rm <name>\n");
+		shirudo_print_help(&remote_rm_help);
 		return 2;
 	}
 	if (!name_ok(argv[1])) {
@@ -567,8 +613,12 @@ static int cmd_rename(int argc, const char **argv)
 	char old_path[1024], new_path[1024];
 	struct stat st;
 
+	if (argc > 1 && shirudo_is_help(argv[1])) {
+		shirudo_print_help(&remote_rename_help);
+		return 0;
+	}
 	if (argc < 3) {
-		fprintf(stderr, "usage: shirudo remote rename <old> <new>\n");
+		shirudo_print_help(&remote_rename_help);
 		return 2;
 	}
 	if (!name_ok(argv[1]) || !name_ok(argv[2])) {
@@ -607,6 +657,11 @@ int cmd_remote(int argc, const char **argv)
 		return cmd_list(argc, argv);
 	if (shirudo_is_help(argv[1])) {
 		shirudo_print_help(&remote_help);
+		return 0;
+	}
+	if (shirudo_is_list_cmds(argv[1])) {
+		shirudo_print_subcmd_list(remote_subcmds,
+					  ARRAY_SIZE(remote_subcmds));
 		return 0;
 	}
 	/*

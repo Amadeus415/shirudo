@@ -2,10 +2,10 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * kubectl-style compact duration formatting -- the single source of
- * truth shared by `shirudo remote` (AGE), `shirudo nodes` (UPTIME,
- * UPATCHES last-applied age), and any future column that wants the
- * same look ("12s", "5m", "3h", "7d").
+ * Compact duration formatting -- the single source of truth shared
+ * by `shirudo remote` (AGE), `shirudo nodes` (UPTIME, UPATCHES
+ * last-applied age), and any future column that wants the same look
+ * ("12s", "5m", "3h", "7d").
  */
 
 #ifndef SHIRUDO_TIMEFMT_H

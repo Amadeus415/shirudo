@@ -251,7 +251,7 @@ cat <<EOF
   ${BOLD}${CYN}shirudo${RST} ("shields") is a BPF-based security platform for a world where
   ${BOLD}AI agents find a threat and write the fix as code${RST} -- a small BPF live-patch
   like ${YEL}examples/${NAME}.bpf.c${RST} -- faster than a fleet can schedule a reboot.
-  Servers, K8s nodes, embedded and air-gapped devices all carry long
+  Servers, Kubernetes nodes, embedded and air-gapped devices all carry long
   patch/reboot cycles; shirudo closes that gap by deploying fixes ${BOLD}live${RST} --
   no reboot, and ${BOLD}no config DSL${RST} (agents work better with code).
 

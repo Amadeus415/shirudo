@@ -70,6 +70,20 @@ int shirudo_is_help(const char *arg)
 		       strcmp(arg, "-h") == 0);
 }
 
+int shirudo_is_list_cmds(const char *arg)
+{
+	return arg && strcmp(arg, "--list-cmds") == 0;
+}
+
+void shirudo_print_subcmd_list(const struct shirudo_help_item *items,
+			       size_t n_items)
+{
+	size_t i;
+
+	for (i = 0; i < n_items; i++)
+		printf("%s\n", items[i].name);
+}
+
 void shirudo_print_help(const struct shirudo_help *h)
 {
 	size_t i, j;

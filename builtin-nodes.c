@@ -72,7 +72,7 @@ static const char *ping_str(enum shirudo_icmp_status st, uint64_t rtt_us,
 
 static const struct shirudo_help_item nodes_subcmds[] = {
 	{ "list", "drift table across registered remotes (default if omitted)" },
-	{ "show", "kubectl-describe-style per-node deep dive: show [--json] [--show-full] <name>..." },
+	{ "show", "per-node deep dive: show [--json] [--show-full] <name>..." },
 };
 
 static const struct shirudo_help_item nodes_options[] = {
@@ -112,6 +112,32 @@ static const struct shirudo_help nodes_help = {
 "--filter and --selector may be combined; when both are given a remote\n"
 "must satisfy both to be queried (intersection). An empty match set is\n"
 "an error. Use `shirudo nodes show <name>` for a per-node deep dive.",
+};
+
+static const struct shirudo_help_item nodes_show_options[] = {
+	{ "--json",      "machine-readable JSON output" },
+	{ "--show-full", "expand the loaded-modules dependency tree" },
+};
+
+static const struct shirudo_help_section nodes_show_sections[] = {
+	{ "options:", nodes_show_options, ARRAY_SIZE(nodes_show_options) },
+};
+
+static const struct shirudo_help nodes_show_help = {
+	.usage      = "shirudo nodes show [--json] [--show-full] <name>...",
+	.summary    = "Per-node deep dive: SSH into each named remote, fetch "
+		      "its\n`shirudo status --json` in one round-trip, and "
+		      "render it as Conditions /\nSystem Info / Upatches "
+		      "loaded / TPM Measurement / Eventlog / Assets /\nKernel "
+		      "log / Loaded modules. <name> is the operator-local "
+		      "registry\nname, not the host/IP.",
+	.sections   = nodes_show_sections,
+	.n_sections = ARRAY_SIZE(nodes_show_sections),
+	.footer     =
+"Examples:\n"
+"  shirudo nodes show prod-edge-01\n"
+"  shirudo nodes show --show-full prod-edge-01 prod-edge-02\n"
+"  shirudo nodes show --json staging-db-1 | jq '.nodes[0].status'",
 };
 
 
@@ -861,7 +887,7 @@ static void print_remote_kmod_recent(const struct node_detail *d, size_t last_n)
 	xfree(all, d->n_kmod * sizeof(*all));
 }
 
-/* kubectl-describe-style report for one node. */
+/* Describe-style report for one node. */
 static void print_describe(const struct node_detail *d, bool show_full)
 {
 	const struct shirudo_remote *r = d->r;
@@ -1356,7 +1382,7 @@ static int cmd_nodes_show(int argc, const char **argv)
 		} else if (strcmp(a, "--show-full") == 0) {
 			show_full = true;
 		} else if (shirudo_is_help(a)) {
-			shirudo_print_help(&nodes_help);
+			shirudo_print_help(&nodes_show_help);
 			return 0;
 		} else if (a[0] == '-') {
 			fprintf(stderr, "nodes show: unknown option '%s'\n", a);
@@ -1369,7 +1395,7 @@ static int cmd_nodes_show(int argc, const char **argv)
 		}
 	}
 	if (nnames == 0) {
-		fprintf(stderr, "usage: shirudo nodes show [--json] <name>...\n");
+		shirudo_print_help(&nodes_show_help);
 		return 2;
 	}
 
@@ -1457,6 +1483,11 @@ int cmd_nodes(int argc, const char **argv)
 {
 	if (argc >= 2 && shirudo_is_help(argv[1])) {
 		shirudo_print_help(&nodes_help);
+		return 0;
+	}
+	if (argc >= 2 && shirudo_is_list_cmds(argv[1])) {
+		shirudo_print_subcmd_list(nodes_subcmds,
+					  ARRAY_SIZE(nodes_subcmds));
 		return 0;
 	}
 	/*

@@ -122,9 +122,23 @@ int main(int argc, const char **argv)
 		cmd_help(0, NULL);
 		return 1;
 	}
-	/* Top-level --help / -h are equivalent to the `help` subcommand. */
+	/*
+	 * Top-level --list-cmds prints bare top-level command names to
+	 * stdout. Bash completion uses this so new commands appear in
+	 * tab-completion without editing the completion script.
+	 */
+	if (shirudo_is_list_cmds(argv[1])) {
+		for (i = 0; i < commands_n; i++)
+			printf("%s\n", commands[i].name);
+		return 0;
+	}
+	/*
+	 * Top-level --help / -h are equivalent to the `help` subcommand.
+	 * Pass the rest of argv through so `shirudo --help --list-cmds`
+	 * reaches cmd_help's --list-cmds emit path too.
+	 */
 	if (shirudo_is_help(argv[1]))
-		return cmd_help(0, NULL);
+		return cmd_help(argc - 1, argv + 1);
 
 	for (i = 0; i < commands_n; i++)
 		names[i] = commands[i].name;

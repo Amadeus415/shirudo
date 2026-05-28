@@ -37,8 +37,20 @@ struct shirudo_help {
 /* Does argv match "help", "--help" or "-h"? Safe on NULL. */
 int shirudo_is_help(const char *arg);
 
+/* Does argv match "--list-cmds"? */
+int shirudo_is_list_cmds(const char *arg);
+
 /* Print to stderr in the top-level `shirudo help` style. */
 void shirudo_print_help(const struct shirudo_help *h);
+
+/*
+ * Print the bare names from an items[] array to stdout, one per line.
+ * The hook bash completion uses (via `shirudo <command> --list-cmds`)
+ * so newly added subcommands appear in tab-completion without editing
+ * the completion script.
+ */
+void shirudo_print_subcmd_list(const struct shirudo_help_item *items,
+			       size_t n_items);
 
 /*
  * Render the unknown-subcommand error for a dispatcher (`shirudo

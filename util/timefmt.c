@@ -2,7 +2,7 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Shared kubectl-style duration formatter.
+ * Shared compact duration formatter.
  */
 
 #include <stdio.h>

@@ -1,50 +1,81 @@
 # bash completion for shirudo                              -*- shell-script -*-
 #
-# The top-level command list is pulled live from
-# `shirudo help --list-cmds`, so a command added to the dispatch table in
-# shirudo.c appears here automatically -- this file does NOT need editing
-# for new top-level commands. The per-command subcommand and flag lists
-# below are hand-maintained; update them only when a subcommand or flag
-# is added.
+# Command and subcommand name lists are pulled live from the binary via
+# `shirudo <command> --list-cmds`, so adding a (sub)command in the
+# C dispatch table makes it appear here automatically -- this file does
+# NOT need editing for new names. Per-command FLAG lists are still
+# hand-maintained below; update them when a flag is added or removed.
 #
 # Install: copied to $(sharedir)/bash-completion/completions/shirudo by
 # `make install`. To try it in place: `source completion/shirudo.bash`.
 
 _shirudo()
 {
-	local cur cword cmd
+	local cur cword cmd sub bin
 	cur="${COMP_WORDS[COMP_CWORD]}"
 	cword=$COMP_CWORD
+	bin="${COMP_WORDS[0]}"
 
-	# First word: the command -- queried live from the binary the user
-	# is completing (${COMP_WORDS[0]}), so it always matches that build.
+	# First word: the top-level command, pulled live from the binary
+	# the user is completing -- always matches that build.
 	if (( cword == 1 )); then
 		local cmds
-		cmds=$("${COMP_WORDS[0]}" help --list-cmds 2>/dev/null)
+		cmds=$("$bin" --list-cmds 2>/dev/null)
 		COMPREPLY=( $(compgen -W "$cmds" -- "$cur") )
 		return
 	fi
 
 	cmd="${COMP_WORDS[1]}"
+	sub="${COMP_WORDS[2]}"
 	case "$cmd" in
 	upatch)
 		if (( cword == 2 )); then
-			COMPREPLY=( $(compgen -W "info load unload list get" -- "$cur") )
+			local subs
+			subs=$("$bin" upatch --list-cmds 2>/dev/null)
+			COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
 		elif [[ $cur == -* ]]; then
-			COMPREPLY=( $(compgen -W "--expect-chain= --expect-version-id= --report= --no-precheck --no-version-check --json" -- "$cur") )
+			case "$sub" in
+			load|unload)
+				COMPREPLY=( $(compgen -W "--expect-chain= \
+					--expect-version-id= --no-precheck \
+					--no-version-check --report=" \
+					-- "$cur") )
+				;;
+			info|list)
+				COMPREPLY=( $(compgen -W "--json" -- "$cur") )
+				;;
+			get)
+				# no flags beyond --help
+				COMPREPLY=()
+				;;
+			esac
 		else
 			COMPREPLY=( $(compgen -f -X '!*.upatch' -- "$cur") \
 				    $(compgen -d -- "$cur") )
 		fi
 		;;
 	remote)
-		(( cword == 2 )) && \
-			COMPREPLY=( $(compgen -W "add list rm rename show" -- "$cur") )
+		if (( cword == 2 )); then
+			local subs
+			subs=$("$bin" remote --list-cmds 2>/dev/null)
+			COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
+		elif [[ $cur == -* ]]; then
+			case "$sub" in
+			add)
+				COMPREPLY=( $(compgen -W "--label" -- "$cur") )
+				;;
+			list)
+				COMPREPLY=( $(compgen -W "--json \
+					--filter= --selector=" -- "$cur") )
+				;;
+			esac
+		fi
 		;;
 	build)
 		if [[ $cur == -* ]]; then
-			COMPREPLY=( $(compgen -W "-o --name --key --cert --vmlinux \
-				--extra-cflags --unload --payload-sha256" -- "$cur") )
+			COMPREPLY=( $(compgen -W "-o --name --key --cert \
+				--vmlinux --extra-cflags --unload \
+				--payload-sha256" -- "$cur") )
 		else
 			COMPREPLY=( $(compgen -f -X '!*.bpf.c' -- "$cur") \
 				    $(compgen -f -X '!*.bpf.o' -- "$cur") \
@@ -53,8 +84,9 @@ _shirudo()
 		;;
 	rollout)
 		if [[ $cur == -* ]]; then
-			COMPREPLY=( $(compgen -W "--expect-chain= --expect-version-id= \
-				--report= --selector= --no-precheck --no-version-check \
+			COMPREPLY=( $(compgen -W "--expect-chain= \
+				--expect-version-id= --report= --filter= \
+				--selector= --no-precheck --no-version-check \
 				--dry-run --sudo" -- "$cur") )
 		else
 			COMPREPLY=( $(compgen -f -X '!*.upatch' -- "$cur") \
@@ -62,10 +94,16 @@ _shirudo()
 		fi
 		;;
 	nodes)
-		if [[ ${COMP_WORDS[2]} == show ]]; then
-			COMPREPLY=( $(compgen -W "--json" -- "$cur") )
+		if (( cword == 2 )); then
+			local subs
+			subs=$("$bin" nodes --list-cmds 2>/dev/null)
+			COMPREPLY=( $(compgen -W "$subs --json --filter= \
+				--selector=" -- "$cur") )
+		elif [[ $sub == show ]]; then
+			COMPREPLY=( $(compgen -W "--json --show-full" \
+				-- "$cur") )
 		else
-			COMPREPLY=( $(compgen -W "show --json --filter= \
+			COMPREPLY=( $(compgen -W "--json --filter= \
 				--selector=" -- "$cur") )
 		fi
 		;;
@@ -73,7 +111,19 @@ _shirudo()
 		COMPREPLY=( $(compgen -W "--check-only --no-tpm" -- "$cur") )
 		;;
 	status)
-		COMPREPLY=( $(compgen -W "--json --include-tpm" -- "$cur") )
+		COMPREPLY=( $(compgen -W "--json --include-tpm \
+			--include-system --include-eventlog \
+			--include-kernel-log --include-modules --show-full" \
+			-- "$cur") )
+		;;
+	keys)
+		COMPREPLY=( $(compgen -W "--keys-dir=" -- "$cur") )
+		;;
+	genkey)
+		COMPREPLY=( $(compgen -W "--keys-dir= --force -f" -- "$cur") )
+		;;
+	config|version|help)
+		# nothing to complete beyond --help / --list-cmds
 		;;
 	esac
 
