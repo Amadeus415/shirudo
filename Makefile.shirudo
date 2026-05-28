@@ -92,6 +92,7 @@ UTIL_SRCS := \
     util/sysinfo.c \
     util/similar.c \
     util/help.c \
+    util/icmp.c \
     util/seal.c
 
 BUILTIN_SRCS := \

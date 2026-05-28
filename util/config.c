@@ -7,6 +7,7 @@
  */
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,6 +88,8 @@ int shirudo_config_load(struct shirudo_config *cfg)
 	FILE *f;
 
 	*cfg = (struct shirudo_config){};	/* defaults: all zero */
+	cfg->nodes_icmp_timeout_ms = 1000;	/* 1s per probe */
+	cfg->nodes_icmp_probes = 1;
 
 	f = fopen(SHIRUDO_CONF_PATH, "r");
 	if (!f) {
@@ -116,6 +119,29 @@ int shirudo_config_load(struct shirudo_config *cfg)
 					cfg->eventlog_max_bytes = v;
 			} else if (strcmp(key, "tpm.owner_auth") == 0) {
 				set_owner_auth(cfg, val);
+			} else if (strcmp(key, "nodes.icmp_timeout_ms") == 0) {
+				unsigned long v;
+				char *end;
+
+				v = strtoul(val, &end, 0);
+				if (*end != '\0' || v > UINT_MAX)
+					pr_warn("config: nodes.icmp_timeout_ms:"
+						" bad value '%s' (ignored)",
+						val);
+				else
+					cfg->nodes_icmp_timeout_ms =
+						(unsigned int)v;
+			} else if (strcmp(key, "nodes.icmp_probes") == 0) {
+				unsigned long v;
+				char *end;
+
+				v = strtoul(val, &end, 0);
+				if (*end != '\0' || v == 0 || v > 16)
+					pr_warn("config: nodes.icmp_probes:"
+						" bad value '%s' (ignored;"
+						" must be 1..16)", val);
+				else
+					cfg->nodes_icmp_probes = (unsigned int)v;
 			} else {
 				pr_warn("config: unknown key '%s' (ignored)",
 					key);

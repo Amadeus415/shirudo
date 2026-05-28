@@ -20,6 +20,13 @@ struct shirudo_config {
 	 */
 	char		tpm_owner_auth[SHIRUDO_OWNER_AUTH_MAX];
 	size_t		tpm_owner_auth_len;
+	/*
+	 * Per-target ICMP probe budget for `shirudo nodes`. Best-effort
+	 * unprivileged dgram ICMP; an operator without the right
+	 * net.ipv4.ping_group_range still sees the table with PING = n/a.
+	 */
+	unsigned int	nodes_icmp_timeout_ms;	/* default 1000 */
+	unsigned int	nodes_icmp_probes;	/* default 1 */
 };
 
 /*

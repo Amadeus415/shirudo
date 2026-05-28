@@ -18,7 +18,9 @@
 #include <string.h>
 
 #include "builtin.h"
+#include "util/config.h"
 #include "util/help.h"
+#include "util/icmp.h"
 #include "util/json.h"
 #include "util/log.h"
 #include "util/macros.h"
@@ -34,16 +36,20 @@
 	"shirudo status --json --include-tpm --include-system --include-eventlog"
 
 struct node_state {
-	const char	*name;
-	bool		reachable;
-	char		version_id[80];
-	int		lsm_attached;
-	char		chain[80];	/* "" if absent/null */
-	int		chain_seen;
-	int		matches;	/* -1 unknown, 0/1 */
+	const char			*name;
+	bool				reachable;
+	enum shirudo_icmp_status	icmp_status;
+	uint64_t			icmp_rtt_us;
+	char				version_id[80];
+	int				lsm_attached;
+	char				chain[80];	/* "" if absent/null */
+	int				chain_seen;
+	int				matches;	/* -1 unknown, 0/1 */
 };
 
-static void query_node(const struct shirudo_remote *r, struct node_state *st)
+static void query_node(const struct shirudo_remote *r,
+		       const struct shirudo_config *cfg,
+		       struct node_state *st)
 {
 	struct shirudo_ssh_session *sess;
 	char *out = NULL;
@@ -52,6 +58,11 @@ static void query_node(const struct shirudo_remote *r, struct node_state *st)
 
 	st->name = r->name;
 	st->matches = -1;
+
+	st->icmp_status = shirudo_icmp_ping(r->host,
+					    cfg->nodes_icmp_timeout_ms,
+					    cfg->nodes_icmp_probes,
+					    &st->icmp_rtt_us, NULL, 0);
 
 	sess = shirudo_ssh_connect(r->user, r->host, r->port);
 	if (!sess)
@@ -105,6 +116,32 @@ static const char *match_str(const struct node_state *s)
 	if (!s->reachable || s->matches < 0)
 		return "?";
 	return s->matches ? "ok" : "MISMATCH";
+}
+
+/*
+ * Compact PING column: best-RTT in ms when OK, a short status word
+ * otherwise. Kept narrow to scan a fleet table; the per-node deep
+ * dive (`shirudo nodes show`) prints the full reachability stanza.
+ */
+static const char *ping_str(const struct node_state *s, char *buf, size_t n)
+{
+	switch (s->icmp_status) {
+	case SHIRUDO_ICMP_OK:
+		snprintf(buf, n, "%.1fms",
+			 (double)s->icmp_rtt_us / 1000.0);
+		return buf;
+	case SHIRUDO_ICMP_TIMEOUT:
+		return "blocked";
+	case SHIRUDO_ICMP_NO_ROUTE:
+		return "no-route";
+	case SHIRUDO_ICMP_DNS_FAIL:
+		return "dns?";
+	case SHIRUDO_ICMP_NO_PRIVILEGE:
+		return "n/a";
+	case SHIRUDO_ICMP_ERROR:
+	default:
+		return "err";
+	}
 }
 
 /* ---- shirudo nodes show <name>: per-node describe ----------------- */
@@ -175,6 +212,10 @@ struct node_detail {
 	const char			*unreach;	/* set if !reachable */
 	bool				reachable;
 	bool				parsed;
+
+	enum shirudo_icmp_status	icmp_status;
+	uint64_t			icmp_rtt_us;
+	char				resolved_ip[64];
 
 	char		version_id[80];
 	int		is_target, is_operator, lsm_attached;
@@ -352,7 +393,9 @@ static int parse_node_detail(const char *out, size_t len,
 	return 0;
 }
 
-static void fetch_node(const struct shirudo_remote *r, struct node_detail *d)
+static void fetch_node(const struct shirudo_remote *r,
+		       const struct shirudo_config *cfg,
+		       struct node_detail *d)
 {
 	struct shirudo_ssh_session *sess;
 	char *out = NULL;
@@ -360,6 +403,12 @@ static void fetch_node(const struct shirudo_remote *r, struct node_detail *d)
 	int rc;
 
 	d->r = r;
+	d->icmp_status = shirudo_icmp_ping(r->host,
+					   cfg->nodes_icmp_timeout_ms,
+					   cfg->nodes_icmp_probes,
+					   &d->icmp_rtt_us,
+					   d->resolved_ip,
+					   sizeof(d->resolved_ip));
 	sess = shirudo_ssh_connect(r->user, r->host, r->port);
 	if (!sess) {
 		d->unreach = "ssh connect failed";
@@ -527,6 +576,42 @@ static void print_describe(const struct node_detail *d)
 		printf("%s%s=%s\n", i ? "                   " : "", k, v);
 	}
 
+	printf("\nReachability:\n");
+	printf("  %-14s %s\n", "Endpoint:", endpoint);
+	if (d->resolved_ip[0])
+		printf("  %-14s %s\n", "Resolved IP:", d->resolved_ip);
+	switch (d->icmp_status) {
+	case SHIRUDO_ICMP_OK:
+		printf("  %-14s yes  (%.1f ms)\n", "ICMP:",
+		       (double)d->icmp_rtt_us / 1000.0);
+		break;
+	case SHIRUDO_ICMP_TIMEOUT:
+		printf("  %-14s no   (no reply within budget; firewall?)\n",
+		       "ICMP:");
+		break;
+	case SHIRUDO_ICMP_NO_ROUTE:
+		printf("  %-14s no   (no route to host)\n", "ICMP:");
+		break;
+	case SHIRUDO_ICMP_DNS_FAIL:
+		printf("  %-14s n/a  (DNS resolution failed)\n", "ICMP:");
+		break;
+	case SHIRUDO_ICMP_NO_PRIVILEGE:
+		printf("  %-14s n/a  (operator gid not in "
+		       "net.ipv4.ping_group_range)\n", "ICMP:");
+		break;
+	case SHIRUDO_ICMP_ERROR:
+	default:
+		printf("  %-14s err\n", "ICMP:");
+		break;
+	}
+	if (d->reachable && d->parsed)
+		printf("  %-14s yes  (status JSON parsed)\n", "SSH:");
+	else if (d->reachable)
+		printf("  %-14s yes  (status JSON unparseable)\n", "SSH:");
+	else
+		printf("  %-14s no   (%s)\n", "SSH:",
+		       d->unreach ? d->unreach : "unreachable");
+
 	if (!d->reachable || !d->parsed) {
 		printf("\n");
 		return;
@@ -621,6 +706,24 @@ static void emit_node_json(struct shirudo_json_emit *e,
 		shirudo_json_kv_string(e, "error",
 				       d->unreach ? d->unreach
 						  : "status JSON unparseable");
+	shirudo_json_obj_open_key(e, "reachability");
+	if (d->resolved_ip[0])
+		shirudo_json_kv_string(e, "resolved_ip", d->resolved_ip);
+	else
+		shirudo_json_kv_null(e, "resolved_ip");
+	shirudo_json_obj_open_key(e, "icmp");
+	shirudo_json_kv_bool(e, "ok",
+			     d->icmp_status == SHIRUDO_ICMP_OK);
+	if (d->icmp_status == SHIRUDO_ICMP_OK)
+		shirudo_json_kv_int(e, "rtt_us", (int64_t)d->icmp_rtt_us);
+	else
+		shirudo_json_kv_null(e, "rtt_us");
+	shirudo_json_obj_close(e);	/* icmp */
+	shirudo_json_obj_open_key(e, "ssh");
+	shirudo_json_kv_bool(e, "ok", d->reachable);
+	shirudo_json_kv_bool(e, "status_parsed", d->parsed);
+	shirudo_json_obj_close(e);	/* ssh */
+	shirudo_json_obj_close(e);	/* reachability */
 	shirudo_json_obj_open_key(e, "labels");
 	nl = shirudo_labels_count(d->r->labels);
 	for (i = 0; i < nl; i++) {
@@ -757,27 +860,32 @@ static int cmd_nodes_show(int argc, const char **argv)
 		return 1;
 	}
 
-	nodes = xcalloc(nnames, sizeof(*nodes));
-	if (!nodes) {
-		shirudo_remotes_free(remotes, n_remotes);
-		return 1;
-	}
+	{
+		struct shirudo_config cfg;
 
-	for (j = 0; j < nnames; j++) {
-		const struct shirudo_remote *r = NULL;
-
-		for (i = 0; i < n_remotes; i++)
-			if (strcmp(remotes[i].name, names[j]) == 0) {
-				r = &remotes[i];
-				break;
-			}
-		if (!r) {
-			pr_err("nodes show: '%s' is not a registered remote",
-			       names[j]);
-			ret = 1;
-			continue;	/* nodes[j].r stays NULL -> skipped */
+		shirudo_config_load(&cfg);
+		nodes = xcalloc(nnames, sizeof(*nodes));
+		if (!nodes) {
+			shirudo_remotes_free(remotes, n_remotes);
+			return 1;
 		}
-		fetch_node(r, &nodes[j]);
+		for (j = 0; j < nnames; j++) {
+			const struct shirudo_remote *r = NULL;
+
+			for (i = 0; i < n_remotes; i++)
+				if (strcmp(remotes[i].name,
+					   names[j]) == 0) {
+					r = &remotes[i];
+					break;
+				}
+			if (!r) {
+				pr_err("nodes show: '%s' is not a "
+				       "registered remote", names[j]);
+				ret = 1;
+				continue;	/* skipped: r stays NULL */
+			}
+			fetch_node(r, &cfg, &nodes[j]);
+		}
 	}
 
 	if (json) {
@@ -888,6 +996,10 @@ int cmd_nodes(int argc, const char **argv)
 		}
 	}
 
+	struct shirudo_config cfg;
+
+	shirudo_config_load(&cfg);
+
 	if (selexpr) {
 		sel = shirudo_selector_parse(selexpr);
 		if (!sel) {
@@ -919,7 +1031,7 @@ int cmd_nodes(int argc, const char **argv)
 			continue;
 		if (sel && !shirudo_selector_match(sel, remotes[i].labels))
 			continue;
-		query_node(&remotes[i], &nodes[n]);
+		query_node(&remotes[i], &cfg, &nodes[n]);
 		n++;
 	}
 
@@ -943,6 +1055,15 @@ int cmd_nodes(int argc, const char **argv)
 			shirudo_json_obj_open(&e);
 			shirudo_json_kv_string(&e, "name", s->name);
 			shirudo_json_kv_bool(&e, "reachable", s->reachable);
+			shirudo_json_obj_open_key(&e, "icmp");
+			shirudo_json_kv_bool(&e, "ok",
+					     s->icmp_status == SHIRUDO_ICMP_OK);
+			if (s->icmp_status == SHIRUDO_ICMP_OK)
+				shirudo_json_kv_int(&e, "rtt_us",
+						    (int64_t)s->icmp_rtt_us);
+			else
+				shirudo_json_kv_null(&e, "rtt_us");
+			shirudo_json_obj_close(&e);
 			if (s->reachable) {
 				shirudo_json_kv_bool(&e, "lsm_attached",
 						     s->lsm_attached);
@@ -973,16 +1094,17 @@ int cmd_nodes(int argc, const char **argv)
 			printf("%s\n", buf);
 		}
 	} else {
-		printf("%-20s %-9s %-8s %-18s %-10s %s\n",
-		       "NODE", "REACHABLE", "LSM", "CHAIN", "VERSION",
+		printf("%-20s %-9s %-4s %-8s %-18s %-10s %s\n",
+		       "NODE", "PING", "SSH", "LSM", "CHAIN", "VERSION",
 		       "CHAIN/LOG");
 		for (i = 0; i < n; i++) {
 			struct node_state *s = &nodes[i];
-			char cb[24];
+			char cb[24], pb[16];
 
-			printf("%-20s %-9s %-8s %-18s %-10.8s %s\n",
+			printf("%-20s %-9s %-4s %-8s %-18s %-10.8s %s\n",
 			       s->name,
-			       s->reachable ? "yes" : "NO",
+			       ping_str(s, pb, sizeof(pb)),
+			       s->reachable ? "yes" : "no",
 			       !s->reachable ? "-" :
 				 s->lsm_attached ? "attached" : "DETACHED",
 			       short_chain(s, cb, sizeof(cb)),
