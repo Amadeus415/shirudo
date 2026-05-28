@@ -689,48 +689,53 @@ case BPF_PROG_LOAD:
     if (attr->signature_size == 0)                  return -EACCES;
     return 0;                        /* kernel verifies signature next */
 
-/* tear-down / replace / corruption — denied (see threat T2) */
-case BPF_MAP_DELETE_ELEM:
-case BPF_MAP_DELETE_BATCH:
-case BPF_MAP_UPDATE_BATCH:
-case BPF_MAP_LOOKUP_AND_DELETE_ELEM:
-case BPF_MAP_LOOKUP_AND_DELETE_BATCH:
-case BPF_LINK_DETACH:
-case BPF_LINK_UPDATE:
-case BPF_PROG_ATTACH:
-case BPF_PROG_DETACH:
-case BPF_BTF_LOAD:
-    return -EACCES;
-
 /*
- * Attach + signed-loader data-map pattern — allowed from userspace.
- * Does not widen the trust boundary: a prog_fd can only be obtained
- * via the signature-gated BPF_PROG_LOAD above or GET_FD_BY_ID of an
- * already-vetted prog, so every attachable program is operator-signed.
- * shirudo needs these because gen_loader can't attach and
- * bpf_sys_bpf() can't OBJ_PIN (TODO.kernel 1-2): the signed loader
- * loads the upatch in kernel context, shirudo's CLI creates + pins
- * the link. BPF_OBJ_PIN falls through to default-allow.
- * Infra maps stay safe via BPF_MAP_FREEZE at creation, independent
- * of the LSM verdict.
+ * Attach + signed-loader data-map pattern, and read-only / observability
+ * — the explicit allow-list. Attach/create/pin do not widen the trust
+ * boundary: a prog_fd is only obtainable via the signature-gated
+ * BPF_PROG_LOAD above or GET_FD_BY_ID of an already-vetted prog, so every
+ * attachable program is operator-signed. shirudo needs them because
+ * gen_loader can't attach and bpf_sys_bpf() can't OBJ_PIN (TODO.kernel
+ * 1-2). Infra maps stay safe via BPF_MAP_FREEZE at creation, independent
+ * of the LSM verdict. Read-only cmds keep observability working.
  */
-case BPF_LINK_CREATE:
-case BPF_RAW_TRACEPOINT_OPEN:
 case BPF_MAP_CREATE:
 case BPF_MAP_UPDATE_ELEM:
 case BPF_MAP_FREEZE:
+case BPF_OBJ_PIN:
+case BPF_LINK_CREATE:
+case BPF_RAW_TRACEPOINT_OPEN:
+case BPF_MAP_LOOKUP_ELEM:
+case BPF_MAP_GET_NEXT_KEY:
+case BPF_MAP_LOOKUP_BATCH:
+case BPF_OBJ_GET:
+case BPF_OBJ_GET_INFO_BY_FD:
+case BPF_PROG_TEST_RUN:            /* invokes our own signed loaders */
+case BPF_PROG_QUERY:
+case BPF_PROG_GET_NEXT_ID:  case BPF_MAP_GET_NEXT_ID:
+case BPF_BTF_GET_NEXT_ID:   case BPF_LINK_GET_NEXT_ID:
+case BPF_PROG_GET_FD_BY_ID: case BPF_MAP_GET_FD_BY_ID:
+case BPF_BTF_GET_FD_BY_ID:  case BPF_LINK_GET_FD_BY_ID:
+case BPF_TASK_FD_QUERY:
     return 0;
 
-default:                              /* read-only ops: BPF_OBJ_GET,
-                                         BPF_*_GET_FD_BY_ID, BPF_MAP_LOOKUP_*,
-                                         BPF_PROG_QUERY, BPF_OBJ_GET_INFO_BY_FD;
-                                         plus BPF_OBJ_PIN, BPF_PROG_TEST_RUN.
-                                         BPF_OBJ_UNPIN is not a bpf() cmd. */
-    return 0;
+/*
+ * Default-DENY (fail closed). Covers tear-down / replace / corruption
+ * (BPF_LINK_DETACH/UPDATE, BPF_PROG_ATTACH/DETACH, BPF_BTF_LOAD,
+ * BPF_MAP_DELETE_ELEM and *_BATCH / LOOKUP_AND_DELETE; see threat T2)
+ * AND every cmd not explicitly vetted above — including ones a newer
+ * kernel adds (BPF_TOKEN_CREATE, BPF_PROG_BIND_MAP, BPF_ITER_CREATE,
+ * BPF_PROG_ASSOC_STRUCT_OPS, ...). A future mutating cmd cannot silently
+ * bypass policy: unknown == denied. BPF_OBJ_UNPIN is not a bpf() cmd.
+ */
+default:
+    return -EACCES;
 }
 ```
 
-Allowing read-only commands keeps observability working (`bpftool prog show`,
+The allow-list is fail-closed: anything unlisted is denied, so a kernel
+that adds a new mutating cmd does not silently widen the syscall surface.
+Allowing the read-only commands keeps observability working (`bpftool prog show`,
 `bpftool map dump`, our own `shirudo status`). The signature-gated
 `BPF_PROG_LOAD` is the trust boundary; attach and the signed-loader map
 pattern are allowed (they cannot introduce unsigned code); tear-down,

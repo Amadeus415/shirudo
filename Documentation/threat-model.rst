@@ -957,12 +957,18 @@ For every userspace ``bpf()`` call (where the LSM hook sees
   ``bpf_sys_bpf()`` cannot ``BPF_OBJ_PIN`` (see ``TODO.kernel`` items
   1–2): the signed loader loads the upatch program in kernel context,
   but shirudo's one-shot CLI creates and pins the link.
-- Denies the tear-down / replace and map-corruption commands
+- Denies, with ``-EACCES`` regardless of caller privilege, **every
+  command not on the allow-list above** — the policy is fail-closed
+  (explicit allow-list, ``default`` denies). This includes the
+  tear-down / replace and map-corruption commands
   (``BPF_LINK_DETACH``, ``BPF_LINK_UPDATE``, ``BPF_PROG_DETACH``,
   ``BPF_MAP_DELETE_ELEM``, the ``*_BATCH`` and
-  ``LOOKUP_AND_DELETE`` variants, ``BPF_BTF_LOAD``) with ``-EACCES``
-  regardless of caller privilege — these are how an adversary would
-  detach shirudo's own links or corrupt existing state (see T2).
+  ``LOOKUP_AND_DELETE`` variants, ``BPF_BTF_LOAD``) — these are how an
+  adversary would detach shirudo's own links or corrupt existing state
+  (see T2) — and any command a newer kernel adds that shirudo has not
+  explicitly vetted (e.g. ``BPF_TOKEN_CREATE``, ``BPF_PROG_BIND_MAP``,
+  ``BPF_ITER_CREATE``, ``BPF_PROG_ASSOC_STRUCT_OPS``), so a future
+  mutating cmd cannot silently widen the syscall surface.
   shirudo's own infrastructure maps add a second, LSM-independent
   guard: they are ``BPF_MAP_FREEZE``-d at creation, so a userspace
   ``BPF_OBJ_GET``-then-update hits the frozen-map ``-EPERM`` even if

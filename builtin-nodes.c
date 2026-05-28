@@ -39,6 +39,21 @@
 #include "util/upatch_table.h"
 
 /*
+ * Output-buffer reservation for one node's eventlog. ev_bytes is parsed
+ * from the target's JSON (untrusted: negative or up to INT64_MAX), so
+ * clamp it before the *3 size math to keep the cap monotonic and avoid
+ * a (size_t) wrap that could underprovision the buffer.
+ */
+static size_t clamp_ev_bytes(int64_t ev_bytes)
+{
+	if (ev_bytes < 0)
+		return 0;
+	if ((uint64_t)ev_bytes > SHIRUDO_JSON_MAX_BYTES)
+		return 3 * (size_t)SHIRUDO_JSON_MAX_BYTES;
+	return 3 * (size_t)ev_bytes;
+}
+
+/*
  * Per-call command builder: kernel-log and modules sections are each
  * operator-side configurable (nodes.kernel_log_lines /
  * nodes.module_loads_lines). A value of 0 disables the section
@@ -1917,7 +1932,7 @@ static int cmd_nodes_show(int argc, const char **argv)
 
 		for (j = 0; j < nnames; j++)
 			if (nodes[j].r)
-				cap += 8192 + 3 * (size_t)nodes[j].ev_bytes;
+				cap += 8192 + clamp_ev_bytes(nodes[j].ev_bytes);
 		if (cap > SHIRUDO_JSON_MAX_BYTES)
 			cap = SHIRUDO_JSON_MAX_BYTES;
 		buf = xmalloc(cap);
@@ -2081,7 +2096,7 @@ int cmd_nodes(int argc, const char **argv)
 		char *buf;
 
 		for (i = 0; i < n; i++)
-			cap += 4096 + 3 * (size_t)nodes[i].ev_bytes;
+			cap += 4096 + clamp_ev_bytes(nodes[i].ev_bytes);
 		if (cap > SHIRUDO_JSON_MAX_BYTES)
 			cap = SHIRUDO_JSON_MAX_BYTES;
 		buf = xmalloc(cap);

@@ -717,9 +717,12 @@ static int chain_extend_init(const struct restore_entry *set, size_t n,
 
 	{
 		struct shirudo_config cfg;
+		bool full;
 
 		shirudo_config_load(&cfg);
-		if (shirudo_eventlog_would_exceed(cfg.eventlog_max_bytes)) {
+		full = shirudo_eventlog_would_exceed(cfg.eventlog_max_bytes);
+		explicit_bzero(&cfg, sizeof(cfg));	/* scrub tpm_owner_auth */
+		if (full) {
 			pr_err("eventlog %s would exceed eventlog.max_bytes=%lu; "
 			       "refusing chain extend (eventlog_full)",
 			       SHIRUDO_EVENTLOG_PATH, cfg.eventlog_max_bytes);

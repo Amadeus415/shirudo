@@ -126,8 +126,7 @@ size_t shirudo_resolve(const char *input,
 		if (clen > len &&
 		    strncmp(input, candidates[i], len) == 0) {
 			if (m < cap)
-				matches[m] = i;
-			m++;
+				matches[m++] = i;
 		}
 	}
 	if (m)
@@ -139,8 +138,7 @@ size_t shirudo_resolve(const char *input,
 		if (clen < len &&
 		    strncmp(input, candidates[i], clen) == 0) {
 			if (m < cap)
-				matches[m] = i;
-			m++;
+				matches[m++] = i;
 		}
 	}
 	return m;

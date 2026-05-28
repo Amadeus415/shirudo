@@ -561,9 +561,23 @@ static int parse_number(struct pctx *c, struct shirudo_json_field *f)
 	if (c->p == start)
 		return -EINVAL;
 	if (f) {
+		char numbuf[32];
+		size_t nlen = (size_t)(c->p - start);
+
 		if (f->type != SHIRUDO_JSON_T_INT)
 			return -EINVAL;
-		*(int64_t *)f->dst = (int64_t)strtoll(start, NULL, 10);
+		/*
+		 * strtoll scans to a non-numeric byte or NUL; the input
+		 * buffer is not guaranteed NUL-terminated (the API is
+		 * (data, len)), so copy the already-bounded token into a
+		 * NUL-terminated scratch first. A token too long to be a
+		 * valid int64 is rejected rather than read.
+		 */
+		if (nlen >= sizeof(numbuf))
+			return -EINVAL;
+		memcpy(numbuf, start, nlen);
+		numbuf[nlen] = '\0';
+		*(int64_t *)f->dst = (int64_t)strtoll(numbuf, NULL, 10);
 		f->seen = 1;
 	}
 	return 0;

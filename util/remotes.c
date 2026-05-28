@@ -81,8 +81,11 @@ static int labels_add(struct shirudo_labels *l, const char *k, const char *v)
 	l->items = it;
 	it[l->n].key = xstrdup(k);
 	it[l->n].val = xstrdup(v);
-	if (!it[l->n].key || !it[l->n].val)
+	if (!it[l->n].key || !it[l->n].val) {
+		xstrfree(it[l->n].key);	/* free the half that succeeded */
+		xstrfree(it[l->n].val);
 		return -ENOMEM;
+	}
 	l->n++;
 	return 0;
 }

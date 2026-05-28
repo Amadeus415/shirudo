@@ -215,16 +215,19 @@ static void check_tpm(struct shirudo_preflight_result *r, bool allow_no_tpm)
 	 */
 	{
 		struct shirudo_config cfg = {};
+		bool override = shirudo_config_load(&cfg) == 0 && cfg.tpm_tcti[0];
 
-		if (shirudo_config_load(&cfg) == 0 && cfg.tpm_tcti[0]) {
+		if (override) {
 			pass(c);
 			snprintf(c->detail, sizeof(c->detail),
 				 "TCTI override: %.*s",
 				 (int)(sizeof(c->detail) -
 				       sizeof("TCTI override: ")),
 				 cfg.tpm_tcti);
-			return;
 		}
+		explicit_bzero(&cfg, sizeof(cfg));	/* scrub tpm_owner_auth */
+		if (override)
+			return;
 	}
 	if (access("/dev/tpmrm0", R_OK | W_OK) == 0)
 		pass(c);

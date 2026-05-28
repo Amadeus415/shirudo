@@ -33,9 +33,13 @@ struct shirudo_selector {
 /* ---- lexer ---- */
 enum tok { T_KEY, T_EQ, T_NE, T_NOT, T_AND, T_OR, T_LP, T_RP, T_END, T_ERR };
 
+/* Bound parenthesis-nesting recursion (parse + match) against stack abuse. */
+#define SHIRUDO_SELECTOR_MAX_DEPTH	64
+
 struct lexer {
 	const char	*p;
 	enum tok	tok;
+	unsigned	depth;		/* open-paren nesting, capped */
 	char		text[256];	/* current T_KEY */
 };
 
@@ -128,8 +132,12 @@ static struct shirudo_selector *parse_atom(struct lexer *lx)
 	char key[256];
 
 	if (lx->tok == T_LP) {
+		if (lx->depth >= SHIRUDO_SELECTOR_MAX_DEPTH)
+			return NULL;	/* nesting too deep -- refuse */
+		lx->depth++;
 		lex(lx);
 		n = parse_expr(lx);
+		lx->depth--;
 		if (!n)
 			return NULL;
 		if (lx->tok != T_RP) {

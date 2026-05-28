@@ -102,67 +102,67 @@ int BPF_PROG(shirudo_lsm_bpf, int cmd, union bpf_attr *attr,
 		return 0;
 
 	/*
-	 * Tear-down / replace of existing attachments stays denied:
-	 * these are how an attacker would detach or swap out shirudo's
-	 * own LSM links and pinned upatch links. The map-data-corruption
-	 * variants stay denied too (drain/replace existing map state).
-	 * The three map cmds the signed-loader pattern needs
-	 * (BPF_MAP_CREATE, BPF_MAP_UPDATE_ELEM, BPF_MAP_FREEZE) and the
-	 * two attach cmds shirudo needs from userspace
-	 * (BPF_LINK_CREATE, BPF_RAW_TRACEPOINT_OPEN) fall through to the
-	 * allow case below.
-	 *
-	 * Notes:
-	 *  - BPF_OBJ_UNPIN does not exist as a bpf() cmd; VFS unlink
-	 *    removes pins and shirudo's lsm/inode_unlink hook blocks
-	 *    `rm` on shirudo's bpffs.
-	 *  - shirudo's own infra maps stay safe even with MAP_CREATE/
-	 *    UPDATE/FREEZE allowed: they're BPF_MAP_FREEZE'd at
-	 *    creation, so BPF_OBJ_GET-then-update on them hits the
-	 *    frozen-map permanent EPERM regardless of LSM verdict.
+	 * Vetted mutating cmds the signed-loader data-map + attach/pin
+	 * pattern needs from userspace. None can introduce unsigned code:
+	 * a prog_fd is only obtainable via the signature-gated
+	 * BPF_PROG_LOAD above or GET_FD_BY_ID of an already-vetted prog,
+	 * and shirudo's own infra maps are BPF_MAP_FREEZE'd at creation
+	 * (a userspace BPF_MAP_UPDATE_ELEM on them then fails -EPERM
+	 * regardless of this verdict). gen_loader emits no link-create and
+	 * bpf_sys_bpf() cannot BPF_OBJ_PIN (TODO.kernel 1-2), so shirudo's
+	 * one-shot CLI must create + pin the link itself. Attaching an
+	 * already-vetted program grants no new code-execution capability.
 	 */
-	case BPF_MAP_DELETE_ELEM:
-	case BPF_MAP_UPDATE_BATCH:
-	case BPF_MAP_DELETE_BATCH:
-	case BPF_MAP_LOOKUP_AND_DELETE_ELEM:
-	case BPF_MAP_LOOKUP_AND_DELETE_BATCH:
-	case BPF_LINK_DETACH:
-	case BPF_LINK_UPDATE:
-	case BPF_PROG_ATTACH:
-	case BPF_PROG_DETACH:
-	case BPF_BTF_LOAD:
-		return -EPERM;
-
-	/*
-	 * Allow attach from userspace. gen_loader loads the inner upatch
-	 * program in kernel context but emits no link-create, and
-	 * bpf_sys_bpf() cannot BPF_OBJ_PIN (see TODO.kernel 1-2), so
-	 * shirudo's one-shot CLI must create and pin the link itself.
-	 * This does not weaken the trust model: the BPF_PROG_LOAD
-	 * signature gate above is the real boundary -- userspace cannot
-	 * load any attachable program (LSM/tracing/XDP/...) without a
-	 * signed SYSCALL loader, so every program reachable here was
-	 * either signed or pre-existed shirudo. Attaching an
-	 * already-vetted program grants no new code-execution
-	 * capability. (A future kernel that lets the signed loader
-	 * attach + pin from kernel context, or an exe_file-scoped
-	 * identity check like seal's, would let us deny these again.)
-	 */
+	case BPF_MAP_CREATE:
+	case BPF_MAP_UPDATE_ELEM:
+	case BPF_MAP_FREEZE:
+	case BPF_OBJ_PIN:
 	case BPF_LINK_CREATE:
 	case BPF_RAW_TRACEPOINT_OPEN:
+
+	/*
+	 * Read-only / observability cmds, so `bpftool prog show`,
+	 * `shirudo status`, and `shirudo upatch get/map` keep working.
+	 * BPF_PROG_TEST_RUN is included so shirudo can invoke its own
+	 * signed loaders -- a TEST_RUN cannot introduce unsigned code.
+	 * BPF_OBJ_UNPIN does not exist as a bpf() cmd; VFS unlink removes
+	 * pins and shirudo's lsm/inode_unlink hook blocks `rm` on the
+	 * private bpffs.
+	 */
+	case BPF_MAP_LOOKUP_ELEM:
+	case BPF_MAP_GET_NEXT_KEY:
+	case BPF_MAP_LOOKUP_BATCH:
+	case BPF_OBJ_GET:
+	case BPF_OBJ_GET_INFO_BY_FD:
+	case BPF_PROG_TEST_RUN:
+	case BPF_PROG_QUERY:
+	case BPF_PROG_GET_NEXT_ID:
+	case BPF_MAP_GET_NEXT_ID:
+	case BPF_BTF_GET_NEXT_ID:
+	case BPF_LINK_GET_NEXT_ID:
+	case BPF_PROG_GET_FD_BY_ID:
+	case BPF_MAP_GET_FD_BY_ID:
+	case BPF_BTF_GET_FD_BY_ID:
+	case BPF_LINK_GET_FD_BY_ID:
+	case BPF_TASK_FD_QUERY:
 		return 0;
 
 	/*
-	 * Default-allow: read-only cmds (BPF_OBJ_GET, *_GET_FD_BY_ID,
-	 * *_GET_NEXT_ID, MAP_LOOKUP_ELEM, MAP_GET_NEXT_KEY,
-	 * MAP_LOOKUP_BATCH, PROG_QUERY, OBJ_GET_INFO_BY_FD),
-	 * BPF_PROG_TEST_RUN (needed so shirudo can invoke its own
-	 * signed loaders), BPF_MAP_FREEZE (harmless without
-	 * MAP_CREATE), BPF_OBJ_PIN (shirudo pins its links and maps),
-	 * and any future readonly cmd a new kernel adds.
+	 * Default-DENY, fail closed. This covers the tear-down / replace /
+	 * corruption cmds an attacker would use to detach or swap out
+	 * shirudo's own LSM/upatch links or drain map state
+	 * (BPF_LINK_DETACH, BPF_LINK_UPDATE, BPF_PROG_ATTACH/DETACH,
+	 * BPF_BTF_LOAD, BPF_MAP_DELETE_ELEM and the *_BATCH /
+	 * LOOKUP_AND_DELETE variants) and -- critically -- every cmd
+	 * shirudo has not explicitly vetted above, including ones a newer
+	 * kernel may add (BPF_TOKEN_CREATE, BPF_PROG_BIND_MAP,
+	 * BPF_ITER_CREATE, BPF_PROG_ASSOC_STRUCT_OPS, ...). A future
+	 * mutating cmd therefore cannot silently bypass policy: it stays
+	 * denied until explicitly classified. -EACCES matches the LSM
+	 * denial errno used throughout (threat-model.rst T1/T2).
 	 */
 	default:
-		return 0;
+		return -EACCES;
 	}
 }
 

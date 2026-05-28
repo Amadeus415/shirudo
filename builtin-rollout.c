@@ -59,6 +59,32 @@ struct target_result {
 extern const char shirudo_version_id[];
 
 /*
+ * A chain value must be a non-empty run of hex digits before it is
+ * spliced into the remote `--expect-chain=<hex>` argument. The chain
+ * comes from the target's own status JSON (untrusted: a compromised
+ * target controls it) or an operator override, and is placed in the
+ * command string unquoted -- validating the charset here forecloses
+ * any shell-metacharacter injection through it. Length is bounded to
+ * the 80-byte capture buffer.
+ */
+static bool chain_is_hex(const char *s)
+{
+	size_t i;
+
+	if (!s || !*s)
+		return false;
+	for (i = 0; s[i]; i++) {
+		if (i >= 78)
+			return false;
+		if (!((s[i] >= '0' && s[i] <= '9') ||
+		      (s[i] >= 'a' && s[i] <= 'f') ||
+		      (s[i] >= 'A' && s[i] <= 'F')))
+			return false;
+	}
+	return true;
+}
+
+/*
  * Read `status --json --include-tpm` from a session; capture the chain
  * and the target's SHIRUDO_VERSION_ID (for the version-skew gate).
  */
@@ -95,6 +121,16 @@ static int remote_chain(struct shirudo_ssh_session *s, char chain[80],
 		rc = shirudo_json_parse(out, len, top, 3);
 		if (rc == 0)
 			*chain_seen = tpm[0].seen;
+		/*
+		 * Reject a non-hex chain the target returned: it is reused
+		 * unquoted in the next remote command. Treat it as "not
+		 * seen" so the rollout proceeds without --expect-chain
+		 * rather than splicing attacker-controlled bytes.
+		 */
+		if (*chain_seen && !chain_is_hex(chain)) {
+			chain[0] = '\0';
+			*chain_seen = 0;
+		}
 	}
 	xfree(out, len);
 	return rc;
@@ -483,8 +519,14 @@ int cmd_rollout(int argc, const char **argv)
 			filter = a + 9;
 		else if (strncmp(a, "--selector=", 11) == 0)
 			selexpr = a + 11;
-		else if (strncmp(a, "--expect-chain=", 15) == 0)
+		else if (strncmp(a, "--expect-chain=", 15) == 0) {
 			expect_override = a + 15;
+			if (!chain_is_hex(expect_override)) {
+				fprintf(stderr, "rollout: --expect-chain must "
+					"be hex digits\n");
+				return 2;
+			}
+		}
 		else if (strcmp(a, "--no-precheck") == 0)
 			no_precheck = true;
 		else if (strcmp(a, "--dry-run") == 0)

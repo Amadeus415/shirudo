@@ -245,6 +245,14 @@ int shirudo_keyring_list(key_serial_t keyring,
 			xfree(serials, cap);
 			return -errno;
 		}
+		/*
+		 * The keyring can grow again between the two reads;
+		 * KEYCTL_READ then returns the full size while filling only
+		 * cap bytes. Clamp to what the buffer actually holds so the
+		 * loop below never reads past the allocation.
+		 */
+		if ((size_t)ret > cap)
+			ret = (long)cap;
 	}
 
 	n = (size_t)ret / sizeof(*serials);
