@@ -43,6 +43,8 @@
 #include "util/sysinfo.h"
 #include "util/timefmt.h"
 #include "util/upatch_maps.h"
+#include "util/upatch_resolve.h"
+#include "util/upatch_table.h"
 
 extern const char shirudo_version_id[];
 
@@ -362,7 +364,6 @@ static const struct shirudo_help_item status_options[] = {
 	{ "--include-eventlog",     "dump eventlog entries (implies --include-tpm)" },
 	{ "--include-kernel-log",   "last 10 lines of the kernel ring buffer" },
 	{ "--include-modules",      "loaded kernel modules (10 most recent; --show-full for tree)" },
-	{ "--include-maps",         "loaded upatches' pinned maps (BTF type-aware; cap 256 entries)" },
 	{ "--show-full",            "opt into a full dump: implies every --include-* flag and "
 				    "expands the loaded-modules dependency tree" },
 };
@@ -376,7 +377,7 @@ static const struct shirudo_help status_help = {
 	.usage      = "shirudo status [--json] [--include-tpm] "
 		      "[--include-system] [--include-eventlog]\n"
 		      "                       [--include-kernel-log] "
-		      "[--include-modules] [--include-maps] [--show-full]",
+		      "[--include-modules] [--show-full]",
 	.summary    = "Local readiness + state report. Auto-detects target "
 		      "vs operator role.\nSafe to run before `shirudo init`.",
 	.sections   = status_help_sections,
@@ -390,59 +391,57 @@ static void usage(void)
 }
 
 /*
- * "If this upatch is loaded, when was it last loaded and what was its
- * payload digest?" map built from one pass over the on-disk eventlog.
- * Used by the Upatches loaded section so the operator sees the same
- * NAME / PAYLOAD-SHA256 / APPLIED columns `nodes show` renders.
+ * Build the upatches_loaded table rows from a scandir() listing.
+ * Each row is resolved via the shared util (location + pin ctime +
+ * payload xattr) so target-local status and `nodes show <name>
+ * upatches` agree. Returns the row count; *out is heap-owned (xfree
+ * by caller with n * sizeof(*out)).
  */
-struct upatch_load_info {
-	char	name[128];
-	char	payload[65];
-	char	ts[40];
-};
-
-static size_t scan_eventlog_loads(struct upatch_load_info *out, size_t cap)
+static size_t build_upatches_table(struct dirent **ups, int n_ups,
+				   struct shirudo_upatch_table_row **out)
 {
-	char *buf = NULL, *line, *save;
-	size_t len = 0, n = 0;
+	struct shirudo_upatch_table_row *rows;
+	struct btf *vbtf;
+	int i;
 
-	if (read_eventlog(&buf, &len) != 0)
+	if (n_ups <= 0) {
+		*out = NULL;
 		return 0;
-	for (line = strtok_r(buf, "\n", &save); line && n <= cap;
-	     line = strtok_r(NULL, "\n", &save)) {
-		struct ev_proj ev;
-		size_t k;
-
-		if (parse_event_line(line, strlen(line), &ev) != 0)
-			continue;
-		if (strcmp(ev.type, "upatch_load") != 0)
-			continue;
-		for (k = 0; k < n; k++)
-			if (strcmp(out[k].name, ev.up_name) == 0)
-				break;
-		if (k == n) {
-			if (n >= cap)
-				continue;
-			n++;
-		}
-		snprintf(out[k].name, sizeof(out[k].name), "%s", ev.up_name);
-		snprintf(out[k].payload, sizeof(out[k].payload), "%s",
-			 ev.up_payload);
-		snprintf(out[k].ts, sizeof(out[k].ts), "%s", ev.ts);
 	}
-	xfree(buf, len);
-	return n;
-}
+	rows = xcalloc((size_t)n_ups, sizeof(*rows));
+	if (!rows) {
+		*out = NULL;
+		return 0;
+	}
+	/*
+	 * vmlinux BTF loaded once; per-upatch reload would burn syscalls
+	 * for no gain since every shirudo upatch attaches to vmlinux.
+	 */
+	vbtf = btf__load_vmlinux_btf();
+	for (i = 0; i < n_ups; i++) {
+		struct shirudo_upatch_table_row *r = &rows[i];
+		struct shirudo_map_summary *list = NULL;
+		size_t nm = 0;
 
-static const struct upatch_load_info *find_load(
-	const struct upatch_load_info *loads, size_t n, const char *name)
-{
-	size_t i;
-
-	for (i = 0; i < n; i++)
-		if (strcmp(loads[i].name, name) == 0)
-			return &loads[i];
-	return NULL;
+		snprintf(r->name, sizeof(r->name), "%.*s",
+			 (int)(sizeof(r->name) - 1), ups[i]->d_name);
+		shirudo_upatch_resolve_location(vbtf, ups[i]->d_name,
+						r->location,
+						sizeof(r->location));
+		shirudo_upatch_loaded_at(ups[i]->d_name, r->loaded_at,
+					 sizeof(r->loaded_at));
+		shirudo_upatch_payload_sha256(ups[i]->d_name,
+					      r->payload_sha256,
+					      sizeof(r->payload_sha256));
+		shirudo_upatch_maps_list_one(ups[i]->d_name, &list, &nm);
+		r->n_maps = (uint32_t)nm;
+		shirudo_map_summary_free(list, nm);
+		r->age_sec = shirudo_upatch_age_sec(r->loaded_at);
+	}
+	if (vbtf)
+		btf__free(vbtf);
+	*out = rows;
+	return (size_t)n_ups;
 }
 
 /*
@@ -478,147 +477,6 @@ static void local_cond_input(struct shirudo_conditions_input *in,
 	};
 }
 
-/*
- * BPF prog_type + expected_attach_type -> SEC()-style prefix. Mirrors the
- * libbpf convention shirudo upatches actually use today: BPF_PROG_TYPE_LSM
- * is "lsm/...", BPF_PROG_TYPE_TRACING is fentry/fexit/fmod_ret/tp_btf/iter
- * keyed on expected_attach_type. NULL for anything else (we render the
- * libbpf type-string then).
- */
-static const char *upatch_loc_prefix(uint32_t prog_type, uint32_t attach_type)
-{
-	if (prog_type == BPF_PROG_TYPE_LSM)
-		return "lsm";
-	if (prog_type == BPF_PROG_TYPE_TRACING) {
-		switch (attach_type) {
-		case BPF_TRACE_FENTRY:		return "fentry";
-		case BPF_TRACE_FEXIT:		return "fexit";
-		case BPF_MODIFY_RETURN:		return "fmod_ret";
-		case BPF_TRACE_RAW_TP:		return "tp_btf";
-		case BPF_TRACE_ITER:		return "iter";
-		default:			return NULL;
-		}
-	}
-	return NULL;
-}
-
-/*
- * Resolve a loaded upatch's bpffs link pin to its attach hook string
- * ("lsm/socket_create", "fentry/tcp_v4_connect", ...). The link pin is
- * opened with read-only bpf() ops (BPF_OBJ_GET / *_GET_INFO_BY_FD /
- * PROG_GET_FD_BY_ID -- all LSM-allowed). vmlinux BTF resolves
- * attach_btf_id back to a function name; caller loads it once and
- * reuses across the per-upatch loop (a fresh load per upatch would
- * re-read /sys/kernel/btf/vmlinux on every iteration).
- *
- * The attach kind (fentry/fexit/lsm/...) comes from the link's
- * tracing.attach_type rather than prog_info -- bpf_prog_info has
- * attach_btf_id but no expected_attach_type. Both LSM and tracing
- * progs use BPF_LINK_TYPE_TRACING when attached via
- * BPF_RAW_TRACEPOINT_OPEN with a NULL name (the path shirudo uses),
- * so linfo.tracing.attach_type is always populated for our links.
- *
- * Returns 0 on success with `out` populated, or -errno; on failure
- * `out` is "" so the JSON field degrades to empty rather than absent.
- */
-static int resolve_upatch_location(struct btf *vbtf, const char *name,
-				   char *out, size_t cap)
-{
-	struct bpf_link_info linfo = {};
-	struct bpf_prog_info info = {};
-	const char *attach_name = NULL;
-	uint32_t attach_type = 0;
-	int link_fd, prog_fd, rc;
-	char pin[PATH_MAX];
-	const char *prefix;
-	uint32_t len;
-
-	out[0] = '\0';
-	if ((size_t)snprintf(pin, sizeof(pin), "%s/%s/link",
-			     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= sizeof(pin))
-		return -ENAMETOOLONG;
-
-	link_fd = bpf_obj_get(pin);
-	if (link_fd < 0)
-		return -errno;
-	len = sizeof(linfo);
-	rc = bpf_link_get_info_by_fd(link_fd, &linfo, &len);
-	close(link_fd);
-	if (rc != 0 || linfo.prog_id == 0)
-		return rc ? -errno : -EINVAL;
-	if (linfo.type == BPF_LINK_TYPE_TRACING)
-		attach_type = linfo.tracing.attach_type;
-
-	prog_fd = bpf_prog_get_fd_by_id(linfo.prog_id);
-	if (prog_fd < 0)
-		return -errno;
-	len = sizeof(info);
-	rc = bpf_prog_get_info_by_fd(prog_fd, &info, &len);
-	close(prog_fd);
-	if (rc != 0)
-		return -errno;
-
-	/*
-	 * Look up the attach BTF type in vmlinux BTF. The kernel sets
-	 * attach_btf_obj_id to btf_obj_id(attach_btf) -- vmlinux has a
-	 * non-zero id (typically 1), so we don't gate the lookup on it
-	 * being zero (that bug let LSM hooks render as bare "lsm" with
-	 * no hook name). All shirudo upatches attach to vmlinux, not
-	 * module BTFs, so a vmlinux lookup is always correct.
-	 */
-	if (vbtf && info.attach_btf_id &&
-	    info.attach_btf_id < btf__type_cnt(vbtf)) {
-		const struct btf_type *t;
-
-		t = btf__type_by_id(vbtf, info.attach_btf_id);
-		if (t)
-			attach_name = btf__name_by_offset(vbtf, t->name_off);
-	}
-
-	prefix = upatch_loc_prefix(info.type, attach_type);
-	if (!prefix)
-		prefix = libbpf_bpf_prog_type_str(info.type);
-	if (!prefix)
-		prefix = "?";
-
-	/* LSM hook funcs are named bpf_lsm_<hook>; strip the prefix. */
-	if (info.type == BPF_PROG_TYPE_LSM && attach_name &&
-	    strncmp(attach_name, "bpf_lsm_", 8) == 0)
-		attach_name += 8;
-
-	if (attach_name && *attach_name)
-		snprintf(out, cap, "%s/%s", prefix, attach_name);
-	else
-		snprintf(out, cap, "%s", prefix);
-	return 0;
-}
-
-/*
- * "When did this upatch become active in this boot?" -- ctime of the
- * upatch's bpffs pin directory. bpffs is RAM-backed (gone on reboot,
- * re-created by boot-restore), so the ctime is honest about the active-
- * since point even after boot-restore: it is the timestamp the kernel
- * inode came into existence on the current boot. Defaults to "" if the
- * dir is missing or stat fails; the operator-side table then renders
- * AGE as "?".
- */
-static void upatch_loaded_at(const char *name, char *out, size_t cap)
-{
-	char dir[PATH_MAX];
-	struct stat st;
-	struct tm tm;
-
-	out[0] = '\0';
-	if ((size_t)snprintf(dir, sizeof(dir), "%s/%s",
-			     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= sizeof(dir))
-		return;
-	if (stat(dir, &st) != 0)
-		return;
-	if (!gmtime_r(&st.st_ctim.tv_sec, &tm))
-		return;
-	strftime(out, cap, "%Y-%m-%dT%H:%M:%SZ", &tm);
-}
-
 /* Compose roles like nodes show: "target", "operator", or both. */
 static const char *roles_str(int is_target, int is_operator)
 {
@@ -636,7 +494,6 @@ int cmd_status(int argc, const char **argv)
 	bool json = false, include_tpm = false;
 	bool include_system = false, include_eventlog = false;
 	bool include_kernel_log = false, include_modules = false;
-	bool include_maps = false;
 	bool show_full = false;
 	bool lsm_attached, keyring_present, is_operator, cert_present, is_target;
 	key_serial_t keyring_serial, keyring_pinned;
@@ -666,8 +523,6 @@ int cmd_status(int argc, const char **argv)
 			include_kernel_log = true;
 		else if (strcmp(argv[i], "--include-modules") == 0)
 			include_modules = true;
-		else if (strcmp(argv[i], "--include-maps") == 0)
-			include_maps = true;
 		else if (strcmp(argv[i], "--show-full") == 0)
 			show_full = true;
 		else if (shirudo_is_help(argv[i])) {
@@ -691,7 +546,6 @@ int cmd_status(int argc, const char **argv)
 		include_eventlog = true;
 		include_kernel_log = true;
 		include_modules = true;
-		include_maps = true;
 	}
 	/* The events[] array lives under tpm.eventlog, so it needs that. */
 	if (include_eventlog)
@@ -821,39 +675,11 @@ int cmd_status(int argc, const char **argv)
 		shirudo_json_kv_bool(&e, "cert_present", cert_present);
 		shirudo_json_kv_bool(&e, "signing_key_present", is_operator);
 		{
-			/*
-			 * vmlinux BTF is loaded once and reused across the
-			 * per-upatch resolve. NULL is fine -- resolver falls
-			 * back to "?". A single load is ~MiBs read from
-			 * /sys/kernel/btf/vmlinux; per-upatch reload would
-			 * be a needless syscall storm on a fleet host.
-			 */
-			struct btf *vbtf = btf__load_vmlinux_btf();
+			struct shirudo_upatch_table_row *rows = NULL;
+			size_t n_rows = build_upatches_table(ups, n_ups, &rows);
 
-			shirudo_json_arr_open(&e, "upatches_loaded");
-			for (i = 0; i < n_ups; i++) {
-				struct shirudo_map_summary *list = NULL;
-				char loc[160] = "";
-				char la[32] = "";
-				size_t nm = 0;
-
-				resolve_upatch_location(vbtf, ups[i]->d_name,
-							loc, sizeof(loc));
-				upatch_loaded_at(ups[i]->d_name, la, sizeof(la));
-				shirudo_upatch_maps_list_one(ups[i]->d_name,
-							     &list, &nm);
-				shirudo_json_obj_open(&e);
-				shirudo_json_kv_string(&e, "name",
-						       ups[i]->d_name);
-				shirudo_json_kv_string(&e, "location", loc);
-				shirudo_json_kv_int(&e, "n_maps", (int64_t)nm);
-				shirudo_json_kv_string(&e, "loaded_at", la);
-				shirudo_json_obj_close(&e);
-				shirudo_map_summary_free(list, nm);
-			}
-			shirudo_json_arr_close(&e);
-			if (vbtf)
-				btf__free(vbtf);
+			shirudo_upatch_table_emit_json(&e, rows, n_rows);
+			xfree(rows, n_rows * sizeof(*rows));
 		}
 		shirudo_json_obj_open_key(&e, "assets");
 		shirudo_json_kv_string(&e, "root", SHIRUDO_VAR_LIB);
@@ -979,37 +805,6 @@ int cmd_status(int argc, const char **argv)
 			shirudo_json_arr_close(&e);
 			shirudo_kmodules_free(&ks);
 		}
-		if (include_maps) {
-			shirudo_json_arr_open(&e, "upatch_maps");
-			for (i = 0; i < n_ups; i++) {
-				struct shirudo_map_summary *list = NULL;
-				size_t nm = 0;
-				size_t k;
-
-				shirudo_upatch_maps_list_one(ups[i]->d_name,
-							     &list, &nm);
-				shirudo_json_obj_open(&e);
-				shirudo_json_kv_string(&e, "upatch",
-						       ups[i]->d_name);
-				shirudo_json_arr_open(&e, "maps");
-				for (k = 0; k < nm; k++) {
-					struct shirudo_map_view v = {};
-					uint32_t cap = show_full ? 0 :
-						SHIRUDO_MAP_ENTRIES_DEFAULT;
-
-					if (shirudo_upatch_maps_read(
-						list[k].upatch, list[k].name,
-						cap, &v) == 0)
-						shirudo_upatch_maps_emit_json(
-							&e, &v);
-					shirudo_map_view_free(&v);
-				}
-				shirudo_json_arr_close(&e);
-				shirudo_json_obj_close(&e);
-				shirudo_map_summary_free(list, nm);
-			}
-			shirudo_json_arr_close(&e);
-		}
 		shirudo_json_obj_close(&e);
 
 		if (e.err)
@@ -1020,8 +815,9 @@ int cmd_status(int argc, const char **argv)
 	} else {
 		struct shirudo_conditions_input cin;
 		struct shirudo_condition conds[SHIRUDO_CONDITIONS_MAX];
-		struct upatch_load_info loads[256];
-		size_t nc, n_loads;
+		struct shirudo_upatch_table_row *rows = NULL;
+		size_t n_rows = 0;
+		size_t nc;
 		char hostname[256] = "?";
 		char reason[160];
 		const char *verdict;
@@ -1039,7 +835,7 @@ int cmd_status(int argc, const char **argv)
 		verdict = shirudo_status_verdict(&cin);
 		shirudo_status_reason(&cin, reason, sizeof(reason));
 		nc = shirudo_conditions(&cin, conds, ARRAY_SIZE(conds));
-		n_loads = scan_eventlog_loads(loads, ARRAY_SIZE(loads));
+		n_rows = build_upatches_table(ups, n_ups, &rows);
 		(void)gethostname(hostname, sizeof(hostname));
 		hostname[sizeof(hostname) - 1] = '\0';
 
@@ -1080,51 +876,9 @@ int cmd_status(int argc, const char **argv)
 		if (include_system)
 			print_system_human(&sysi);
 
-		printf("\nUpatches loaded (%d):\n", n_ups);
-		if (n_ups > 0) {
-			printf("  %-30s %-18s %s\n", "NAME", "PAYLOAD-SHA256",
-			       "APPLIED");
-			for (i = 0; i < n_ups; i++) {
-				const struct upatch_load_info *li =
-					find_load(loads, n_loads,
-						  ups[i]->d_name);
-				char age[16] = "?";
-				char pay[20];
-
-				if (li) {
-					struct tm tm = {};
-
-					snprintf(pay, sizeof(pay), "%.16s..",
-						 li->payload);
-					if (strptime(li->ts,
-						     "%Y-%m-%dT%H:%M:%SZ",
-						     &tm))
-						shirudo_format_duration(
-							(long)(time(NULL) -
-							       timegm(&tm)),
-							age, sizeof(age));
-				} else {
-					snprintf(pay, sizeof(pay), "-");
-				}
-				printf("  %-30s %-18s %s\n",
-				       ups[i]->d_name, pay, age);
-				if (include_maps) {
-					struct shirudo_map_summary *list = NULL;
-					size_t nm = 0;
-					size_t k;
-
-					shirudo_upatch_maps_list_one(
-						ups[i]->d_name, &list, &nm);
-					if (nm) {
-						printf("    Maps:\n");
-						for (k = 0; k < nm; k++)
-							shirudo_upatch_map_print_inline(
-								&list[k]);
-					}
-					shirudo_map_summary_free(list, nm);
-				}
-			}
-		}
+		shirudo_upatch_table_print(rows, n_rows);
+		xfree(rows, n_rows * sizeof(*rows));
+		rows = NULL;
 
 		if (include_tpm) {
 			printf("\nTPM Measurement:\n");

@@ -239,3 +239,20 @@ bool shirudo_upatch_has_source(const struct shirudo_upatch *u)
 {
 	return u->map && u->source && u->source_len > 0;
 }
+
+bool shirudo_upatch_name_valid(const char *name)
+{
+	size_t i;
+
+	if (!name || name[0] == '\0' || name[0] == '.')
+		return false;
+	for (i = 0; name[i]; i++) {
+		char c = name[i];
+
+		if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		      (c >= '0' && c <= '9') || c == '.' || c == '_' ||
+		      c == '-'))
+			return false;
+	}
+	return true;
+}

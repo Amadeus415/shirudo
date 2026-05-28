@@ -1,0 +1,143 @@
+// SPDX-License-Identifier: BSD-2-Clause
+/*
+ * Copyright (c) 2026 Authors of shirudo
+ *
+ * Lifted out of builtin-status.c so `shirudo upatch get` can share
+ * the same hook-string + loaded_at resolvers.
+ */
+
+#include <errno.h>
+#include <limits.h>
+#include <linux/bpf.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/xattr.h>
+#include <time.h>
+#include <unistd.h>
+
+#include <bpf/bpf.h>
+#include <bpf/btf.h>
+#include <bpf/libbpf.h>
+
+#include "paths.h"
+#include "upatch_resolve.h"
+
+static const char *loc_prefix(uint32_t prog_type, uint32_t attach_type)
+{
+	if (prog_type == BPF_PROG_TYPE_LSM)
+		return "lsm";
+	if (prog_type == BPF_PROG_TYPE_TRACING) {
+		switch (attach_type) {
+		case BPF_TRACE_FENTRY:		return "fentry";
+		case BPF_TRACE_FEXIT:		return "fexit";
+		case BPF_MODIFY_RETURN:		return "fmod_ret";
+		case BPF_TRACE_RAW_TP:		return "tp_btf";
+		case BPF_TRACE_ITER:		return "iter";
+		default:			return NULL;
+		}
+	}
+	return NULL;
+}
+
+int shirudo_upatch_resolve_location(struct btf *vbtf, const char *name,
+				    char *out, size_t cap)
+{
+	struct bpf_link_info linfo = {};
+	struct bpf_prog_info info = {};
+	const char *attach_name = NULL;
+	uint32_t attach_type = 0;
+	int link_fd, prog_fd, rc;
+	char pin[PATH_MAX];
+	const char *prefix;
+	uint32_t len;
+
+	out[0] = '\0';
+	if ((size_t)snprintf(pin, sizeof(pin), "%s/%s/link",
+			     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= sizeof(pin))
+		return -ENAMETOOLONG;
+
+	link_fd = bpf_obj_get(pin);
+	if (link_fd < 0)
+		return -errno;
+	len = sizeof(linfo);
+	rc = bpf_link_get_info_by_fd(link_fd, &linfo, &len);
+	close(link_fd);
+	if (rc != 0 || linfo.prog_id == 0)
+		return rc ? -errno : -EINVAL;
+	if (linfo.type == BPF_LINK_TYPE_TRACING)
+		attach_type = linfo.tracing.attach_type;
+
+	prog_fd = bpf_prog_get_fd_by_id(linfo.prog_id);
+	if (prog_fd < 0)
+		return -errno;
+	len = sizeof(info);
+	rc = bpf_prog_get_info_by_fd(prog_fd, &info, &len);
+	close(prog_fd);
+	if (rc != 0)
+		return -errno;
+
+	if (vbtf && info.attach_btf_id &&
+	    info.attach_btf_id < btf__type_cnt(vbtf)) {
+		const struct btf_type *t = btf__type_by_id(vbtf,
+							   info.attach_btf_id);
+
+		if (t)
+			attach_name = btf__name_by_offset(vbtf, t->name_off);
+	}
+
+	prefix = loc_prefix(info.type, attach_type);
+	if (!prefix)
+		prefix = libbpf_bpf_prog_type_str(info.type);
+	if (!prefix)
+		prefix = "?";
+
+	/* Strip the bpf_lsm_ prefix the kernel mangles LSM hooks with. */
+	if (info.type == BPF_PROG_TYPE_LSM && attach_name &&
+	    strncmp(attach_name, "bpf_lsm_", 8) == 0)
+		attach_name += 8;
+
+	if (attach_name && *attach_name)
+		snprintf(out, cap, "%s/%s", prefix, attach_name);
+	else
+		snprintf(out, cap, "%s", prefix);
+	return 0;
+}
+
+void shirudo_upatch_loaded_at(const char *name, char *out, size_t cap)
+{
+	char dir[PATH_MAX];
+	struct stat st;
+	struct tm tm;
+
+	out[0] = '\0';
+	if ((size_t)snprintf(dir, sizeof(dir), "%s/%s",
+			     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= sizeof(dir))
+		return;
+	if (stat(dir, &st) != 0)
+		return;
+	if (!gmtime_r(&st.st_ctim.tv_sec, &tm))
+		return;
+	strftime(out, cap, "%Y-%m-%dT%H:%M:%SZ", &tm);
+}
+
+void shirudo_upatch_payload_sha256(const char *name, char *out, size_t cap)
+{
+	char dir[PATH_MAX];
+	uint8_t raw[32];
+	ssize_t n;
+	size_t i;
+
+	out[0] = '\0';
+	if (cap < 65)
+		return;
+	if ((size_t)snprintf(dir, sizeof(dir), "%s/%s",
+			     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= sizeof(dir))
+		return;
+	n = getxattr(dir, SHIRUDO_XATTR_PAYLOAD, raw, sizeof(raw));
+	if (n != (ssize_t)sizeof(raw))
+		return;
+	for (i = 0; i < sizeof(raw); i++)
+		snprintf(out + 2 * i, cap - 2 * i, "%02x", raw[i]);
+}

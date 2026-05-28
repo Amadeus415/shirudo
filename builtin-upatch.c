@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/xattr.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <linux/bpf.h>
@@ -39,8 +40,10 @@
 #include "util/paths.h"
 #include "util/report.h"
 #include "util/seal.h"
+#include "util/timefmt.h"
 #include "util/upatch.h"
 #include "util/upatch_maps.h"
+#include "util/upatch_resolve.h"
 
 extern const char shirudo_version_id[];
 
@@ -190,17 +193,32 @@ static const struct shirudo_help upatch_map_help = {
 "  shirudo upatch map cve-2026-31431-counter big_hash --show-full",
 };
 
+static const struct shirudo_help_item upatch_get_options[] = {
+	{ "--json",       "machine-readable JSON output" },
+	{ "--show-full",  "lift the per-map 256-entry truncation cap" },
+};
+
+static const struct shirudo_help_section upatch_get_sections[] = {
+	{ "options:", upatch_get_options, ARRAY_SIZE(upatch_get_options) },
+};
+
 static const struct shirudo_help upatch_get_help = {
-	.usage   = "shirudo upatch get <name>",
-	.summary = "Dump source of a loaded upatch from the target kernel,\n"
-		   "via the BPF prog's BTF line_info installed by the signed "
-		   "loader.\nAuthoritative (reads what is actually loaded), "
-		   "but shows only the\nsparse instruction-tagged lines "
-		   "`clang -g` recorded -- not the\nfull .c. For the build-"
-		   "time-embedded full source see\n`shirudo upatch info`.",
+	.usage   = "shirudo upatch get <name> [--json] [--show-full]",
+	.summary = "Describe a loaded upatch from the target kernel:\n"
+		   "  - the SEC()-style attach hook (e.g. fexit/tcp_v4_connect),\n"
+		   "  - the prog source via BTF line_info installed by the\n"
+		   "    signed loader (authoritative, but sparse),\n"
+		   "  - every pinned map: BTF key/value type definitions plus\n"
+		   "    the live key/value contents.\n"
+		   "Read-only; uses only LSM-allowed bpf() ops + xattr / stat.\n"
+		   "For the build-time-embedded full source see\n"
+		   "`shirudo upatch info`.",
+	.sections   = upatch_get_sections,
+	.n_sections = ARRAY_SIZE(upatch_get_sections),
 	.footer  =
 "Examples:\n"
-"  shirudo upatch get cve-2026-31431",
+"  shirudo upatch get cve-2026-31431\n"
+"  shirudo upatch get cve-2026-31431 --json | jq",
 };
 
 static int cmd_upatch_info(int argc, const char **argv)
@@ -2028,17 +2046,13 @@ static uint32_t li_collect(const struct btf *btf, const void *recs,
 	return k;
 }
 
-static void dump_line_info(const struct btf *btf, const void *recs,
-			   uint32_t rec_size, uint32_t n)
+static void dump_line_info_text(struct li_entry *ents, uint32_t k)
 {
-	struct li_entry *ents = NULL;
 	const char *last = NULL;
-	uint32_t k, i;
+	uint32_t i;
 
-	k = li_collect(btf, recs, rec_size, n, &ents);
 	if (k == 0) {
 		printf("  (no line info)\n");
-		xfree(ents, (size_t)n * sizeof(*ents));
 		return;
 	}
 	for (i = 0; i < k; i++) {
@@ -2048,7 +2062,37 @@ static void dump_line_info(const struct btf *btf, const void *recs,
 		}
 		printf("    %5u: %s\n", ents[i].line, ents[i].src);
 	}
-	xfree(ents, (size_t)n * sizeof(*ents));
+}
+
+/*
+ * Emit a {"files":[{"path":..., "lines":[{line, src}, ...]}, ...]}
+ * object body inside the caller's open "source" key. ents is the
+ * file-then-line sorted unique tuple list from li_collect().
+ */
+static void emit_line_info_json(struct shirudo_json_emit *e,
+				struct li_entry *ents, uint32_t k)
+{
+	uint32_t i = 0;
+
+	shirudo_json_arr_open(e, "files");
+	while (i < k) {
+		const char *path = ents[i].file;
+		uint32_t j;
+
+		shirudo_json_obj_open(e);
+		shirudo_json_kv_string(e, "path", path);
+		shirudo_json_arr_open(e, "lines");
+		for (j = i; j < k && strcmp(ents[j].file, path) == 0; j++) {
+			shirudo_json_obj_open(e);
+			shirudo_json_kv_int(e, "line", ents[j].line);
+			shirudo_json_kv_string(e, "src", ents[j].src);
+			shirudo_json_obj_close(e);
+		}
+		shirudo_json_arr_close(e);
+		shirudo_json_obj_close(e);
+		i = j;
+	}
+	shirudo_json_arr_close(e);
 }
 
 /*
@@ -2207,31 +2251,316 @@ static int cmd_upatch_map(int argc, const char **argv)
 	return ret;
 }
 
-static int cmd_upatch_get(int argc, const char **argv)
+/*
+ * Format a payload SHA-256 (32 raw bytes) as lowercase hex; "" if
+ * the xattr was absent / kernel without the bpffs-xattr patch.
+ */
+static void payload_hex(const char *upatch, char *out, size_t cap)
 {
-	struct bpf_prog_info info = {};
+	uint8_t raw[32];
+	int rc = get_pin_payload(upatch, raw);
+	size_t i;
+
+	out[0] = '\0';
+	if (rc != 0)
+		return;
+	if (cap < 65)
+		return;
+	for (i = 0; i < 32; i++)
+		snprintf(out + 2 * i, cap - 2 * i, "%02x", raw[i]);
+}
+
+struct upatch_get_ctx {
+	const char	*upatch;
+	uint32_t	prog_id;
+	char		location[160];
+	char		loaded_at[32];
+	char		payload[65];
+	struct li_entry	*ents;	/* sorted unique source lines */
+	uint32_t	n_ents;
+	uint32_t	n_recs;	/* raw line_info record count, for free() */
+	struct btf	*btf;
+};
+
+static void upatch_get_ctx_free(struct upatch_get_ctx *c)
+{
+	if (c->ents)
+		xfree(c->ents, (size_t)c->n_recs * sizeof(*c->ents));
+	if (c->btf)
+		btf__free(c->btf);
+	c->ents = NULL;
+	c->btf = NULL;
+}
+
+/*
+ * Populate the ctx: open the pin, read link+prog info, load BTF,
+ * collect line_info. Returns 0 on success; -errno on failure. On
+ * partial failure (e.g. no line_info), still returns 0 and leaves
+ * the source-related fields empty so the caller can render the rest.
+ */
+static int upatch_get_collect(const char *want, struct upatch_get_ctx *c)
+{
 	struct bpf_link_info linfo = {};
-	const char *want = NULL;
+	struct bpf_prog_info info = {};
+	struct btf *vbtf = NULL;
 	char pin[PATH_MAX];
-	struct btf *btf = NULL;
 	void *recs = NULL;
 	size_t recs_sz = 0;
 	uint32_t len, nr, rec_size, btf_id;
-	int link_fd = -1, prog_fd = -1, rc = 1, i;
+	int link_fd = -1, prog_fd = -1, rc = 0;
+
+	c->upatch = want;
+	c->ents = NULL;
+	c->n_ents = 0;
+	c->n_recs = 0;
+	c->btf = NULL;
+	c->location[0] = '\0';
+	c->loaded_at[0] = '\0';
+	c->payload[0] = '\0';
+	c->prog_id = 0;
+
+	if (snprintf(pin, sizeof(pin), "%s/%s/link",
+		     SHIRUDO_BPFFS_UPATCHES_DIR, want) >= (int)sizeof(pin))
+		return -ENAMETOOLONG;
+	link_fd = bpf_obj_get(pin);
+	if (link_fd < 0)
+		return -errno;
+	len = sizeof(linfo);
+	if (bpf_link_get_info_by_fd(link_fd, &linfo, &len) != 0) {
+		rc = -errno;
+		close(link_fd);
+		return rc;
+	}
+	close(link_fd);
+	if (linfo.prog_id == 0)
+		return -EINVAL;
+	c->prog_id = linfo.prog_id;
+	shirudo_upatch_loaded_at(want, c->loaded_at, sizeof(c->loaded_at));
+	payload_hex(want, c->payload, sizeof(c->payload));
+
+	vbtf = btf__load_vmlinux_btf();
+	shirudo_upatch_resolve_location(vbtf, want, c->location,
+					sizeof(c->location));
+	if (vbtf)
+		btf__free(vbtf);
+
+	prog_fd = bpf_prog_get_fd_by_id(linfo.prog_id);
+	if (prog_fd < 0)
+		return -errno;
+	len = sizeof(info);
+	if (bpf_prog_get_info_by_fd(prog_fd, &info, &len) != 0) {
+		rc = -errno;
+		close(prog_fd);
+		return rc;
+	}
+	nr = info.nr_line_info;
+	rec_size = info.line_info_rec_size;
+	btf_id = info.btf_id;
+	if (nr == 0 || btf_id == 0 || rec_size == 0) {
+		close(prog_fd);
+		return 0;	/* no source -- still a usable get */
+	}
+	recs_sz = (size_t)nr * rec_size;
+	recs = xmalloc(recs_sz);
+	if (!recs) {
+		close(prog_fd);
+		return -ENOMEM;
+	}
+	memset(&info, 0, sizeof(info));
+	info.nr_line_info = nr;
+	info.line_info_rec_size = rec_size;
+	info.line_info = (uint64_t)(unsigned long)recs;
+	len = sizeof(info);
+	if (bpf_prog_get_info_by_fd(prog_fd, &info, &len) != 0) {
+		rc = -errno;
+		xfree(recs, recs_sz);
+		close(prog_fd);
+		return rc;
+	}
+	close(prog_fd);
+	c->btf = btf__load_from_kernel_by_id(btf_id);
+	if (!c->btf) {
+		xfree(recs, recs_sz);
+		return -errno;
+	}
+	c->n_recs = nr;
+	c->n_ents = li_collect(c->btf, recs, rec_size, nr, &c->ents);
+	xfree(recs, recs_sz);
+	return 0;
+}
+
+/* "since <ts>" human helper. "" if ts is empty / unparseable. */
+static void age_from_ts(const char *ts, char *out, size_t cap)
+{
+	struct tm tm = {};
+
+	out[0] = '\0';
+	if (!ts || !ts[0])
+		return;
+	if (!strptime(ts, "%Y-%m-%dT%H:%M:%SZ", &tm))
+		return;
+	shirudo_format_duration((long)(time(NULL) - timegm(&tm)), out, cap);
+}
+
+/* Text render of one map; cap=0 means "lift the truncation". */
+static void render_one_map_text(const char *upatch, const char *map,
+				uint32_t cap)
+{
+	struct shirudo_map_view v = {};
+	int rc = shirudo_upatch_maps_read(upatch, map,
+					  cap ? cap
+					      : SHIRUDO_MAP_ENTRIES_DEFAULT,
+					  &v);
+
+	printf("\n== Map: %s ==\n", map);
+	if (rc != 0) {
+		printf("  (read failed: %s)\n", strerror(-rc));
+		shirudo_map_view_free(&v);
+		return;
+	}
+	shirudo_upatch_maps_print_detail(&v);
+	shirudo_map_view_free(&v);
+}
+
+/* Text render of the bundled get document. */
+static void render_get_text(const struct upatch_get_ctx *c,
+			    const struct shirudo_map_summary *maps, size_t nm,
+			    uint32_t map_cap)
+{
+	char age[16] = "";
+	size_t k;
+
+	age_from_ts(c->loaded_at, age, sizeof(age));
+
+	printf("upatch:        %s\n", c->upatch);
+	printf("Location:      %s\n",
+	       c->location[0] ? c->location : "?");
+	printf("Prog id:       %u\n", c->prog_id);
+	if (c->loaded_at[0])
+		printf("Loaded at:     %s%s%s%s\n", c->loaded_at,
+		       age[0] ? "  (" : "", age, age[0] ? " ago)" : "");
+	if (c->payload[0])
+		printf("Payload:       %s  (signature-bound)\n", c->payload);
+	else
+		printf("Payload:       (unavailable)\n");
+	printf("Maps (%zu):    ", nm);
+	for (k = 0; k < nm; k++)
+		printf("%s%s", maps[k].name, k + 1 < nm ? ", " : "");
+	printf("\n");
+
+	printf("\nSource (kernel BTF line_info):\n\n");
+	if (c->n_ents == 0)
+		printf("  (no line info -- built without `clang -g`?)\n");
+	else
+		dump_line_info_text(c->ents, c->n_ents);
+
+	for (k = 0; k < nm; k++)
+		render_one_map_text(c->upatch, maps[k].name, map_cap);
+}
+
+/* JSON render of the bundled get document. */
+static int render_get_json(const struct upatch_get_ctx *c,
+			   const struct shirudo_map_summary *maps, size_t nm,
+			   uint32_t map_cap)
+{
+	struct shirudo_json_emit e = {};
+	size_t cap = 64 * 1024 + 1024 * nm;
+	char age[16] = "";
+	char *buf;
+	size_t k;
+	int ret = 0;
+
+	if (cap > SHIRUDO_JSON_MAX_BYTES)
+		cap = SHIRUDO_JSON_MAX_BYTES;
+	buf = xmalloc(cap);
+	if (!buf)
+		return 1;
+	e.buf = buf;
+	e.cap = cap;
+
+	age_from_ts(c->loaded_at, age, sizeof(age));
+
+	shirudo_json_obj_open(&e);
+	shirudo_json_kv_int(&e, "schema", 1);
+	shirudo_json_obj_open_key(&e, "upatch");
+	shirudo_json_kv_string(&e, "name", c->upatch);
+	shirudo_json_kv_string(&e, "location", c->location);
+	shirudo_json_kv_int(&e, "prog_id", c->prog_id);
+	shirudo_json_kv_string(&e, "loaded_at", c->loaded_at);
+	shirudo_json_kv_string(&e, "age", age);
+	if (c->payload[0])
+		shirudo_json_kv_string(&e, "payload_sha256", c->payload);
+	else
+		shirudo_json_kv_null(&e, "payload_sha256");
+	shirudo_json_obj_open_key(&e, "source");
+	emit_line_info_json(&e, c->ents, c->n_ents);
+	shirudo_json_obj_close(&e);
+	shirudo_json_arr_open(&e, "maps");
+	for (k = 0; k < nm; k++) {
+		struct shirudo_map_view v = {};
+		int rc;
+
+		rc = shirudo_upatch_maps_read(c->upatch, maps[k].name,
+					      map_cap ? map_cap
+						      : SHIRUDO_MAP_ENTRIES_DEFAULT,
+					      &v);
+		if (rc != 0) {
+			shirudo_json_obj_open(&e);
+			shirudo_json_kv_string(&e, "name", maps[k].name);
+			shirudo_json_kv_string(&e, "type",
+					       maps[k].type_name);
+			shirudo_json_kv_int(&e, "max_entries",
+					    maps[k].max_entries);
+			shirudo_json_kv_string(&e, "error", strerror(-rc));
+			shirudo_json_obj_close(&e);
+		} else {
+			shirudo_upatch_maps_emit_json(&e, &v);
+		}
+		shirudo_map_view_free(&v);
+	}
+	shirudo_json_arr_close(&e);
+	shirudo_json_obj_close(&e);	/* upatch */
+	shirudo_json_obj_close(&e);	/* root */
+	if (e.err) {
+		fprintf(stderr, "upatch get: json encode failed: %s\n",
+			strerror(-e.err));
+		ret = 1;
+	} else {
+		printf("%s\n", buf);
+	}
+	xfree(buf, cap);
+	return ret;
+}
+
+static int cmd_upatch_get(int argc, const char **argv)
+{
+	struct shirudo_map_summary *maps = NULL;
+	struct upatch_get_ctx ctx = {};
+	const char *want = NULL;
+	bool json = false, show_full = false;
+	size_t nm = 0;
+	uint32_t map_cap;
+	int rc, i;
 
 	for (i = 1; i < argc; i++) {
-		if (shirudo_is_help(argv[i])) {
+		const char *a = argv[i];
+
+		if (shirudo_is_help(a)) {
 			shirudo_print_help(&upatch_get_help);
 			return 0;
-		} else if (argv[i][0] == '-') {
-			fprintf(stderr, "upatch get: unknown option '%s'\n",
-				argv[i]);
+		}
+		if (strcmp(a, "--json") == 0) {
+			json = true;
+		} else if (strcmp(a, "--show-full") == 0) {
+			show_full = true;
+		} else if (a[0] == '-') {
+			fprintf(stderr, "upatch get: unknown option '%s'\n", a);
 			return 2;
 		} else if (!want) {
-			want = argv[i];
+			want = a;
 		} else {
-			fprintf(stderr, "upatch get: unexpected argument '%s'\n",
-				argv[i]);
+			fprintf(stderr,
+				"upatch get: unexpected argument '%s'\n", a);
 			return 2;
 		}
 	}
@@ -2244,83 +2573,22 @@ static int cmd_upatch_get(int argc, const char **argv)
 		return 2;
 	}
 
-	if (snprintf(pin, sizeof(pin), "%s/%s/link",
-		     SHIRUDO_BPFFS_UPATCHES_DIR, want) >= (int)sizeof(pin))
-		return 2;
-	link_fd = bpf_obj_get(pin);
-	if (link_fd < 0) {
-		pr_err("upatch get: '%s' not loaded (%s): %s", want, pin,
-		       strerror(errno));
+	rc = upatch_get_collect(want, &ctx);
+	if (rc != 0) {
+		pr_err("upatch get: '%s': %s", want, strerror(-rc));
+		upatch_get_ctx_free(&ctx);
 		return 1;
 	}
+	shirudo_upatch_maps_list_one(want, &maps, &nm);
+	map_cap = show_full ? 0 : SHIRUDO_MAP_ENTRIES_DEFAULT;
 
-	len = sizeof(linfo);
-	if (bpf_link_get_info_by_fd(link_fd, &linfo, &len) != 0) {
-		pr_err("upatch get: link info: %s", strerror(errno));
-		goto out;
-	}
-	if (linfo.prog_id == 0) {
-		pr_err("upatch get: link has no program");
-		goto out;
-	}
-	prog_fd = bpf_prog_get_fd_by_id(linfo.prog_id);
-	if (prog_fd < 0) {
-		pr_err("upatch get: prog id %u: %s", linfo.prog_id,
-		       strerror(errno));
-		goto out;
-	}
+	if (json)
+		rc = render_get_json(&ctx, maps, nm, map_cap);
+	else
+		render_get_text(&ctx, maps, nm, map_cap), rc = 0;
 
-	len = sizeof(info);
-	if (bpf_prog_get_info_by_fd(prog_fd, &info, &len) != 0) {
-		pr_err("upatch get: prog info: %s", strerror(errno));
-		goto out;
-	}
-	nr = info.nr_line_info;
-	rec_size = info.line_info_rec_size;
-	btf_id = info.btf_id;
-	printf("upatch %s: prog id=%u, %u line-info record%s\n",
-	       want, linfo.prog_id, nr, nr == 1 ? "" : "s");
-	if (nr == 0 || btf_id == 0 || rec_size == 0) {
-		printf("  (no line info -- built without `clang -g`?)\n");
-		rc = 0;
-		goto out;
-	}
-
-	recs_sz = (size_t)nr * rec_size;
-	recs = xmalloc(recs_sz);
-	if (!recs)
-		goto out;
-	/*
-	 * Second pass: a fresh info requesting only the line_info array
-	 * (a kernel-populated info has other count fields set, which would
-	 * make the kernel try to fill arrays we have no buffer for).
-	 */
-	memset(&info, 0, sizeof(info));
-	info.nr_line_info = nr;
-	info.line_info_rec_size = rec_size;
-	info.line_info = (uint64_t)(unsigned long)recs;
-	len = sizeof(info);
-	if (bpf_prog_get_info_by_fd(prog_fd, &info, &len) != 0) {
-		pr_err("upatch get: prog line_info: %s", strerror(errno));
-		goto out;
-	}
-	btf = btf__load_from_kernel_by_id(btf_id);
-	if (!btf) {
-		pr_err("upatch get: load BTF id %u: %s", btf_id,
-		       strerror(errno));
-		goto out;
-	}
-	dump_line_info(btf, recs, rec_size, nr);
-	rc = 0;
-out:
-	if (btf)
-		btf__free(btf);
-	if (recs)
-		xfree(recs, recs_sz);
-	if (prog_fd >= 0)
-		close(prog_fd);
-	if (link_fd >= 0)
-		close(link_fd);
+	shirudo_map_summary_free(maps, nm);
+	upatch_get_ctx_free(&ctx);
 	return rc;
 }
 

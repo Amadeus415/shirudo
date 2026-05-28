@@ -38,6 +38,16 @@ struct shirudo_map_entry {
 	void		*value;		/* value_size * (per-CPU ? n_cpus : 1) */
 };
 
+/*
+ * SHIRUDO_MAP_TYPEDEF_MAX bounds the multi-line struct/array
+ * "definition" string captured at read time (struct foo { __u32 a; ... }).
+ * Big enough for the common shirudo case (~10 fields); structs larger
+ * than this are truncated with "; ..." and the renderer still works.
+ */
+#define SHIRUDO_MAP_TYPEDEF_MAX		1024
+
+struct btf;
+
 struct shirudo_map_view {
 	char		upatch[64];
 	char		name[SHIRUDO_MAP_NAME_MAX + 1];
@@ -54,6 +64,11 @@ struct shirudo_map_view {
 	const char	*skipped_reason;
 	char		btf_key_type[SHIRUDO_MAP_TYPENAME_MAX];
 	char		btf_value_type[SHIRUDO_MAP_TYPENAME_MAX];
+	char		key_type_def[SHIRUDO_MAP_TYPEDEF_MAX];
+	char		value_type_def[SHIRUDO_MAP_TYPEDEF_MAX];
+	uint32_t	key_type_id;
+	uint32_t	value_type_id;
+	struct btf	*btf;		/* heap; owned by the view */
 	struct shirudo_map_entry	*entries;	/* n_entries long */
 };
 
@@ -94,7 +109,7 @@ void shirudo_upatch_maps_print_summary(const struct shirudo_map_summary *list,
 				       size_t n);
 void shirudo_upatch_maps_print_detail(const struct shirudo_map_view *v);
 
-/* Compact one-liner used inside the Upatches loaded section. */
+/* Compact one-liner used inside the upatches loaded section. */
 void shirudo_upatch_map_print_inline(const struct shirudo_map_summary *m);
 
 /*

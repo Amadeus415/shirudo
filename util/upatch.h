@@ -44,4 +44,11 @@ bool shirudo_upatch_is_unload(const struct shirudo_upatch *u);
 /* True if a parsed extras blob (embedded C source) is present. */
 bool shirudo_upatch_has_source(const struct shirudo_upatch *u);
 
+/*
+ * Validate an externally-provided upatch name: non-empty, doesn't
+ * start with '.', and matches [A-Za-z0-9._-]+. Rejects anything that
+ * could escape the bpffs / on-disk path namespace.
+ */
+bool shirudo_upatch_name_valid(const char *name);
+
 #endif /* SHIRUDO_UTIL_UPATCH_H */

@@ -503,7 +503,7 @@ Inspect on the target (SSH in once):
     # cve-2026-31431-counter       blocked_af_alg  percpu_array max=1  (per-cpu)
 
     shirudo upatch map cve-2026-31431-counter blocked_af_alg
-    # Upatch:             cve-2026-31431-counter
+    # upatch:             cve-2026-31431-counter
     # Map:                blocked_af_alg
     # Type:               percpu_array (16 CPUs)
     # Entries:            1 of 1
@@ -525,8 +525,8 @@ makes):
 
     # operator
     shirudo nodes show --include-maps prod-a
-    #   ... (Conditions, System Info, Upatches loaded ...)
-    # Upatches loaded (1):
+    #   ... (Conditions, System Info, upatches loaded ...)
+    # upatches loaded (1):
     #   NAME                          PAYLOAD-SHA256     APPLIED
     #   cve-2026-31431-counter        4513ab88..         23m
     #     Maps:

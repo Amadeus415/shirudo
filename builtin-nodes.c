@@ -35,11 +35,12 @@
 #include "util/ssh.h"
 #include "util/sysinfo.h"
 #include "util/timefmt.h"
+#include "util/upatch.h"
+#include "util/upatch_table.h"
 
 #define SHOW_CMD \
 	"shirudo status --json --include-tpm --include-system " \
-	"--include-eventlog --include-kernel-log --include-modules " \
-	"--include-maps"
+	"--include-eventlog --include-kernel-log --include-modules"
 
 /*
  * Compact PING column for the drift table: best-RTT in ms when OK,
@@ -126,16 +127,21 @@ static const struct shirudo_help_section nodes_show_sections[] = {
 
 static const struct shirudo_help nodes_show_help = {
 	.usage      = "shirudo nodes show [--json] [--show-full] <name>...\n"
-		      "       shirudo nodes show [--json] <name> upatches",
+		      "       shirudo nodes show [--json] <name> upatches\n"
+		      "       shirudo nodes show [--json] [--show-full] "
+		      "<name> upatches <upatch-name>",
 	.summary    = "Per-node deep dive: SSH into each named remote, fetch "
 		      "its\n`shirudo status --json` in one round-trip, and "
-		      "render it as Conditions /\nSystem Info / Upatches "
+		      "render it as Conditions /\nSystem Info / upatches "
 		      "loaded / TPM Measurement / Eventlog / Assets /\nKernel "
 		      "log / Loaded modules. <name> is the operator-local "
 		      "registry\nname, not the host/IP.\n\n"
 		      "A trailing `upatches` switches the view to just the "
 		      "NAME / LOCATION /\nMAPS / AGE table for the loaded "
-		      "upatches on one node.",
+		      "upatches on one node. Adding a\n<upatch-name> proxies "
+		      "`shirudo upatch get` on the target -- the loaded\n"
+		      "upatch's source (kernel BTF line_info) plus every "
+		      "pinned map's BTF\ntype and contents.",
 	.sections   = nodes_show_sections,
 	.n_sections = ARRAY_SIZE(nodes_show_sections),
 	.footer     =
@@ -144,7 +150,9 @@ static const struct shirudo_help nodes_show_help = {
 "  shirudo nodes show --show-full prod-edge-01 prod-edge-02\n"
 "  shirudo nodes show --json staging-db-1 | jq '.nodes[0].status'\n"
 "  shirudo nodes show prod-edge-01 upatches\n"
-"  shirudo nodes show --json prod-edge-01 upatches | jq '.upatches'",
+"  shirudo nodes show --json prod-edge-01 upatches | jq '.upatches'\n"
+"  shirudo nodes show prod-edge-01 upatches cve-2026-31431\n"
+"  shirudo nodes show --json prod-edge-01 upatches cve-2026-31431 | jq",
 };
 
 
@@ -170,7 +178,9 @@ struct up_row {
 	char	name[128];
 	char	location[160];
 	int64_t	n_maps;
+	int64_t	age_sec;
 	char	loaded_at[32];
+	char	payload_sha256[65];
 };
 
 /*
@@ -455,6 +465,11 @@ static int parse_node_detail(const char *out, size_t len,
 		  0, 0, NULL, 0 },
 		{ "loaded_at", SHIRUDO_JSON_T_STRING, d->up_scratch.loaded_at,
 		  sizeof(d->up_scratch.loaded_at), 0, NULL, 0 },
+		{ "age_sec", SHIRUDO_JSON_T_INT, &d->up_scratch.age_sec,
+		  0, 0, NULL, 0 },
+		{ "payload_sha256", SHIRUDO_JSON_T_STRING,
+		  d->up_scratch.payload_sha256,
+		  sizeof(d->up_scratch.payload_sha256), 0, NULL, 0 },
 	};
 	struct shirudo_json_array ev_sink = { ev_on_elem, d };
 	struct shirudo_json_field ev_upatch[] = {
@@ -1198,71 +1213,42 @@ static void print_describe(const struct node_detail *d, bool show_full)
 	if (d->sys.boot_id[0])
 		printf("  %-16s %s\n", "Boot ID:", d->sys.boot_id);
 
-	printf("\nUpatches loaded (%zu):\n", d->n_up);
-	if (d->n_up) {
-		printf("  %-30s %-18s %s\n", "NAME", "PAYLOAD-SHA256",
-		       "APPLIED");
-		for (i = 0; i < d->n_up; i++) {
-			const struct ev_row *ev =
-				last_load_event_for(d, d->upatches[i].name);
-			char age[16] = "?";
-			char pay[20];
+	{
+		/*
+		 * Same NAME / LOCATION / MAPS / AGE shape as `shirudo status`
+		 * and `shirudo nodes show <name> upatches`. The age basis is the
+		 * pin ctime captured by the target; on the operator side the
+		 * recompute is from the same timestamp so the columns agree.
+		 * For deeper detail (source + map contents) use
+		 * `shirudo nodes show <name> upatches <upatch-name>`.
+		 */
+		struct shirudo_upatch_table_row *rows;
+		size_t k;
 
-			if (ev) {
-				struct tm tm = {};
+		rows = xcalloc(d->n_up ? d->n_up : 1, sizeof(*rows));
+		if (rows) {
+			for (k = 0; k < d->n_up; k++) {
+				const struct up_row *u = &d->upatches[k];
 
-				snprintf(pay, sizeof(pay), "%.16s..",
-					 ev->up_payload);
-				if (strptime(ev->ts, "%Y-%m-%dT%H:%M:%SZ",
-					     &tm))
-					shirudo_format_duration(
-						(long)(time(NULL) -
-						       timegm(&tm)),
-						age, sizeof(age));
-			} else {
-				snprintf(pay, sizeof(pay), "-");
+				snprintf(rows[k].name, sizeof(rows[k].name),
+					 "%.*s", (int)(sizeof(rows[k].name) - 1),
+					 u->name);
+				snprintf(rows[k].location,
+					 sizeof(rows[k].location), "%.*s",
+					 (int)(sizeof(rows[k].location) - 1),
+					 u->location);
+				snprintf(rows[k].loaded_at,
+					 sizeof(rows[k].loaded_at), "%s",
+					 u->loaded_at);
+				snprintf(rows[k].payload_sha256,
+					 sizeof(rows[k].payload_sha256), "%s",
+					 u->payload_sha256);
+				rows[k].n_maps = (uint32_t)u->n_maps;
+				rows[k].age_sec = u->age_sec > 0 ? u->age_sec :
+					shirudo_upatch_age_sec(u->loaded_at);
 			}
-			printf("  %-30s %-18s %s\n", d->upatches[i].name, pay, age);
-			{
-				size_t k;
-				int shown = 0;
-
-				for (k = 0; k < d->n_umap; k++) {
-					const struct umap_row *m = &d->umaps[k];
-
-					if (strcmp(m->upatch, d->upatches[i].name)
-					    != 0)
-						continue;
-					if (!shown) {
-						printf("    Maps:\n");
-						shown = 1;
-					}
-					if (m->skipped[0]) {
-						printf("      %-22s %-16s "
-						       "(skipped: %s)\n",
-						       m->name, m->type,
-						       m->skipped);
-					} else if (m->first_sum[0]) {
-						printf("      %-22s %-16s "
-						       "%lld/%lld entries  "
-						       "sum=%s%s\n",
-						       m->name, m->type,
-						       (long long)m->n_entries,
-						       (long long)m->max_entries,
-						       m->first_sum,
-						       m->truncated ?
-						       "  (truncated)" : "");
-					} else {
-						printf("      %-22s %-16s "
-						       "%lld/%lld entries%s\n",
-						       m->name, m->type,
-						       (long long)m->n_entries,
-						       (long long)m->max_entries,
-						       m->truncated ?
-						       "  (truncated)" : "");
-					}
-				}
-			}
+			shirudo_upatch_table_print(rows, d->n_up);
+			xfree(rows, (d->n_up ? d->n_up : 1) * sizeof(*rows));
 		}
 	}
 
@@ -1443,29 +1429,42 @@ static void emit_node_json(struct shirudo_json_emit *e,
 		shirudo_json_kv_bool(e, "cert_present", d->cert_present);
 		shirudo_json_kv_bool(e, "signing_key_present",
 				     d->signing_key_present);
-		shirudo_json_arr_open(e, "upatches_loaded");
-		for (i = 0; i < d->n_up; i++) {
-			const struct up_row *u = &d->upatches[i];
-			const struct ev_row *ev =
-				last_load_event_for(d, u->name);
+		{
+			struct shirudo_upatch_table_row *rows;
+			size_t k;
 
-			shirudo_json_obj_open(e);
-			shirudo_json_kv_string(e, "name", u->name);
-			shirudo_json_kv_string(e, "location", u->location);
-			shirudo_json_kv_int(e, "n_maps", u->n_maps);
-			shirudo_json_kv_string(e, "loaded_at", u->loaded_at);
-			if (ev) {
-				shirudo_json_kv_string(e, "payload_sha256",
-						       ev->up_payload);
-				shirudo_json_kv_string(e, "applied_ts",
-						       ev->ts);
-			} else {
-				shirudo_json_kv_null(e, "payload_sha256");
-				shirudo_json_kv_null(e, "applied_ts");
+			rows = xcalloc(d->n_up ? d->n_up : 1, sizeof(*rows));
+			if (rows) {
+				for (k = 0; k < d->n_up; k++) {
+					const struct up_row *u = &d->upatches[k];
+
+					snprintf(rows[k].name,
+						 sizeof(rows[k].name), "%.*s",
+						 (int)(sizeof(rows[k].name) - 1),
+						 u->name);
+					snprintf(rows[k].location,
+						 sizeof(rows[k].location),
+						 "%.*s",
+						 (int)(sizeof(rows[k].location)
+						       - 1),
+						 u->location);
+					snprintf(rows[k].loaded_at,
+						 sizeof(rows[k].loaded_at), "%s",
+						 u->loaded_at);
+					snprintf(rows[k].payload_sha256,
+						 sizeof(rows[k].payload_sha256),
+						 "%s", u->payload_sha256);
+					rows[k].n_maps = (uint32_t)u->n_maps;
+					rows[k].age_sec = u->age_sec > 0 ?
+						u->age_sec :
+						shirudo_upatch_age_sec(
+							u->loaded_at);
+				}
+				shirudo_upatch_table_emit_json(e, rows, d->n_up);
+				xfree(rows, (d->n_up ? d->n_up : 1) *
+					    sizeof(*rows));
 			}
-			shirudo_json_obj_close(e);
 		}
-		shirudo_json_arr_close(e);
 		shirudo_sysinfo_emit_json(e, &d->sys);
 		shirudo_json_obj_open_key(e, "assets");
 		shirudo_json_kv_string(e, "root",
@@ -1624,7 +1623,7 @@ static void emit_node_json(struct shirudo_json_emit *e,
 /*
  * NAME / LOCATION / MAPS / AGE table for `shirudo nodes show <name>
  * upatches`. AGE is "time since last upatch_load event for <name>" --
- * the same eventlog projection the Upatches loaded section in the
+ * the same eventlog projection the upatches loaded section in the
  * full describe uses, so the columns agree across both views.
  */
 static void print_upatches_table(const struct node_detail *d)
@@ -1734,6 +1733,7 @@ static int cmd_nodes_show(int argc, const char **argv)
 	struct shirudo_remote *remotes = NULL;
 	struct node_detail *nodes = NULL;
 	const char *names[256];
+	const char *deep_upatch = NULL;
 	size_t n_remotes = 0, nnames = 0, i, j;
 	bool json = false, show_full = false, upatches_mode = false;
 	int ret = 0;
@@ -1760,18 +1760,25 @@ static int cmd_nodes_show(int argc, const char **argv)
 		}
 	}
 	/*
-	 * Trailing `upatches` switches to the per-node upatches table
-	 * (NAME / LOCATION / MAPS / AGE). Single <name> only -- the table
-	 * is a focused per-node view, not a fleet aggregate (the full
-	 * fleet view is `shirudo nodes`).
+	 * Trailing `upatches [<upatch>]` switches view:
+	 *   <name> upatches             -> per-node upatches table
+	 *   <name> upatches <upatch>    -> deep-dive (proxy of
+	 *                                  `shirudo upatch get <upatch>`
+	 *                                  on the target).
+	 * Single <name> only -- both are per-node views, not fleet aggregates.
 	 */
-	if (nnames >= 2 && strcmp(names[nnames - 1], "upatches") == 0) {
+	if (nnames >= 3 && strcmp(names[nnames - 2], "upatches") == 0) {
+		upatches_mode = true;
+		deep_upatch = names[nnames - 1];
+		nnames -= 2;
+	} else if (nnames >= 2 && strcmp(names[nnames - 1], "upatches") == 0) {
 		upatches_mode = true;
 		nnames--;
 	}
 	if (upatches_mode && nnames != 1) {
 		fprintf(stderr,
-			"nodes show: 'upatches' takes exactly one <name>\n");
+			"nodes show: 'upatches' takes exactly one <name>%s\n",
+			deep_upatch ? " plus an optional <upatch-name>" : "");
 		return 2;
 	}
 	if (nnames == 0) {
@@ -1783,6 +1790,68 @@ static int cmd_nodes_show(int argc, const char **argv)
 	if (n_remotes == 0) {
 		pr_err("nodes show: no remotes registered (see remotes.d)");
 		return 1;
+	}
+
+	/*
+	 * Deep-dive: skip the full `shirudo status` fetch entirely and
+	 * just proxy `shirudo upatch get <upatch>` on the target. One SSH
+	 * exec, no parsing on the operator side -- the target already
+	 * renders the bundled view (program info + source + maps + BTF).
+	 */
+	if (deep_upatch) {
+		const struct shirudo_remote *r = NULL;
+		struct shirudo_ssh_session *sess;
+		char cmd[256];
+		char *out = NULL;
+		size_t len = 0;
+		int rc;
+
+		if (!shirudo_upatch_name_valid(deep_upatch)) {
+			pr_err("nodes show: invalid upatch name '%s'",
+			       deep_upatch);
+			shirudo_remotes_free(remotes, n_remotes);
+			return 2;
+		}
+		for (i = 0; i < n_remotes; i++)
+			if (strcmp(remotes[i].name, names[0]) == 0) {
+				r = &remotes[i];
+				break;
+			}
+		if (!r) {
+			pr_err("nodes show: '%s' is not a registered remote",
+			       names[0]);
+			shirudo_remotes_free(remotes, n_remotes);
+			return 1;
+		}
+		snprintf(cmd, sizeof(cmd),
+			 "shirudo upatch get %s%s%s",
+			 deep_upatch,
+			 json ? " --json" : "",
+			 show_full ? " --show-full" : "");
+		sess = shirudo_ssh_connect(r->user, r->host, r->port);
+		if (!sess) {
+			pr_err("nodes show: ssh connect to '%s' failed",
+			       r->name);
+			shirudo_remotes_free(remotes, n_remotes);
+			return 1;
+		}
+		rc = shirudo_ssh_exec(sess, cmd, &out, &len);
+		shirudo_ssh_close(sess);
+		if (rc < 0 || !out) {
+			pr_err("nodes show: ssh exec on '%s' failed",
+			       r->name);
+			xfree(out, len);
+			shirudo_remotes_free(remotes, n_remotes);
+			return 1;
+		}
+		if (!json)
+			printf("On node: %s (%s)\n\n", r->name, r->host);
+		fwrite(out, 1, len, stdout);
+		if (len && out[len - 1] != '\n')
+			fputc('\n', stdout);
+		xfree(out, len);
+		shirudo_remotes_free(remotes, n_remotes);
+		return 0;
 	}
 
 	{
