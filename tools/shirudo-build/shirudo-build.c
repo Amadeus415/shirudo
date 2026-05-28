@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "compile.h"
@@ -250,6 +251,32 @@ int main(int argc, char **argv)
 		       pkey, strerror(errno));
 		pr_err("run `shirudo genkey` on the operator (or pass --key).");
 		return 1;
+	}
+	{
+		struct stat st;
+
+		if (stat(pkey, &st) != 0) {
+			pr_err("signing key not statable: %s: %s",
+			       pkey, strerror(errno));
+			return 1;
+		}
+		if (!S_ISREG(st.st_mode)) {
+			pr_err("signing key %s is not a regular file", pkey);
+			return 1;
+		}
+		/*
+		 * Refuse to sign with a private key that any other user
+		 * on this host can read. 0600 is what `shirudo genkey`
+		 * produces; anything broader has been loosened after the
+		 * fact, deliberately or accidentally, and we'd rather fail
+		 * loudly than silently sign with a leakable key.
+		 */
+		if ((st.st_mode & 07777) != 0600) {
+			pr_err("signing key %s has mode 0%o, must be 0600 "
+			       "(run `chmod 0600 %s`)",
+			       pkey, st.st_mode & 07777, pkey);
+			return 1;
+		}
 	}
 	if (access(cert, R_OK) != 0) {
 		pr_err("cert not readable: %s: %s",
