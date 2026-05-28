@@ -236,6 +236,8 @@ util/version_id.c:
 	       sha256sum | cut -c1-16); \
 	id=$$(printf '%s%s|%s' "$$rev$$dirty" "$$cfg" | \
 	      sha256sum | cut -d' ' -f1); \
+	extra_c=$$(printf '%s' "$(EXTRAVERSION)" | sed 's/[\\"]/\\&/g'); \
+	name_c=$$(printf '%s' "$(NAME)" | sed 's/[\\"]/\\&/g'); \
 	{ \
 	    echo "// SPDX-License-Identifier: BSD-2-Clause"; \
 	    echo "/* Copyright (c) 2026 Authors of shirudo */"; \
@@ -243,6 +245,8 @@ util/version_id.c:
 	    echo ""; \
 	    echo "const char shirudo_version[] = \"$$describe_c\";"; \
 	    echo "const char shirudo_version_id[] = \"$$id\";"; \
+	    echo "const char shirudo_extraversion[] = \"$$extra_c\";"; \
+	    echo "const char shirudo_release_name[] = \"$$name_c\";"; \
 	} > $@
 
 # ----- phase 5: link ---------------------------------------------

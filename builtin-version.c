@@ -14,6 +14,8 @@
 
 extern const char shirudo_version[];
 extern const char shirudo_version_id[];
+extern const char shirudo_extraversion[];
+extern const char shirudo_release_name[];
 
 static const struct shirudo_help_item version_options[] = {
 	{ "--version-id", "print only the raw SHIRUDO_VERSION_ID, one line" },
@@ -43,7 +45,8 @@ int cmd_version(int argc, const char **argv)
 		printf("%s\n", shirudo_version_id);
 		return 0;
 	}
-	printf("shirudo (%s)\n", shirudo_version);
+	printf("shirudo (%s%s, \"%s\")\n",
+	       shirudo_version, shirudo_extraversion, shirudo_release_name);
 	printf("version-id: %s\n", shirudo_version_id);
 	return 0;
 }

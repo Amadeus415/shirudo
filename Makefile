@@ -6,6 +6,11 @@
 # Run `make` from the repo root. Feature probes write config.mk;
 # Makefile.shirudo contains the actual build graph.
 
+EXTRAVERSION = -rc0
+NAME = Social BPF Coding
+
+export EXTRAVERSION NAME
+
 MAKEFLAGS += -rR --no-print-directory
 
 # Output verbosity. `make V=1` shows full command lines.
