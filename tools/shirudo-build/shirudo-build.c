@@ -35,6 +35,7 @@ static void usage(FILE *fp)
 		"                [--keys-dir <dir>]\n"
 		"                [--key <signing_key.pem>] [--cert <cert.der>]\n"
 		"                [--vmlinux <vmlinux.h>] [--extra-cflags '<flags>']\n"
+		"                [--emit-artifacts]\n"
 		"\n"
 		"  shirudo-build --unload <upatch-name> [-o <output.upatch>]\n"
 		"                [--payload-sha256 <64-hex>]\n"
@@ -57,7 +58,11 @@ static void usage(FILE *fp)
 		"           /usr/share/shirudo/vmlinux.h.\n"
 		"--payload-sha256: 64 hex chars; if omitted, read from the local\n"
 		"                  archive /var/lib/shirudo/upatches/<name>.upatch,\n"
-		"                  else all-zero (target skips the payload check).\n",
+		"                  else all-zero (target skips the payload check).\n"
+		"--emit-artifacts: for a .bpf.c input, also keep the compiled\n"
+		"                  .bpf.o next to the .upatch (instead of a temp\n"
+		"                  file that is removed). Reports every emitted\n"
+		"                  path on stdout. A debugging aid.\n",
 		SHIRUDO_KEYS_DIR_ENV, SHIRUDO_KEYS_DIR_ENV,
 		SHIRUDO_SIGNING_KEY_PATH, SHIRUDO_KEYS_DIR_ENV,
 		SHIRUDO_CERT_PATH);
@@ -127,6 +132,26 @@ static int derive_output(const char *input, char *buf, size_t buf_sz)
 	return 0;
 }
 
+/*
+ * --emit-artifacts artifact path: the .bpf.o sits beside the .upatch,
+ * so strip a trailing .upatch off the (already resolved) output path
+ * and append .o, keeping the .bpf stem (foo/bar.bpf.upatch ->
+ * foo/bar.bpf.o).
+ */
+static int derive_artifact_o(const char *output, char *buf, size_t buf_sz)
+{
+	size_t stem = strlen(output);
+	int len;
+
+	if (stem > 7 && strcmp(output + stem - 7, ".upatch") == 0)
+		stem -= 7;
+
+	len = snprintf(buf, buf_sz, "%.*s.o", (int)stem, output);
+	if (len < 0 || (size_t)len >= buf_sz)
+		return -ENAMETOOLONG;
+	return 0;
+}
+
 static int compile_to_temp(const char *source, const char *vmlinux_h,
 			   const char *extra_cflags, char **out_path)
 {
@@ -166,13 +191,16 @@ int main(int argc, char **argv)
 	const char *output = NULL;
 	const char *input = NULL;
 	const char *name = NULL;
+	const char *emitted_o = NULL;
 	char *temp_bpf_o = NULL;
 	const char *src_path = NULL;
+	char artifact_buf[PATH_MAX];
 	char pkey_path[PATH_MAX];
 	char cert_path[PATH_MAX];
 	char output_buf[PATH_MAX];
 	char name_buf[256];
 	const char *bpf_o;
+	int emit_artifacts = 0;
 	int pkey_explicit = 0;
 	int cert_explicit = 0;
 	int rc;
@@ -205,6 +233,8 @@ int main(int argc, char **argv)
 			unload_name = argv[++i];
 		} else if (strcmp(a, "--payload-sha256") == 0 && i + 1 < argc) {
 			payload_sha256_hex = argv[++i];
+		} else if (strcmp(a, "--emit-artifacts") == 0) {
+			emit_artifacts = 1;
 		} else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
 			usage(stdout);
 			return 0;
@@ -338,15 +368,36 @@ int main(int argc, char **argv)
 			pr_info("writing %s (no -o given)", output);
 		}
 
-		return shirudo_build_package_unload(unload_name,
-						    payload_sha256,
-						    output, pkey, cert)
-		       ? 1 : 0;
+		rc = shirudo_build_package_unload(unload_name, payload_sha256,
+						  output, pkey, cert);
+		if (rc == 0 && emit_artifacts) {
+			printf("emitted:\n");
+			printf("  upatch: %s\n", output);
+			printf("  bpf.o:  (none; --unload embeds the prebuilt "
+			       "unload program)\n");
+		}
+		return rc ? 1 : 0;
 	}
 
 	if (!input) {
 		usage(stderr);
 		return 2;
+	}
+
+	/*
+	 * Resolve the output path before compiling: --emit-artifacts
+	 * derives the .bpf.o location from it so the object lands in the
+	 * same directory as the .upatch.
+	 */
+	if (!output) {
+		rc = derive_output(input, output_buf, sizeof(output_buf));
+		if (rc) {
+			pr_err("cannot derive output path from %s: %s",
+			       input, strerror(-rc));
+			return 1;
+		}
+		output = output_buf;
+		pr_info("writing %s (no -o given)", output);
 	}
 
 	if (ends_with(input, ".bpf.c")) {
@@ -359,30 +410,37 @@ int main(int argc, char **argv)
 						: "(none)");
 			return 1;
 		}
-		rc = compile_to_temp(input, vmlinux_h, extra_cflags,
-				     &temp_bpf_o);
-		if (rc) {
-			pr_err("compile %s: %d", input, rc);
-			return 1;
+		if (emit_artifacts) {
+			rc = derive_artifact_o(output, artifact_buf,
+					       sizeof(artifact_buf));
+			if (rc) {
+				pr_err("cannot derive .bpf.o path from %s: %s",
+				       output, strerror(-rc));
+				return 1;
+			}
+			rc = shirudo_build_compile(input, artifact_buf,
+						   vmlinux_h, extra_cflags);
+			if (rc) {
+				pr_err("compile %s: %d", input, rc);
+				return 1;
+			}
+			bpf_o = artifact_buf;
+			emitted_o = artifact_buf;
+		} else {
+			rc = compile_to_temp(input, vmlinux_h, extra_cflags,
+					     &temp_bpf_o);
+			if (rc) {
+				pr_err("compile %s: %d", input, rc);
+				return 1;
+			}
+			bpf_o = temp_bpf_o;
 		}
-		bpf_o = temp_bpf_o;
 		src_path = input;	/* embed the .bpf.c source for `info` */
 	} else if (ends_with(input, ".bpf.o") || ends_with(input, ".o")) {
 		bpf_o = input;		/* no source available -> no extras */
 	} else {
 		pr_err("input must be .bpf.c or .bpf.o");
 		return 2;
-	}
-
-	if (!output) {
-		rc = derive_output(input, output_buf, sizeof(output_buf));
-		if (rc) {
-			pr_err("cannot derive output path from %s: %s",
-			       input, strerror(-rc));
-			return 1;
-		}
-		output = output_buf;
-		pr_info("writing %s (no -o given)", output);
 	}
 
 	if (!name)
@@ -394,6 +452,16 @@ int main(int argc, char **argv)
 	if (temp_bpf_o) {
 		unlink(temp_bpf_o);
 		xstrfree(temp_bpf_o);
+	}
+
+	if (rc == 0 && emit_artifacts) {
+		printf("emitted:\n");
+		printf("  upatch: %s\n", output);
+		if (emitted_o)
+			printf("  bpf.o:  %s\n", emitted_o);
+		else
+			printf("  bpf.o:  (none; input was a pre-compiled "
+			       "object, not recompiled)\n");
 	}
 	return rc ? 1 : 0;
 }

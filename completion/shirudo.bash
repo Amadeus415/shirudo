@@ -83,7 +83,7 @@ _shirudo()
 		if [[ $cur == -* ]]; then
 			COMPREPLY=( $(compgen -W "-o --name --key --cert \
 				--vmlinux --extra-cflags --unload \
-				--payload-sha256" -- "$cur") )
+				--payload-sha256 --emit-artifacts" -- "$cur") )
 		else
 			COMPREPLY=( $(compgen -f -X '!*.bpf.c' -- "$cur") \
 				    $(compgen -f -X '!*.bpf.o' -- "$cur") \
