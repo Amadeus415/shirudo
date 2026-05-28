@@ -31,6 +31,7 @@
 #include "util/eventlog.h"
 #include "util/help.h"
 #include "util/json.h"
+#include "util/macros.h"
 #include "util/keyring.h"
 #include "util/loader.h"
 #include "util/log.h"
@@ -361,7 +362,7 @@ static int attach_seal(struct bpf_object **obj_out, struct bpf_link **links)
 		bpf_object__close(obj);
 		return err;
 	}
-	for (i = 0; i < (int)(sizeof(hooks) / sizeof(hooks[0])); i++) {
+	for (i = 0; i < (int)ARRAY_SIZE(hooks); i++) {
 		struct bpf_program *p =
 			bpf_object__find_program_by_name(obj, hooks[i].prog);
 
@@ -515,7 +516,7 @@ static int init_lsm(void)
 		"/var/lib/shirudo sealed");
 	err = 0;
 out:
-	for (i = 0; i < (int)(sizeof(seal_links) / sizeof(seal_links[0])); i++)
+	for (i = 0; i < (int)ARRAY_SIZE(seal_links); i++)
 		bpf_link__destroy(seal_links[i]);
 	bpf_object__close(seal_obj);
 	bpf_link__destroy(link_bpf);
@@ -803,7 +804,7 @@ static const struct shirudo_help_item init_options[] = {
 
 static const struct shirudo_help_section init_help_sections[] = {
 	{ "options:", init_options,
-	  sizeof(init_options) / sizeof(init_options[0]) },
+	  ARRAY_SIZE(init_options) },
 };
 
 static const struct shirudo_help init_help = {

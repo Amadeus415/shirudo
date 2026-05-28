@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "help.h"
+#include "macros.h"
 #include "similar.h"
 
 int shirudo_is_help(const char *arg)
@@ -79,7 +80,7 @@ void shirudo_help_unknown_subcommand(const char *cmd_label, const char *bad,
 	for (i = 0; i < n_subcmds && n_names < SHIRUDO_SUBCMD_MAX; i++)
 		names[n_names++] = subcmds[i].name;
 	n = shirudo_suggest(bad, names, n_names, max_dist, sugg,
-			    sizeof(sugg) / sizeof(sugg[0]));
+			    ARRAY_SIZE(sugg));
 	if (n) {
 		fprintf(stderr, "\nDid you mean one of:\n");
 		for (i = 0; i < n; i++)

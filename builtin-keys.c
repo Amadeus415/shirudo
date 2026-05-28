@@ -28,6 +28,7 @@
 #include "util/help.h"
 #include "util/keyring.h"
 #include "util/log.h"
+#include "util/macros.h"
 #include "util/paths.h"
 
 static void openssl_complain(const char *where)
@@ -300,7 +301,7 @@ static const struct shirudo_help_item keys_options[] = {
 
 static const struct shirudo_help_section keys_help_sections[] = {
 	{ "options:", keys_options,
-	  sizeof(keys_options) / sizeof(keys_options[0]) },
+	  ARRAY_SIZE(keys_options) },
 };
 
 static const struct shirudo_help keys_help = {
@@ -310,8 +311,7 @@ static const struct shirudo_help keys_help = {
 		   "\"" SHIRUDO_KEYRING_NAME "\" named kernel keyring (if "
 		   "init'd).\nLocal-only on either side.",
 	.sections   = keys_help_sections,
-	.n_sections = sizeof(keys_help_sections) /
-		      sizeof(keys_help_sections[0]),
+	.n_sections = ARRAY_SIZE(keys_help_sections),
 	.footer  = "Default paths:\n"
 		   "  " SHIRUDO_CERT_PATH "\n"
 		   "  " SHIRUDO_SIGNING_KEY_PATH "\n"

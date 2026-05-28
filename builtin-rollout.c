@@ -26,6 +26,7 @@
 #include "util/chain.h"
 #include "util/help.h"
 #include "util/json.h"
+#include "util/macros.h"
 #include "util/log.h"
 #include "util/malloc.h"
 #include "util/paths.h"
@@ -420,7 +421,7 @@ static const struct shirudo_help_item rollout_options[] = {
 
 static const struct shirudo_help_section rollout_help_sections[] = {
 	{ "options:", rollout_options,
-	  sizeof(rollout_options) / sizeof(rollout_options[0]) },
+	  ARRAY_SIZE(rollout_options) },
 };
 
 static const struct shirudo_help rollout_help = {
@@ -430,8 +431,7 @@ static const struct shirudo_help rollout_help = {
 		   "SSH exec channel. A LOAD upatch runs\n`upatch load` on "
 		   "the target; an UNLOAD directive runs `upatch unload`.",
 	.sections   = rollout_help_sections,
-	.n_sections = sizeof(rollout_help_sections) /
-		      sizeof(rollout_help_sections[0]),
+	.n_sections = ARRAY_SIZE(rollout_help_sections),
 	.footer  = "Literal user@host arguments are refused; targets must be "
 		   "registered\nfirst with `shirudo remote add`.",
 };

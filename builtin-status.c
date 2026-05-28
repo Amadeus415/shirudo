@@ -25,6 +25,7 @@
 #include "util/eventlog.h"
 #include "util/help.h"
 #include "util/json.h"
+#include "util/macros.h"
 #include "util/keyring.h"
 #include "util/malloc.h"
 #include "util/paths.h"
@@ -172,7 +173,7 @@ static int parse_event_line(const char *line, size_t len, struct ev_proj *ev)
 	};
 
 	*ev = (struct ev_proj){};
-	return shirudo_json_parse(line, len, f, sizeof(f) / sizeof(f[0]));
+	return shirudo_json_parse(line, len, f, ARRAY_SIZE(f));
 }
 
 /* Slurp the whole eventlog. 0 with buf/len set, or -errno (buf == NULL). */
@@ -318,7 +319,7 @@ static const struct shirudo_help_item status_options[] = {
 
 static const struct shirudo_help_section status_help_sections[] = {
 	{ "options:", status_options,
-	  sizeof(status_options) / sizeof(status_options[0]) },
+	  ARRAY_SIZE(status_options) },
 };
 
 static const struct shirudo_help status_help = {

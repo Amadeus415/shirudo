@@ -21,6 +21,7 @@
 #include "util/help.h"
 #include "util/json.h"
 #include "util/log.h"
+#include "util/macros.h"
 #include "util/malloc.h"
 #include "util/remotes.h"
 #include "util/selector.h"
@@ -76,8 +77,7 @@ static void query_node(const struct shirudo_remote *r, struct node_state *st)
 			{ "tpm", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, tpm, 2 },
 		};
 
-		if (shirudo_json_parse(out, len, top,
-				       sizeof(top) / sizeof(top[0])) == 0) {
+		if (shirudo_json_parse(out, len, top, ARRAY_SIZE(top)) == 0) {
 			st->reachable = true;
 			st->chain_seen = tpm[0].seen;
 			if (!tpm[1].seen)
@@ -120,9 +120,9 @@ static const struct shirudo_help_item nodes_options[] = {
 
 static const struct shirudo_help_section nodes_help_sections[] = {
 	{ "subcommands:", nodes_subcmds,
-	  sizeof(nodes_subcmds) / sizeof(nodes_subcmds[0]) },
+	  ARRAY_SIZE(nodes_subcmds) },
 	{ "options (drift-table form):", nodes_options,
-	  sizeof(nodes_options) / sizeof(nodes_options[0]) },
+	  ARRAY_SIZE(nodes_options) },
 };
 
 static const struct shirudo_help nodes_help = {
@@ -131,8 +131,7 @@ static const struct shirudo_help nodes_help = {
 		      "remotes. Bare\n`shirudo nodes` prints the drift table; "
 		      "`shirudo nodes show <name>` runs a\nper-node deep dive.",
 	.sections   = nodes_help_sections,
-	.n_sections = sizeof(nodes_help_sections) /
-		      sizeof(nodes_help_sections[0]),
+	.n_sections = ARRAY_SIZE(nodes_help_sections),
 };
 
 
@@ -323,7 +322,7 @@ static int parse_node_detail(const char *out, size_t len,
 	};
 	int rc;
 
-	rc = shirudo_json_parse(out, len, top, sizeof(top) / sizeof(top[0]));
+	rc = shirudo_json_parse(out, len, top, ARRAY_SIZE(top));
 	if (rc)
 		return rc;
 	d->ks_seen = top[5].seen;
@@ -721,7 +720,7 @@ static int cmd_nodes_show(int argc, const char **argv)
 		} else if (a[0] == '-') {
 			fprintf(stderr, "nodes show: unknown option '%s'\n", a);
 			return 2;
-		} else if (nnames < sizeof(names) / sizeof(names[0])) {
+		} else if (nnames < ARRAY_SIZE(names)) {
 			names[nnames++] = a;
 		} else {
 			fprintf(stderr, "nodes show: too many names\n");
@@ -841,7 +840,7 @@ int cmd_nodes(int argc, const char **argv)
 		} else if (a[0] == '-') {
 			fprintf(stderr, "nodes: unknown option '%s'\n", a);
 			return 2;
-		} else if (nnames < sizeof(names) / sizeof(names[0])) {
+		} else if (nnames < ARRAY_SIZE(names)) {
 			names[nnames++] = a;	/* positional remote name */
 		} else {
 			fprintf(stderr, "nodes: too many names\n");

@@ -32,6 +32,7 @@
 #include "util/eventlog.h"
 #include "util/help.h"
 #include "util/json.h"
+#include "util/macros.h"
 #include "util/keyring.h"
 #include "util/log.h"
 #include "util/malloc.h"
@@ -1969,7 +1970,7 @@ static const struct shirudo_help_item upatch_subcmds[] = {
 
 static const struct shirudo_help_section upatch_help_sections[] = {
 	{ "subcommands:", upatch_subcmds,
-	  sizeof(upatch_subcmds) / sizeof(upatch_subcmds[0]) },
+	  ARRAY_SIZE(upatch_subcmds) },
 };
 
 static const struct shirudo_help upatch_help = {
@@ -1978,8 +1979,7 @@ static const struct shirudo_help upatch_help = {
 		      "target-only;\nlist/info/get are read-only and run on "
 		      "either side.",
 	.sections   = upatch_help_sections,
-	.n_sections = sizeof(upatch_help_sections) /
-		      sizeof(upatch_help_sections[0]),
+	.n_sections = ARRAY_SIZE(upatch_help_sections),
 };
 
 int cmd_upatch(int argc, const char **argv)
@@ -2001,7 +2001,6 @@ int cmd_upatch(int argc, const char **argv)
 
 	shirudo_help_unknown_subcommand("shirudo upatch", argv[1],
 					upatch_subcmds,
-					sizeof(upatch_subcmds) /
-					sizeof(upatch_subcmds[0]));
+					ARRAY_SIZE(upatch_subcmds));
 	return 2;
 }

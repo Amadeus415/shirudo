@@ -15,6 +15,7 @@
 #include "util/harden.h"
 #include "util/help.h"
 #include "util/log.h"
+#include "util/macros.h"
 #include "util/similar.h"
 
 /*
@@ -62,7 +63,7 @@ static const struct cmd commands[] = {
 	{ "help",	cmd_help,	GROUP_GENERAL,	"show this list" },
 };
 
-static const size_t commands_n = sizeof(commands) / sizeof(commands[0]);
+static const size_t commands_n = ARRAY_SIZE(commands);
 
 static void print_group(enum cmd_group g, const char *header)
 {
@@ -132,7 +133,7 @@ int main(int argc, const char **argv)
 	c = find_cmd(argv[1]);
 	if (!c) {
 		struct shirudo_suggestion sugg[4];
-		const char *names[sizeof(commands) / sizeof(commands[0])];
+		const char *names[ARRAY_SIZE(commands)];
 		size_t i, n;
 		int max_dist, len;
 
@@ -152,7 +153,7 @@ int main(int argc, const char **argv)
 		for (i = 0; i < commands_n; i++)
 			names[i] = commands[i].name;
 		n = shirudo_suggest(argv[1], names, commands_n, max_dist,
-				    sugg, sizeof(sugg) / sizeof(sugg[0]));
+				    sugg, ARRAY_SIZE(sugg));
 		if (n) {
 			fprintf(stderr, "\nDid you mean one of:\n");
 			for (i = 0; i < n; i++)

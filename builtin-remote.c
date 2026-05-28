@@ -21,6 +21,7 @@
 #include "builtin.h"
 #include "util/help.h"
 #include "util/log.h"
+#include "util/macros.h"
 #include "util/remotes.h"
 
 struct kv {
@@ -169,7 +170,7 @@ static int cmd_add(int argc, const char **argv)
 			       "(want key=value)", spec);
 			return 2;
 		}
-		if (nlabels == (int)(sizeof(labels) / sizeof(labels[0]))) {
+		if (nlabels == (int)ARRAY_SIZE(labels)) {
 			pr_err("remote add: too many labels");
 			return 2;
 		}
@@ -457,7 +458,7 @@ static const struct shirudo_help_item remote_subcmds[] = {
 
 static const struct shirudo_help_section remote_help_sections[] = {
 	{ "subcommands:", remote_subcmds,
-	  sizeof(remote_subcmds) / sizeof(remote_subcmds[0]) },
+	  ARRAY_SIZE(remote_subcmds) },
 };
 
 static const struct shirudo_help remote_help = {
@@ -465,8 +466,7 @@ static const struct shirudo_help remote_help = {
 	.summary    = "Manage the operator-local remote registry. Bare\n"
 		      "`shirudo remote` lists all registered remotes.",
 	.sections   = remote_help_sections,
-	.n_sections = sizeof(remote_help_sections) /
-		      sizeof(remote_help_sections[0]),
+	.n_sections = ARRAY_SIZE(remote_help_sections),
 	.footer     = "Labels and other registry metadata never leave the "
 		      "operator -- they\nare not pushed to targets.",
 };
@@ -494,7 +494,6 @@ int cmd_remote(int argc, const char **argv)
 
 	shirudo_help_unknown_subcommand("shirudo remote", argv[1],
 					remote_subcmds,
-					sizeof(remote_subcmds) /
-					sizeof(remote_subcmds[0]));
+					ARRAY_SIZE(remote_subcmds));
 	return 2;
 }

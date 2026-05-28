@@ -10,6 +10,7 @@
 
 #include "builtin.h"
 #include "util/help.h"
+#include "util/macros.h"
 
 extern const char shirudo_version[];
 extern const char shirudo_version_id[];
@@ -20,7 +21,7 @@ static const struct shirudo_help_item version_options[] = {
 
 static const struct shirudo_help_section version_help_sections[] = {
 	{ "options:", version_options,
-	  sizeof(version_options) / sizeof(version_options[0]) },
+	  ARRAY_SIZE(version_options) },
 };
 
 static const struct shirudo_help version_help = {
@@ -29,8 +30,7 @@ static const struct shirudo_help version_help = {
 		      "SHIRUDO_VERSION_ID\nthat targets compare against the "
 		      "operator's signed artifacts.",
 	.sections   = version_help_sections,
-	.n_sections = sizeof(version_help_sections) /
-		      sizeof(version_help_sections[0]),
+	.n_sections = ARRAY_SIZE(version_help_sections),
 };
 
 int cmd_version(int argc, const char **argv)

@@ -25,6 +25,7 @@
 #include "builtin.h"
 #include "util/help.h"
 #include "util/log.h"
+#include "util/macros.h"
 #include "util/paths.h"
 
 #define ALG_RSA_BITS	2048
@@ -301,7 +302,7 @@ static const struct shirudo_help_item genkey_options[] = {
 
 static const struct shirudo_help_section genkey_help_sections[] = {
 	{ "options:", genkey_options,
-	  sizeof(genkey_options) / sizeof(genkey_options[0]) },
+	  ARRAY_SIZE(genkey_options) },
 };
 
 static const struct shirudo_help genkey_help = {
@@ -309,8 +310,7 @@ static const struct shirudo_help genkey_help = {
 	.summary = "Generate a self-signed X.509 cert + RSA-2048 private key "
 		   "for signing\n.upatch loader bytes. Operator-only.",
 	.sections   = genkey_help_sections,
-	.n_sections = sizeof(genkey_help_sections) /
-		      sizeof(genkey_help_sections[0]),
+	.n_sections = ARRAY_SIZE(genkey_help_sections),
 	.footer  = "Default output paths:\n"
 		   "  " SHIRUDO_SIGNING_KEY_PATH "\n"
 		   "  " SHIRUDO_CERT_PATH "\n"
