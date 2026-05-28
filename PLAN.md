@@ -618,6 +618,27 @@ xattr filesystem sealing, the process hardening) exists to
 defend that minimal target TCB from compromise by anything
 outside it.
 
+**The operator stays stateless.** Keeping the operator-side TCB
+minimal also means shirudo holds no hidden, managed on-disk state
+on the operator. The only things shirudo itself writes there are:
+the registry (`remotes.d/<name>.conf`); the signing keypair
+(`signing_key.pem` + `cert.der`, written only by `shirudo genkey`
+into `--keys-dir`); and artifacts/reports the operator *explicitly
+names* (`shirudo build -o`, `--emit-artifacts`, `--report=<path>`).
+It must never grow an upatch archive, an expected-chain / per-host
+state cache, rollout history, a last-state file, a lockfile, a cache
+dir, an on-disk log (events go to `syslog` → journald only), or local
+rollout staging (the `.upatch` is streamed over SFTP, never copied
+locally). `--expect-chain` stays derived live from a pre-`status` or
+supplied by the caller; shirudo persists nothing between invocations.
+`/var/lib/shirudo/upatches/` on the operator is a **read-only
+convention** — `shirudo-build` reads it to auto-derive
+`--payload-sha256` for UNLOAD directives, but never writes it
+operator-side (every write to that dir is target-side: `upatch
+load`/`unload`, `init` boot-restore). A stateless operator has no
+hidden working state to corrupt, leak, or drift, and matches the
+agentless, credential-holder-pushes-outward (git push) model.
+
 **Implications when designing or reviewing code**:
 
 1. If a change brings new userspace components into the target's
@@ -631,6 +652,10 @@ outside it.
 3. If a defense in shirudo turns out to require trusting
    something the threat model says is outside the TCB, the
    defense doesn't work — re-design.
+4. If a new operator-side feature wants to persist anything to a
+   fixed shirudo-owned path, that's a red flag — derive it live,
+   take it as input, or write only to an operator-named path. The
+   operator stays stateless (see above).
 
 ### LSM enforcement policy (in `bpf/bpf2.c`)
 

@@ -739,6 +739,27 @@ Operator machine:
 - **The operator machine never touches the kernel keyring or the TPM.
   The target machine never touches the private signing key.** If a
   code path crosses this line, it's a bug, full stop.
+- **The operator stays stateless.** The only things shirudo itself
+  writes on the operator are: the registry (`remotes.d/<name>.conf`),
+  the signing keypair (`signing_key.pem` + `cert.der`, written only by
+  `shirudo genkey` into `--keys-dir`), and artifacts/reports the
+  operator *explicitly names* (`shirudo build -o`, `--emit-artifacts`,
+  `--report=<path>`). It must never grow a hidden, shirudo-managed
+  store: no upatch archive, no expected-chain / per-host state cache,
+  no rollout history, no last-state file, no lockfile, no cache dir,
+  no on-disk log (events go to `syslog` → journald only), no local
+  rollout staging (the `.upatch` is streamed over SFTP, never copied
+  locally). `--expect-chain` stays derived live from a pre-status or
+  supplied by the caller; shirudo persists nothing between invocations.
+  `/var/lib/shirudo/upatches/` on the operator is **read-only
+  convention** — `shirudo-build` reads it to auto-derive
+  `--payload-sha256` for UNLOAD directives, but never writes it
+  operator-side (every write to that dir is target-side: `upatch
+  load`/`unload`, `init` boot-restore). When a new operator-side
+  feature wants to persist anything to a fixed shirudo-owned path,
+  that's a red flag — derive it live, take it as input, or write only
+  to an operator-named path. This keeps the operator-side TCB minimal
+  and matches the agentless, credential-holder-pushes-outward model.
 - **No subprocesses, no daemons.** No `fork+exec` of `ssh`/`scp`/`sftp`/
   `openssl`/`bpftool`/`journalctl`/`tpm2_pcrread`/anything. No
   long-lived shirudo process on the target. If a new feature appears
