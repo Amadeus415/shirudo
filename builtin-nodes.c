@@ -125,20 +125,26 @@ static const struct shirudo_help_section nodes_show_sections[] = {
 };
 
 static const struct shirudo_help nodes_show_help = {
-	.usage      = "shirudo nodes show [--json] [--show-full] <name>...",
+	.usage      = "shirudo nodes show [--json] [--show-full] <name>...\n"
+		      "       shirudo nodes show [--json] <name> upatches",
 	.summary    = "Per-node deep dive: SSH into each named remote, fetch "
 		      "its\n`shirudo status --json` in one round-trip, and "
 		      "render it as Conditions /\nSystem Info / Upatches "
 		      "loaded / TPM Measurement / Eventlog / Assets /\nKernel "
 		      "log / Loaded modules. <name> is the operator-local "
-		      "registry\nname, not the host/IP.",
+		      "registry\nname, not the host/IP.\n\n"
+		      "A trailing `upatches` switches the view to just the "
+		      "NAME / LOCATION /\nMAPS / AGE table for the loaded "
+		      "upatches on one node.",
 	.sections   = nodes_show_sections,
 	.n_sections = ARRAY_SIZE(nodes_show_sections),
 	.footer     =
 "Examples:\n"
 "  shirudo nodes show prod-edge-01\n"
 "  shirudo nodes show --show-full prod-edge-01 prod-edge-02\n"
-"  shirudo nodes show --json staging-db-1 | jq '.nodes[0].status'",
+"  shirudo nodes show --json staging-db-1 | jq '.nodes[0].status'\n"
+"  shirudo nodes show prod-edge-01 upatches\n"
+"  shirudo nodes show --json prod-edge-01 upatches | jq '.upatches'",
 };
 
 
@@ -150,6 +156,21 @@ struct ev_row {
 	char	set_digest[65];
 	char	up_name[128];
 	char	up_payload[65];
+};
+
+/*
+ * One loaded upatch as the target shipped it. Status emits
+ * upatches_loaded as an array of these objects (name + attach hook +
+ * number of pinned maps + pin-dir ctime); the operator parses straight
+ * into this row. `loaded_at` is the bpffs pin directory's ctime in ISO
+ * UTC -- always set on a successful load, never null even when the
+ * eventlog is suppressed (boot-restore one-event-per-boot semantics).
+ */
+struct up_row {
+	char	name[128];
+	char	location[160];
+	int64_t	n_maps;
+	char	loaded_at[32];
 };
 
 /*
@@ -175,8 +196,8 @@ struct node_detail {
 	int		keyring_serial_matches;
 	int		ks_seen, ksp_seen, ksm_seen;
 
-	char		up_scratch[128];
-	char		(*upatches)[128];
+	struct up_row	up_scratch;
+	struct up_row	*upatches;
 	size_t		n_up, cap_up;
 
 	struct shirudo_sysinfo	sys;
@@ -264,9 +285,8 @@ static int up_on_elem(void *ctx)
 		d->upatches = p;
 		d->cap_up = nc;
 	}
-	snprintf(d->upatches[d->n_up], sizeof(d->upatches[0]), "%s",
-		 d->up_scratch);
-	d->n_up++;
+	d->upatches[d->n_up++] = d->up_scratch;
+	d->up_scratch = (struct up_row){};
 	return 0;
 }
 
@@ -427,8 +447,14 @@ static int parse_node_detail(const char *out, size_t len,
 {
 	struct shirudo_json_array up_sink = { up_on_elem, d };
 	struct shirudo_json_field up_elem[] = {
-		{ "", SHIRUDO_JSON_T_STRING, d->up_scratch,
-		  sizeof(d->up_scratch), 0, NULL, 0 },
+		{ "name", SHIRUDO_JSON_T_STRING, d->up_scratch.name,
+		  sizeof(d->up_scratch.name), 0, NULL, 0 },
+		{ "location", SHIRUDO_JSON_T_STRING, d->up_scratch.location,
+		  sizeof(d->up_scratch.location), 0, NULL, 0 },
+		{ "n_maps", SHIRUDO_JSON_T_INT, &d->up_scratch.n_maps,
+		  0, 0, NULL, 0 },
+		{ "loaded_at", SHIRUDO_JSON_T_STRING, d->up_scratch.loaded_at,
+		  sizeof(d->up_scratch.loaded_at), 0, NULL, 0 },
 	};
 	struct shirudo_json_array ev_sink = { ev_on_elem, d };
 	struct shirudo_json_field ev_upatch[] = {
@@ -594,7 +620,7 @@ static int parse_node_detail(const char *out, size_t len,
 		{ "signing_key_present", SHIRUDO_JSON_T_BOOL,
 		  &d->signing_key_present, 0, 0, NULL, 0 },
 		{ "upatches_loaded", SHIRUDO_JSON_T_ARRAY, &up_sink, 0, 0,
-		  up_elem, 1 },
+		  up_elem, ARRAY_SIZE(up_elem) },
 		{ "system", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, sys_sub,
 		  ARRAY_SIZE(sys_sub) },
 		{ "assets", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, assets_sub,
@@ -825,7 +851,7 @@ static void upatches_summary(const struct node_detail *d, char *buf, size_t cap)
 		name = last->up_name;
 	} else {
 		verb = "init";
-		name = d->upatches[0];
+		name = d->upatches[0].name;
 	}
 	{
 		struct tm tm = {};
@@ -1178,7 +1204,7 @@ static void print_describe(const struct node_detail *d, bool show_full)
 		       "APPLIED");
 		for (i = 0; i < d->n_up; i++) {
 			const struct ev_row *ev =
-				last_load_event_for(d, d->upatches[i]);
+				last_load_event_for(d, d->upatches[i].name);
 			char age[16] = "?";
 			char pay[20];
 
@@ -1196,7 +1222,7 @@ static void print_describe(const struct node_detail *d, bool show_full)
 			} else {
 				snprintf(pay, sizeof(pay), "-");
 			}
-			printf("  %-30s %-18s %s\n", d->upatches[i], pay, age);
+			printf("  %-30s %-18s %s\n", d->upatches[i].name, pay, age);
 			{
 				size_t k;
 				int shown = 0;
@@ -1204,7 +1230,7 @@ static void print_describe(const struct node_detail *d, bool show_full)
 				for (k = 0; k < d->n_umap; k++) {
 					const struct umap_row *m = &d->umaps[k];
 
-					if (strcmp(m->upatch, d->upatches[i])
+					if (strcmp(m->upatch, d->upatches[i].name)
 					    != 0)
 						continue;
 					if (!shown) {
@@ -1419,11 +1445,15 @@ static void emit_node_json(struct shirudo_json_emit *e,
 				     d->signing_key_present);
 		shirudo_json_arr_open(e, "upatches_loaded");
 		for (i = 0; i < d->n_up; i++) {
+			const struct up_row *u = &d->upatches[i];
 			const struct ev_row *ev =
-				last_load_event_for(d, d->upatches[i]);
+				last_load_event_for(d, u->name);
 
 			shirudo_json_obj_open(e);
-			shirudo_json_kv_string(e, "name", d->upatches[i]);
+			shirudo_json_kv_string(e, "name", u->name);
+			shirudo_json_kv_string(e, "location", u->location);
+			shirudo_json_kv_int(e, "n_maps", u->n_maps);
+			shirudo_json_kv_string(e, "loaded_at", u->loaded_at);
 			if (ev) {
 				shirudo_json_kv_string(e, "payload_sha256",
 						       ev->up_payload);
@@ -1591,13 +1621,121 @@ static void emit_node_json(struct shirudo_json_emit *e,
 	shirudo_json_obj_close(e);		/* node */
 }
 
+/*
+ * NAME / LOCATION / MAPS / AGE table for `shirudo nodes show <name>
+ * upatches`. AGE is "time since last upatch_load event for <name>" --
+ * the same eventlog projection the Upatches loaded section in the
+ * full describe uses, so the columns agree across both views.
+ */
+static void print_upatches_table(const struct node_detail *d)
+{
+	size_t i;
+
+	if (!d->reachable || !d->parsed) {
+		printf("(%s)\n", d->unreach ? d->unreach : "unreachable");
+		return;
+	}
+	if (d->n_up == 0) {
+		printf("(no upatches loaded)\n");
+		return;
+	}
+	printf("%-24s  %-28s  %5s  %s\n", "NAME", "LOCATION", "MAPS", "AGE");
+	for (i = 0; i < d->n_up; i++) {
+		const struct up_row *u = &d->upatches[i];
+		const char *ts = NULL;
+		char age[16] = "?";
+
+		/*
+		 * Prefer the pin dir ctime (always available on a live load,
+		 * even after boot-restore where per-upatch eventlog entries
+		 * are suppressed). Eventlog is the audit-grade fallback when
+		 * we somehow have no ctime to show.
+		 */
+		if (u->loaded_at[0]) {
+			ts = u->loaded_at;
+		} else {
+			const struct ev_row *ev = last_load_event_for(d,
+								      u->name);
+			if (ev)
+				ts = ev->ts;
+		}
+		if (ts) {
+			struct tm tm = {};
+
+			if (strptime(ts, "%Y-%m-%dT%H:%M:%SZ", &tm))
+				shirudo_format_duration(
+					(long)(time(NULL) - timegm(&tm)),
+					age, sizeof(age));
+		}
+		printf("%-24s  %-28s  %5lld  %s\n", u->name,
+		       u->location[0] ? u->location : "-",
+		       (long long)u->n_maps, age);
+	}
+}
+
+/*
+ * --json sibling of the table: a focused object scoped to one node,
+ * not the full status report emit_node_json hands back. Same field
+ * names as the table columns so jq pipelines compose.
+ */
+static int emit_upatches_json(const struct node_detail *d)
+{
+	size_t cap = 8192 + d->n_up * 512;
+	struct shirudo_json_emit e;
+	int ret = 0;
+	char *buf;
+	size_t i;
+
+	if (cap > SHIRUDO_JSON_MAX_BYTES)
+		cap = SHIRUDO_JSON_MAX_BYTES;
+	buf = xmalloc(cap);
+	if (!buf)
+		return 1;
+	e = (struct shirudo_json_emit){ .buf = buf, .cap = cap };
+	shirudo_json_obj_open(&e);
+	shirudo_json_kv_int(&e, "schema", 1);
+	shirudo_json_kv_string(&e, "name", d->r->name);
+	shirudo_json_kv_bool(&e, "reachable", d->reachable);
+	if (!d->reachable || !d->parsed)
+		shirudo_json_kv_string(&e, "error",
+				       d->unreach ? d->unreach
+						  : "status JSON unparseable");
+	shirudo_json_arr_open(&e, "upatches");
+	for (i = 0; i < d->n_up; i++) {
+		const struct up_row *u = &d->upatches[i];
+		const struct ev_row *ev = last_load_event_for(d, u->name);
+
+		shirudo_json_obj_open(&e);
+		shirudo_json_kv_string(&e, "name", u->name);
+		shirudo_json_kv_string(&e, "location", u->location);
+		shirudo_json_kv_int(&e, "n_maps", u->n_maps);
+		shirudo_json_kv_string(&e, "loaded_at", u->loaded_at);
+		if (ev)
+			shirudo_json_kv_string(&e, "applied_ts", ev->ts);
+		else
+			shirudo_json_kv_null(&e, "applied_ts");
+		shirudo_json_obj_close(&e);
+	}
+	shirudo_json_arr_close(&e);
+	shirudo_json_obj_close(&e);
+	if (e.err) {
+		pr_err("nodes show upatches: json encode failed: %s",
+		       strerror(-e.err));
+		ret = 1;
+	} else {
+		printf("%s\n", buf);
+	}
+	xfree(buf, cap);
+	return ret;
+}
+
 static int cmd_nodes_show(int argc, const char **argv)
 {
 	struct shirudo_remote *remotes = NULL;
 	struct node_detail *nodes = NULL;
 	const char *names[256];
 	size_t n_remotes = 0, nnames = 0, i, j;
-	bool json = false, show_full = false;
+	bool json = false, show_full = false, upatches_mode = false;
 	int ret = 0;
 
 	/* argv[0]="nodes", argv[1]="show"; options/names follow. */
@@ -1620,6 +1758,21 @@ static int cmd_nodes_show(int argc, const char **argv)
 			fprintf(stderr, "nodes show: too many names\n");
 			return 2;
 		}
+	}
+	/*
+	 * Trailing `upatches` switches to the per-node upatches table
+	 * (NAME / LOCATION / MAPS / AGE). Single <name> only -- the table
+	 * is a focused per-node view, not a fleet aggregate (the full
+	 * fleet view is `shirudo nodes`).
+	 */
+	if (nnames >= 2 && strcmp(names[nnames - 1], "upatches") == 0) {
+		upatches_mode = true;
+		nnames--;
+	}
+	if (upatches_mode && nnames != 1) {
+		fprintf(stderr,
+			"nodes show: 'upatches' takes exactly one <name>\n");
+		return 2;
 	}
 	if (nnames == 0) {
 		shirudo_print_help(&nodes_show_help);
@@ -1660,7 +1813,15 @@ static int cmd_nodes_show(int argc, const char **argv)
 		}
 	}
 
-	if (json) {
+	if (upatches_mode) {
+		if (!nodes[0].r) {
+			ret = 1;	/* unknown-name already diagnosed */
+		} else if (json) {
+			ret = emit_upatches_json(&nodes[0]);
+		} else {
+			print_upatches_table(&nodes[0]);
+		}
+	} else if (json) {
 		struct shirudo_json_emit e;
 		size_t cap = 65536;
 		char *buf;
@@ -1902,7 +2063,7 @@ int cmd_nodes(int argc, const char **argv)
 					shirudo_json_obj_open_key(&e, "last");
 					shirudo_json_kv_string(&e, "verb", "init");
 					shirudo_json_kv_string(&e, "name",
-						s->upatches[0]);
+						s->upatches[0].name);
 					shirudo_json_kv_string(&e, "ts",
 						init->ts);
 					shirudo_json_obj_close(&e);

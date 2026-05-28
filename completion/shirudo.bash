@@ -108,7 +108,7 @@ _shirudo()
 			COMPREPLY=( $(compgen -W "$subs --json --filter= \
 				--selector=" -- "$cur") )
 		elif [[ $sub == show ]]; then
-			COMPREPLY=( $(compgen -W "--json --show-full" \
+			COMPREPLY=( $(compgen -W "--json --show-full upatches" \
 				-- "$cur") )
 		else
 			COMPREPLY=( $(compgen -W "--json --filter= \

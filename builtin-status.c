@@ -18,7 +18,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <limits.h>
+#include <linux/bpf.h>
+
 #include <bpf/bpf.h>
+#include <bpf/btf.h>
+#include <bpf/libbpf.h>
 
 #include <time.h>
 
@@ -473,6 +478,147 @@ static void local_cond_input(struct shirudo_conditions_input *in,
 	};
 }
 
+/*
+ * BPF prog_type + expected_attach_type -> SEC()-style prefix. Mirrors the
+ * libbpf convention shirudo upatches actually use today: BPF_PROG_TYPE_LSM
+ * is "lsm/...", BPF_PROG_TYPE_TRACING is fentry/fexit/fmod_ret/tp_btf/iter
+ * keyed on expected_attach_type. NULL for anything else (we render the
+ * libbpf type-string then).
+ */
+static const char *upatch_loc_prefix(uint32_t prog_type, uint32_t attach_type)
+{
+	if (prog_type == BPF_PROG_TYPE_LSM)
+		return "lsm";
+	if (prog_type == BPF_PROG_TYPE_TRACING) {
+		switch (attach_type) {
+		case BPF_TRACE_FENTRY:		return "fentry";
+		case BPF_TRACE_FEXIT:		return "fexit";
+		case BPF_MODIFY_RETURN:		return "fmod_ret";
+		case BPF_TRACE_RAW_TP:		return "tp_btf";
+		case BPF_TRACE_ITER:		return "iter";
+		default:			return NULL;
+		}
+	}
+	return NULL;
+}
+
+/*
+ * Resolve a loaded upatch's bpffs link pin to its attach hook string
+ * ("lsm/socket_create", "fentry/tcp_v4_connect", ...). The link pin is
+ * opened with read-only bpf() ops (BPF_OBJ_GET / *_GET_INFO_BY_FD /
+ * PROG_GET_FD_BY_ID -- all LSM-allowed). vmlinux BTF resolves
+ * attach_btf_id back to a function name; caller loads it once and
+ * reuses across the per-upatch loop (a fresh load per upatch would
+ * re-read /sys/kernel/btf/vmlinux on every iteration).
+ *
+ * The attach kind (fentry/fexit/lsm/...) comes from the link's
+ * tracing.attach_type rather than prog_info -- bpf_prog_info has
+ * attach_btf_id but no expected_attach_type. Both LSM and tracing
+ * progs use BPF_LINK_TYPE_TRACING when attached via
+ * BPF_RAW_TRACEPOINT_OPEN with a NULL name (the path shirudo uses),
+ * so linfo.tracing.attach_type is always populated for our links.
+ *
+ * Returns 0 on success with `out` populated, or -errno; on failure
+ * `out` is "" so the JSON field degrades to empty rather than absent.
+ */
+static int resolve_upatch_location(struct btf *vbtf, const char *name,
+				   char *out, size_t cap)
+{
+	struct bpf_link_info linfo = {};
+	struct bpf_prog_info info = {};
+	const char *attach_name = NULL;
+	uint32_t attach_type = 0;
+	int link_fd, prog_fd, rc;
+	char pin[PATH_MAX];
+	const char *prefix;
+	uint32_t len;
+
+	out[0] = '\0';
+	if ((size_t)snprintf(pin, sizeof(pin), "%s/%s/link",
+			     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= sizeof(pin))
+		return -ENAMETOOLONG;
+
+	link_fd = bpf_obj_get(pin);
+	if (link_fd < 0)
+		return -errno;
+	len = sizeof(linfo);
+	rc = bpf_link_get_info_by_fd(link_fd, &linfo, &len);
+	close(link_fd);
+	if (rc != 0 || linfo.prog_id == 0)
+		return rc ? -errno : -EINVAL;
+	if (linfo.type == BPF_LINK_TYPE_TRACING)
+		attach_type = linfo.tracing.attach_type;
+
+	prog_fd = bpf_prog_get_fd_by_id(linfo.prog_id);
+	if (prog_fd < 0)
+		return -errno;
+	len = sizeof(info);
+	rc = bpf_prog_get_info_by_fd(prog_fd, &info, &len);
+	close(prog_fd);
+	if (rc != 0)
+		return -errno;
+
+	/*
+	 * Look up the attach BTF type in vmlinux BTF. The kernel sets
+	 * attach_btf_obj_id to btf_obj_id(attach_btf) -- vmlinux has a
+	 * non-zero id (typically 1), so we don't gate the lookup on it
+	 * being zero (that bug let LSM hooks render as bare "lsm" with
+	 * no hook name). All shirudo upatches attach to vmlinux, not
+	 * module BTFs, so a vmlinux lookup is always correct.
+	 */
+	if (vbtf && info.attach_btf_id &&
+	    info.attach_btf_id < btf__type_cnt(vbtf)) {
+		const struct btf_type *t;
+
+		t = btf__type_by_id(vbtf, info.attach_btf_id);
+		if (t)
+			attach_name = btf__name_by_offset(vbtf, t->name_off);
+	}
+
+	prefix = upatch_loc_prefix(info.type, attach_type);
+	if (!prefix)
+		prefix = libbpf_bpf_prog_type_str(info.type);
+	if (!prefix)
+		prefix = "?";
+
+	/* LSM hook funcs are named bpf_lsm_<hook>; strip the prefix. */
+	if (info.type == BPF_PROG_TYPE_LSM && attach_name &&
+	    strncmp(attach_name, "bpf_lsm_", 8) == 0)
+		attach_name += 8;
+
+	if (attach_name && *attach_name)
+		snprintf(out, cap, "%s/%s", prefix, attach_name);
+	else
+		snprintf(out, cap, "%s", prefix);
+	return 0;
+}
+
+/*
+ * "When did this upatch become active in this boot?" -- ctime of the
+ * upatch's bpffs pin directory. bpffs is RAM-backed (gone on reboot,
+ * re-created by boot-restore), so the ctime is honest about the active-
+ * since point even after boot-restore: it is the timestamp the kernel
+ * inode came into existence on the current boot. Defaults to "" if the
+ * dir is missing or stat fails; the operator-side table then renders
+ * AGE as "?".
+ */
+static void upatch_loaded_at(const char *name, char *out, size_t cap)
+{
+	char dir[PATH_MAX];
+	struct stat st;
+	struct tm tm;
+
+	out[0] = '\0';
+	if ((size_t)snprintf(dir, sizeof(dir), "%s/%s",
+			     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= sizeof(dir))
+		return;
+	if (stat(dir, &st) != 0)
+		return;
+	if (!gmtime_r(&st.st_ctim.tv_sec, &tm))
+		return;
+	strftime(out, cap, "%Y-%m-%dT%H:%M:%SZ", &tm);
+}
+
 /* Compose roles like nodes show: "target", "operator", or both. */
 static const char *roles_str(int is_target, int is_operator)
 {
@@ -674,10 +820,41 @@ int cmd_status(int argc, const char **argv)
 			shirudo_json_kv_null(&e, "keyring_serial_matches");
 		shirudo_json_kv_bool(&e, "cert_present", cert_present);
 		shirudo_json_kv_bool(&e, "signing_key_present", is_operator);
-		shirudo_json_arr_open(&e, "upatches_loaded");
-		for (i = 0; i < n_ups; i++)
-			shirudo_json_str(&e, ups[i]->d_name);
-		shirudo_json_arr_close(&e);
+		{
+			/*
+			 * vmlinux BTF is loaded once and reused across the
+			 * per-upatch resolve. NULL is fine -- resolver falls
+			 * back to "?". A single load is ~MiBs read from
+			 * /sys/kernel/btf/vmlinux; per-upatch reload would
+			 * be a needless syscall storm on a fleet host.
+			 */
+			struct btf *vbtf = btf__load_vmlinux_btf();
+
+			shirudo_json_arr_open(&e, "upatches_loaded");
+			for (i = 0; i < n_ups; i++) {
+				struct shirudo_map_summary *list = NULL;
+				char loc[160] = "";
+				char la[32] = "";
+				size_t nm = 0;
+
+				resolve_upatch_location(vbtf, ups[i]->d_name,
+							loc, sizeof(loc));
+				upatch_loaded_at(ups[i]->d_name, la, sizeof(la));
+				shirudo_upatch_maps_list_one(ups[i]->d_name,
+							     &list, &nm);
+				shirudo_json_obj_open(&e);
+				shirudo_json_kv_string(&e, "name",
+						       ups[i]->d_name);
+				shirudo_json_kv_string(&e, "location", loc);
+				shirudo_json_kv_int(&e, "n_maps", (int64_t)nm);
+				shirudo_json_kv_string(&e, "loaded_at", la);
+				shirudo_json_obj_close(&e);
+				shirudo_map_summary_free(list, nm);
+			}
+			shirudo_json_arr_close(&e);
+			if (vbtf)
+				btf__free(vbtf);
+		}
 		shirudo_json_obj_open_key(&e, "assets");
 		shirudo_json_kv_string(&e, "root", SHIRUDO_VAR_LIB);
 		shirudo_json_kv_bool(&e, "cert", assets.cert);
