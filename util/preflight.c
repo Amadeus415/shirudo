@@ -219,7 +219,10 @@ static void check_tpm(struct shirudo_preflight_result *r, bool allow_no_tpm)
 		if (shirudo_config_load(&cfg) == 0 && cfg.tpm_tcti[0]) {
 			pass(c);
 			snprintf(c->detail, sizeof(c->detail),
-				 "TCTI override: %s", cfg.tpm_tcti);
+				 "TCTI override: %.*s",
+				 (int)(sizeof(c->detail) -
+				       sizeof("TCTI override: ")),
+				 cfg.tpm_tcti);
 			return;
 		}
 	}
