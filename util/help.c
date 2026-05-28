@@ -14,6 +14,55 @@
 
 #define SHIRUDO_SUBCMD_MAX	32
 
+/* Wrap target for help-item summaries; covers a 100-col terminal with slack. */
+#define SHIRUDO_HELP_WIDTH	90
+
+/*
+ * Word-wrap <text> at <avail> chars. The first word continues whatever
+ * the caller already printed; every subsequent line starts with
+ * <indent> spaces so continuation aligns under the summary column.
+ * Single-spaces between words; trailing whitespace dropped.
+ */
+static void wrap_print(const char *text, size_t indent, size_t avail)
+{
+	const char *p = text;
+	size_t col = 0;
+
+	if (avail < 1)
+		avail = 1;
+	while (*p) {
+		const char *w;
+		size_t wlen;
+
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (!*p)
+			break;
+		w = p;
+		while (*p && *p != ' ' && *p != '\t')
+			p++;
+		wlen = (size_t)(p - w);
+
+		if (col == 0) {
+			fwrite(w, 1, wlen, stderr);
+			col = wlen;
+		} else if (col + 1 + wlen <= avail) {
+			fputc(' ', stderr);
+			fwrite(w, 1, wlen, stderr);
+			col += 1 + wlen;
+		} else {
+			size_t i;
+
+			fputc('\n', stderr);
+			for (i = 0; i < indent; i++)
+				fputc(' ', stderr);
+			fwrite(w, 1, wlen, stderr);
+			col = wlen;
+		}
+	}
+	fputc('\n', stderr);
+}
+
 int shirudo_is_help(const char *arg)
 {
 	return arg && (strcmp(arg, "help") == 0 ||
@@ -50,9 +99,14 @@ void shirudo_print_help(const struct shirudo_help *h)
 		}
 		w += 2;
 		fprintf(stderr, "\n%s\n", s->header);
-		for (j = 0; j < s->n_items; j++)
-			fprintf(stderr, "  %-*s%s\n", (int)w,
-				s->items[j].name, s->items[j].summary);
+		for (j = 0; j < s->n_items; j++) {
+			size_t indent = 2 + w;
+			size_t avail = SHIRUDO_HELP_WIDTH > indent ?
+				       SHIRUDO_HELP_WIDTH - indent : 1;
+
+			fprintf(stderr, "  %-*s", (int)w, s->items[j].name);
+			wrap_print(s->items[j].summary, indent, avail);
+		}
 	}
 	if (h->footer && *h->footer)
 		fprintf(stderr, "\n%s\n", h->footer);
