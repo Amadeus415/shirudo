@@ -167,6 +167,21 @@ verification + bpf2 exe-identity inode_unlink; userspace payload_mismatch
 compare against the bpf2-protected pin xattr (item 7); documented
 residual on target binding.
 
+Same gap applies to the per-upatch map pins introduced for
+`shirudo upatch map` / `shirudo status --include-maps`. Each loaded
+upatch has its maps auto-pinned at
+`/var/lib/shirudo/bpffs/upatches/<name>/maps/<map_name>` so userspace
+can read them via OBJ_GET + MAP_LOOKUP_ELEM. On unload, the signed
+unload program cannot OBJ_GET/OBJ_UNPIN any of those map pins
+either, so shirudo's userspace `remove_pin_dir()` descends into
+`maps/` first and unlinks every entry before unlinking the link pin
+(see PLAN.md `shirudo upatch unload` row). Same fix as the link-pin
+case: lifting OBJ_GET + OBJ_UNPIN into the bpf_sys_bpf() allowlist
+would let the signed unload clean both `link` and `maps/<*>` in
+kernel context, removing the userspace step entirely. Until that
+lands, the bpf2 inode_unlink exe-identity check keeps the map pins
+protected from non-shirudo deletion -- same defence as the link.
+
 
 7. bpffs supported no extended attributes (RESOLVED by a local patch)
 ---------------------------------------------------------------------

@@ -98,7 +98,8 @@ UTIL_SRCS := \
     util/format.c \
     util/kmsg.c \
     util/kmodules.c \
-    util/seal.c
+    util/seal.c \
+    util/upatch_maps.c
 
 BUILTIN_SRCS := \
     builtin-init.c \

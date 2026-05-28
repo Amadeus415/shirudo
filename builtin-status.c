@@ -37,6 +37,7 @@
 #include "util/format.h"
 #include "util/sysinfo.h"
 #include "util/timefmt.h"
+#include "util/upatch_maps.h"
 
 extern const char shirudo_version_id[];
 
@@ -356,6 +357,7 @@ static const struct shirudo_help_item status_options[] = {
 	{ "--include-eventlog",     "dump eventlog entries (implies --include-tpm)" },
 	{ "--include-kernel-log",   "last 10 lines of the kernel ring buffer" },
 	{ "--include-modules",      "loaded kernel modules (10 most recent; --show-full for tree)" },
+	{ "--include-maps",         "loaded upatches' pinned maps (BTF type-aware; cap 256 entries)" },
 	{ "--show-full",            "opt into a full dump: implies every --include-* flag and "
 				    "expands the loaded-modules dependency tree" },
 };
@@ -369,7 +371,7 @@ static const struct shirudo_help status_help = {
 	.usage      = "shirudo status [--json] [--include-tpm] "
 		      "[--include-system] [--include-eventlog]\n"
 		      "                       [--include-kernel-log] "
-		      "[--include-modules] [--show-full]",
+		      "[--include-modules] [--include-maps] [--show-full]",
 	.summary    = "Local readiness + state report. Auto-detects target "
 		      "vs operator role.\nSafe to run before `shirudo init`.",
 	.sections   = status_help_sections,
@@ -488,6 +490,7 @@ int cmd_status(int argc, const char **argv)
 	bool json = false, include_tpm = false;
 	bool include_system = false, include_eventlog = false;
 	bool include_kernel_log = false, include_modules = false;
+	bool include_maps = false;
 	bool show_full = false;
 	bool lsm_attached, keyring_present, is_operator, cert_present, is_target;
 	key_serial_t keyring_serial, keyring_pinned;
@@ -517,6 +520,8 @@ int cmd_status(int argc, const char **argv)
 			include_kernel_log = true;
 		else if (strcmp(argv[i], "--include-modules") == 0)
 			include_modules = true;
+		else if (strcmp(argv[i], "--include-maps") == 0)
+			include_maps = true;
 		else if (strcmp(argv[i], "--show-full") == 0)
 			show_full = true;
 		else if (shirudo_is_help(argv[i])) {
@@ -540,6 +545,7 @@ int cmd_status(int argc, const char **argv)
 		include_eventlog = true;
 		include_kernel_log = true;
 		include_modules = true;
+		include_maps = true;
 	}
 	/* The events[] array lives under tpm.eventlog, so it needs that. */
 	if (include_eventlog)
@@ -796,6 +802,37 @@ int cmd_status(int argc, const char **argv)
 			shirudo_json_arr_close(&e);
 			shirudo_kmodules_free(&ks);
 		}
+		if (include_maps) {
+			shirudo_json_arr_open(&e, "upatch_maps");
+			for (i = 0; i < n_ups; i++) {
+				struct shirudo_map_summary *list = NULL;
+				size_t nm = 0;
+				size_t k;
+
+				shirudo_upatch_maps_list_one(ups[i]->d_name,
+							     &list, &nm);
+				shirudo_json_obj_open(&e);
+				shirudo_json_kv_string(&e, "upatch",
+						       ups[i]->d_name);
+				shirudo_json_arr_open(&e, "maps");
+				for (k = 0; k < nm; k++) {
+					struct shirudo_map_view v = {};
+					uint32_t cap = show_full ? 0 :
+						SHIRUDO_MAP_ENTRIES_DEFAULT;
+
+					if (shirudo_upatch_maps_read(
+						list[k].upatch, list[k].name,
+						cap, &v) == 0)
+						shirudo_upatch_maps_emit_json(
+							&e, &v);
+					shirudo_map_view_free(&v);
+				}
+				shirudo_json_arr_close(&e);
+				shirudo_json_obj_close(&e);
+				shirudo_map_summary_free(list, nm);
+			}
+			shirudo_json_arr_close(&e);
+		}
 		shirudo_json_obj_close(&e);
 
 		if (e.err)
@@ -894,6 +931,21 @@ int cmd_status(int argc, const char **argv)
 				}
 				printf("  %-30s %-18s %s\n",
 				       ups[i]->d_name, pay, age);
+				if (include_maps) {
+					struct shirudo_map_summary *list = NULL;
+					size_t nm = 0;
+					size_t k;
+
+					shirudo_upatch_maps_list_one(
+						ups[i]->d_name, &list, &nm);
+					if (nm) {
+						printf("    Maps:\n");
+						for (k = 0; k < nm; k++)
+							shirudo_upatch_map_print_inline(
+								&list[k]);
+					}
+					shirudo_map_summary_free(list, nm);
+				}
 			}
 		}
 

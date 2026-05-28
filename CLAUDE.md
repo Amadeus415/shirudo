@@ -640,6 +640,16 @@ Target machine:
   links. The pin directory `<name>/` carries the
   `security.bpf.shirudo.payload` xattr (the loaded upatch's
   payload_sha256, the unload `payload_mismatch` ground truth).
+- `/var/lib/shirudo/bpffs/upatches/<name>/maps/<map_name>` — every
+  map the signed loader created, auto-pinned by shirudo after
+  attach (`util/upatch_maps.h`). Read-back via `shirudo upatch
+  map` (target-local) and `shirudo status --include-maps` /
+  `shirudo nodes show --include-maps` (operator over SSH). Covered
+  by the same `bpf2.c` `inode_unlink` / `seal.c` LSM hooks as the
+  link pin -- a non-shirudo `rm` is denied. Cleanup on
+  `upatch unload` descends into `maps/` first (unlink every map,
+  rmdir `maps/`, unlink `link`, rmdir parent) so the link
+  refcount drop releases nothing the kernel is still pinning.
 
 Operator machine:
 

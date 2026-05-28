@@ -40,6 +40,7 @@
 #include "util/report.h"
 #include "util/seal.h"
 #include "util/upatch.h"
+#include "util/upatch_maps.h"
 
 extern const char shirudo_version_id[];
 
@@ -158,6 +159,35 @@ static const struct shirudo_help upatch_unload_help = {
 "Examples:\n"
 "  shirudo upatch unload cve-2026-31431.unload.upatch\n"
 "  shirudo upatch unload --report=- foo.unload.upatch | jq",
+};
+
+static const struct shirudo_help_item upatch_map_options[] = {
+	{ "--json",       "machine-readable JSON output" },
+	{ "--show-full",  "lift the per-map 256-entry truncation cap" },
+};
+
+static const struct shirudo_help_section upatch_map_sections[] = {
+	{ "options:", upatch_map_options, ARRAY_SIZE(upatch_map_options) },
+};
+
+static const struct shirudo_help upatch_map_help = {
+	.usage      = "shirudo upatch map [<upatch>] [<map>] [--json] [--show-full]",
+	.summary    = "Read the contents of a pinned upatch map from the\n"
+		      "target kernel. With no positional args, list every "
+		      "pinned\nmap across every loaded upatch. With "
+		      "<upatch>, list maps\nfor that upatch only. With "
+		      "<upatch> <map>, dump the map's\ncontents -- BTF "
+		      "type-aware where the build embedded `-g`.\n"
+		      "Read-only; uses only LSM-allowed bpf() commands.",
+	.sections   = upatch_map_sections,
+	.n_sections = ARRAY_SIZE(upatch_map_sections),
+	.footer     =
+"Examples:\n"
+"  shirudo upatch map\n"
+"  shirudo upatch map cve-2026-31431-counter\n"
+"  shirudo upatch map cve-2026-31431-counter blocked_af_alg\n"
+"  shirudo upatch map cve-2026-31431-counter blocked_af_alg --json | jq\n"
+"  shirudo upatch map cve-2026-31431-counter big_hash --show-full",
 };
 
 static const struct shirudo_help upatch_get_help = {
@@ -729,6 +759,79 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 }
 
 /*
+ * For each map the signed loader created (cx->map_descs[].map_fd is
+ * populated by gen_loader's MAP_CREATE-from-kernel-context, see
+ * skel_internal.h), pin it under <upatches>/<name>/maps/<map_name>.
+ * The maps/ dir is created on first hit (mode 0700, under the same
+ * seal-LSM coverage as the link pin). Best-effort: a failure to pin
+ * one map is logged and skipped -- the upatch already loaded ok, so
+ * we want the rest of the loading to succeed, and the unpinned map
+ * just isn't observable via `shirudo upatch map` until next load.
+ *
+ * Skips:
+ *  - map_fd <= 0 (loader produced no fd, nothing to pin)
+ *  - empty name (kernel will reject the BPF_OBJ_PIN anyway)
+ *  - already-pinned maps_dir/name (idempotent on re-runs)
+ */
+static int pin_upatch_maps(const struct shirudo_loader_ctx *cx,
+			   uint32_t nr_maps, const char *name)
+{
+	char dir[PATH_MAX], maps_dir[PATH_MAX + 8];
+	char pin[PATH_MAX + 32];
+	uint32_t i;
+	int rc;
+
+	if (nr_maps == 0)
+		return 0;
+	if (snprintf(dir, sizeof(dir), "%s/%s",
+		     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= (int)sizeof(dir))
+		return -ENAMETOOLONG;
+	if (snprintf(maps_dir, sizeof(maps_dir), "%s/maps", dir) >=
+	    (int)sizeof(maps_dir))
+		return -ENAMETOOLONG;
+	rc = mkdir_if_absent(maps_dir, 0700);
+	if (rc) {
+		pr_warn("upatch maps: mkdir %s: %s (continuing without "
+			"map pins)", maps_dir, strerror(-rc));
+		return 0;
+	}
+	for (i = 0; i < nr_maps; i++) {
+		const struct shirudo_map_desc *md =
+			(const void *)((const char *)cx +
+				       sizeof(struct shirudo_loader_ctx) +
+				       (size_t)i * sizeof(*md));
+		struct bpf_map_info info = {};
+		uint32_t info_len = sizeof(info);
+		struct stat st;
+		int err;
+
+		if (md->map_fd <= 0)
+			continue;
+		err = bpf_map_get_info_by_fd(md->map_fd, &info, &info_len);
+		if (err) {
+			pr_warn("upatch maps: get_info(map %u): %s",
+				i, strerror(errno));
+			continue;
+		}
+		if (info.name[0] == '\0')
+			continue;
+		if (snprintf(pin, sizeof(pin), "%s/%s", maps_dir,
+			     info.name) >= (int)sizeof(pin))
+			continue;
+		if (stat(pin, &st) == 0)
+			continue;	/* already pinned (idempotent) */
+		if (obj_pin(md->map_fd, pin) != 0) {
+			pr_warn("upatch maps: pin %s: %s", pin,
+				strerror(errno));
+			continue;
+		}
+		pr_info("pinned map %u (%s, type=%u) -> %s",
+			i, info.name, (unsigned)info.type, pin);
+	}
+	return 0;
+}
+
+/*
  * Record the loaded upatch's payload_sha256 as an xattr on its pin
  * directory. `upatch unload` reads it back to confirm what is actually
  * loaded under <name> matches the directive's signed expectation; the
@@ -1114,6 +1217,15 @@ static int upatch_apply(const char *path, bool verify_only,
 		rc = 1;
 		goto out;
 	}
+
+	/*
+	 * 7b. Pin every map the signed loader created under
+	 *     <pin_dir>/maps/<map_name>, so userspace can read it back
+	 *     via `shirudo upatch map`. Non-fatal: a pin failure here
+	 *     does not roll back the load (which already succeeded);
+	 *     it just makes that map unobservable until next load.
+	 */
+	pin_upatch_maps(cx, u.hdr.nr_maps, upatch_name);
 
 	/*
 	 * Record payload_sha256 on the pin dir for the unload-time
@@ -1518,24 +1630,13 @@ static int parse_op_args(int argc, const char **argv, const char *verb,
 	return 0;
 }
 
-/*
- * Detach + unpin an upatch: unlink every pinned link under
- * /var/lib/shirudo/bpffs/upatches/<name>/ (dropping the link refcount
- * detaches the program) and rmdir the directory. The bpf2
- * inode_unlink hook permits this because the caller is shirudo.
- * Returns 0 on success, -ENOENT if the dir is absent (already
- * unloaded), -errno otherwise.
- */
-static int remove_pin_dir(const char *name)
+/* Unlink every file under <dir>, then rmdir <dir>. -errno on failure. */
+static int wipe_dir_flat(const char *dir)
 {
-	char dir[PATH_MAX];
 	struct dirent *e;
 	int dfd, rc = 0;
 	DIR *d;
 
-	if (snprintf(dir, sizeof(dir), "%s/%s", SHIRUDO_BPFFS_UPATCHES_DIR,
-		     name) >= (int)sizeof(dir))
-		return -ENAMETOOLONG;
 	d = opendir(dir);
 	if (!d)
 		return -errno;
@@ -1554,6 +1655,40 @@ static int remove_pin_dir(const char *name)
 	if (rmdir(dir) != 0 && errno != ENOENT)
 		return -errno;
 	return 0;
+}
+
+/*
+ * Detach + unpin an upatch: descend into <upatches>/<name>/, wipe the
+ * maps/ subdir first (unpinning every BPF_OBJ_PIN'd map), then unlink
+ * the link pin (dropping the link refcount detaches the program), then
+ * rmdir the top dir. The bpf2 inode_unlink hook permits this because
+ * the caller is shirudo. Returns 0 on success, -ENOENT if the dir is
+ * absent (already unloaded), -errno otherwise.
+ */
+static int remove_pin_dir(const char *name)
+{
+	char dir[PATH_MAX], maps_dir[PATH_MAX + 8];
+	struct stat st;
+	int rc;
+
+	if (snprintf(dir, sizeof(dir), "%s/%s", SHIRUDO_BPFFS_UPATCHES_DIR,
+		     name) >= (int)sizeof(dir))
+		return -ENAMETOOLONG;
+	if (snprintf(maps_dir, sizeof(maps_dir), "%s/maps", dir) >=
+	    (int)sizeof(maps_dir))
+		return -ENAMETOOLONG;
+	if (stat(dir, &st) != 0)
+		return -errno;
+	/*
+	 * maps/ must be torn down before the top dir, so the parent
+	 * isn't holding an unwipeable subdir when we rmdir it.
+	 */
+	if (stat(maps_dir, &st) == 0) {
+		rc = wipe_dir_flat(maps_dir);
+		if (rc)
+			return rc;
+	}
+	return wipe_dir_flat(dir);
 }
 
 static int cmd_upatch_load(int argc, const char **argv)
@@ -1924,6 +2059,154 @@ static void dump_line_info(const struct btf *btf, const void *recs,
  * loader, so this view is authoritative (unlike the .upatch's stored,
  * unsigned copy that `upatch info` shows).
  */
+/*
+ * Emit one map view as part of a `{ "schema": 1, "upatch": "...",
+ * "map": "...", ... }` document so consumers don't have to bolt the
+ * scaffolding on themselves.
+ */
+static int dump_one_map_json(const struct shirudo_map_view *v)
+{
+	struct shirudo_json_emit e = {};
+	size_t cap;
+	char *buf;
+
+	cap = 8192 + 128 * v->n_entries +
+	      (size_t)v->value_size * v->n_cpus * (size_t)v->n_entries * 8;
+	if (cap > SHIRUDO_JSON_MAX_BYTES)
+		cap = SHIRUDO_JSON_MAX_BYTES;
+	buf = xmalloc(cap);
+	if (!buf)
+		return 1;
+	e.buf = buf;
+	e.cap = cap;
+	shirudo_json_obj_open(&e);
+	shirudo_json_kv_int(&e, "schema", 1);
+	shirudo_json_kv_string(&e, "upatch", v->upatch);
+	shirudo_json_kv_string(&e, "map", v->name);
+	shirudo_json_obj_open_key(&e, "data");
+	shirudo_upatch_maps_emit_json(&e, v);
+	shirudo_json_obj_close(&e);
+	shirudo_json_obj_close(&e);
+	if (e.err) {
+		fprintf(stderr, "upatch map: json encode failed: %s\n",
+			strerror(-e.err));
+		xfree(buf, cap);
+		return 1;
+	}
+	printf("%s\n", buf);
+	xfree(buf, cap);
+	return 0;
+}
+
+static int cmd_upatch_map(int argc, const char **argv)
+{
+	struct shirudo_map_summary *list = NULL;
+	const char *upatch = NULL, *map = NULL;
+	bool json = false, show_full = false;
+	size_t n = 0;
+	int i, ret = 0;
+
+	for (i = 1; i < argc; i++) {
+		const char *a = argv[i];
+
+		if (shirudo_is_help(a)) {
+			shirudo_print_help(&upatch_map_help);
+			return 0;
+		}
+		if (strcmp(a, "--json") == 0) {
+			json = true;
+		} else if (strcmp(a, "--show-full") == 0) {
+			show_full = true;
+		} else if (a[0] == '-') {
+			fprintf(stderr, "upatch map: unknown option '%s'\n", a);
+			return 2;
+		} else if (!upatch) {
+			upatch = a;
+		} else if (!map) {
+			map = a;
+		} else {
+			fprintf(stderr, "upatch map: unexpected argument '%s'\n",
+				a);
+			return 2;
+		}
+	}
+
+	if (upatch && map) {
+		struct shirudo_map_view v = {};
+		uint32_t cap = show_full ? 0 : SHIRUDO_MAP_ENTRIES_DEFAULT;
+		int rc;
+
+		if (!safe_upatch_name(upatch)) {
+			pr_err("upatch map: invalid upatch name '%s'", upatch);
+			return 2;
+		}
+		rc = shirudo_upatch_maps_read(upatch, map, cap, &v);
+		if (rc) {
+			pr_err("upatch map: read %s/%s: %s", upatch, map,
+			       strerror(-rc));
+			return 1;
+		}
+		if (json)
+			ret = dump_one_map_json(&v);
+		else
+			shirudo_upatch_maps_print_detail(&v);
+		shirudo_map_view_free(&v);
+		return ret;
+	}
+
+	if (upatch) {
+		if (!safe_upatch_name(upatch)) {
+			pr_err("upatch map: invalid upatch name '%s'", upatch);
+			return 2;
+		}
+		shirudo_upatch_maps_list_one(upatch, &list, &n);
+	} else {
+		shirudo_upatch_maps_list_all(&list, &n);
+	}
+
+	if (json) {
+		struct shirudo_json_emit e = {};
+		size_t cap = 8192 + 256 * n;
+		char *buf;
+		size_t k;
+
+		buf = xmalloc(cap);
+		if (!buf) {
+			shirudo_map_summary_free(list, n);
+			return 1;
+		}
+		e.buf = buf;
+		e.cap = cap;
+		shirudo_json_obj_open(&e);
+		shirudo_json_kv_int(&e, "schema", 1);
+		shirudo_json_arr_open(&e, "maps");
+		for (k = 0; k < n; k++) {
+			shirudo_json_obj_open(&e);
+			shirudo_json_kv_string(&e, "upatch", list[k].upatch);
+			shirudo_json_kv_string(&e, "name", list[k].name);
+			shirudo_json_kv_string(&e, "type",
+					       list[k].type_name);
+			shirudo_json_kv_int(&e, "max_entries",
+					    list[k].max_entries);
+			if (list[k].n_cpus > 1)
+				shirudo_json_kv_int(&e, "n_cpus",
+						    list[k].n_cpus);
+			shirudo_json_obj_close(&e);
+		}
+		shirudo_json_arr_close(&e);
+		shirudo_json_obj_close(&e);
+		if (e.err)
+			ret = 1;
+		else
+			printf("%s\n", buf);
+		xfree(buf, cap);
+	} else {
+		shirudo_upatch_maps_print_summary(list, n);
+	}
+	shirudo_map_summary_free(list, n);
+	return ret;
+}
+
 static int cmd_upatch_get(int argc, const char **argv)
 {
 	struct bpf_prog_info info = {};
@@ -2047,6 +2330,7 @@ static const struct shirudo_help_item upatch_subcmds[] = {
 	{ "list",   "list persisted + bpffs-pinned upatches on this host" },
 	{ "info",   "describe a .upatch file (any host; offline, no kernel state)" },
 	{ "get",    "dump source of a loaded upatch from the target kernel (BTF line_info)" },
+	{ "map",    "read pinned map contents (target-only; BTF type-aware)" },
 };
 
 static const struct shirudo_help_section upatch_help_sections[] = {
@@ -2091,5 +2375,7 @@ int cmd_upatch(int argc, const char **argv)
 		return cmd_upatch_list(argc - 1, argv + 1);
 	if (strcmp(canonical, "get") == 0)
 		return cmd_upatch_get(argc - 1, argv + 1);
+	if (strcmp(canonical, "map") == 0)
+		return cmd_upatch_map(argc - 1, argv + 1);
 	return 2;	/* unreachable */
 }

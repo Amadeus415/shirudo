@@ -449,7 +449,119 @@ For the operational log, the journal has the events:
 Filter by ``_EXE`` and ``_UID`` (trusted journald fields), not by
 ``-t shirudo`` (which is forgeable by any process).
 
-11. Roll back
+11. Observing what an upatch is doing
+======================================
+
+A typical defensive upatch carries a small map -- a counter, a
+table of per-comm hits, an LRU of offending PIDs -- so an operator
+can answer "is the mitigation firing?". shirudo auto-pins every
+map the loader created under
+``/var/lib/shirudo/bpffs/upatches/<name>/maps/<map_name>`` and
+exposes them read-only via two routes: target-local
+``shirudo upatch map`` for detailed inspection, and operator-side
+``shirudo nodes show --include-maps`` for the fleet-wide summary.
+
+The example program ``examples/cve-2026-31431-counter.bpf.c``
+extends the AF_ALG-blocker with a per-CPU counter::
+
+    struct {
+        __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+        __uint(max_entries, 1);
+        __type(key, __u32);
+        __type(value, __u64);
+    } blocked_af_alg SEC(".maps");
+
+    SEC("lsm/socket_create")
+    int BPF_PROG(block_af_alg, int family, int type, int protocol, int kern)
+    {
+        __u32 zero = 0;
+        __u64 *count;
+
+        if (family != AF_ALG)
+            return 0;
+        count = bpf_map_lookup_elem(&blocked_af_alg, &zero);
+        if (count)
+            (*count)++;        /* per-CPU; no atomic needed */
+        return -EPERM;
+    }
+
+Build, sign and roll out exactly like the original example:
+
+.. code-block:: sh
+
+    # operator machine
+    shirudo build examples/cve-2026-31431-counter.bpf.c
+    shirudo rollout examples/cve-2026-31431-counter.bpf.upatch prod-a
+
+Inspect on the target (SSH in once):
+
+.. code-block:: sh
+
+    # on prod-a
+    shirudo upatch map
+    # UPATCH                       MAP             TYPE         ENTRIES
+    # cve-2026-31431-counter       blocked_af_alg  percpu_array max=1  (per-cpu)
+
+    shirudo upatch map cve-2026-31431-counter blocked_af_alg
+    # Upatch:             cve-2026-31431-counter
+    # Map:                blocked_af_alg
+    # Type:               percpu_array (16 CPUs)
+    # Entries:            1 of 1
+    # Key type:           __u32 (4 B)
+    # Value type:         __u64 (8 B per CPU)
+    #
+    # Contents:
+    #   key=0: sum=42
+    #     cpu0=3   cpu1=5   cpu2=0   cpu3=2
+    #     cpu4=1   cpu5=0   cpu6=4   cpu7=2
+    #     cpu8=6   cpu9=3   cpu10=1  cpu11=0
+    #     cpu12=4  cpu13=8  cpu14=1  cpu15=2
+
+Inspect from the operator, no SSH hop needed (the target's status
+JSON ships under the same one round-trip ``nodes show`` already
+makes):
+
+.. code-block:: sh
+
+    # operator
+    shirudo nodes show --include-maps prod-a
+    #   ... (Conditions, System Info, Upatches loaded ...)
+    # Upatches loaded (1):
+    #   NAME                          PAYLOAD-SHA256     APPLIED
+    #   cve-2026-31431-counter        4513ab88..         23m
+    #     Maps:
+    #       blocked_af_alg          percpu_array   1/1 entries   sum=42
+
+The summary inline form is the default; for per-CPU detail or for
+hashes with many entries, run ``shirudo upatch map`` on the target.
+
+For tooling, ``--json`` carries the structure (here trimmed):
+
+.. code-block:: sh
+
+    shirudo nodes show --include-maps --json prod-a | jq '
+      .nodes[0].report.upatch_maps[].maps[] | {name, type, n_entries, first_sum}'
+    # { "name": "blocked_af_alg", "type": "percpu_array",
+    #   "n_entries": 1, "first_sum": "42" }
+
+Per-map truncation kicks in at 256 entries by default (HASH walk
+order is BPF-defined); the JSON ``truncated: true`` and
+``n_truncated_at: 256`` carry that fact so consumers can render
+"256 of N (use --show-full)". The same ``--show-full`` flag that
+expands the loaded-modules dependency tree also lifts the per-map
+cap.
+
+A few map types -- ``ringbuf``, ``perf_event_array``,
+``stack_trace``, ``prog_array`` -- are listed but not dumped
+inline; they need dedicated readers (future work). They appear
+with a ``skipped: "use shirudo upatch <verb> (future work)"``
+marker so they remain discoverable.
+
+When the upatch is later unloaded (next section), shirudo
+descends into the ``maps/`` subdir and unpins every map before
+unlinking the link pin -- no orphan map refs left behind.
+
+12. Roll back
 ==============
 
 To remove an upatch:
@@ -465,6 +577,10 @@ out-of-band "destroy" path. The target verifies the signature,
 verifies that the named upatch is currently loaded with the
 expected ``payload_sha256``, detaches the link, removes the pin,
 and extends the TPM chain with a ``"shirudo-unload\0"`` event.
+For an upatch with maps the cleanup descends into the ``maps/``
+subdir first (every map pin is unlinked, refcount drop releases
+each map; then ``maps/`` is rmdir'd, then the link pin, then the
+parent dir) so the unload teardown is symmetric with the load.
 
 Rollback is **idempotent**: removing an upatch that isn't loaded
 returns ``result: ok, category: already_unloaded`` with no chain

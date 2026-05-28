@@ -38,7 +38,8 @@
 
 #define SHOW_CMD \
 	"shirudo status --json --include-tpm --include-system " \
-	"--include-eventlog --include-kernel-log --include-modules"
+	"--include-eventlog --include-kernel-log --include-modules " \
+	"--include-maps"
 
 /*
  * Compact PING column for the drift table: best-RTT in ms when OK,
@@ -226,6 +227,27 @@ struct node_detail {
 	char			(*kdep_names)[64];
 	size_t			n_kdep, cap_kdep;
 	char			boot_at[32];	/* top-level ISO UTC */
+
+	/*
+	 * Compact view of shirudo status's `upatch_maps[]` -- one row per
+	 * pinned map; entry details (values) are fetched on demand via
+	 * `shirudo upatch map` over SSH, this just carries summary info.
+	 */
+	struct umap_row {
+		char		upatch[64];
+		char		name[24];
+		char		type[24];
+		int64_t		max_entries;
+		int64_t		n_entries;
+		int64_t		n_cpus;
+		int		truncated;
+		char		skipped[80];
+		char		first_sum[48];	/* entries[0].sum for percpu */
+	}			umap_scratch_inner;
+	struct umap_row		*umaps;
+	size_t			n_umap, cap_umap;
+	char			umap_current[64];	/* outer scratch */
+	char			umap_sum_scratch[48];	/* nested entries */
 };
 
 static int up_on_elem(void *ctx)
@@ -338,6 +360,57 @@ static int kmod_on_elem(void *ctx)
 	return 0;
 }
 
+/*
+ * The nested entries[] inside each map carries a "sum" string (for
+ * percpu types). We capture only the first entry's sum, since the
+ * inline nodes-show render shows at most one sum per map; full detail
+ * goes through `shirudo upatch map <upatch> <map>`.
+ */
+static int umap_on_entry_elem(void *ctx)
+{
+	struct node_detail *d = ctx;
+
+	if (d->umap_sum_scratch[0] && !d->umap_scratch_inner.first_sum[0]) {
+		snprintf(d->umap_scratch_inner.first_sum,
+			 sizeof(d->umap_scratch_inner.first_sum), "%s",
+			 d->umap_sum_scratch);
+	}
+	d->umap_sum_scratch[0] = '\0';
+	return 0;
+}
+
+static int umap_on_inner_elem(void *ctx)
+{
+	struct node_detail *d = ctx;
+	struct umap_row *r;
+
+	if (d->n_umap == d->cap_umap) {
+		size_t nc = d->cap_umap ? d->cap_umap * 2 : 16;
+		void *p = xreallocarray(d->umaps, d->cap_umap, nc,
+					sizeof(d->umaps[0]));
+
+		if (!p)
+			return -ENOMEM;
+		d->umaps = p;
+		d->cap_umap = nc;
+	}
+	snprintf(d->umap_scratch_inner.upatch,
+		 sizeof(d->umap_scratch_inner.upatch), "%s",
+		 d->umap_current);
+	r = &d->umaps[d->n_umap++];
+	*r = d->umap_scratch_inner;
+	d->umap_scratch_inner = (struct umap_row){};
+	return 0;
+}
+
+static int umap_on_outer_elem(void *ctx)
+{
+	struct node_detail *d = ctx;
+
+	d->umap_current[0] = '\0';
+	return 0;
+}
+
 static void node_detail_free(struct node_detail *d)
 {
 	xfree(d->upatches, d->cap_up * sizeof(d->upatches[0]));
@@ -345,6 +418,7 @@ static void node_detail_free(struct node_detail *d)
 	xfree(d->kmsg, d->cap_kmsg * sizeof(d->kmsg[0]));
 	xfree(d->kmods, d->cap_kmod * sizeof(d->kmods[0]));
 	xfree(d->kdep_names, d->cap_kdep * sizeof(d->kdep_names[0]));
+	xfree(d->umaps, d->cap_umap * sizeof(d->umaps[0]));
 }
 
 /* Parse one `shirudo status --json ...` document into *d. 0 / -errno. */
@@ -394,6 +468,38 @@ static int parse_node_detail(const char *out, size_t len,
 	struct shirudo_json_field kdep_elem[] = {
 		{ "", SHIRUDO_JSON_T_STRING, d->kdep_scratch,
 		  sizeof(d->kdep_scratch), 0, NULL, 0 },
+	};
+	struct shirudo_json_array umap_entries_sink = { umap_on_entry_elem, d };
+	struct shirudo_json_field umap_entries_elem[] = {
+		{ "sum", SHIRUDO_JSON_T_STRING, d->umap_sum_scratch,
+		  sizeof(d->umap_sum_scratch), 0, NULL, 0 },
+	};
+	struct shirudo_json_array umap_inner_sink = { umap_on_inner_elem, d };
+	struct shirudo_json_field umap_inner_elem[] = {
+		{ "name", SHIRUDO_JSON_T_STRING, d->umap_scratch_inner.name,
+		  sizeof(d->umap_scratch_inner.name), 0, NULL, 0 },
+		{ "type", SHIRUDO_JSON_T_STRING, d->umap_scratch_inner.type,
+		  sizeof(d->umap_scratch_inner.type), 0, NULL, 0 },
+		{ "max_entries", SHIRUDO_JSON_T_INT,
+		  &d->umap_scratch_inner.max_entries, 0, 0, NULL, 0 },
+		{ "n_entries", SHIRUDO_JSON_T_INT,
+		  &d->umap_scratch_inner.n_entries, 0, 0, NULL, 0 },
+		{ "n_cpus", SHIRUDO_JSON_T_INT,
+		  &d->umap_scratch_inner.n_cpus, 0, 0, NULL, 0 },
+		{ "truncated", SHIRUDO_JSON_T_BOOL,
+		  &d->umap_scratch_inner.truncated, 0, 0, NULL, 0 },
+		{ "skipped", SHIRUDO_JSON_T_STRING,
+		  d->umap_scratch_inner.skipped,
+		  sizeof(d->umap_scratch_inner.skipped), 0, NULL, 0 },
+		{ "entries", SHIRUDO_JSON_T_ARRAY, &umap_entries_sink, 0, 0,
+		  umap_entries_elem, ARRAY_SIZE(umap_entries_elem) },
+	};
+	struct shirudo_json_array umap_outer_sink = { umap_on_outer_elem, d };
+	struct shirudo_json_field umap_outer_elem[] = {
+		{ "upatch", SHIRUDO_JSON_T_STRING, d->umap_current,
+		  sizeof(d->umap_current), 0, NULL, 0 },
+		{ "maps", SHIRUDO_JSON_T_ARRAY, &umap_inner_sink, 0, 0,
+		  umap_inner_elem, ARRAY_SIZE(umap_inner_elem) },
 	};
 	struct shirudo_json_array kmod_sink = { kmod_on_elem, d };
 	struct shirudo_json_field kmod_elem[] = {
@@ -500,6 +606,8 @@ static int parse_node_detail(const char *out, size_t len,
 		  kmod_elem, ARRAY_SIZE(kmod_elem) },
 		{ "boot_at", SHIRUDO_JSON_T_STRING, d->boot_at,
 		  sizeof(d->boot_at), 0, NULL, 0 },
+		{ "upatch_maps", SHIRUDO_JSON_T_ARRAY, &umap_outer_sink,
+		  0, 0, umap_outer_elem, ARRAY_SIZE(umap_outer_elem) },
 	};
 
 	d->kmod_scratch.since_boot_sec = INT64_MIN;
@@ -1064,6 +1172,46 @@ static void print_describe(const struct node_detail *d, bool show_full)
 				snprintf(pay, sizeof(pay), "-");
 			}
 			printf("  %-30s %-18s %s\n", d->upatches[i], pay, age);
+			{
+				size_t k;
+				int shown = 0;
+
+				for (k = 0; k < d->n_umap; k++) {
+					const struct umap_row *m = &d->umaps[k];
+
+					if (strcmp(m->upatch, d->upatches[i])
+					    != 0)
+						continue;
+					if (!shown) {
+						printf("    Maps:\n");
+						shown = 1;
+					}
+					if (m->skipped[0]) {
+						printf("      %-22s %-16s "
+						       "(skipped: %s)\n",
+						       m->name, m->type,
+						       m->skipped);
+					} else if (m->first_sum[0]) {
+						printf("      %-22s %-16s "
+						       "%lld/%lld entries  "
+						       "sum=%s%s\n",
+						       m->name, m->type,
+						       (long long)m->n_entries,
+						       (long long)m->max_entries,
+						       m->first_sum,
+						       m->truncated ?
+						       "  (truncated)" : "");
+					} else {
+						printf("      %-22s %-16s "
+						       "%lld/%lld entries%s\n",
+						       m->name, m->type,
+						       (long long)m->n_entries,
+						       (long long)m->max_entries,
+						       m->truncated ?
+						       "  (truncated)" : "");
+					}
+				}
+			}
 		}
 	}
 
@@ -1359,6 +1507,60 @@ static void emit_node_json(struct shirudo_json_emit *e,
 			shirudo_json_obj_close(e);
 		}
 		shirudo_json_arr_close(e);
+		/*
+		 * Pass through the parsed upatch_maps[] verbatim so operator
+		 * tooling sees the same structure regardless of whether it's
+		 * reading shirudo nodes show --json or shirudo status --json
+		 * on the target. Grouped by upatch.
+		 */
+		if (d->n_umap) {
+			char prev[64] = "";
+			size_t k;
+			int in_obj = 0;
+
+			shirudo_json_arr_open(e, "upatch_maps");
+			for (k = 0; k < d->n_umap; k++) {
+				const struct umap_row *m = &d->umaps[k];
+
+				if (strcmp(prev, m->upatch) != 0) {
+					if (in_obj) {
+						shirudo_json_arr_close(e);
+						shirudo_json_obj_close(e);
+					}
+					shirudo_json_obj_open(e);
+					shirudo_json_kv_string(e, "upatch",
+							       m->upatch);
+					shirudo_json_arr_open(e, "maps");
+					snprintf(prev, sizeof(prev), "%s",
+						 m->upatch);
+					in_obj = 1;
+				}
+				shirudo_json_obj_open(e);
+				shirudo_json_kv_string(e, "name", m->name);
+				shirudo_json_kv_string(e, "type", m->type);
+				shirudo_json_kv_int(e, "max_entries",
+						    m->max_entries);
+				shirudo_json_kv_int(e, "n_entries",
+						    m->n_entries);
+				if (m->n_cpus > 1)
+					shirudo_json_kv_int(e, "n_cpus",
+							    m->n_cpus);
+				shirudo_json_kv_bool(e, "truncated",
+						     m->truncated);
+				if (m->skipped[0])
+					shirudo_json_kv_string(e, "skipped",
+							       m->skipped);
+				if (m->first_sum[0])
+					shirudo_json_kv_string(e, "first_sum",
+							       m->first_sum);
+				shirudo_json_obj_close(e);
+			}
+			if (in_obj) {
+				shirudo_json_arr_close(e);
+				shirudo_json_obj_close(e);
+			}
+			shirudo_json_arr_close(e);
+		}
 		shirudo_json_obj_close(e);	/* status */
 	}
 	shirudo_json_obj_close(e);		/* node */

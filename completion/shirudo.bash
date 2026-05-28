@@ -121,8 +121,8 @@ _shirudo()
 	status)
 		COMPREPLY=( $(compgen -W "--json --include-tpm \
 			--include-system --include-eventlog \
-			--include-kernel-log --include-modules --show-full" \
-			-- "$cur") )
+			--include-kernel-log --include-modules \
+			--include-maps --show-full" -- "$cur") )
 		;;
 	keys)
 		COMPREPLY=( $(compgen -W "--keys-dir=" -- "$cur") )
