@@ -473,6 +473,8 @@ static const struct shirudo_help remote_help = {
 
 int cmd_remote(int argc, const char **argv)
 {
+	const char *canonical;
+
 	/* Bare `shirudo remote` lists the registered remotes (most common
 	 * use); explicit `list` keeps working. */
 	if (argc < 2)
@@ -481,19 +483,22 @@ int cmd_remote(int argc, const char **argv)
 		shirudo_print_help(&remote_help);
 		return 0;
 	}
-	if (strcmp(argv[1], "add") == 0)
+	/* Tolerant resolution: 'remotes', 'li', 'ad', etc. all resolve as
+	 * long as the match is unique (see util/similar.c). */
+	canonical = shirudo_resolve_subcommand("shirudo remote", argv[1],
+					       remote_subcmds,
+					       ARRAY_SIZE(remote_subcmds));
+	if (!canonical)
+		return 2;
+	if (strcmp(canonical, "add") == 0)
 		return cmd_add(argc - 1, argv + 1);
-	if (strcmp(argv[1], "list") == 0)
+	if (strcmp(canonical, "list") == 0)
 		return cmd_list(argc - 1, argv + 1);
-	if (strcmp(argv[1], "show") == 0)
+	if (strcmp(canonical, "show") == 0)
 		return cmd_show(argc - 1, argv + 1);
-	if (strcmp(argv[1], "rm") == 0)
+	if (strcmp(canonical, "rm") == 0)
 		return cmd_rm(argc - 1, argv + 1);
-	if (strcmp(argv[1], "rename") == 0)
+	if (strcmp(canonical, "rename") == 0)
 		return cmd_rename(argc - 1, argv + 1);
-
-	shirudo_help_unknown_subcommand("shirudo remote", argv[1],
-					remote_subcmds,
-					ARRAY_SIZE(remote_subcmds));
-	return 2;
+	return 2;	/* unreachable: resolve returned a non-matching name */
 }

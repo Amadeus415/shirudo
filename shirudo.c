@@ -107,17 +107,12 @@ static int cmd_help(int argc, const char **argv)
 	return 0;
 }
 
-static const struct cmd *find_cmd(const char *name)
-{
-	for (size_t i = 0; i < commands_n; i++)
-		if (strcmp(commands[i].name, name) == 0)
-			return &commands[i];
-	return NULL;
-}
-
 int main(int argc, const char **argv)
 {
-	const struct cmd *c;
+	const struct cmd *c = NULL;
+	const char *names[ARRAY_SIZE(commands)];
+	size_t matches[ARRAY_SIZE(commands)];
+	size_t i, n_match;
 
 	shirudo_log_init();
 	shirudo_harden_self();
@@ -130,11 +125,27 @@ int main(int argc, const char **argv)
 	if (shirudo_is_help(argv[1]))
 		return cmd_help(0, NULL);
 
-	c = find_cmd(argv[1]);
+	for (i = 0; i < commands_n; i++)
+		names[i] = commands[i].name;
+
+	/*
+	 * Tolerant resolution: 'node' -> 'nodes', 'remotes' -> 'remote',
+	 * 'rolllout' is left to the Levenshtein "did you mean" pass below.
+	 */
+	n_match = shirudo_resolve(argv[1], names, commands_n,
+				  matches, ARRAY_SIZE(matches));
+	if (n_match == 1) {
+		c = &commands[matches[0]];
+	} else if (n_match > 1) {
+		fprintf(stderr, "shirudo: '%s' is ambiguous; matches:\n",
+			argv[1]);
+		for (i = 0; i < n_match; i++)
+			fprintf(stderr, "\t%s\n", commands[matches[i]].name);
+		return 1;
+	}
 	if (!c) {
 		struct shirudo_suggestion sugg[4];
-		const char *names[ARRAY_SIZE(commands)];
-		size_t i, n;
+		size_t n;
 		int max_dist, len;
 
 		fprintf(stderr,
@@ -150,8 +161,6 @@ int main(int argc, const char **argv)
 		if (max_dist > 3)
 			max_dist = 3;
 
-		for (i = 0; i < commands_n; i++)
-			names[i] = commands[i].name;
 		n = shirudo_suggest(argv[1], names, commands_n, max_dist,
 				    sugg, ARRAY_SIZE(sugg));
 		if (n) {

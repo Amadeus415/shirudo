@@ -1984,23 +1984,26 @@ static const struct shirudo_help upatch_help = {
 
 int cmd_upatch(int argc, const char **argv)
 {
+	const char *canonical;
+
 	if (argc < 2 || shirudo_is_help(argv[1])) {
 		shirudo_print_help(&upatch_help);
 		return argc < 2 ? 2 : 0;
 	}
-	if (strcmp(argv[1], "info") == 0)
+	canonical = shirudo_resolve_subcommand("shirudo upatch", argv[1],
+					       upatch_subcmds,
+					       ARRAY_SIZE(upatch_subcmds));
+	if (!canonical)
+		return 2;
+	if (strcmp(canonical, "info") == 0)
 		return cmd_upatch_info(argc - 1, argv + 1);
-	if (strcmp(argv[1], "load") == 0)
+	if (strcmp(canonical, "load") == 0)
 		return cmd_upatch_load(argc - 1, argv + 1);
-	if (strcmp(argv[1], "unload") == 0)
+	if (strcmp(canonical, "unload") == 0)
 		return cmd_upatch_unload(argc - 1, argv + 1);
-	if (strcmp(argv[1], "list") == 0)
+	if (strcmp(canonical, "list") == 0)
 		return cmd_upatch_list(argc - 1, argv + 1);
-	if (strcmp(argv[1], "get") == 0)
+	if (strcmp(canonical, "get") == 0)
 		return cmd_upatch_get(argc - 1, argv + 1);
-
-	shirudo_help_unknown_subcommand("shirudo upatch", argv[1],
-					upatch_subcmds,
-					ARRAY_SIZE(upatch_subcmds));
-	return 2;
+	return 2;	/* unreachable */
 }

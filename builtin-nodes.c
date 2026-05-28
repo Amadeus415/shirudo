@@ -22,6 +22,7 @@
 #include "util/json.h"
 #include "util/log.h"
 #include "util/macros.h"
+#include "util/similar.h"
 #include "util/malloc.h"
 #include "util/remotes.h"
 #include "util/selector.h"
@@ -109,6 +110,7 @@ static const char *match_str(const struct node_state *s)
 /* ---- shirudo nodes show <name>: per-node describe ----------------- */
 
 static const struct shirudo_help_item nodes_subcmds[] = {
+	{ "list", "drift table across registered remotes (default if omitted)" },
 	{ "show", "kubectl-describe-style per-node deep dive: show [--json] <name>..." },
 };
 
@@ -813,8 +815,31 @@ int cmd_nodes(int argc, const char **argv)
 		shirudo_print_help(&nodes_help);
 		return 0;
 	}
-	if (argc >= 2 && strcmp(argv[1], "show") == 0)
-		return cmd_nodes_show(argc, argv);
+	/*
+	 * `nodes` is mixed: argv[1] may be a sub-subcommand ("show"/"list")
+	 * OR a positional remote name. Only treat it as a subcommand when
+	 * it tolerantly resolves to one of the declared sub-subs; otherwise
+	 * fall through to the drift-table parser so `shirudo nodes <name>`
+	 * keeps working. Doesn't print a diagnostic because the fallthrough
+	 * still needs to succeed for the registered-name case.
+	 */
+	if (argc >= 2 && argv[1][0] != '-') {
+		const char *names[] = { "list", "show" };
+		size_t m[ARRAY_SIZE(names)];
+		size_t n = shirudo_resolve(argv[1], names,
+					   ARRAY_SIZE(names), m,
+					   ARRAY_SIZE(m));
+
+		if (n == 1 && strcmp(names[m[0]], "show") == 0)
+			return cmd_nodes_show(argc, argv);
+		if (n == 1 && strcmp(names[m[0]], "list") == 0) {
+			/* `nodes list ...` is just the drift-table form;
+			 * skip the verb so the existing parser sees the
+			 * options/names that follow. */
+			argc--;
+			argv++;
+		}
+	}
 
 	const char *filter = NULL, *selexpr = NULL;
 	struct shirudo_remote *remotes = NULL;

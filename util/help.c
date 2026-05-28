@@ -12,6 +12,8 @@
 #include "macros.h"
 #include "similar.h"
 
+#define SHIRUDO_SUBCMD_MAX	32
+
 int shirudo_is_help(const char *arg)
 {
 	return arg && (strcmp(arg, "help") == 0 ||
@@ -54,8 +56,6 @@ void shirudo_print_help(const struct shirudo_help *h)
 		fprintf(stderr, "\n%s\n", h->footer);
 }
 
-#define SHIRUDO_SUBCMD_MAX	32
-
 void shirudo_help_unknown_subcommand(const char *cmd_label, const char *bad,
 				     const struct shirudo_help_item *subcmds,
 				     size_t n_subcmds)
@@ -86,4 +86,37 @@ void shirudo_help_unknown_subcommand(const char *cmd_label, const char *bad,
 		for (i = 0; i < n; i++)
 			fprintf(stderr, "\t%s\n", sugg[i].name);
 	}
+}
+
+const char *shirudo_resolve_subcommand(const char *cmd_label,
+				       const char *input,
+				       const struct shirudo_help_item *subcmds,
+				       size_t n_subcmds)
+{
+	const char *names[SHIRUDO_SUBCMD_MAX];
+	size_t matches[SHIRUDO_SUBCMD_MAX];
+	size_t i, n_names = 0, n;
+
+	if (!subcmds || !n_subcmds) {
+		shirudo_help_unknown_subcommand(cmd_label, input,
+						subcmds, n_subcmds);
+		return NULL;
+	}
+	for (i = 0; i < n_subcmds && n_names < ARRAY_SIZE(names); i++)
+		names[n_names++] = subcmds[i].name;
+
+	n = shirudo_resolve(input, names, n_names, matches,
+			    ARRAY_SIZE(matches));
+	if (n == 1)
+		return names[matches[0]];
+	if (n == 0) {
+		shirudo_help_unknown_subcommand(cmd_label, input,
+						subcmds, n_subcmds);
+		return NULL;
+	}
+	/* Ambiguous: list the colliding matches so the user can pick. */
+	fprintf(stderr, "%s: '%s' is ambiguous; matches:\n", cmd_label, input);
+	for (i = 0; i < n; i++)
+		fprintf(stderr, "\t%s\n", names[matches[i]]);
+	return NULL;
 }

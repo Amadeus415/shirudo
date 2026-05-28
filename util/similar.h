@@ -43,4 +43,21 @@ size_t shirudo_suggest(const char *name,
 		       int max_dist,
 		       struct shirudo_suggestion *out, size_t cap);
 
+/*
+ * Resolve `input` against `candidates[0..n)` and fill `matches[]`
+ * with the indices that match, returning the count (clamped to cap).
+ *
+ * Three resolution tiers, short-circuit at the first that hits:
+ *   1. exact match (strcmp).
+ *   2. input is a prefix of candidate ("node" -> "nodes", "li" -> "list").
+ *   3. candidate is a prefix of input ("remotes" -> "remote").
+ *
+ * Caller dispatches on count: 1 = unique match (matches[0]), 0 = no
+ * match (let Levenshtein "did you mean" kick in), >1 = ambiguous
+ * (list `matches` to the user).
+ */
+size_t shirudo_resolve(const char *input,
+		       const char *const *candidates, size_t n,
+		       size_t *matches, size_t cap);
+
 #endif /* SHIRUDO_SIMILAR_H */

@@ -104,3 +104,44 @@ size_t shirudo_suggest(const char *name,
 	}
 	return n_out;
 }
+
+size_t shirudo_resolve(const char *input,
+		       const char *const *candidates, size_t n,
+		       size_t *matches, size_t cap)
+{
+	size_t i, m = 0, len = strlen(input);
+
+	/* Tier 1: exact match. Unique by definition; short-circuit. */
+	for (i = 0; i < n; i++) {
+		if (strcmp(input, candidates[i]) == 0) {
+			if (cap >= 1)
+				matches[0] = i;
+			return 1;
+		}
+	}
+	/* Tier 2: input is a prefix of a candidate ("node" -> "nodes"). */
+	for (i = 0; i < n; i++) {
+		size_t clen = strlen(candidates[i]);
+
+		if (clen > len &&
+		    strncmp(input, candidates[i], len) == 0) {
+			if (m < cap)
+				matches[m] = i;
+			m++;
+		}
+	}
+	if (m)
+		return m;
+	/* Tier 3: candidate is a prefix of input ("remotes" -> "remote"). */
+	for (i = 0; i < n; i++) {
+		size_t clen = strlen(candidates[i]);
+
+		if (clen < len &&
+		    strncmp(input, candidates[i], clen) == 0) {
+			if (m < cap)
+				matches[m] = i;
+			m++;
+		}
+	}
+	return m;
+}

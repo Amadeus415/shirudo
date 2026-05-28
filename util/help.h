@@ -53,4 +53,20 @@ void shirudo_help_unknown_subcommand(const char *cmd_label,
 				     const struct shirudo_help_item *subcmds,
 				     size_t n_subcmds);
 
+/*
+ * Resolve `input` against `subcmds` using shirudo_resolve()'s tiered
+ * matching (exact, then unique prefix-of-candidate, then candidate-
+ * is-prefix-of-input) so that `nod` -> `nodes`, `remotes` -> `remote`,
+ * `li` -> `list`, `ad` -> `add` all work.
+ *
+ * Returns the canonical name on a unique match. Returns NULL on
+ * failure with stderr already populated: a Levenshtein "Did you
+ * mean" block when nothing matched, or a "is ambiguous; matches:"
+ * listing when more than one candidate matched the same tier.
+ */
+const char *shirudo_resolve_subcommand(const char *cmd_label,
+				       const char *input,
+				       const struct shirudo_help_item *subcmds,
+				       size_t n_subcmds);
+
 #endif /* SHIRUDO_HELP_H */
