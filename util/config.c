@@ -136,10 +136,11 @@ int shirudo_config_load(struct shirudo_config *cfg)
 				char *end;
 
 				v = strtoul(val, &end, 0);
-				if (*end != '\0' || v == 0 || v > 16)
+				if (*end != '\0' || v > 16)
 					pr_warn("config: nodes.icmp_probes:"
 						" bad value '%s' (ignored;"
-						" must be 1..16)", val);
+						" must be 0..16, 0=disabled)",
+						val);
 				else
 					cfg->nodes_icmp_probes = (unsigned int)v;
 			} else {

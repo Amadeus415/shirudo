@@ -28,6 +28,8 @@ static const struct shirudo_help config_help = {
 	.summary = "Print the effective shirudo configuration in shirudo.conf "
 		   "syntax.\nWhen " SHIRUDO_CONF_PATH " is absent, prints "
 		   "the defaults.\nLocal-only.",
+	.footer  = "Starting point for a new config file:\n"
+		   "  shirudo config > " SHIRUDO_CONF_PATH,
 };
 
 static void usage(void)
@@ -91,7 +93,9 @@ int cmd_config(int argc, const char **argv)
 	printf("# `shirudo nodes` ICMP probe budget per target. Best-effort\n"
 	       "# unprivileged dgram ICMP -- the drift table still renders\n"
 	       "# (with PING = n/a) when the probe is blocked or the operator\n"
-	       "# gid isn't in net.ipv4.ping_group_range.\n");
+	       "# gid isn't in net.ipv4.ping_group_range. Set\n"
+	       "# nodes.icmp_probes = 0 to disable ICMP probing entirely\n"
+	       "# (no socket opened; PING column shows `off`).\n");
 	printf("nodes.icmp_timeout_ms = %u\n", cfg.nodes_icmp_timeout_ms);
 	printf("nodes.icmp_probes = %u\n", cfg.nodes_icmp_probes);
 

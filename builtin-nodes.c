@@ -59,6 +59,8 @@ static const char *ping_str(enum shirudo_icmp_status st, uint64_t rtt_us,
 		return "dns?";
 	case SHIRUDO_ICMP_NO_PRIVILEGE:
 		return "n/a";
+	case SHIRUDO_ICMP_DISABLED:
+		return "off";
 	case SHIRUDO_ICMP_ERROR:
 	default:
 		return "err";
@@ -915,6 +917,10 @@ static void print_describe(const struct node_detail *d, bool show_full)
 		printf("  %-14s n/a  (operator gid not in "
 		       "net.ipv4.ping_group_range)\n", "ICMP:");
 		break;
+	case SHIRUDO_ICMP_DISABLED:
+		printf("  %-14s off  (disabled in shirudo.conf: "
+		       "nodes.icmp_probes = 0)\n", "ICMP:");
+		break;
 	case SHIRUDO_ICMP_ERROR:
 	default:
 		printf("  %-14s err\n", "ICMP:");
@@ -1101,6 +1107,8 @@ static void emit_node_json(struct shirudo_json_emit *e,
 	shirudo_json_obj_open_key(e, "icmp");
 	shirudo_json_kv_bool(e, "ok",
 			     d->icmp_status == SHIRUDO_ICMP_OK);
+	shirudo_json_kv_bool(e, "disabled",
+			     d->icmp_status == SHIRUDO_ICMP_DISABLED);
 	if (d->icmp_status == SHIRUDO_ICMP_OK)
 		shirudo_json_kv_int(e, "rtt_us", (int64_t)d->icmp_rtt_us);
 	else
@@ -1547,6 +1555,8 @@ int cmd_nodes(int argc, const char **argv)
 			shirudo_json_obj_open_key(&e, "icmp");
 			shirudo_json_kv_bool(&e, "ok",
 				s->icmp_status == SHIRUDO_ICMP_OK);
+			shirudo_json_kv_bool(&e, "disabled",
+				s->icmp_status == SHIRUDO_ICMP_DISABLED);
 			if (s->icmp_status == SHIRUDO_ICMP_OK)
 				shirudo_json_kv_int(&e, "rtt_us",
 					(int64_t)s->icmp_rtt_us);

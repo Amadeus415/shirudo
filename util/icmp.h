@@ -21,6 +21,7 @@ enum shirudo_icmp_status {
 	SHIRUDO_ICMP_NO_ROUTE,		/* destination unreachable */
 	SHIRUDO_ICMP_DNS_FAIL,		/* getaddrinfo could not resolve */
 	SHIRUDO_ICMP_NO_PRIVILEGE,	/* not in net.ipv4.ping_group_range */
+	SHIRUDO_ICMP_DISABLED,		/* nodes.icmp_probes = 0 (off by config) */
 	SHIRUDO_ICMP_ERROR,		/* other (logged via pr_warn) */
 };
 

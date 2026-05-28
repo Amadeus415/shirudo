@@ -58,6 +58,10 @@ enum shirudo_icmp_status shirudo_icmp_ping(const char *host,
 	if (resolved && resolved_cap)
 		resolved[0] = '\0';
 
+	/* probes = 0 in shirudo.conf means "ICMP disabled" -- no socket. */
+	if (probes == 0)
+		return SHIRUDO_ICMP_DISABLED;
+
 	gai = getaddrinfo(host, NULL, &hints, &res);
 	if (gai != 0 || !res)
 		return SHIRUDO_ICMP_DNS_FAIL;
