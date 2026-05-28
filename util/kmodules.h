@@ -20,6 +20,14 @@ struct shirudo_kmod {
 	uint32_t	refcount;	/* /proc/modules column 3 */
 	uint16_t	n_deps;
 	uint16_t	deps_off;	/* index into the global deps[] */
+	/*
+	 * sysfs `/sys/module/<name>` mtime -- the moment the kernel's
+	 * kobject for this module was created, i.e. when it was loaded.
+	 * Zero if the stat() failed (race: rmmod between /proc/modules
+	 * read and the per-module stat).
+	 */
+	int64_t		loaded_at_sec;
+	int32_t		loaded_at_nsec;
 };
 
 struct shirudo_kmod_set {
@@ -35,6 +43,15 @@ void shirudo_kmodules_free(struct shirudo_kmod_set *set);
 
 /* Render as an ASCII tree with the kubectl-describe 2-space indent. */
 void shirudo_kmodules_print_tree(const struct shirudo_kmod_set *set);
+
+/*
+ * Render the <last_n> most recently loaded modules as a chronological
+ * list ([ISO ts]  name (size, refs=K, Ts since boot)). Sorted oldest
+ * of the 15 at top, newest at bottom -- "tail" semantics. <boot_sec>
+ * is the wallclock instant of boot, used to compute "since boot".
+ */
+void shirudo_kmodules_print_recent(const struct shirudo_kmod_set *set,
+				   size_t last_n, int64_t boot_sec);
 
 /*
  * Format a size in human units (16K, 1.8M, ...) into <out>. The form

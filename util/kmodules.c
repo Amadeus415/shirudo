@@ -18,8 +18,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <time.h>
+
 #include "kmodules.h"
 #include "malloc.h"
+#include "timefmt.h"
 
 void shirudo_human_size(uint64_t bytes, char *out, size_t out_cap)
 {
@@ -384,6 +387,25 @@ skip:
 		}
 	}
 
+	/*
+	 * Stat each /sys/module/<name>/ for its kernfs mtime, which the
+	 * kernel sets when sysfs_create_dir registers the module's
+	 * kobject during init_module/finit_module. That mtime is the
+	 * load time. ENOENT on a race (rmmod between /proc/modules read
+	 * and this stat) is non-fatal; leave loaded_at zero.
+	 */
+	for (size_t i = 0; i < set->n; i++) {
+		struct shirudo_kmod *m = &set->mods[i];
+		char path[64 + sizeof("/sys/module/")];
+		struct stat st;
+
+		snprintf(path, sizeof(path), "/sys/module/%s", m->name);
+		if (stat(path, &st) == 0) {
+			m->loaded_at_sec  = (int64_t)st.st_mtim.tv_sec;
+			m->loaded_at_nsec = (int32_t)st.st_mtim.tv_nsec;
+		}
+	}
+
 	xfree(raws, raw_cap * sizeof(*raws));
 	xfree(buf, buf_cap);
 	return 0;
@@ -493,4 +515,85 @@ void shirudo_kmodules_print_tree(const struct shirudo_kmod_set *set)
 	xfree(used_by, bitmap_bytes);
 	xfree(seen, bitmap_bytes);
 	xfree(roots, set->n * sizeof(*roots));
+}
+
+/* Format an int64 epoch seconds value as ISO-8601 UTC. */
+static void iso_utc(int64_t sec, char *out, size_t out_cap)
+{
+	struct tm tm = {};
+	time_t t = (time_t)sec;
+
+	if (sec > 0 && gmtime_r(&t, &tm))
+		strftime(out, out_cap, "%Y-%m-%dT%H:%M:%SZ", &tm);
+	else
+		snprintf(out, out_cap, "?");
+}
+
+/*
+ * qsort comparator: descending by (loaded_at_sec, loaded_at_nsec).
+ * Indices into set->mods[]. Modules with loaded_at_sec == 0 (stat
+ * failure) sort to the bottom so they don't crowd out real entries.
+ */
+struct recent_idx {
+	const struct shirudo_kmod_set	*set;
+	size_t				idx;
+};
+
+static int recent_cmp(const void *a, const void *b)
+{
+	const struct recent_idx *x = a, *y = b;
+	const struct shirudo_kmod *mx = &x->set->mods[x->idx];
+	const struct shirudo_kmod *my = &y->set->mods[y->idx];
+
+	if (mx->loaded_at_sec == 0 && my->loaded_at_sec != 0)
+		return 1;
+	if (mx->loaded_at_sec != 0 && my->loaded_at_sec == 0)
+		return -1;
+	if (mx->loaded_at_sec != my->loaded_at_sec)
+		return mx->loaded_at_sec < my->loaded_at_sec ? 1 : -1;
+	if (mx->loaded_at_nsec != my->loaded_at_nsec)
+		return mx->loaded_at_nsec < my->loaded_at_nsec ? 1 : -1;
+	return strcmp(mx->name, my->name);
+}
+
+void shirudo_kmodules_print_recent(const struct shirudo_kmod_set *set,
+				   size_t last_n, int64_t boot_sec)
+{
+	struct recent_idx *all;
+	size_t take, i;
+
+	if (set->n == 0) {
+		printf("  (no modules loaded)\n");
+		return;
+	}
+
+	all = xmalloc(set->n * sizeof(*all));
+	if (!all) {
+		printf("  (out of memory)\n");
+		return;
+	}
+	for (i = 0; i < set->n; i++) {
+		all[i].set = set;
+		all[i].idx = i;
+	}
+	qsort(all, set->n, sizeof(*all), recent_cmp);
+	take = set->n < last_n ? set->n : last_n;
+	/* qsort already put the freshest first -- print in that order. */
+	for (i = 0; i < take; i++) {
+		const struct shirudo_kmod *m = &set->mods[all[i].idx];
+		char ts[32], size_s[16], age[24];
+
+		iso_utc(m->loaded_at_sec, ts, sizeof(ts));
+		shirudo_human_size(m->size, size_s, sizeof(size_s));
+		if (boot_sec > 0 && m->loaded_at_sec >= boot_sec)
+			shirudo_format_duration(
+				(long)(m->loaded_at_sec - boot_sec),
+				age, sizeof(age));
+		else
+			snprintf(age, sizeof(age), "?");
+
+		printf("  [%s]  %s (%s, refs=%u, %s since boot)\n",
+		       ts, m->name, size_s, (unsigned)m->refcount, age);
+	}
+	xfree(all, set->n * sizeof(*all));
 }

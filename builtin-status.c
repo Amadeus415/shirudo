@@ -275,7 +275,7 @@ static void print_eventlog_table(void)
 
 	if (read_eventlog(&buf, &len) != 0)
 		return;
-	printf("Eventlog (audit trail):\n");
+	printf("\nEventlog (audit trail):\n");
 	printf("  %-20s %-13s %-13s %s\n", "TIME", "TYPE", "DIGEST",
 	       "DETAIL");
 	for (line = strtok_r(buf, "\n", &save); line;
@@ -330,8 +330,10 @@ static const struct shirudo_help_item status_options[] = {
 	{ "--include-tpm",          "read the live NV chain and replay the eventlog" },
 	{ "--include-system",       "add a `system` block (hostname, kernel, arch, cpus, ...)" },
 	{ "--include-eventlog",     "dump eventlog entries (implies --include-tpm)" },
-	{ "--include-kernel-log",   "last 15 lines of the kernel ring buffer" },
-	{ "--include-modules",      "loaded kernel modules + dependency tree" },
+	{ "--include-kernel-log",   "last 10 lines of the kernel ring buffer" },
+	{ "--include-modules",      "loaded kernel modules (10 most recent; --show-full for tree)" },
+	{ "--show-full",            "opt into a full dump: implies every --include-* flag and "
+				    "expands the loaded-modules dependency tree" },
 };
 
 static const struct shirudo_help_section status_help_sections[] = {
@@ -342,7 +344,8 @@ static const struct shirudo_help_section status_help_sections[] = {
 static const struct shirudo_help status_help = {
 	.usage      = "shirudo status [--json] [--include-tpm] "
 		      "[--include-system] [--include-eventlog]\n"
-		      "                       [--include-kernel-log] [--include-modules]",
+		      "                       [--include-kernel-log] "
+		      "[--include-modules] [--show-full]",
 	.summary    = "Local readiness + state report. Auto-detects target "
 		      "vs operator role.\nSafe to run before `shirudo init`.",
 	.sections   = status_help_sections,
@@ -461,6 +464,7 @@ int cmd_status(int argc, const char **argv)
 	bool json = false, include_tpm = false;
 	bool include_system = false, include_eventlog = false;
 	bool include_kernel_log = false, include_modules = false;
+	bool show_full = false;
 	bool lsm_attached, keyring_present, is_operator, cert_present, is_target;
 	key_serial_t keyring_serial, keyring_pinned;
 	struct shirudo_sysinfo sysi = {};
@@ -489,6 +493,8 @@ int cmd_status(int argc, const char **argv)
 			include_kernel_log = true;
 		else if (strcmp(argv[i], "--include-modules") == 0)
 			include_modules = true;
+		else if (strcmp(argv[i], "--show-full") == 0)
+			show_full = true;
 		else if (shirudo_is_help(argv[i])) {
 			shirudo_print_help(&status_help);
 			return 0;
@@ -499,6 +505,18 @@ int cmd_status(int argc, const char **argv)
 		}
 	}
 
+	/*
+	 * --show-full is the one-switch verbose mode: every section the
+	 * --include-* flags can opt into, plus the modules dep-tree. Stack
+	 * it on first so any individual --include-* already given is a no-op.
+	 */
+	if (show_full) {
+		include_tpm = true;
+		include_system = true;
+		include_eventlog = true;
+		include_kernel_log = true;
+		include_modules = true;
+	}
 	/* The events[] array lives under tpm.eventlog, so it needs that. */
 	if (include_eventlog)
 		include_tpm = true;
@@ -549,10 +567,17 @@ int cmd_status(int argc, const char **argv)
 		 * The events[] dump re-emits one object per logged line, so
 		 * size the buffer to the on-disk log plus headroom for the
 		 * fixed fields; 16 KiB covers the no-eventlog case.
+		 * --include-modules pads ~250 B per module; --include-kernel-log
+		 * pads up to 8 KiB total (15 lines * ~500 B). Eyeball-padded,
+		 * the cap-clamp at the bottom keeps us under SHIRUDO_JSON_MAX_BYTES.
 		 */
 		json_cap = 16384;
 		if (include_eventlog && ev_rc == 0)
 			json_cap = 65536 + 3 * (size_t)ev_bytes;
+		if (include_kernel_log)
+			json_cap += 8192;
+		if (include_modules)
+			json_cap += 64 * 1024;
 		if (json_cap > SHIRUDO_JSON_MAX_BYTES)
 			json_cap = SHIRUDO_JSON_MAX_BYTES;
 		json_buf = xmalloc(json_cap);
@@ -665,7 +690,7 @@ int cmd_status(int argc, const char **argv)
 			shirudo_json_obj_close(&e);
 		}
 		if (include_kernel_log) {
-			struct shirudo_kmsg_record recs[15];
+			struct shirudo_kmsg_record recs[10];
 			int nr = shirudo_kmsg_tail(recs, ARRAY_SIZE(recs));
 			int j;
 
@@ -681,15 +706,41 @@ int cmd_status(int argc, const char **argv)
 		if (include_modules) {
 			struct shirudo_kmod_set ks = {};
 			int mrc = shirudo_kmodules_read(&ks);
+			struct timespec rt = {}, bt = {};
+			int64_t boot_sec = 0;
+			char boot_iso[32] = "";
 			size_t mi;
 
+			if (clock_gettime(CLOCK_REALTIME, &rt) == 0 &&
+			    clock_gettime(CLOCK_BOOTTIME, &bt) == 0) {
+				boot_sec = (int64_t)rt.tv_sec - bt.tv_sec;
+				struct tm tm = {};
+				time_t t = (time_t)boot_sec;
+
+				if (gmtime_r(&t, &tm))
+					strftime(boot_iso, sizeof(boot_iso),
+						 "%Y-%m-%dT%H:%M:%SZ", &tm);
+			}
+			shirudo_json_kv_string(&e, "boot_at",
+					       boot_iso[0] ? boot_iso : "");
 			shirudo_json_arr_open(&e, "modules");
 			if (mrc == 0) {
 				for (mi = 0; mi < ks.n; mi++) {
 					const struct shirudo_kmod *m =
 						&ks.mods[mi];
+					char loaded_iso[32] = "";
 					uint16_t di;
 
+					if (m->loaded_at_sec > 0) {
+						struct tm tm = {};
+						time_t t = (time_t)m->loaded_at_sec;
+
+						if (gmtime_r(&t, &tm))
+							strftime(loaded_iso,
+								 sizeof(loaded_iso),
+								 "%Y-%m-%dT%H:%M:%SZ",
+								 &tm);
+					}
 					shirudo_json_obj_open(&e);
 					shirudo_json_kv_string(&e, "name",
 							       m->name);
@@ -697,6 +748,16 @@ int cmd_status(int argc, const char **argv)
 							    (int64_t)m->size);
 					shirudo_json_kv_int(&e, "refcount",
 							    m->refcount);
+					shirudo_json_kv_string(&e, "loaded_at",
+							       loaded_iso);
+					if (boot_sec > 0 &&
+					    m->loaded_at_sec >= boot_sec)
+						shirudo_json_kv_int(&e,
+							"since_boot_sec",
+							m->loaded_at_sec - boot_sec);
+					else
+						shirudo_json_kv_null(&e,
+							"since_boot_sec");
 					shirudo_json_arr_open(&e, "deps");
 					for (di = 0; di < m->n_deps; di++) {
 						size_t dk = ks.deps[m->deps_off
@@ -832,10 +893,8 @@ int cmd_status(int argc, const char **argv)
 				printf("  %-18s absent\n", "Eventlog:");
 		}
 
-		if (include_eventlog) {
-			printf("\n");
+		if (include_eventlog)
 			print_eventlog_table();
-		}
 
 		printf("\nAssets (%s):\n", SHIRUDO_VAR_LIB);
 		printf("  %-22s %s\n", "keys/cert.der",
@@ -865,29 +924,49 @@ int cmd_status(int argc, const char **argv)
 		       assets.bpffs_mounted ? "mounted" : "not mounted");
 
 		if (include_kernel_log) {
-			struct shirudo_kmsg_record recs[15];
+			struct shirudo_kmsg_record recs[10];
 			int nr = shirudo_kmsg_tail(recs, ARRAY_SIZE(recs));
 			int j;
 
-			printf("\nKernel log (last %zu lines):\n",
+			printf("\nKernel log (last %zu lines, newest first):\n",
 			       ARRAY_SIZE(recs));
 			if (nr <= 0)
 				printf("  (unavailable)\n");
 			else
-				for (j = 0; j < nr; j++)
+				for (j = nr; j-- > 0;)
 					printf("  [%s]  %s\n", recs[j].ts,
 					       recs[j].msg);
 		}
 		if (include_modules) {
 			struct shirudo_kmod_set ks = {};
 			int mrc = shirudo_kmodules_read(&ks);
+			struct timespec rt = {}, bt = {};
+			int64_t boot_sec = 0;
+			size_t last = 10;
+			size_t shown = ks.n < last ? ks.n : last;
 
-			printf("\nLoaded modules (%zu):\n",
-			       mrc == 0 ? ks.n : (size_t)0);
-			if (mrc != 0)
+			if (clock_gettime(CLOCK_REALTIME, &rt) == 0 &&
+			    clock_gettime(CLOCK_BOOTTIME, &bt) == 0)
+				boot_sec = (int64_t)rt.tv_sec - bt.tv_sec;
+
+			if (mrc != 0) {
+				printf("\nLoaded modules:\n");
 				printf("  (unavailable: %s)\n", strerror(-mrc));
-			else
-				shirudo_kmodules_print_tree(&ks);
+			} else {
+				printf("\nLoaded modules (total %zu, "
+				       "last %zu loads, newest first):\n",
+				       ks.n, shown);
+				shirudo_kmodules_print_recent(&ks, last,
+							      boot_sec);
+				if (!show_full)
+					printf("  (Use --show-full to show "
+					       "all loaded modules in a "
+					       "dependency tree)\n");
+				else {
+					printf("\nDependency tree:\n");
+					shirudo_kmodules_print_tree(&ks);
+				}
+			}
 			shirudo_kmodules_free(&ks);
 		}
 	}

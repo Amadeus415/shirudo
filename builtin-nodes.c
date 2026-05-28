@@ -69,7 +69,7 @@ static const char *ping_str(enum shirudo_icmp_status st, uint64_t rtt_us,
 
 static const struct shirudo_help_item nodes_subcmds[] = {
 	{ "list", "drift table across registered remotes (default if omitted)" },
-	{ "show", "kubectl-describe-style per-node deep dive: show [--json] <name>..." },
+	{ "show", "kubectl-describe-style per-node deep dive: show [--json] [--show-full] <name>..." },
 };
 
 static const struct shirudo_help_item nodes_options[] = {
@@ -87,7 +87,7 @@ static const struct shirudo_help_section nodes_help_sections[] = {
 
 static const struct shirudo_help nodes_help = {
 	.usage      = "shirudo nodes [list] [--json] [--filter=<glob>] [--selector=<expr>]\n"
-		      "       shirudo nodes show [--json] <name>...",
+		      "       shirudo nodes show [--json] [--show-full] <name>...",
 	.summary    = "Operator-side fleet observability over registered "
 		      "remotes. Bare\n`shirudo nodes` prints the drift table; "
 		      "`shirudo nodes show <name>` runs a\nper-node deep dive.",
@@ -185,6 +185,9 @@ struct node_detail {
 		char		name[64];
 		int64_t		size;
 		int64_t		refcount;
+		char		loaded_at[32];	/* ISO UTC, empty if absent */
+		int64_t		since_boot_sec;	/* 0 if null in JSON */
+		int		since_boot_seen;
 		uint16_t	deps_off;
 		uint16_t	n_deps;
 	}			kmod_scratch;
@@ -193,6 +196,7 @@ struct node_detail {
 	char			kdep_scratch[64];
 	char			(*kdep_names)[64];
 	size_t			n_kdep, cap_kdep;
+	char			boot_at[32];	/* top-level ISO UTC */
 };
 
 static int up_on_elem(void *ctx)
@@ -289,9 +293,18 @@ static int kmod_on_elem(void *ctx)
 		d->kmods = p;
 		d->cap_kmod = nc;
 	}
+	/*
+	 * JSON `since_boot_sec` is nullable; the parser leaves the dst
+	 * untouched on null. Use INT64_MIN as a sentinel so we can tell
+	 * "JSON had an int" from "JSON had null / field absent" without
+	 * relying on per-element schema seen-flag access.
+	 */
+	d->kmod_scratch.since_boot_seen =
+		(d->kmod_scratch.since_boot_sec != INT64_MIN);
 	d->kmods[d->n_kmod++] = d->kmod_scratch;
 	d->kmod_scratch = (struct kmod_row){
-		.deps_off = (uint16_t)d->n_kdep,
+		.deps_off       = (uint16_t)d->n_kdep,
+		.since_boot_sec = INT64_MIN,
 	};
 	return 0;
 }
@@ -361,6 +374,10 @@ static int parse_node_detail(const char *out, size_t len,
 		  0, 0, NULL, 0 },
 		{ "refcount", SHIRUDO_JSON_T_INT, &d->kmod_scratch.refcount,
 		  0, 0, NULL, 0 },
+		{ "loaded_at", SHIRUDO_JSON_T_STRING, d->kmod_scratch.loaded_at,
+		  sizeof(d->kmod_scratch.loaded_at), 0, NULL, 0 },
+		{ "since_boot_sec", SHIRUDO_JSON_T_INT,
+		  &d->kmod_scratch.since_boot_sec, 0, 0, NULL, 0 },
 		{ "deps", SHIRUDO_JSON_T_ARRAY, &kdep_sink, 0, 0,
 		  kdep_elem, 1 },
 	};
@@ -445,7 +462,11 @@ static int parse_node_detail(const char *out, size_t len,
 		  kmsg_elem, ARRAY_SIZE(kmsg_elem) },
 		{ "modules", SHIRUDO_JSON_T_ARRAY, &kmod_sink, 0, 0,
 		  kmod_elem, ARRAY_SIZE(kmod_elem) },
+		{ "boot_at", SHIRUDO_JSON_T_STRING, d->boot_at,
+		  sizeof(d->boot_at), 0, NULL, 0 },
 	};
+
+	d->kmod_scratch.since_boot_sec = INT64_MIN;
 	int rc;
 
 	rc = shirudo_json_parse(out, len, top, ARRAY_SIZE(top));
@@ -744,8 +765,85 @@ static void print_remote_kmod_tree(const struct node_detail *d)
 	xfree(roots, d->n_kmod * sizeof(*roots));
 }
 
+/*
+ * qsort comparator over kmod indices, sorting descending by recency
+ * (largest since_boot_sec first). Numeric comparison on the integer the
+ * target already shipped -- avoids leaning on ISO-8601's lex-sortability
+ * property. Modules with no since_boot_sec (e.g. a race where stat()
+ * lost to rmmod on the target) sink to the bottom; alphabetical name
+ * breaks ties (sec-resolution mtime ties happen routinely when the
+ * kernel batch-registers many kobjects in one kernfs tick).
+ */
+struct kmod_recent_idx {
+	const struct node_detail	*d;
+	size_t				idx;
+};
+
+static int kmod_recent_cmp(const void *a, const void *b)
+{
+	const struct kmod_recent_idx *x = a, *y = b;
+	const struct kmod_row *mx = &x->d->kmods[x->idx];
+	const struct kmod_row *my = &y->d->kmods[y->idx];
+
+	if (!mx->since_boot_seen && my->since_boot_seen)
+		return 1;
+	if (mx->since_boot_seen && !my->since_boot_seen)
+		return -1;
+	if (mx->since_boot_seen && my->since_boot_seen) {
+		if (mx->since_boot_sec != my->since_boot_sec)
+			return mx->since_boot_sec < my->since_boot_sec
+				? 1 : -1;
+	}
+	return strcmp(mx->name, my->name);
+}
+
+/*
+ * Recent-15 chronological list, tail-style: oldest of the 15 at top,
+ * newest at bottom. Each row is
+ *   [<loaded_at>]  <name> (<size>, refs=N, <age> since boot)
+ * Computed on the operator side from the target-shipped loaded_at +
+ * since_boot_sec; failures stay as `?` rather than crowd the table.
+ */
+static void print_remote_kmod_recent(const struct node_detail *d, size_t last_n)
+{
+	struct kmod_recent_idx *all;
+	size_t take, i;
+
+	if (d->n_kmod == 0) {
+		printf("  (no modules loaded)\n");
+		return;
+	}
+	all = xmalloc(d->n_kmod * sizeof(*all));
+	if (!all) {
+		printf("  (out of memory)\n");
+		return;
+	}
+	for (i = 0; i < d->n_kmod; i++) {
+		all[i].d = d;
+		all[i].idx = i;
+	}
+	qsort(all, d->n_kmod, sizeof(*all), kmod_recent_cmp);
+	take = d->n_kmod < last_n ? d->n_kmod : last_n;
+	/* qsort already put the freshest first -- print in that order. */
+	for (i = 0; i < take; i++) {
+		const struct kmod_row *m = &d->kmods[all[i].idx];
+		char size_s[16], age[24];
+
+		shirudo_human_size((uint64_t)m->size, size_s, sizeof(size_s));
+		if (m->since_boot_seen && m->since_boot_sec >= 0)
+			shirudo_format_duration((long)m->since_boot_sec,
+						age, sizeof(age));
+		else
+			snprintf(age, sizeof(age), "?");
+		printf("  [%s]  %s (%s, refs=%lld, %s since boot)\n",
+		       m->loaded_at[0] ? m->loaded_at : "?", m->name,
+		       size_s, (long long)m->refcount, age);
+	}
+	xfree(all, d->n_kmod * sizeof(*all));
+}
+
 /* kubectl-describe-style report for one node. */
-static void print_describe(const struct node_detail *d)
+static void print_describe(const struct node_detail *d, bool show_full)
 {
 	const struct shirudo_remote *r = d->r;
 	struct shirudo_condition conds[4];
@@ -955,14 +1053,26 @@ static void print_describe(const struct node_detail *d)
 	       d->ats.bpffs_mounted ? "mounted" : "not mounted");
 
 	if (d->n_kmsg) {
-		printf("\nKernel log (last %zu lines):\n", d->n_kmsg);
-		for (i = 0; i < d->n_kmsg; i++)
+		printf("\nKernel log (last %zu lines, newest first):\n",
+		       d->n_kmsg);
+		for (i = d->n_kmsg; i-- > 0;)
 			printf("  [%s]  %s\n", d->kmsg[i].ts, d->kmsg[i].msg);
 	}
 
 	if (d->n_kmod) {
-		printf("\nLoaded modules (%zu):\n", d->n_kmod);
-		print_remote_kmod_tree(d);
+		size_t last = 10;
+		size_t shown = d->n_kmod < last ? d->n_kmod : last;
+
+		printf("\nLoaded modules (total %zu, last %zu loads, "
+		       "newest first):\n", d->n_kmod, shown);
+		print_remote_kmod_recent(d, last);
+		if (!show_full)
+			printf("  (Use --show-full to show all loaded "
+			       "modules in a dependency tree)\n");
+		else {
+			printf("\nDependency tree:\n");
+			print_remote_kmod_tree(d);
+		}
 	}
 	printf("\n");
 }
@@ -1148,6 +1258,8 @@ static void emit_node_json(struct shirudo_json_emit *e,
 			shirudo_json_obj_close(e);
 		}
 		shirudo_json_arr_close(e);
+		if (d->boot_at[0])
+			shirudo_json_kv_string(e, "boot_at", d->boot_at);
 		shirudo_json_arr_open(e, "modules");
 		for (i = 0; i < d->n_kmod; i++) {
 			const struct kmod_row *m = &d->kmods[i];
@@ -1157,6 +1269,14 @@ static void emit_node_json(struct shirudo_json_emit *e,
 			shirudo_json_kv_string(e, "name", m->name);
 			shirudo_json_kv_int(e, "size", m->size);
 			shirudo_json_kv_int(e, "refcount", m->refcount);
+			if (m->loaded_at[0])
+				shirudo_json_kv_string(e, "loaded_at",
+						       m->loaded_at);
+			if (m->since_boot_seen)
+				shirudo_json_kv_int(e, "since_boot_sec",
+						    m->since_boot_sec);
+			else
+				shirudo_json_kv_null(e, "since_boot_sec");
 			shirudo_json_arr_open(e, "deps");
 			for (k = 0; k < m->n_deps; k++)
 				shirudo_json_str(e,
@@ -1176,7 +1296,7 @@ static int cmd_nodes_show(int argc, const char **argv)
 	struct node_detail *nodes = NULL;
 	const char *names[256];
 	size_t n_remotes = 0, nnames = 0, i, j;
-	bool json = false;
+	bool json = false, show_full = false;
 	int ret = 0;
 
 	/* argv[0]="nodes", argv[1]="show"; options/names follow. */
@@ -1185,6 +1305,8 @@ static int cmd_nodes_show(int argc, const char **argv)
 
 		if (strcmp(a, "--json") == 0) {
 			json = true;
+		} else if (strcmp(a, "--show-full") == 0) {
+			show_full = true;
 		} else if (shirudo_is_help(a)) {
 			shirudo_print_help(&nodes_help);
 			return 0;
@@ -1272,7 +1394,7 @@ static int cmd_nodes_show(int argc, const char **argv)
 	} else {
 		for (j = 0; j < nnames; j++)
 			if (nodes[j].r)
-				print_describe(&nodes[j]);
+				print_describe(&nodes[j], show_full);
 	}
 
 done:
