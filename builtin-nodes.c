@@ -40,7 +40,7 @@
 
 #define SHOW_CMD \
 	"shirudo status --json --include-tpm --include-system " \
-	"--include-eventlog --include-kernel-log --include-modules"
+	"--include-eventlog --include-kernellog --include-modules"
 
 /*
  * Compact ICMP column for the drift table: best-RTT in ms when OK,

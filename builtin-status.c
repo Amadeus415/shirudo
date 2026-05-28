@@ -362,7 +362,7 @@ static const struct shirudo_help_item status_options[] = {
 	{ "--include-tpm",          "read the live NV chain and replay the eventlog" },
 	{ "--include-system",       "add a `system` block (hostname, kernel, arch, cpus, ...)" },
 	{ "--include-eventlog",     "dump eventlog entries (implies --include-tpm)" },
-	{ "--include-kernel-log",   "last 10 lines of the kernel ring buffer" },
+	{ "--include-kernellog",    "last 10 lines of the kernel ring buffer" },
 	{ "--include-modules",      "loaded kernel modules (10 most recent; --show-full for tree)" },
 	{ "--show-full",            "opt into a full dump: implies every --include-* flag and "
 				    "expands the loaded-modules dependency tree" },
@@ -376,7 +376,7 @@ static const struct shirudo_help_section status_help_sections[] = {
 static const struct shirudo_help status_help = {
 	.usage      = "shirudo status [--json] [--include-tpm] "
 		      "[--include-system] [--include-eventlog]\n"
-		      "                       [--include-kernel-log] "
+		      "                       [--include-kernellog] "
 		      "[--include-modules] [--show-full]",
 	.summary    = "Local readiness + state report. Auto-detects target "
 		      "vs operator role.\nSafe to run before `shirudo init`.",
@@ -519,7 +519,7 @@ int cmd_status(int argc, const char **argv)
 			include_system = true;
 		else if (strcmp(argv[i], "--include-eventlog") == 0)
 			include_eventlog = true;
-		else if (strcmp(argv[i], "--include-kernel-log") == 0)
+		else if (strcmp(argv[i], "--include-kernellog") == 0)
 			include_kernel_log = true;
 		else if (strcmp(argv[i], "--include-modules") == 0)
 			include_modules = true;
@@ -597,7 +597,7 @@ int cmd_status(int argc, const char **argv)
 		 * The events[] dump re-emits one object per logged line, so
 		 * size the buffer to the on-disk log plus headroom for the
 		 * fixed fields; 16 KiB covers the no-eventlog case.
-		 * --include-modules pads ~250 B per module; --include-kernel-log
+		 * --include-modules pads ~250 B per module; --include-kernellog
 		 * pads up to 8 KiB total (15 lines * ~500 B). Eyeball-padded,
 		 * the cap-clamp at the bottom keeps us under SHIRUDO_JSON_MAX_BYTES.
 		 */
