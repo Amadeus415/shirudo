@@ -365,11 +365,10 @@ static int cmd_rename(int argc, const char **argv)
 
 int cmd_remote(int argc, const char **argv)
 {
-	if (argc < 2) {
-		fprintf(stderr,
-			"usage: shirudo remote {add|list|show|rm|rename} ...\n");
-		return 2;
-	}
+	/* Bare `shirudo remote` lists the registered remotes (most common
+	 * use); explicit `list` keeps working. */
+	if (argc < 2)
+		return cmd_list(argc, argv);
 	if (strcmp(argv[1], "add") == 0)
 		return cmd_add(argc - 1, argv + 1);
 	if (strcmp(argv[1], "list") == 0)
@@ -381,6 +380,8 @@ int cmd_remote(int argc, const char **argv)
 	if (strcmp(argv[1], "rename") == 0)
 		return cmd_rename(argc - 1, argv + 1);
 
-	fprintf(stderr, "shirudo remote: unknown subcommand '%s'\n", argv[1]);
+	fprintf(stderr, "shirudo remote: unknown subcommand '%s'\n"
+		"usage: shirudo remote [list|add|show|rm|rename] ...\n",
+		argv[1]);
 	return 2;
 }
