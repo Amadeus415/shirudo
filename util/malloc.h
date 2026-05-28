@@ -78,4 +78,31 @@ void xfree(void *ptr, size_t size);
  */
 void xstrfree(char *s);
 
+/*
+ * Escape hatch to release memory the C library allocated for us
+ * (scandir entry array and entries, getline buffer, realpath result,
+ * etc.) -- a no-op on NULL. The only legitimate user of libc's free()
+ * is util/malloc.c itself; everywhere else, code that needs to free
+ * a libc-owned pointer goes through this wrapper. The poison pragma
+ * below makes bare malloc/free/strdup a hard build error outside of
+ * util/malloc.c, so this is the *only* permitted path.
+ */
+void shirudo_libc_free(void *p);
+
+/*
+ * Hard build-time ban on libc's own allocators outside util/malloc.c.
+ * `#pragma GCC poison` rejects any subsequent token appearance of the
+ * named identifiers, so `malloc(...)`, `free(...)`, etc. become syntax
+ * errors -- the project must go through x...() / shirudo_libc_free instead.
+ * util/malloc.c sets SHIRUDO_MALLOC_INTERNAL before including this
+ * header to opt the implementations out (they're the ones that must
+ * call the real libc allocators). The pragma sits at the end of the
+ * header so that system declarations of malloc/free pulled in earlier
+ * (from <stdlib.h>, <string.h>, ...) are processed before the poison
+ * takes effect.
+ */
+#ifndef SHIRUDO_MALLOC_INTERNAL
+# pragma GCC poison malloc calloc realloc reallocarray free strdup strndup asprintf vasprintf
+#endif
+
 #endif /* SHIRUDO_MALLOC_H */

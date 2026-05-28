@@ -17,6 +17,7 @@
 #include <openssl/evp.h>
 
 #include "chain.h"
+#include "malloc.h"
 #include "paths.h"
 #include "tpm.h"
 
@@ -93,7 +94,7 @@ int shirudo_chain_cert_sha256(uint8_t out[32])
 		close(fd);
 		return -EINVAL;
 	}
-	buf = malloc((size_t)st.st_size);
+	buf = xmalloc((size_t)st.st_size);
 	if (!buf) {
 		close(fd);
 		return -ENOMEM;
@@ -104,7 +105,7 @@ int shirudo_chain_cert_sha256(uint8_t out[32])
 		rc = -EIO;
 	else
 		shirudo_sha256(buf, (size_t)st.st_size, out);
-	free(buf);
+	xfree(buf, (size_t)st.st_size);
 	return rc;
 }
 

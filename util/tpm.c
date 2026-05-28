@@ -14,6 +14,7 @@
 #include <tss2/tss2_tctildr.h>
 
 #include "log.h"
+#include "malloc.h"
 #include "paths.h"
 #include "tpm.h"
 
@@ -28,7 +29,7 @@ int shirudo_tpm_open(struct shirudo_tpm **out)
 	const char *tcti;
 	TSS2_RC rc;
 
-	t = calloc(1, sizeof(*t));
+	t = xcalloc(1, sizeof(*t));
 	if (!t)
 		return -ENOMEM;
 
@@ -57,14 +58,14 @@ int shirudo_tpm_open(struct shirudo_tpm **out)
 	if (rc != TSS2_RC_SUCCESS) {
 		pr_err("tpm: TctiLdr_Initialize(%s): rc=0x%08x", tcti,
 		       (unsigned)rc);
-		free(t);
+		xfree(t, sizeof(*t));
 		return -EIO;
 	}
 	rc = Esys_Initialize(&t->esys, t->tcti, NULL);
 	if (rc != TSS2_RC_SUCCESS) {
 		pr_err("tpm: Esys_Initialize: rc=0x%08x", (unsigned)rc);
 		Tss2_TctiLdr_Finalize(&t->tcti);
-		free(t);
+		xfree(t, sizeof(*t));
 		return -EIO;
 	}
 	*out = t;
@@ -79,7 +80,7 @@ void shirudo_tpm_close(struct shirudo_tpm *t)
 		Esys_Finalize(&t->esys);
 	if (t->tcti)
 		Tss2_TctiLdr_Finalize(&t->tcti);
-	free(t);
+	xfree(t, sizeof(*t));
 }
 
 /* Auth-failure base code, masking off the session/handle/parameter number. */

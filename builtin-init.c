@@ -575,15 +575,15 @@ static int boot_restore(struct restore_entry **out_set, size_t *out_n)
 		return -errno;
 	}
 	if (n == 0) {
-		free(names);
+		shirudo_libc_free(names);	/* scandir-owned */
 		return 0;
 	}
 
 	set = xcalloc((size_t)n, sizeof(*set));
 	if (!set) {
 		for (i = 0; i < n; i++)
-			free(names[i]);
-		free(names);
+			shirudo_libc_free(names[i]);	/* scandir-owned */
+		shirudo_libc_free(names);		/* scandir-owned */
 		return -ENOMEM;
 	}
 
@@ -621,9 +621,9 @@ static int boot_restore(struct restore_entry **out_set, size_t *out_n)
 		}
 		cnt++;
 next:
-		free(names[i]);
+		shirudo_libc_free(names[i]);	/* scandir-owned */
 	}
-	free(names);
+	shirudo_libc_free(names);		/* scandir-owned */
 
 	if (rc) {
 		xfree(set, (size_t)n * sizeof(*set));
@@ -736,7 +736,7 @@ static int chain_extend_init(const struct restore_entry *set, size_t n,
 	for (i = 0; i < n; i++)
 		listing_len += strlen(set[i].payload_hex) + 1 +
 			       strlen(set[i].name) + 1;
-	listing = malloc(listing_len + 1);
+	listing = xmalloc(listing_len + 1);
 	if (!listing)
 		return -ENOMEM;
 	for (i = 0, off = 0; i < n; i++)
@@ -744,7 +744,7 @@ static int chain_extend_init(const struct restore_entry *set, size_t n,
 					"%s %s\n", set[i].payload_hex,
 					set[i].name);
 	shirudo_sha256(listing, listing_len, set_digest);
-	free(listing);
+	xfree(listing, listing_len + 1);
 
 	/* init_event = SHA256("shirudo-init\0" || cert_sha256 || set_digest) */
 	taglen = sizeof("shirudo-init");

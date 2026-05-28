@@ -64,8 +64,8 @@ static int labels_add(struct shirudo_labels *l, const char *k, const char *v)
 	if (!it)
 		return -ENOMEM;
 	l->items = it;
-	it[l->n].key = strdup(k);
-	it[l->n].val = strdup(v);
+	it[l->n].key = xstrdup(k);
+	it[l->n].val = xstrdup(v);
 	if (!it[l->n].key || !it[l->n].val)
 		return -ENOMEM;
 	l->n++;
@@ -97,12 +97,12 @@ static int parse_conf(const char *dir, const char *fname,
 	FILE *f;
 	int rc = 0;
 
-	labels = calloc(1, sizeof(*labels));
+	labels = xcalloc(1, sizeof(*labels));
 	if (!labels)
 		return -ENOMEM;
 
-	r.name = strndup(fname, namelen);
-	r.user = strdup("root");
+	r.name = xstrndup(fname, namelen);
+	r.user = xstrdup("root");
 	r.port = 22;
 	r.labels = labels;
 	if (!r.name || !r.user) {
@@ -132,11 +132,11 @@ static int parse_conf(const char *dir, const char *fname,
 		key = trim(p);
 		val = trim(eq + 1);
 		if (strcmp(key, "host") == 0) {
-			free(r.host);
-			r.host = strdup(val);
+			xstrfree(r.host);
+			r.host = xstrdup(val);
 		} else if (strcmp(key, "user") == 0) {
-			free(r.user);
-			r.user = strdup(val);
+			xstrfree(r.user);
+			r.user = xstrdup(val);
 		} else if (strcmp(key, "port") == 0) {
 			r.port = atoi(val);
 		} else if (strcmp(key, "created") == 0) {
@@ -165,7 +165,7 @@ static int parse_conf(const char *dir, const char *fname,
 		if (stat(path, &st) == 0)
 			r.added = st.st_mtime;
 	}
-	r.path = strdup(path);
+	r.path = xstrdup(path);
 	if (!r.path) {
 		rc = -ENOMEM;
 		goto fail;
@@ -187,19 +187,19 @@ static int parse_conf(const char *dir, const char *fname,
 	return 0;
 
 fail:
-	free(r.name);
-	free(r.host);
-	free(r.user);
-	free(r.path);
+	xstrfree(r.name);
+	xstrfree(r.host);
+	xstrfree(r.user);
+	xstrfree(r.path);
 	if (labels) {
 		size_t i;
 
 		for (i = 0; i < labels->n; i++) {
-			free(labels->items[i].key);
-			free(labels->items[i].val);
+			xstrfree(labels->items[i].key);
+			xstrfree(labels->items[i].val);
 		}
-		free(labels->items);
-		free(labels);
+		xfree(labels->items, labels->n * sizeof(labels->items[0]));
+		xfree(labels, sizeof(*labels));
 	}
 	return rc;
 }
@@ -235,9 +235,9 @@ static void load_dir(const char *dir, struct shirudo_remote **list, size_t *n)
 		if (has_suffix(ents[i]->d_name, ".conf") &&
 		    !already(*list, *n, ents[i]->d_name))
 			parse_conf(dir, ents[i]->d_name, list, n);
-		free(ents[i]);
+		shirudo_libc_free(ents[i]);	/* scandir-owned */
 	}
-	free(ents);
+	shirudo_libc_free(ents);		/* scandir-owned */
 }
 
 int shirudo_remotes_user_dir(char *buf, size_t cap)
@@ -278,20 +278,22 @@ void shirudo_remotes_free(struct shirudo_remote *list, size_t n)
 	size_t i, j;
 
 	for (i = 0; i < n; i++) {
-		free(list[i].name);
-		free(list[i].host);
-		free(list[i].user);
-		free(list[i].path);
+		xstrfree(list[i].name);
+		xstrfree(list[i].host);
+		xstrfree(list[i].user);
+		xstrfree(list[i].path);
 		if (list[i].labels) {
 			for (j = 0; j < list[i].labels->n; j++) {
-				free(list[i].labels->items[j].key);
-				free(list[i].labels->items[j].val);
+				xstrfree(list[i].labels->items[j].key);
+				xstrfree(list[i].labels->items[j].val);
 			}
-			free(list[i].labels->items);
-			free(list[i].labels);
+			xfree(list[i].labels->items,
+			      list[i].labels->n *
+			      sizeof(list[i].labels->items[0]));
+			xfree(list[i].labels, sizeof(*list[i].labels));
 		}
 	}
-	free(list);
+	xfree(list, n * sizeof(*list));
 }
 
 void shirudo_remote_endpoint(const struct shirudo_remote *r,

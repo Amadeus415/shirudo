@@ -91,9 +91,9 @@ static int count_dir(const char *dir, bool upatch_only)
 		if (!upatch_only ||
 		    (len > 7 && strcmp(nm + len - 7, ".upatch") == 0))
 			count++;
-		free(list[i]);
+		shirudo_libc_free(list[i]);	/* scandir-owned */
 	}
-	free(list);
+	shirudo_libc_free(list);		/* scandir-owned */
 	return count;
 }
 
@@ -572,8 +572,8 @@ int cmd_status(int argc, const char **argv)
 
 out:
 	for (i = 0; i < n_ups; i++)
-		free(ups[i]);		/* scandir-owned: libc free, not xfree */
-	free(ups);
+		shirudo_libc_free(ups[i]);	/* scandir-owned */
+	shirudo_libc_free(ups);			/* scandir-owned */
 	if (json_buf)
 		xfree(json_buf, json_cap);
 	return ret;

@@ -104,22 +104,19 @@ int shirudo_report_emit(const char *path, const struct shirudo_op_report *r)
 
 void shirudo_report_set_log(struct shirudo_op_report *r, const char *log)
 {
-	size_t n;
-
-	free(r->verifier_log);
+	xstrfree(r->verifier_log);
 	r->verifier_log = NULL;
 	if (!log || !*log)
 		return;
-	n = strnlen(log, SHIRUDO_VERIFIER_LOG_MAX);
-	r->verifier_log = malloc(n + 1);
-	if (!r->verifier_log)
-		return;
-	memcpy(r->verifier_log, log, n);
-	r->verifier_log[n] = '\0';
+	/*
+	 * The verifier log is kernel-provided diagnostic output -- bound
+	 * the read, copy with xstrndup, and scrub on free via xstrfree.
+	 */
+	r->verifier_log = xstrndup(log, SHIRUDO_VERIFIER_LOG_MAX);
 }
 
 void shirudo_report_free(struct shirudo_op_report *r)
 {
-	free(r->verifier_log);
+	xstrfree(r->verifier_log);
 	r->verifier_log = NULL;
 }

@@ -17,6 +17,7 @@
 
 #include "compile.h"
 #include "log.h"
+#include "malloc.h"
 #include "package.h"
 #include "paths.h"
 #include "upatch.h"
@@ -142,7 +143,7 @@ static int compile_to_temp(const char *source, const char *vmlinux_h,
 		unlink(tmpl);
 		return rc;
 	}
-	*out_path = strdup(tmpl);
+	*out_path = xstrdup(tmpl);
 	if (!*out_path) {
 		unlink(tmpl);
 		return -ENOMEM;
@@ -365,7 +366,7 @@ int main(int argc, char **argv)
 
 	if (temp_bpf_o) {
 		unlink(temp_bpf_o);
-		free(temp_bpf_o);
+		xstrfree(temp_bpf_o);
 	}
 	return rc ? 1 : 0;
 }

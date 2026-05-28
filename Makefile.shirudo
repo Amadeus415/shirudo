@@ -308,7 +308,9 @@ t/helper/test-json-parser: t/helper/test-json-parser.c util/json.o
 
 # chain.o's read/extend paths reference util/tpm (libtss2); the tests
 # only exercise the pure helpers, but the symbols must still resolve.
-t/helper/test-chain: t/helper/test-chain.c util/chain.o util/tpm.o util/log.o
+# util/malloc.o brings in x*/shirudo_libc_free that chain.o/tpm.o use.
+t/helper/test-chain: t/helper/test-chain.c util/chain.o util/tpm.o util/log.o \
+                     util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -ltss2-esys -ltss2-tctildr
 

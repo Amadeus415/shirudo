@@ -18,6 +18,7 @@
 
 #include "compile.h"
 #include "log.h"
+#include "malloc.h"
 
 #ifndef SHIRUDO_CLANG_PATH
 #define SHIRUDO_CLANG_PATH	"/usr/bin/clang"
@@ -117,14 +118,14 @@ int shirudo_build_compile(const char *source, const char *output,
 	if (extra_cflags && extra_cflags[0]) {
 		char *tok;
 
-		cf_copy = strdup(extra_cflags);
+		cf_copy = xstrdup(extra_cflags);
 		if (!cf_copy)
 			return -ENOMEM;
 		for (tok = strtok(cf_copy, " \t\n"); tok;
 		     tok = strtok(NULL, " \t\n")) {
 			rc = push(argv, &n, tok);
 			if (rc) {
-				free(cf_copy);
+				xstrfree(cf_copy);
 				return rc;
 			}
 		}
@@ -163,6 +164,6 @@ int shirudo_build_compile(const char *source, const char *output,
 		rc = -EIO;
 	}
 out:
-	free(cf_copy);
+	xstrfree(cf_copy);
 	return rc;
 }

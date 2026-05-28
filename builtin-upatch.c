@@ -388,11 +388,11 @@ static int cmd_upatch_list(int argc, const char **argv)
 
 out:
 	for (i = 0; i < np; i++)
-		free(persisted[i]);
-	free(persisted);
+		shirudo_libc_free(persisted[i]);	/* scandir-owned */
+	shirudo_libc_free(persisted);			/* scandir-owned */
 	for (j = 0; j < na; j++)
-		free(active[j]);
-	free(active);
+		shirudo_libc_free(active[j]);		/* scandir-owned */
+	shirudo_libc_free(active);			/* scandir-owned */
 	if (jbuf)
 		xfree(jbuf, 65536);
 	return rc;

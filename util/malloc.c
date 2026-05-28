@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Implements the wrappers; opt out of the poison pragma in malloc.h. */
+#define SHIRUDO_MALLOC_INTERNAL
 #include "malloc.h"
 
 void *xmalloc(size_t size)
@@ -99,4 +101,9 @@ void xstrfree(char *s)
 		return;
 	explicit_bzero(s, strlen(s) + 1);
 	free(s);
+}
+
+void shirudo_libc_free(void *p)
+{
+	free(p);
 }

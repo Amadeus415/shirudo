@@ -550,9 +550,19 @@ load-bearing — consult them directly rather than reasoning from memory:
   out-of-bounds read, crash or info leak). For any untrusted or
   unbounded input use `xstrndup(s, hard_bound)`, which caps the read
   with `strnlen`. `xfree` makes no assumption about a hidden header,
-  so it stays safe even on a plain `malloc`'d pointer; array
-  allocations may stay `calloc(n, size)` (its own overflow check) and
-  library-owned buffers must use their library's free.
+  so it stays safe even on a plain `malloc`'d pointer. **The libc
+  allocators are `#pragma GCC poison`'d project-wide** at the bottom
+  of `util/malloc.h` (`malloc calloc realloc reallocarray free strdup
+  strndup asprintf vasprintf`) -- any bare libc allocator/free token
+  outside `util/malloc.c` is a hard compile error, not a style nag.
+  `util/malloc.c` opts out by defining `SHIRUDO_MALLOC_INTERNAL`
+  before including the header (it implements the wrappers). For the
+  one legitimate case where a libc API hands us a malloc'd pointer
+  (scandir entries + scandir's array; that's basically it in shirudo),
+  release with `shirudo_libc_free(p)` -- the named escape hatch in
+  `util/malloc.{c,h}`. Don't carve new exceptions into the poison
+  list; if a new code path "needs" bare `malloc`/`free`, that's a
+  signal to wrap it in `util/malloc.c` instead.
 - **In-tree JSON parser + emitter, not a third-party library.**
   `util/json.{c,h}` (~400 LOC, BSD-2-Clause) is the **only**
   JSON code in shirudo. The parser is schema-callback driven

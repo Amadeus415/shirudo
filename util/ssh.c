@@ -35,12 +35,12 @@ struct shirudo_ssh_session *shirudo_ssh_connect(const char *user,
 	int verbosity = SSH_LOG_NONE;
 	int rc;
 
-	h = calloc(1, sizeof(*h));
+	h = xcalloc(1, sizeof(*h));
 	if (!h)
 		return NULL;
 	h->s = ssh_new();
 	if (!h->s) {
-		free(h);
+		xfree(h, sizeof(*h));
 		return NULL;
 	}
 
@@ -94,7 +94,7 @@ void shirudo_ssh_close(struct shirudo_ssh_session *h)
 			ssh_disconnect(h->s);
 		ssh_free(h->s);
 	}
-	free(h);
+	xfree(h, sizeof(*h));
 }
 
 /* Upload local -> remote via SFTP, creating the parent dir if needed. */

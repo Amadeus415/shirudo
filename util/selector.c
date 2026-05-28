@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "malloc.h"
 #include "remotes.h"
 #include "selector.h"
 
@@ -89,14 +90,14 @@ static struct shirudo_selector *parse_expr(struct lexer *lx);
 static struct shirudo_selector *leaf(enum node_op op, const char *k,
 				     const char *v)
 {
-	struct shirudo_selector *n = calloc(1, sizeof(*n));
+	struct shirudo_selector *n = xcalloc(1, sizeof(*n));
 
 	if (!n)
 		return NULL;
 	n->op = op;
-	n->key = strdup(k);
+	n->key = xstrdup(k);
 	if (v)
-		n->val = strdup(v);
+		n->val = xstrdup(v);
 	if (!n->key || (v && !n->val)) {
 		shirudo_selector_free(n);
 		return NULL;
@@ -108,7 +109,7 @@ static struct shirudo_selector *node2(enum node_op op,
 				      struct shirudo_selector *l,
 				      struct shirudo_selector *r)
 {
-	struct shirudo_selector *n = calloc(1, sizeof(*n));
+	struct shirudo_selector *n = xcalloc(1, sizeof(*n));
 
 	if (!n) {
 		shirudo_selector_free(l);
@@ -256,7 +257,7 @@ void shirudo_selector_free(struct shirudo_selector *s)
 		return;
 	shirudo_selector_free(s->l);
 	shirudo_selector_free(s->r);
-	free(s->key);
-	free(s->val);
-	free(s);
+	xstrfree(s->key);
+	xstrfree(s->val);
+	xfree(s, sizeof(*s));
 }
