@@ -756,6 +756,19 @@ static const struct ev_row *last_upatch_event(const struct node_detail *d)
 	return NULL;
 }
 
+static const struct ev_row *last_init_event(const struct node_detail *d)
+{
+	size_t i = d->n_ev;
+
+	while (i--) {
+		const struct ev_row *e = &d->events[i];
+
+		if (strcmp(e->type, "init") == 0)
+			return e;
+	}
+	return NULL;
+}
+
 /*
  * Thin wrappers so existing call sites stay terse. `node_detail`
  * carries a registry pointer; we use that to short-circuit "?" for
@@ -788,32 +801,44 @@ static void nd_status_reason(const struct node_detail *d, char *buf, size_t cap)
  * age of the most recent upatch_load or upatch_unload event. The verb
  * matters -- "2 (unload:old-x, 3d)" means "2 currently loaded, last
  * change was unloading old-x 3 days ago," which reads differently from
- * "2 (load:cve-..., 3d)".
+ * "2 (load:cve-..., 3d)". After a reboot the chain extension is
+ * suppressed per-upatch (one `init` event for the whole boot-restored
+ * set), so when no upatch_load/unload event is present but upatches
+ * are loaded, fall back to "N (init:<first>, <init-age>)".
  */
 static void upatches_summary(const struct node_detail *d, char *buf, size_t cap)
 {
 	const struct ev_row *last = last_upatch_event(d);
-	const char *verb;
+	const struct ev_row *src = last;
+	const char *verb, *name;
 	char age[16] = "?";
 	char nm[20];
 
-	if (!last) {
+	if (!src && d->n_up > 0)
+		src = last_init_event(d);
+	if (!src) {
 		snprintf(buf, cap, "%zu", d->n_up);
 		return;
+	}
+	if (last) {
+		verb = strcmp(last->type, "upatch_unload") == 0 ? "unload" : "load";
+		name = last->up_name;
+	} else {
+		verb = "init";
+		name = d->upatches[0];
 	}
 	{
 		struct tm tm = {};
 
-		if (strptime(last->ts, "%Y-%m-%dT%H:%M:%SZ", &tm))
+		if (strptime(src->ts, "%Y-%m-%dT%H:%M:%SZ", &tm))
 			shirudo_format_duration(
 				(long)(time(NULL) - timegm(&tm)),
 				age, sizeof(age));
 	}
-	verb = strcmp(last->type, "upatch_unload") == 0 ? "unload" : "load";
-	if (strlen(last->up_name) > 14)
-		snprintf(nm, sizeof(nm), "%.14s..", last->up_name);
+	if (strlen(name) > 14)
+		snprintf(nm, sizeof(nm), "%.14s..", name);
 	else
-		snprintf(nm, sizeof(nm), "%s", last->up_name);
+		snprintf(nm, sizeof(nm), "%s", name);
 	snprintf(buf, cap, "%zu (%s:%s, %s)", d->n_up, verb, nm, age);
 }
 
@@ -1821,7 +1846,10 @@ int cmd_nodes(int argc, const char **argv)
 		for (i = 0; i < n; i++) {
 			struct node_detail *s = &nodes[i];
 			const struct ev_row *last = last_upatch_event(s);
+			const struct ev_row *init = NULL;
 
+			if (!last && s->n_up > 0)
+				init = last_init_event(s);
 			shirudo_json_obj_open(&e);
 			shirudo_json_kv_string(&e, "name", s->r->name);
 			shirudo_json_kv_bool(&e, "reachable", s->reachable);
@@ -1869,6 +1897,14 @@ int cmd_nodes(int argc, const char **argv)
 						last->up_name);
 					shirudo_json_kv_string(&e, "ts",
 						last->ts);
+					shirudo_json_obj_close(&e);
+				} else if (init) {
+					shirudo_json_obj_open_key(&e, "last");
+					shirudo_json_kv_string(&e, "verb", "init");
+					shirudo_json_kv_string(&e, "name",
+						s->upatches[0]);
+					shirudo_json_kv_string(&e, "ts",
+						init->ts);
 					shirudo_json_obj_close(&e);
 				} else {
 					shirudo_json_kv_null(&e, "last");
