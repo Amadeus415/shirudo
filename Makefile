@@ -56,11 +56,12 @@ STATIC_IMAGE_ROOT    := $(STATIC_IMAGE_STAGE)/root
 # core `shirudo` finds shirudo-build), so bindeb-pkg rebuilds with this.
 DEB_PREFIX     ?= /usr
 DEB_STAGE      ?= build/deb
-DEB_VERSION    ?= $(shell $(SHIRUDO_GIT_DESCRIBE) 2>/dev/null || cat VERSION)
+DEB_RAW_VERSION ?= $(shell $(SHIRUDO_GIT_DESCRIBE) 2>/dev/null || cat VERSION)
+DEB_VERSION    ?= $(shell printf '%s' "$(DEB_RAW_VERSION)" | sed 's/^v//; s/[^A-Za-z0-9.+:~-]/./g; /^[0-9]/!s/^/0~/')
 DEB_ARCH       ?= $(shell dpkg --print-architecture 2>/dev/null || echo amd64)
 DEB_MAINTAINER ?= $(shell git config user.name 2>/dev/null || echo shirudo) <$(shell git config user.email 2>/dev/null || echo shirudo@localhost)>
-DEB_TARGET_PKG   ?= shirudo-target.deb
-DEB_OPERATOR_PKG ?= shirudo-operator.deb
+DEB_TARGET_PKG   ?= shirudo-target_$(DEB_VERSION)_$(DEB_ARCH).deb
+DEB_OPERATOR_PKG ?= shirudo-operator_$(DEB_VERSION)_$(DEB_ARCH).deb
 
 # The outer make exports bindir/libexecdir/... derived from the default
 # prefix, and a sub-make's `?=` will not recompute an already-set (env)
@@ -106,8 +107,10 @@ shirudo make targets (run from the repo root):
 
   Package   (each rebuilds; pick by target environment)
     make bindeb-pkg        Two binary .deb's for Debian/Ubuntu targets:
-                           shirudo-target.deb (binary + systemd unit) and
-                           shirudo-operator.deb (binary + shirudo-build).
+                           shirudo-target_<version>_<arch>.deb (binary +
+                           systemd unit) and
+                           shirudo-operator_<version>_<arch>.deb (binary +
+                           shirudo-build).
                            Rebuilds from clean with prefix=/usr.
     make bintar-pkg        Two distro-agnostic target-installer tarballs:
                            shirudo.tar.gz (expects system libssh/libtss2/
@@ -179,8 +182,10 @@ bintar-pkg: config packaging/tar/install.sh packaging/tar/bundle-libs.sh
 	@printf 'shirudo: wrote $(INSTALLER_TARBALL) and $(STATIC_IMAGE_TARBALL)\n'
 
 # Build two .deb packages (kernel-style `make bindeb-pkg`):
-#   shirudo-target.deb   -- shirudo + the systemd reboot unit (target node)
-#   shirudo-operator.deb -- shirudo + shirudo-build + BPF headers, no unit
+#   shirudo-target_<version>_<arch>.deb
+#       shirudo + the systemd reboot unit (target node)
+#   shirudo-operator_<version>_<arch>.deb
+#       shirudo + shirudo-build + BPF headers, no unit
 # Rebuilds from clean with prefix=$(DEB_PREFIX) because the libexec path is
 # compiled into the binary and make cannot see the changed -D otherwise.
 bindeb-pkg:

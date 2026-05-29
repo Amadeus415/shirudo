@@ -51,7 +51,7 @@ jobs:
 
       - name: Install deb package
         run: |
-          sudo apt-get install -y ./shirudo-target.deb
+          sudo apt-get install -y ./shirudo-target_*.deb
           shirudo version
 
       - name: Upload deb package
