@@ -19,6 +19,13 @@
 struct btf;
 
 /*
+ * Open the first pinned link for an upatch. Single-program upatches use
+ * "link"; multi-program upatches use "link_0", "link_1", ...
+ * Returns a link fd on success, negative errno on failure.
+ */
+int shirudo_upatch_open_first_link(const char *name);
+
+/*
  * Resolve an upatch name to its SEC()-style attach string in `out`
  * (e.g. "lsm/socket_create", "fentry/tcp_v4_connect"). Returns 0 and
  * empty-string out on success; -errno otherwise. `vbtf` may be NULL

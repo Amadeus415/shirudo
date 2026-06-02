@@ -7,6 +7,7 @@
 
 #include <endian.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -122,6 +123,131 @@ static int read_small_file(const char *path, char **out, uint32_t *out_len)
 	return 0;
 }
 
+static bool unsupported_kprobe_section(const char *sec)
+{
+	return sec &&
+	       (strcmp(sec, "kprobe") == 0 ||
+		strcmp(sec, "kretprobe") == 0 ||
+		strcmp(sec, "kprobe/") == 0 ||
+		strcmp(sec, "kretprobe/") == 0 ||
+		strncmp(sec, "kprobe.multi", 12) == 0 ||
+		strncmp(sec, "kretprobe.multi", 15) == 0);
+}
+
+static uint32_t attach_kind_from_section(const char *sec,
+					 const char **target)
+{
+	*target = NULL;
+	if (!sec)
+		return SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT;
+	if (strncmp(sec, "kprobe/", 7) == 0 && sec[7]) {
+		*target = sec + 7;
+		return SHIRUDO_UPATCH_ATTACH_KPROBE;
+	}
+	if (strncmp(sec, "kretprobe/", 10) == 0 && sec[10]) {
+		*target = sec + 10;
+		return SHIRUDO_UPATCH_ATTACH_KRETPROBE;
+	}
+	return SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT;
+}
+
+static int split_probe_target(const char *src, char *target,
+			      size_t target_sz, uint64_t *offset)
+{
+	const char *plus = strrchr(src, '+');
+	size_t len;
+
+	*offset = 0;
+	if (!src || !src[0])
+		return -EINVAL;
+	if (plus) {
+		char *end = NULL;
+		unsigned long long parsed;
+
+		if (plus == src || plus[1] == '\0')
+			return -EINVAL;
+		errno = 0;
+		parsed = strtoull(plus + 1, &end, 0);
+		if (errno || !end || *end != '\0')
+			return -EINVAL;
+		*offset = (uint64_t)parsed;
+		len = (size_t)(plus - src);
+	} else {
+		len = strlen(src);
+	}
+	if (len == 0 || len >= target_sz)
+		return -EINVAL;
+	memcpy(target, src, len);
+	target[len] = '\0';
+	return 0;
+}
+
+static int build_attach_metadata(struct bpf_object *obj, uint32_t nr_progs,
+				 void **out, uint32_t *out_len)
+{
+	struct shirudo_upatch_attach_metadata *md;
+	struct bpf_program *p;
+	size_t len;
+	uint32_t i = 0;
+	int err;
+
+	*out = NULL;
+	*out_len = 0;
+	if (nr_progs >
+	    (UINT32_MAX - sizeof(*md)) / sizeof(md->progs[0]))
+		return -EOVERFLOW;
+	len = sizeof(*md) + (size_t)nr_progs * sizeof(md->progs[0]);
+	md = xmalloc(len);
+	if (!md)
+		return -ENOMEM;
+	memset(md, 0, len);
+	md->magic = htole32(SHIRUDO_UPATCH_ATTACH_MAGIC);
+	md->version = htole32(SHIRUDO_UPATCH_ATTACH_VERSION);
+	md->nr_progs = htole32(nr_progs);
+
+	bpf_object__for_each_program(p, obj) {
+		const char *sec = bpf_program__section_name(p);
+		const char *target = NULL;
+		uint64_t offset = 0;
+		uint32_t kind;
+
+		if (unsupported_kprobe_section(sec)) {
+			pr_err("unsupported kprobe section '%s'; use kprobe/<symbol> or kretprobe/<symbol>",
+			       sec);
+			err = -EOPNOTSUPP;
+			goto err_free;
+		}
+		kind = attach_kind_from_section(sec, &target);
+		md->progs[i].kind = htole32(kind);
+		if (target) {
+			err = split_probe_target(target, md->progs[i].target,
+						 sizeof(md->progs[i].target),
+						 &offset);
+			if (err) {
+				pr_err("invalid kprobe target in section '%s'",
+				       sec);
+				goto err_free;
+			}
+			if (kind == SHIRUDO_UPATCH_ATTACH_KRETPROBE && offset) {
+				pr_err("kretprobe offsets are unsupported in section '%s'",
+				       sec);
+				err = -EINVAL;
+				goto err_free;
+			}
+		}
+		md->progs[i].offset = htole64(offset);
+		i++;
+	}
+
+	*out = md;
+	*out_len = (uint32_t)len;
+	return 0;
+
+err_free:
+	xfree(md, len);
+	return err;
+}
+
 /*
  * Run gen_loader on an already-opened object, CMS-sign the produced
  * loader bytes, and write the .upatch container. Takes ownership of
@@ -141,6 +267,9 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 	struct bpf_map *m;
 	struct bpf_program *p;
 	void *sig_buf = NULL;
+	void *attach_meta = NULL;
+	const void *write_meta = meta;
+	uint32_t write_meta_len = meta_len, attach_meta_len = 0;
 	char *src_buf = NULL;
 	int fd = -1;
 	int err = 0;
@@ -171,6 +300,15 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 		nr_maps++;
 	bpf_object__for_each_program(p, obj)
 		nr_progs++;
+
+	if (!(flags & SHIRUDO_DIRECTIVE_UNLOAD)) {
+		err = build_attach_metadata(obj, nr_progs,
+					    &attach_meta, &attach_meta_len);
+		if (err)
+			goto out;
+		write_meta = attach_meta;
+		write_meta_len = attach_meta_len;
+	}
 
 	sig_buf = xmalloc(SHIRUDO_MAX_SIG_SIZE);
 	if (!sig_buf) {
@@ -209,7 +347,7 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 	uint32_t data_off = sig_off + (uint32_t)sio.signature_sz;
 	uint32_t data_len = opts.data_sz;
 	uint32_t meta_off = data_off + data_len;
-	uint32_t extra_off = src_buf ? meta_off + meta_len : 0;
+	uint32_t extra_off = src_buf ? meta_off + write_meta_len : 0;
 	struct shirudo_upatch_extras ex = {};
 
 	ex.magic      = htole32(SHIRUDO_UPATCH_EXTRAS_MAGIC);
@@ -221,7 +359,7 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 		    sio.payload_sha256,
 		    loader_off, opts.insns_sz,
 		    sig_off, (uint32_t)sio.signature_sz,
-		    meta_len ? meta_off : 0, meta_len,
+		    write_meta_len ? meta_off : 0, write_meta_len,
 		    data_len ? data_off : 0, data_len,
 		    1u * 1024u * 1024u,
 		    nr_maps, nr_progs, extra_off);
@@ -239,8 +377,8 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 		err = write_all(fd, sig_buf, sio.signature_sz);
 	if (!err && data_len)
 		err = write_all(fd, opts.data, data_len);
-	if (!err && meta_len)
-		err = write_all(fd, meta, meta_len);
+	if (!err && write_meta_len)
+		err = write_all(fd, write_meta, write_meta_len);
 	if (!err && extra_off) {
 		err = write_all(fd, &ex, sizeof(ex));
 		if (!err && name_len)
@@ -259,9 +397,9 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 		goto out;
 	}
 
-	pr_info("wrote %s (insns=%u sig=%zu data=%u maps=%u progs=%u source=%u name=%s%s)",
+	pr_info("wrote %s (insns=%u sig=%zu data=%u meta=%u maps=%u progs=%u source=%u name=%s%s)",
 		out_path, opts.insns_sz, sio.signature_sz, data_len,
-		nr_maps, nr_progs, src_len, upatch_name,
+		write_meta_len, nr_maps, nr_progs, src_len, upatch_name,
 		(flags & SHIRUDO_DIRECTIVE_UNLOAD) ? " UNLOAD" : "");
 out:
 	if (fd >= 0)
@@ -269,6 +407,7 @@ out:
 	xfree(src_buf, src_len);
 	xfree(sig_buf, SHIRUDO_MAX_SIG_SIZE);
 	bpf_object__close(obj);
+	xfree(attach_meta, attach_meta_len);
 	return err;
 }
 

@@ -69,4 +69,43 @@ struct shirudo_upatch_extras {
 	 */
 };
 
+/*
+ * Optional metadata format for LOAD upatches. This tells the target how
+ * each program should be attached after the signed loader has created it.
+ * Programs without a special attach kind use RAW_TRACEPOINT, preserving
+ * the original attach_btf_id behavior.
+ *
+ * Metadata is not signature-covered in the v1 upatch format. The program
+ * bytes are still hash-locked by the signed loader; this blob is attach
+ * policy for the target to validate before creating links.
+ */
+#define SHIRUDO_UPATCH_ATTACH_MAGIC	0x41545055u	/* "UPTA" le */
+#define SHIRUDO_UPATCH_ATTACH_VERSION	1u
+#define SHIRUDO_UPATCH_ATTACH_TARGET_MAX	128u
+
+enum shirudo_upatch_attach_kind {
+	SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT = 0,
+	SHIRUDO_UPATCH_ATTACH_KPROBE = 1,
+	SHIRUDO_UPATCH_ATTACH_KRETPROBE = 2,
+};
+
+struct shirudo_upatch_attach_prog {
+	uint32_t	kind;		/* enum shirudo_upatch_attach_kind */
+	uint32_t	reserved;
+	uint64_t	offset;		/* kprobe offset; zero for kretprobe */
+	char		target[SHIRUDO_UPATCH_ATTACH_TARGET_MAX];
+};
+
+struct shirudo_upatch_attach_metadata {
+	uint32_t	magic;		/* SHIRUDO_UPATCH_ATTACH_MAGIC */
+	uint32_t	version;		/* SHIRUDO_UPATCH_ATTACH_VERSION */
+	uint32_t	nr_progs;
+	uint32_t	reserved;
+	/*
+	 * Then: nr_progs struct shirudo_upatch_attach_prog entries in
+	 * libbpf/gen_loader program iteration order.
+	 */
+	struct shirudo_upatch_attach_prog progs[];
+};
+
 #endif /* SHIRUDO_UPATCH_H */

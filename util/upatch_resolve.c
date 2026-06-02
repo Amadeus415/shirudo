@@ -24,6 +24,28 @@
 #include "paths.h"
 #include "upatch_resolve.h"
 
+int shirudo_upatch_open_first_link(const char *name)
+{
+	char pin[PATH_MAX];
+	int fd, first_errno;
+
+	if ((size_t)snprintf(pin, sizeof(pin), "%s/%s/link",
+			     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= sizeof(pin))
+		return -ENAMETOOLONG;
+	fd = bpf_obj_get(pin);
+	if (fd >= 0)
+		return fd;
+	first_errno = errno;
+
+	if ((size_t)snprintf(pin, sizeof(pin), "%s/%s/link_0",
+			     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= sizeof(pin))
+		return -ENAMETOOLONG;
+	fd = bpf_obj_get(pin);
+	if (fd >= 0)
+		return fd;
+	return errno == ENOENT ? -first_errno : -errno;
+}
+
 static const char *loc_prefix(uint32_t prog_type, uint32_t attach_type)
 {
 	if (prog_type == BPF_PROG_TYPE_LSM)
@@ -49,18 +71,13 @@ int shirudo_upatch_resolve_location(struct btf *vbtf, const char *name,
 	const char *attach_name = NULL;
 	uint32_t attach_type = 0;
 	int link_fd, prog_fd, rc;
-	char pin[PATH_MAX];
 	const char *prefix;
 	uint32_t len;
 
 	out[0] = '\0';
-	if ((size_t)snprintf(pin, sizeof(pin), "%s/%s/link",
-			     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= sizeof(pin))
-		return -ENAMETOOLONG;
-
-	link_fd = bpf_obj_get(pin);
+	link_fd = shirudo_upatch_open_first_link(name);
 	if (link_fd < 0)
-		return -errno;
+		return link_fd;
 	len = sizeof(linfo);
 	rc = bpf_link_get_info_by_fd(link_fd, &linfo, &len);
 	close(link_fd);

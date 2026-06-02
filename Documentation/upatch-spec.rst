@@ -158,6 +158,37 @@ directive's expected ``payload_sha256``, so the target can compute the
 unload chain event without parsing the loader data). **Not
 signature-covered.**
 
+For LOAD upatches produced by ``shirudo build``, metadata may carry
+attach metadata:
+
+==========  ====  =====================  ====================================
+offset      size  field                  meaning
+==========  ====  =====================  ====================================
++0          4     magic                  ``0x41545055`` (``"UPTA"`` LE)
++4          4     version                ``1``
++8          4     nr_progs               number of program entries
++12         4     reserved               zero
++16         ...   progs                  one entry per program
+==========  ====  =====================  ====================================
+
+Each program entry is 144 bytes:
+
+==========  ====  =====================  ====================================
+offset      size  field                  meaning
+==========  ====  =====================  ====================================
++0          4     kind                   ``0`` raw tracepoint, ``1`` kprobe,
+                                         ``2`` kretprobe
++4          4     reserved               zero
++8          8     offset                 kprobe offset, zero for kretprobe
++16         128   target                 NUL-terminated symbol name
+==========  ====  =====================  ====================================
+
+Attach metadata is advisory in the container integrity model because
+metadata is not CMS-signed in v1. The loaded program bytes remain
+hash-locked by the signed loader; the target validates this blob before
+creating links and falls back to raw tracepoint attach for older LOAD
+upatches without this metadata.
+
 extras (embedded C source)
 --------------------------
 

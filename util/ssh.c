@@ -10,6 +10,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +27,25 @@
 struct shirudo_ssh_session {
 	ssh_session	s;
 };
+
+static void shirudo_ssh_set_known_hosts(ssh_session s)
+{
+	const char *known_hosts = getenv("SHIRUDO_KNOWN_HOSTS");
+	const char *home;
+	char path[PATH_MAX];
+
+	if (!known_hosts || !*known_hosts) {
+		home = getenv("HOME");
+		if (!home || !*home)
+			return;
+		if ((size_t)snprintf(path, sizeof(path), "%s/.ssh/known_hosts",
+				     home) >= sizeof(path))
+			return;
+		known_hosts = path;
+	}
+
+	ssh_options_set(s, SSH_OPTIONS_KNOWNHOSTS, known_hosts);
+}
 
 struct shirudo_ssh_session *shirudo_ssh_connect(const char *user,
 						const char *host, int port)
@@ -49,6 +69,7 @@ struct shirudo_ssh_session *shirudo_ssh_connect(const char *user,
 	ssh_options_set(h->s, SSH_OPTIONS_PORT, &port);
 	ssh_options_set(h->s, SSH_OPTIONS_TIMEOUT, &timeout);
 	ssh_options_set(h->s, SSH_OPTIONS_LOG_VERBOSITY, &verbosity);
+	shirudo_ssh_set_known_hosts(h->s);
 
 	if (ssh_connect(h->s) != SSH_OK) {
 		pr_err("ssh: connect %s@%s:%d: %s", user, host, port,

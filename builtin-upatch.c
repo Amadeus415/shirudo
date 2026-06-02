@@ -5,6 +5,7 @@
  * shirudo upatch {info,load,unload,list} -- subcommand router.
  */
 
+#include <endian.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -21,6 +22,7 @@
 #include <unistd.h>
 
 #include <linux/bpf.h>
+#include <linux/perf_event.h>
 #include <linux/keyctl.h>
 
 #include <bpf/bpf.h>
@@ -361,13 +363,13 @@ static int is_upatch_file(const struct dirent *e)
 /* Loaded == its bpffs link pin is present. */
 static bool upatch_is_loaded(const char *name)
 {
-	char pin[1024];
-	struct stat st;
+	int fd;
 
-	if ((size_t)snprintf(pin, sizeof(pin), "%s/%s/link",
-			     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= sizeof(pin))
+	fd = shirudo_upatch_open_first_link(name);
+	if (fd < 0)
 		return false;
-	return stat(pin, &st) == 0;
+	close(fd);
+	return true;
 }
 
 /*
@@ -678,6 +680,7 @@ static int prog_test_run_ctx(int prog_fd, void *ctx, uint32_t ctx_sz,
  * BPF_PROG_TYPE_LSM (bpftool gen.c:codegen_attach_detach). The gen
  * loader resolves attach_btf_id at load time, so the link target is
  * fixed by the signed program, not chosen here. Returns a link fd.
+ * On failure, returns a negative errno.
  */
 static int prog_attach_raw_tp(int prog_fd)
 {
@@ -687,7 +690,184 @@ static int prog_attach_raw_tp(int prog_fd)
 	attr.raw_tracepoint.name = 0;
 	attr.raw_tracepoint.prog_fd = (uint32_t)prog_fd;
 	fd = syscall(__NR_bpf, BPF_RAW_TRACEPOINT_OPEN, &attr, sizeof(attr));
-	return (int)fd;
+	return fd >= 0 ? (int)fd : -errno;
+}
+
+static int read_int_file(const char *path, const char *fmt)
+{
+	char buf[64];
+	ssize_t n;
+	int fd, value;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+	n = read(fd, buf, sizeof(buf) - 1);
+	if (n < 0) {
+		int e = -errno;
+
+		close(fd);
+		return e;
+	}
+	close(fd);
+	if (n == 0)
+		return -EINVAL;
+	buf[n] = '\0';
+	if (sscanf(buf, fmt, &value) != 1 || value < 0)
+		return -EINVAL;
+	return value;
+}
+
+static int determine_kprobe_perf_type(void)
+{
+	return read_int_file("/sys/bus/event_source/devices/kprobe/type",
+			     "%d\n");
+}
+
+static int determine_kprobe_retprobe_bit(void)
+{
+	return read_int_file("/sys/bus/event_source/devices/kprobe/format/retprobe",
+			     "config:%d\n");
+}
+
+static int perf_event_open_kprobe(const char *target, uint64_t offset,
+				  bool retprobe)
+{
+	struct perf_event_attr attr = {};
+	int type, bit;
+	long fd;
+
+	type = determine_kprobe_perf_type();
+	if (type < 0)
+		return type;
+	attr.size = sizeof(attr);
+	attr.type = (uint32_t)type;
+	attr.config1 = (uint64_t)(uintptr_t)target;
+	attr.config2 = offset;
+	if (retprobe) {
+		bit = determine_kprobe_retprobe_bit();
+		if (bit < 0)
+			return bit;
+		if (bit >= 64)
+			return -EINVAL;
+		attr.config |= 1ULL << bit;
+	}
+
+	fd = syscall(__NR_perf_event_open, &attr,
+		     -1 /* pid */, 0 /* cpu */,
+		     -1 /* group_fd */, PERF_FLAG_FD_CLOEXEC);
+	return fd >= 0 ? (int)fd : -errno;
+}
+
+static int prog_attach_perf_event(int prog_fd, int perf_fd)
+{
+	union bpf_attr attr = {};
+	long fd;
+
+	attr.link_create.prog_fd = (uint32_t)prog_fd;
+	attr.link_create.target_fd = (uint32_t)perf_fd;
+	attr.link_create.attach_type = BPF_PERF_EVENT;
+	fd = syscall(__NR_bpf, BPF_LINK_CREATE, &attr, sizeof(attr));
+	return fd >= 0 ? (int)fd : -errno;
+}
+
+struct shirudo_attach_spec {
+	uint32_t kind;
+	uint64_t offset;
+	char target[SHIRUDO_UPATCH_ATTACH_TARGET_MAX];
+};
+
+static const char *attach_kind_name(uint32_t kind)
+{
+	switch (kind) {
+	case SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT:
+		return "raw_tracepoint";
+	case SHIRUDO_UPATCH_ATTACH_KPROBE:
+		return "kprobe";
+	case SHIRUDO_UPATCH_ATTACH_KRETPROBE:
+		return "kretprobe";
+	default:
+		return "unknown";
+	}
+}
+
+static int attach_spec_for_prog(const void *metadata, uint32_t metadata_len,
+				uint32_t nr_progs, uint32_t index,
+				struct shirudo_attach_spec *spec)
+{
+	struct shirudo_upatch_attach_metadata md;
+	struct shirudo_upatch_attach_prog prog;
+	size_t need, off;
+	uint32_t magic, version, count, kind;
+
+	memset(spec, 0, sizeof(*spec));
+	spec->kind = SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT;
+	if (!metadata || metadata_len == 0)
+		return 0;
+	if (metadata_len < sizeof(md))
+		return 0;
+
+	memcpy(&md, metadata, sizeof(md));
+	magic = le32toh(md.magic);
+	if (magic != SHIRUDO_UPATCH_ATTACH_MAGIC)
+		return 0;
+	version = le32toh(md.version);
+	count = le32toh(md.nr_progs);
+	if (version != SHIRUDO_UPATCH_ATTACH_VERSION)
+		return -EOPNOTSUPP;
+	if (count != nr_progs || index >= count)
+		return -EINVAL;
+	if (count > (UINT32_MAX - sizeof(md)) / sizeof(prog))
+		return -EOVERFLOW;
+	need = sizeof(md) + (size_t)count * sizeof(prog);
+	if (metadata_len != need)
+		return -EINVAL;
+
+	off = sizeof(md) + (size_t)index * sizeof(prog);
+	memcpy(&prog, (const char *)metadata + off, sizeof(prog));
+	kind = le32toh(prog.kind);
+	switch (kind) {
+	case SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT:
+		spec->kind = kind;
+		return 0;
+	case SHIRUDO_UPATCH_ATTACH_KPROBE:
+	case SHIRUDO_UPATCH_ATTACH_KRETPROBE:
+		break;
+	default:
+		return -EINVAL;
+	}
+	if (!memchr(prog.target, '\0', sizeof(prog.target)) ||
+	    prog.target[0] == '\0')
+		return -EINVAL;
+	spec->kind = kind;
+	spec->offset = le64toh(prog.offset);
+	memcpy(spec->target, prog.target, sizeof(spec->target));
+	spec->target[sizeof(spec->target) - 1] = '\0';
+	if (spec->kind == SHIRUDO_UPATCH_ATTACH_KRETPROBE && spec->offset)
+		return -EINVAL;
+	return 0;
+}
+
+static int prog_attach_for_spec(int prog_fd,
+				const struct shirudo_attach_spec *spec)
+{
+	int perf_fd, link_fd;
+
+	switch (spec->kind) {
+	case SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT:
+		return prog_attach_raw_tp(prog_fd);
+	case SHIRUDO_UPATCH_ATTACH_KPROBE:
+	case SHIRUDO_UPATCH_ATTACH_KRETPROBE:
+		perf_fd = perf_event_open_kprobe(spec->target, spec->offset,
+				spec->kind == SHIRUDO_UPATCH_ATTACH_KRETPROBE);
+		if (perf_fd < 0)
+			return perf_fd;
+		link_fd = prog_attach_perf_event(prog_fd, perf_fd);
+		close(perf_fd);
+		return link_fd;
+	default:
+		return -EINVAL;
+	}
 }
 
 static int obj_pin(int fd, const char *path)
@@ -698,7 +878,7 @@ static int obj_pin(int fd, const char *path)
 	attr.pathname = (uint64_t)(uintptr_t)path;
 	attr.bpf_fd = (uint32_t)fd;
 	ret = syscall(__NR_bpf, BPF_OBJ_PIN, &attr, sizeof(attr));
-	return (int)ret;
+	return ret >= 0 ? 0 : -errno;
 }
 
 static int mkdir_if_absent(const char *path, mode_t mode)
@@ -709,15 +889,14 @@ static int mkdir_if_absent(const char *path, mode_t mode)
 }
 
 /*
- * Attach each inner program (raw-tp link with NULL name, so the
- * kernel uses the prog's baked-in attach_btf_id) and pin the link
- * under the private bpffs. Without a pinned link the program detaches
- * the instant this one-shot CLI exits. A single-program upatch pins
- * as ".../upatches/<name>/link"; multiple programs get "link_<i>".
+ * Attach each inner program according to the upatch attach metadata and
+ * pin the link under the private bpffs. Without a pinned link the program
+ * detaches the instant this one-shot CLI exits.
  */
 static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 				size_t prog_desc_off, uint32_t nr_progs,
-				const char *name)
+				const char *name, const void *metadata,
+				uint32_t metadata_len)
 {
 	char dir[PATH_MAX], pin[PATH_MAX + 32];
 	uint32_t i;
@@ -748,6 +927,7 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 			(const void *)((const char *)cx + prog_desc_off +
 				       (size_t)i * sizeof(*pd));
 		int inner_fd = pd->prog_fd;
+		struct shirudo_attach_spec spec;
 		int link_fd;
 
 		if (inner_fd <= 0) {
@@ -759,10 +939,24 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 		else
 			snprintf(pin, sizeof(pin), "%s/link_%u", dir, i);
 
-		link_fd = prog_attach_raw_tp(inner_fd);
+		rc = attach_spec_for_prog(metadata, metadata_len,
+					  nr_progs, i, &spec);
+		if (rc) {
+			pr_err("attach metadata for prog %u: %s",
+			       i, strerror(-rc));
+			return rc;
+		}
+		link_fd = prog_attach_for_spec(inner_fd, &spec);
 		if (link_fd < 0) {
-			pr_err("attach prog %u: %s", i, strerror(errno));
-			return -errno;
+			if (spec.target[0])
+				pr_err("attach prog %u (%s %s): %s",
+				       i, attach_kind_name(spec.kind),
+				       spec.target, strerror(-link_fd));
+			else
+				pr_err("attach prog %u (%s): %s",
+				       i, attach_kind_name(spec.kind),
+				       strerror(-link_fd));
+			return link_fd;
 		}
 		rc = obj_pin(link_fd, pin);
 		if (rc) {
@@ -771,7 +965,8 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 			return -errno;
 		}
 		close(link_fd);
-		pr_info("attached + pinned prog %u -> %s", i, pin);
+		pr_info("attached + pinned prog %u (%s) -> %s",
+			i, attach_kind_name(spec.kind), pin);
 	}
 	return 0;
 }
@@ -1225,7 +1420,8 @@ static int upatch_apply(const char *path, bool verify_only,
 	 *    them.
 	 */
 	rc = attach_and_pin_progs(cx, prog_desc_off, u.hdr.nr_progs,
-				  upatch_name);
+				  upatch_name, shirudo_upatch_metadata(&u),
+				  u.hdr.metadata_len);
 	if (rc) {
 		int e = -rc;
 
@@ -2303,7 +2499,6 @@ static int upatch_get_collect(const char *want, struct upatch_get_ctx *c)
 	struct bpf_link_info linfo = {};
 	struct bpf_prog_info info = {};
 	struct btf *vbtf = NULL;
-	char pin[PATH_MAX];
 	void *recs = NULL;
 	size_t recs_sz = 0;
 	uint32_t len, nr, rec_size, btf_id;
@@ -2319,12 +2514,9 @@ static int upatch_get_collect(const char *want, struct upatch_get_ctx *c)
 	c->payload[0] = '\0';
 	c->prog_id = 0;
 
-	if (snprintf(pin, sizeof(pin), "%s/%s/link",
-		     SHIRUDO_BPFFS_UPATCHES_DIR, want) >= (int)sizeof(pin))
-		return -ENAMETOOLONG;
-	link_fd = bpf_obj_get(pin);
+	link_fd = shirudo_upatch_open_first_link(want);
 	if (link_fd < 0)
-		return -errno;
+		return link_fd;
 	len = sizeof(linfo);
 	if (bpf_link_get_info_by_fd(link_fd, &linfo, &len) != 0) {
 		rc = -errno;
