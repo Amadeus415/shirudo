@@ -25,7 +25,7 @@
 #endif
 
 #ifndef SHIRUDO_BPF_INCDIR
-#define SHIRUDO_BPF_INCDIR	"/var/lib/shirudo/bpf/include"
+#define SHIRUDO_BPF_INCDIR	"/usr/share/shirudo/bpf/include"
 #endif
 
 #define SHIRUDO_BUILD_MAX_ARGS	64

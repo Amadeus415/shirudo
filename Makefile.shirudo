@@ -29,8 +29,7 @@ SHIRUDO_LIBEXEC_DIR ?= $(libexecdir)/shirudo
 
 # Where operator-installed BPF headers live on a packaged host;
 # also baked into shirudo-build as a runtime fallback -I path.
-SHIRUDO_VAR_DIR     ?= /var/lib/shirudo
-SHIRUDO_BPF_INCDIR  ?= $(SHIRUDO_VAR_DIR)/bpf/include
+SHIRUDO_BPF_INCDIR  ?= $(sharedir)/shirudo/bpf/include
 
 WARNINGS := -Wall -Wextra -Wno-unused-parameter -Wstrict-prototypes \
             -Wmissing-prototypes -Wpointer-arith -Wshadow
@@ -312,11 +311,15 @@ install-target: install systemd/shirudo.service
 	$(Q)install -m 0644 systemd/shirudo.service \
 	    $(DESTDIR)$(systemdunitdir)/shirudo.service
 
-install-operator: install shirudo-build $(BPF_HEADERS_OUT) $(BPF_LIB_HEADERS)
+install-operator: install shirudo-build bpf/vmlinux.h $(BPF_HEADERS_OUT) $(BPF_LIB_HEADERS)
 	@printf '  INSTALL $(DESTDIR)$(libexecdir)/shirudo/shirudo-build\n'
 	$(Q)install -d $(DESTDIR)$(libexecdir)/shirudo
 	$(Q)install -m 0755 tools/shirudo-build/shirudo-build \
 	    $(DESTDIR)$(libexecdir)/shirudo/shirudo-build
+	@printf '  INSTALL $(DESTDIR)$(sharedir)/shirudo/vmlinux.h\n'
+	$(Q)install -d $(DESTDIR)$(sharedir)/shirudo
+	$(Q)install -m 0644 bpf/vmlinux.h \
+	    $(DESTDIR)$(sharedir)/shirudo/vmlinux.h
 	@printf '  INSTALL $(DESTDIR)$(SHIRUDO_BPF_INCDIR)/bpf/\n'
 	$(Q)install -d $(DESTDIR)$(SHIRUDO_BPF_INCDIR)/bpf
 	$(Q)install -m 0644 $(BPF_HEADERS_OUT) \

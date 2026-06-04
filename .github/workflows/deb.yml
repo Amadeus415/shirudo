@@ -49,14 +49,41 @@ jobs:
       - name: Build deb package
         run: make BPF_VMLINUX_H=$PWD/packaging/bpf/vmlinux.h bindeb-pkg
 
-      - name: Install deb package
-        run: |
-          sudo apt-get install -y ./shirudo-target_*.deb
-          shirudo version
-
       - name: Upload deb package
         uses: actions/upload-artifact@v4
         with:
           name: shirudo-deb
           path: shirudo-*.deb
           if-no-files-found: error
+
+      - name: Run shirudo in LVH VM
+        uses: cilium/little-vm-helper@v0.0.30
+        with:
+          test-name: shirudo-apt
+          image: kind
+          image-version: bpf-next-20260603.072225
+          host-mount: ${{ github.workspace }}
+          images-folder-parent: /tmp/lvh
+          install-dependencies: true
+          cpu: 4
+          mem: 8G
+          cmd: |
+            grep -qw bpf /sys/kernel/security/lsm
+            grep -aq 'signature_size' /sys/kernel/btf/vmlinux || {
+              echo 'kernel BTF lacks bpf_attr.signature_size; needs a signed-BPF capable bpf-next kernel' >&2
+              exit 1
+            }
+            cd /host
+
+            apt-get update
+            apt-get install -y /host/shirudo-operator_*.deb
+
+            /usr/bin/shirudo genkey
+
+            # Verify that shirudo build works without a local copy of vmlinux.h
+            pushd examples
+            # TODO: shirudo build should include multiarch include path.
+            shirudo build verifier-reject-null-deref.bpf.c --extra-cflags "-I/usr/include/$(gcc -dumpmachine)"
+            popd
+
+            apt-get remove -y shirudo-operator
