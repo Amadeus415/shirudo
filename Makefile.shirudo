@@ -128,6 +128,8 @@ BPF_VENDOR_HEADERS := bpf_helpers bpf_helper_defs bpf_tracing \
                       bpf_core_read bpf_endian
 BPF_HEADERS_OUT    := $(addprefix bpf/include/bpf/,\
                                   $(addsuffix .h,$(BPF_VENDOR_HEADERS)))
+BPF_LIB_HEADERS    := bpf/lib/shirudo_bpf_common.h \
+                      bpf/lib/shirudo_serializer.h
 
 # bpf/*.bpf.c sources compiled with clang -target bpf and embedded via
 # .incbin into util/loader.o. bpf/lib/ is include-only.
@@ -310,7 +312,7 @@ install-target: install systemd/shirudo.service
 	$(Q)install -m 0644 systemd/shirudo.service \
 	    $(DESTDIR)$(systemdunitdir)/shirudo.service
 
-install-operator: install shirudo-build $(BPF_HEADERS_OUT)
+install-operator: install shirudo-build $(BPF_HEADERS_OUT) $(BPF_LIB_HEADERS)
 	@printf '  INSTALL $(DESTDIR)$(libexecdir)/shirudo/shirudo-build\n'
 	$(Q)install -d $(DESTDIR)$(libexecdir)/shirudo
 	$(Q)install -m 0755 tools/shirudo-build/shirudo-build \
@@ -319,6 +321,9 @@ install-operator: install shirudo-build $(BPF_HEADERS_OUT)
 	$(Q)install -d $(DESTDIR)$(SHIRUDO_BPF_INCDIR)/bpf
 	$(Q)install -m 0644 $(BPF_HEADERS_OUT) \
 	    $(DESTDIR)$(SHIRUDO_BPF_INCDIR)/bpf/
+	@printf '  INSTALL $(DESTDIR)$(SHIRUDO_BPF_INCDIR)/\n'
+	$(Q)install -m 0644 $(BPF_LIB_HEADERS) \
+	    $(DESTDIR)$(SHIRUDO_BPF_INCDIR)/
 
 # ----- test -------------------------------------------------------
 
@@ -327,7 +332,9 @@ TEST_HELPERS := t/helper/test-json-parser \
                 t/helper/test-chain \
                 t/helper/test-selector \
                 t/helper/test-bpf-load \
-                t/helper/test-upatch-map-types
+                t/helper/test-upatch-map-types \
+                t/helper/test-upatch-prog-metadata \
+                t/helper/test-upatch-serializer-pages
 
 t/helper/test-json-parser: t/helper/test-json-parser.c util/json.o
 	@printf '  CC      $@\n'
@@ -354,6 +361,16 @@ t/helper/test-bpf-load: t/helper/test-bpf-load.c
 t/helper/test-upatch-map-types: t/helper/test-upatch-map-types.c
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+t/helper/test-upatch-prog-metadata: t/helper/test-upatch-prog-metadata.c \
+                                    util/upatch.o
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+t/helper/test-upatch-serializer-pages: t/helper/test-upatch-serializer-pages.c \
+                                       util/upatch_maps.o util/json.o util/malloc.o
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS)
 
 check test: shirudo $(TEST_HELPERS)
 	@printf '  TEST\n'

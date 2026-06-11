@@ -7,9 +7,10 @@
  * per-type reader for the entries. BTF type names come from
  * libbpf::btf__name_by_offset() when the map carries a btf_id.
  *
- * Read-only -- every bpf() syscall used here is on shirudo's LSM
- * allow-list (BPF_OBJ_GET, MAP_LOOKUP_ELEM, MAP_GET_NEXT_KEY,
- * OBJ_GET_INFO_BY_FD).
+ * Generic map reads are read-only. Serializer-backed reads also clear
+ * the reserved output map and run the pinned serializer program with
+ * BPF_PROG_TEST_RUN; the serializer writes serialized chunks back to
+ * that reserved map for userspace to print.
  */
 
 #include <dirent.h>
@@ -21,6 +22,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <bpf/bpf.h>
@@ -31,6 +33,7 @@
 #include "paths.h"
 #include "upatch_map_types.h"
 #include "upatch_maps.h"
+#include "bpf/lib/shirudo_serializer.h"
 
 /*
  * Per-call recursion bound for the BTF value renderer. Real-world map
@@ -39,6 +42,10 @@
  * pretty-printing in a "shirudo upatch get" view.
  */
 #define SHIRUDO_BTF_MAX_DEPTH		6
+#define SHIRUDO_SERIAL_MAX_BYTES \
+	(SHIRUDO_SERIAL_MAX_CHUNKS * SHIRUDO_SERIAL_CHUNK_PAYLOAD)
+#define SHIRUDO_SERIAL_MAX_TOTAL_BYTES \
+	((uint64_t)SHIRUDO_SERIAL_MAX_PAGES * SHIRUDO_SERIAL_MAX_BYTES)
 
 static bool is_percpu_type(uint32_t type)
 {
@@ -685,6 +692,321 @@ static struct btf *try_load_btf(uint32_t btf_id)
 	return btf__load_from_kernel_by_id(btf_id);
 }
 
+static int open_serializer_pin(const char *upatch, const char *map_name)
+{
+	char path[PATH_MAX];
+	int fd;
+
+	if ((size_t)snprintf(path, sizeof(path), "%s/%s/serializers/%s",
+			     SHIRUDO_BPFFS_UPATCHES_DIR, upatch, map_name) >=
+	    sizeof(path))
+		return -ENAMETOOLONG;
+	fd = bpf_obj_get(path);
+	if (fd < 0)
+		return -errno;
+	return fd;
+}
+
+static int prog_test_run_ctx(int prog_fd, void *ctx, uint32_t ctx_sz,
+			     uint32_t *retval)
+{
+	union bpf_attr attr = {};
+	long ret;
+
+	attr.test.prog_fd = prog_fd;
+	attr.test.ctx_in = (uint64_t)(uintptr_t)ctx;
+	attr.test.ctx_size_in = ctx_sz;
+	ret = syscall(__NR_bpf, BPF_PROG_TEST_RUN, &attr, sizeof(attr));
+	if (ret < 0)
+		return -errno;
+	*retval = attr.test.retval;
+	return 0;
+}
+
+static int validate_serial_map(const struct bpf_map_info *info)
+{
+	if (info->type != BPF_MAP_TYPE_ARRAY)
+		return -EINVAL;
+	if (info->key_size != sizeof(uint32_t))
+		return -EINVAL;
+	if (info->value_size != sizeof(struct shirudo_serial_chunk))
+		return -EINVAL;
+	if (info->max_entries == 0 ||
+	    info->max_entries > SHIRUDO_SERIAL_MAX_CHUNKS)
+		return -E2BIG;
+	return 0;
+}
+
+static int clear_serial_map(int fd, const struct bpf_map_info *info)
+{
+	void *zero;
+	uint32_t i;
+
+	zero = xcalloc(1, info->value_size);
+	if (!zero)
+		return -ENOMEM;
+	for (i = 0; i < info->max_entries; i++) {
+		if (bpf_map_update_elem(fd, &i, zero, BPF_ANY) != 0) {
+			int e = -errno;
+
+			xfree(zero, info->value_size);
+			return e;
+		}
+	}
+	xfree(zero, info->value_size);
+	return 0;
+}
+
+static int validate_serial_chunk(const struct shirudo_serial_chunk *c,
+				 uint32_t want_index, uint32_t total_chunks,
+				 uint32_t page_index, uint64_t cursor,
+				 uint64_t next_cursor)
+{
+	if (c->magic != SHIRUDO_SERIAL_MAGIC ||
+	    c->version != SHIRUDO_SERIAL_VERSION)
+		return -EBADMSG;
+	if (c->chunk_index != want_index || c->total_chunks != total_chunks)
+		return -EBADMSG;
+	if (c->bytes_in_chunk > SHIRUDO_SERIAL_CHUNK_PAYLOAD)
+		return -EBADMSG;
+	if (c->page_index != page_index || c->cursor != cursor ||
+	    c->next_cursor != next_cursor)
+		return -EBADMSG;
+	return 0;
+}
+
+static int append_serial_page(struct shirudo_map_view *out,
+			      struct shirudo_serial_page *page)
+{
+	void *p;
+
+	p = xreallocarray(out->serial_pages, out->n_serial_pages,
+			  out->n_serial_pages + 1, sizeof(*out->serial_pages));
+	if (!p)
+		return -ENOMEM;
+	out->serial_pages = p;
+	out->serial_pages[out->n_serial_pages++] = *page;
+	memset(page, 0, sizeof(*page));
+	return 0;
+}
+
+static int read_serial_page(int serial_fd,
+			    const struct bpf_map_info *serial_info,
+			    uint32_t want_page_index, uint64_t want_cursor,
+			    struct shirudo_serial_page *page)
+{
+	struct shirudo_serial_chunk *chunk;
+	uint32_t key, total_chunks, bytes_total, copied = 0;
+	uint32_t page_index, flags;
+	uint64_t cursor, next_cursor;
+	unsigned char *data = NULL;
+	int rc;
+
+	chunk = xmalloc(sizeof(*chunk));
+	if (!chunk)
+		return -ENOMEM;
+	key = 0;
+	if (bpf_map_lookup_elem(serial_fd, &key, chunk) != 0) {
+		rc = -errno;
+		goto out_chunk;
+	}
+	if (chunk->magic != SHIRUDO_SERIAL_MAGIC ||
+	    chunk->version != SHIRUDO_SERIAL_VERSION) {
+		rc = -EBADMSG;
+		goto out_chunk;
+	}
+	if (chunk->status != 0) {
+		rc = chunk->status < 0 ? chunk->status : -EIO;
+		goto out_chunk;
+	}
+	total_chunks = chunk->total_chunks;
+	bytes_total = chunk->bytes_total;
+	page_index = chunk->page_index;
+	cursor = chunk->cursor;
+	next_cursor = chunk->next_cursor;
+	flags = chunk->flags;
+	if (total_chunks == 0 || total_chunks > serial_info->max_entries ||
+	    total_chunks > SHIRUDO_SERIAL_MAX_CHUNKS ||
+	    bytes_total > SHIRUDO_SERIAL_MAX_BYTES ||
+	    bytes_total > total_chunks * SHIRUDO_SERIAL_CHUNK_PAYLOAD) {
+		rc = -EBADMSG;
+		goto out_chunk;
+	}
+	if (page_index != want_page_index || cursor != want_cursor ||
+	    next_cursor < cursor) {
+		rc = -EBADMSG;
+		goto out_chunk;
+	}
+	data = bytes_total ? xmalloc(bytes_total) : NULL;
+	if (bytes_total && !data) {
+		rc = -ENOMEM;
+		goto out_chunk;
+	}
+	for (key = 0; key < total_chunks; key++) {
+		if (key != 0 &&
+		    bpf_map_lookup_elem(serial_fd, &key, chunk) != 0) {
+			rc = -errno;
+			goto out_data;
+		}
+		rc = validate_serial_chunk(chunk, key, total_chunks,
+					   page_index, cursor, next_cursor);
+		if (rc)
+			goto out_data;
+		if (chunk->status != 0) {
+			rc = chunk->status < 0 ? chunk->status : -EIO;
+			goto out_data;
+		}
+		if (chunk->bytes_total != bytes_total ||
+		    copied + chunk->bytes_in_chunk > bytes_total) {
+			rc = -EBADMSG;
+			goto out_data;
+		}
+		if (chunk->bytes_in_chunk)
+			memcpy(data + copied, chunk->data,
+			       chunk->bytes_in_chunk);
+		copied += chunk->bytes_in_chunk;
+	}
+	if (copied != bytes_total) {
+		rc = -EBADMSG;
+		goto out_data;
+	}
+
+	memset(page, 0, sizeof(*page));
+	page->page_index = page_index;
+	page->cursor = cursor;
+	page->next_cursor = next_cursor;
+	page->flags = flags;
+	page->chunks = total_chunks;
+	page->bytes = bytes_total;
+	page->done = (page->flags & SHIRUDO_SERIAL_F_DONE) != 0;
+	page->data = data;
+	xfree(chunk, sizeof(*chunk));
+	return 0;
+
+out_data:
+	xfree(data, bytes_total);
+out_chunk:
+	xfree(chunk, sizeof(*chunk));
+	return rc;
+}
+
+/*
+ * Return 1 when a serializer was found and populated out, 0 when none
+ * exists for this map, or -errno on serializer/output failure.
+ */
+static int try_read_serialized(const char *upatch, const char *map,
+			       struct shirudo_map_view *out)
+{
+	struct bpf_map_info serial_info = {};
+	uint64_t cursor = 0, bytes_total = 0;
+	uint32_t page_index;
+	int prog_fd = -1, serial_fd = -1, rc;
+
+	if (strcmp(map, SHIRUDO_SERIAL_MAP_NAME) == 0)
+		return 0;
+	prog_fd = open_serializer_pin(upatch, map);
+	if (prog_fd < 0) {
+		if (prog_fd == -ENOENT)
+			return 0;
+		return prog_fd;
+	}
+	rc = open_map_pin(upatch, SHIRUDO_SERIAL_MAP_NAME,
+			  &serial_fd, &serial_info);
+	if (rc)
+		goto out;
+	rc = validate_serial_map(&serial_info);
+	if (rc)
+		goto out;
+
+	for (page_index = 0; page_index < SHIRUDO_SERIAL_MAX_PAGES;
+	     page_index++) {
+		struct shirudo_serialize_ctx ctx = {};
+		struct shirudo_serial_page page = {};
+		uint32_t retval = 0;
+
+		rc = clear_serial_map(serial_fd, &serial_info);
+		if (rc)
+			goto out;
+
+		ctx.magic = SHIRUDO_SERIAL_MAGIC;
+		ctx.version = SHIRUDO_SERIAL_VERSION;
+		ctx.max_chunks = serial_info.max_entries;
+		ctx.chunk_payload_size = SHIRUDO_SERIAL_CHUNK_PAYLOAD;
+		ctx.page_index = page_index;
+		ctx.cursor = cursor;
+
+		rc = prog_test_run_ctx(prog_fd, &ctx, sizeof(ctx), &retval);
+		if (rc)
+			goto out;
+		if ((int32_t)retval < 0) {
+			rc = (int32_t)retval;
+			goto out;
+		}
+		if (ctx.magic != SHIRUDO_SERIAL_MAGIC ||
+		    ctx.version != SHIRUDO_SERIAL_VERSION ||
+		    ctx.page_index != page_index ||
+		    ctx.cursor != cursor) {
+			rc = -EBADMSG;
+			goto out;
+		}
+
+		rc = read_serial_page(serial_fd, &serial_info, page_index,
+				      cursor, &page);
+		if (rc)
+			goto out;
+		if (bytes_total + page.bytes > SHIRUDO_SERIAL_MAX_TOTAL_BYTES) {
+			xfree(page.data, page.bytes);
+			rc = -E2BIG;
+			goto out;
+		}
+		bytes_total += page.bytes;
+		rc = append_serial_page(out, &page);
+		if (rc) {
+			xfree(page.data, page.bytes);
+			goto out;
+		}
+
+		page = out->serial_pages[out->n_serial_pages - 1];
+		if (page.done)
+			break;
+		if (page.next_cursor == cursor) {
+			rc = -EBADMSG;
+			goto out;
+		}
+		cursor = page.next_cursor;
+	}
+	if (out->n_serial_pages == 0 ||
+	    !out->serial_pages[out->n_serial_pages - 1].done) {
+		rc = -E2BIG;
+		goto out;
+	}
+
+	out->serialized = true;
+	out->serial_bytes_total = bytes_total;
+	close(serial_fd);
+	close(prog_fd);
+	return 1;
+
+out:
+	if (rc < 0 && out->serial_pages) {
+		uint32_t i;
+
+		for (i = 0; i < out->n_serial_pages; i++)
+			xfree(out->serial_pages[i].data,
+			      out->serial_pages[i].bytes);
+		xfree(out->serial_pages,
+		      out->n_serial_pages * sizeof(*out->serial_pages));
+		out->serial_pages = NULL;
+		out->n_serial_pages = 0;
+		out->serial_bytes_total = 0;
+	}
+	if (serial_fd >= 0)
+		close(serial_fd);
+	if (prog_fd >= 0)
+		close(prog_fd);
+	return rc;
+}
+
 /* Iterate every entry of a map with cap; populate v->entries. */
 static int read_entries(int fd, struct shirudo_map_view *v,
 			uint32_t cap)
@@ -819,6 +1141,16 @@ void shirudo_map_view_free(struct shirudo_map_view *v)
 		btf__free(v->btf);
 		v->btf = NULL;
 	}
+	if (v->serial_pages) {
+		for (i = 0; i < v->n_serial_pages; i++)
+			xfree(v->serial_pages[i].data,
+			      v->serial_pages[i].bytes);
+		xfree(v->serial_pages,
+		      v->n_serial_pages * sizeof(*v->serial_pages));
+		v->serial_pages = NULL;
+		v->n_serial_pages = 0;
+		v->serial_bytes_total = 0;
+	}
 }
 
 int shirudo_upatch_maps_read(const char *upatch, const char *map,
@@ -843,6 +1175,16 @@ int shirudo_upatch_maps_read(const char *upatch, const char *map,
 	out->max_entries = info.max_entries;
 	out->n_cpus = is_percpu_type(info.type) ?
 			(uint32_t)nproc_possible() : 1;
+
+	rc = try_read_serialized(upatch, map, out);
+	if (rc < 0) {
+		close(fd);
+		return rc;
+	}
+	if (rc > 0) {
+		close(fd);
+		return 0;
+	}
 
 	if (shirudo_map_skip_reason(info.type)) {
 		out->skipped = true;
@@ -920,6 +1262,8 @@ static void scan_upatch_maps(const char *upatch,
 		int fd, rc;
 
 		if (e->d_name[0] == '.')
+			continue;
+		if (strcmp(e->d_name, SHIRUDO_SERIAL_MAP_NAME) == 0)
 			continue;
 		rc = open_map_pin(upatch, e->d_name, &fd, &info);
 		if (rc)
@@ -1056,6 +1400,39 @@ static void print_type_def(const char *label, const char *def, uint32_t size)
 	printf(" (%u B)\n", size);
 }
 
+static char *hex_alloc(const void *data, uint32_t len)
+{
+	static const char hexdigits[] = "0123456789abcdef";
+	const unsigned char *p = data;
+	char *out;
+	uint32_t i;
+
+	out = xmalloc((size_t)len * 2 + 1);
+	if (!out)
+		return NULL;
+	for (i = 0; i < len; i++) {
+		out[2 * i] = hexdigits[p[i] >> 4];
+		out[2 * i + 1] = hexdigits[p[i] & 0xf];
+	}
+	out[(size_t)len * 2] = '\0';
+	return out;
+}
+
+static void print_serialized_hex(const unsigned char *data, uint32_t len)
+{
+	uint32_t i;
+
+	for (i = 0; i < len; i++) {
+		if (i % 16 == 0)
+			printf("  %08x: ", i);
+		printf("%02x", data[i]);
+		if (i % 16 == 15 || i + 1 == len)
+			printf("\n");
+		else if (i % 2 == 1)
+			printf(" ");
+	}
+}
+
 void shirudo_upatch_maps_print_detail(const struct shirudo_map_view *v)
 {
 	uint32_t i;
@@ -1071,6 +1448,34 @@ void shirudo_upatch_maps_print_detail(const struct shirudo_map_view *v)
 	if (v->skipped) {
 		printf("Status:              skipped -- %s\n",
 		       v->skipped_reason ? v->skipped_reason : "(no reason)");
+		return;
+	}
+	if (v->serialized) {
+		uint32_t p;
+
+		printf("Status:              serialized\n");
+		printf("Serialized pages:    %u\n", v->n_serial_pages);
+		printf("Serialized bytes:    %" PRIu64 "\n",
+		       v->serial_bytes_total);
+		for (p = 0; p < v->n_serial_pages; p++) {
+			const struct shirudo_serial_page *page =
+				&v->serial_pages[p];
+
+			printf("\nPage %u:\n", page->page_index);
+			printf("  Cursor:            %" PRIu64 "\n",
+			       page->cursor);
+			printf("  Next cursor:       %" PRIu64 "\n",
+			       page->next_cursor);
+			printf("  Done:              %s\n",
+			       page->done ? "true" : "false");
+			printf("  Flags:             0x%x\n", page->flags);
+			printf("  Chunks:            %u\n", page->chunks);
+			printf("  Bytes:             %u\n", page->bytes);
+			if (page->bytes) {
+				printf("\n  Data (hex):\n");
+				print_serialized_hex(page->data, page->bytes);
+			}
+		}
 		return;
 	}
 	printf("Entries:             %u of %u%s\n", v->n_entries,
@@ -1137,25 +1542,56 @@ void shirudo_upatch_maps_print_detail(const struct shirudo_map_view *v)
 
 /* === JSON === */
 
-void shirudo_upatch_maps_emit_json(struct shirudo_json_emit *e,
-				   const struct shirudo_map_view *v)
+void shirudo_upatch_maps_emit_json_fields(struct shirudo_json_emit *e,
+					  const struct shirudo_map_view *v)
 {
 	uint32_t i, j;
 
 	if (!v)
 		return;
-	shirudo_json_obj_open(e);
 	shirudo_json_kv_string(e, "name", v->name);
 	shirudo_json_kv_string(e, "type", v->type_name);
 	shirudo_json_kv_int(e, "max_entries", v->max_entries);
 	shirudo_json_kv_int(e, "n_entries", v->n_entries);
 	if (v->n_cpus > 1)
 		shirudo_json_kv_int(e, "n_cpus", v->n_cpus);
+	if (v->serialized) {
+		uint32_t p;
+
+		shirudo_json_kv_bool(e, "serialized", true);
+		shirudo_json_kv_int(e, "serialized_pages",
+				    v->n_serial_pages);
+		shirudo_json_kv_int(e, "serialized_bytes",
+				    v->serial_bytes_total);
+		shirudo_json_arr_open(e, "pages");
+		for (p = 0; p < v->n_serial_pages; p++) {
+			const struct shirudo_serial_page *page =
+				&v->serial_pages[p];
+			char *hex = hex_alloc(page->data, page->bytes);
+
+			shirudo_json_obj_open(e);
+			shirudo_json_kv_int(e, "page_index",
+					    page->page_index);
+			shirudo_json_kv_int(e, "cursor", page->cursor);
+			shirudo_json_kv_int(e, "next_cursor",
+					    page->next_cursor);
+			shirudo_json_kv_bool(e, "done", page->done);
+			shirudo_json_kv_int(e, "flags", page->flags);
+			shirudo_json_kv_int(e, "chunks", page->chunks);
+			shirudo_json_kv_int(e, "bytes", page->bytes);
+			shirudo_json_kv_string(e, "data_hex",
+					       hex ? hex : "");
+			xfree(hex, (size_t)page->bytes * 2 + 1);
+			shirudo_json_obj_close(e);
+		}
+		shirudo_json_arr_close(e);
+		return;
+	}
+	shirudo_json_kv_bool(e, "serialized", false);
 	if (v->skipped) {
 		shirudo_json_kv_string(e, "skipped",
 				       v->skipped_reason ?
 					       v->skipped_reason : "");
-		shirudo_json_obj_close(e);
 		return;
 	}
 	shirudo_json_kv_bool(e, "truncated", v->truncated);
@@ -1216,5 +1652,14 @@ void shirudo_upatch_maps_emit_json(struct shirudo_json_emit *e,
 		xstrfree(key_s);
 	}
 	shirudo_json_arr_close(e);
+}
+
+void shirudo_upatch_maps_emit_json(struct shirudo_json_emit *e,
+				   const struct shirudo_map_view *v)
+{
+	if (!v)
+		return;
+	shirudo_json_obj_open(e);
+	shirudo_upatch_maps_emit_json_fields(e, v);
 	shirudo_json_obj_close(e);
 }

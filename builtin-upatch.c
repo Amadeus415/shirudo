@@ -182,8 +182,9 @@ static const struct shirudo_help upatch_map_help = {
 		      "pinned\nmap across every loaded upatch. With "
 		      "<upatch>, list maps\nfor that upatch only. With "
 		      "<upatch> <map>, dump the map's\ncontents -- BTF "
-		      "type-aware where the build embedded `-g`.\n"
-		      "Read-only; uses only LSM-allowed bpf() commands.",
+		      "type-aware where the build embedded `-g`. If the "
+		      "upatch\npins a serializer for the map, run it and "
+		      "print the serialized\npages.",
 	.sections   = upatch_map_sections,
 	.n_sections = ARRAY_SIZE(upatch_map_sections),
 	.footer     =
@@ -771,10 +772,12 @@ static int prog_attach_perf_event(int prog_fd, int perf_fd)
 	return fd >= 0 ? (int)fd : -errno;
 }
 
-struct shirudo_attach_spec {
+struct shirudo_prog_spec {
+	uint32_t role;
 	uint32_t kind;
 	uint64_t offset;
 	char target[SHIRUDO_UPATCH_ATTACH_TARGET_MAX];
+	char map[SHIRUDO_UPATCH_PROG_MAP_MAX];
 };
 
 static const char *attach_kind_name(uint32_t kind)
@@ -791,29 +794,27 @@ static const char *attach_kind_name(uint32_t kind)
 	}
 }
 
-static int attach_spec_for_prog(const void *metadata, uint32_t metadata_len,
-				uint32_t nr_progs, uint32_t index,
-				struct shirudo_attach_spec *spec)
+static int prog_spec_for_prog(const void *metadata, uint32_t metadata_len,
+			      uint32_t nr_progs, uint32_t index,
+			      struct shirudo_prog_spec *spec)
 {
-	struct shirudo_upatch_attach_metadata md;
-	struct shirudo_upatch_attach_prog prog;
+	struct shirudo_upatch_prog_metadata md;
+	struct shirudo_upatch_prog_entry prog;
 	size_t need, off;
-	uint32_t magic, version, count, kind;
+	uint32_t magic, version, count, role, kind;
 
-	memset(spec, 0, sizeof(*spec));
-	spec->kind = SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT;
-	if (!metadata || metadata_len == 0)
-		return 0;
+	if (!metadata || metadata_len < sizeof(uint32_t))
+		return -EINVAL;
+	memcpy(&magic, metadata, sizeof(magic));
+	magic = le32toh(magic);
+	if (magic != SHIRUDO_UPATCH_PROG_MAGIC)
+		return -EINVAL;
 	if (metadata_len < sizeof(md))
-		return 0;
-
+		return -EINVAL;
 	memcpy(&md, metadata, sizeof(md));
-	magic = le32toh(md.magic);
-	if (magic != SHIRUDO_UPATCH_ATTACH_MAGIC)
-		return 0;
 	version = le32toh(md.version);
 	count = le32toh(md.nr_progs);
-	if (version != SHIRUDO_UPATCH_ATTACH_VERSION)
+	if (version != SHIRUDO_UPATCH_PROG_VERSION)
 		return -EOPNOTSUPP;
 	if (count != nr_progs || index >= count)
 		return -EINVAL;
@@ -823,8 +824,27 @@ static int attach_spec_for_prog(const void *metadata, uint32_t metadata_len,
 	if (metadata_len != need)
 		return -EINVAL;
 
+	memset(spec, 0, sizeof(*spec));
+	spec->role = SHIRUDO_UPATCH_PROG_ROLE_ATTACH;
+	spec->kind = SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT;
 	off = sizeof(md) + (size_t)index * sizeof(prog);
 	memcpy(&prog, (const char *)metadata + off, sizeof(prog));
+	role = le32toh(prog.role);
+	switch (role) {
+	case SHIRUDO_UPATCH_PROG_ROLE_ATTACH:
+		break;
+	case SHIRUDO_UPATCH_PROG_ROLE_SERIALIZER:
+		if (!memchr(prog.map, '\0', sizeof(prog.map)) ||
+		    prog.map[0] == '\0')
+			return -EINVAL;
+		spec->role = role;
+		memcpy(spec->map, prog.map, sizeof(spec->map));
+		spec->map[sizeof(spec->map) - 1] = '\0';
+		return 0;
+	default:
+		return -EINVAL;
+	}
+
 	kind = le32toh(prog.kind);
 	switch (kind) {
 	case SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT:
@@ -849,7 +869,7 @@ static int attach_spec_for_prog(const void *metadata, uint32_t metadata_len,
 }
 
 static int prog_attach_for_spec(int prog_fd,
-				const struct shirudo_attach_spec *spec)
+				const struct shirudo_prog_spec *spec)
 {
 	int perf_fd, link_fd;
 
@@ -888,18 +908,39 @@ static int mkdir_if_absent(const char *path, mode_t mode)
 	return -errno;
 }
 
+static int count_attach_progs(const void *metadata, uint32_t metadata_len,
+			      uint32_t nr_progs, uint32_t *out)
+{
+	uint32_t i, n = 0;
+	int rc;
+
+	for (i = 0; i < nr_progs; i++) {
+		struct shirudo_prog_spec spec;
+
+		rc = prog_spec_for_prog(metadata, metadata_len,
+					nr_progs, i, &spec);
+		if (rc)
+			return rc;
+		if (spec.role == SHIRUDO_UPATCH_PROG_ROLE_ATTACH)
+			n++;
+	}
+	*out = n;
+	return 0;
+}
+
 /*
- * Attach each inner program according to the upatch attach metadata and
- * pin the link under the private bpffs. Without a pinned link the program
- * detaches the instant this one-shot CLI exits.
+ * Attach or pin each inner program according to the upatch program
+ * metadata. Attached programs get pinned links; serializer programs are
+ * pinned as programs and invoked later by `shirudo upatch map`.
  */
 static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 				size_t prog_desc_off, uint32_t nr_progs,
 				const char *name, const void *metadata,
 				uint32_t metadata_len)
 {
-	char dir[PATH_MAX], pin[PATH_MAX + 32];
-	uint32_t i;
+	char dir[PATH_MAX], serializers_dir[PATH_MAX + 16];
+	char pin[PATH_MAX + 32];
+	uint32_t i, attach_count = 0, attach_seen = 0;
 	int rc;
 
 	if (nr_progs == 0) {
@@ -921,31 +962,66 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 		pr_err("mkdir %s: %s", dir, strerror(-rc));
 		return rc;
 	}
+	rc = count_attach_progs(metadata, metadata_len, nr_progs,
+				&attach_count);
+	if (rc) {
+		pr_err("program metadata: %s", strerror(-rc));
+		return rc;
+	}
+	if (snprintf(serializers_dir, sizeof(serializers_dir),
+		     "%s/serializers", dir) >= (int)sizeof(serializers_dir))
+		return -ENAMETOOLONG;
 
 	for (i = 0; i < nr_progs; i++) {
 		const struct shirudo_prog_desc *pd =
 			(const void *)((const char *)cx + prog_desc_off +
 				       (size_t)i * sizeof(*pd));
 		int inner_fd = pd->prog_fd;
-		struct shirudo_attach_spec spec;
+		struct shirudo_prog_spec spec;
 		int link_fd;
 
 		if (inner_fd <= 0) {
 			pr_err("loader produced no fd for prog %u", i);
 			return -EINVAL;
 		}
-		if (nr_progs == 1)
-			snprintf(pin, sizeof(pin), "%s/link", dir);
-		else
-			snprintf(pin, sizeof(pin), "%s/link_%u", dir, i);
-
-		rc = attach_spec_for_prog(metadata, metadata_len,
-					  nr_progs, i, &spec);
+		rc = prog_spec_for_prog(metadata, metadata_len,
+					nr_progs, i, &spec);
 		if (rc) {
-			pr_err("attach metadata for prog %u: %s",
+			pr_err("program metadata for prog %u: %s",
 			       i, strerror(-rc));
 			return rc;
 		}
+		if (spec.role == SHIRUDO_UPATCH_PROG_ROLE_SERIALIZER) {
+			struct stat st;
+
+			rc = mkdir_if_absent(serializers_dir, 0700);
+			if (rc) {
+				pr_err("mkdir %s: %s", serializers_dir,
+				       strerror(-rc));
+				return rc;
+			}
+			if (snprintf(pin, sizeof(pin), "%s/%s",
+				     serializers_dir, spec.map) >=
+			    (int)sizeof(pin))
+				return -ENAMETOOLONG;
+			if (stat(pin, &st) == 0)
+				continue;	/* idempotent re-run */
+			rc = obj_pin(inner_fd, pin);
+			if (rc) {
+				pr_err("pin serializer %s: %s", pin,
+				       strerror(-rc));
+				return rc;
+			}
+			pr_info("pinned serializer prog %u -> %s", i, pin);
+			continue;
+		}
+		if (attach_count == 1)
+			snprintf(pin, sizeof(pin), "%s/link", dir);
+		else
+			snprintf(pin, sizeof(pin), "%s/link_%u", dir,
+				 attach_seen);
+		attach_seen++;
+
 		link_fd = prog_attach_for_spec(inner_fd, &spec);
 		if (link_fd < 0) {
 			if (spec.target[0])
@@ -960,9 +1036,9 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 		}
 		rc = obj_pin(link_fd, pin);
 		if (rc) {
-			pr_err("pin %s: %s", pin, strerror(errno));
+			pr_err("pin %s: %s", pin, strerror(-rc));
 			close(link_fd);
-			return -errno;
+			return rc;
 		}
 		close(link_fd);
 		pr_info("attached + pinned prog %u (%s) -> %s",
@@ -1381,7 +1457,12 @@ static int upatch_apply(const char *path, bool verify_only,
 	}
 	vlog[0] = '\0';
 	cx->sz = (uint32_t)ctx_sz;
-	cx->log_level = 1 | 2 | 4;	/* bpftool's verifier_logs */
+	/*
+	 * Keep inner verifier diagnostics enabled without bpftool's full
+	 * accepted-program trace; the verbose mode can make valid payload
+	 * loads fail with -ENOSPC when the log buffer fills.
+	 */
+	cx->log_level = 1;
 	cx->log_size = SHIRUDO_VERIFIER_LOG_MAX;
 	cx->log_buf = (uint64_t)(uintptr_t)vlog;
 
@@ -1882,6 +1963,7 @@ static int wipe_dir_flat(const char *dir)
 static int remove_pin_dir(const char *name)
 {
 	char dir[PATH_MAX], maps_dir[PATH_MAX + 8];
+	char serializers_dir[PATH_MAX + 16];
 	struct stat st;
 	int rc;
 
@@ -1891,14 +1973,22 @@ static int remove_pin_dir(const char *name)
 	if (snprintf(maps_dir, sizeof(maps_dir), "%s/maps", dir) >=
 	    (int)sizeof(maps_dir))
 		return -ENAMETOOLONG;
+	if (snprintf(serializers_dir, sizeof(serializers_dir),
+		     "%s/serializers", dir) >= (int)sizeof(serializers_dir))
+		return -ENAMETOOLONG;
 	if (stat(dir, &st) != 0)
 		return -errno;
 	/*
-	 * maps/ must be torn down before the top dir, so the parent
-	 * isn't holding an unwipeable subdir when we rmdir it.
+	 * Child pin directories must be torn down before the top dir, so
+	 * the parent isn't holding unwipeable subdirs when we rmdir it.
 	 */
 	if (stat(maps_dir, &st) == 0) {
 		rc = wipe_dir_flat(maps_dir);
+		if (rc)
+			return rc;
+	}
+	if (stat(serializers_dir, &st) == 0) {
+		rc = wipe_dir_flat(serializers_dir);
 		if (rc)
 			return rc;
 	}
@@ -2301,8 +2391,8 @@ static void emit_line_info_json(struct shirudo_json_emit *e,
  */
 /*
  * Emit one map view as part of a `{ "schema": 1, "upatch": "...",
- * "map": "...", ... }` document so consumers don't have to bolt the
- * scaffolding on themselves.
+ * "map": "...", "data": {...} }` document so consumers don't have to
+ * bolt the scaffolding on themselves.
  */
 static int dump_one_map_json(const struct shirudo_map_view *v)
 {
@@ -2310,8 +2400,13 @@ static int dump_one_map_json(const struct shirudo_map_view *v)
 	size_t cap;
 	char *buf;
 
-	cap = 8192 + 128 * v->n_entries +
-	      (size_t)v->value_size * v->n_cpus * (size_t)v->n_entries * 8;
+	if (v->serialized)
+		cap = 8192 + (size_t)v->n_serial_pages * 256 +
+		      (size_t)v->serial_bytes_total * 2;
+	else
+		cap = 8192 + 128 * v->n_entries +
+		      (size_t)v->value_size * v->n_cpus *
+			      (size_t)v->n_entries * 8;
 	if (cap > SHIRUDO_JSON_MAX_BYTES)
 		cap = SHIRUDO_JSON_MAX_BYTES;
 	buf = xmalloc(cap);
@@ -2324,7 +2419,7 @@ static int dump_one_map_json(const struct shirudo_map_view *v)
 	shirudo_json_kv_string(&e, "upatch", v->upatch);
 	shirudo_json_kv_string(&e, "map", v->name);
 	shirudo_json_obj_open_key(&e, "data");
-	shirudo_upatch_maps_emit_json(&e, v);
+	shirudo_upatch_maps_emit_json_fields(&e, v);
 	shirudo_json_obj_close(&e);
 	shirudo_json_obj_close(&e);
 	if (e.err) {

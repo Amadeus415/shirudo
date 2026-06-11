@@ -14,7 +14,7 @@ test_expect_success 'arena maps render with the arena type name' '
 	[ "$("$H" arena-name)" = arena ]
 '
 
-test_expect_success 'arena maps are skipped until serializer support exists' '
+test_expect_success 'arena maps are skipped when no serializer is pinned' '
 	"$H" arena-skip | grep -q "serializer"
 '
 

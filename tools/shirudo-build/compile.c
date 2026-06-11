@@ -57,6 +57,16 @@ static const char *locate_bpf_headers(void)
 	return NULL;
 }
 
+static const char *locate_shirudo_bpf_headers(void)
+{
+	static const char in_tree[] = "-I./bpf/lib";
+	struct stat st;
+
+	if (stat("./bpf/lib/shirudo_serializer.h", &st) == 0)
+		return in_tree;
+	return NULL;
+}
+
 int shirudo_build_compile(const char *source, const char *output,
 			  const char *vmlinux_h, const char *extra_cflags)
 {
@@ -109,6 +119,12 @@ int shirudo_build_compile(const char *source, const char *output,
 
 		if (inc_bpf)
 			push(argv, &n, inc_bpf);
+	}
+	{
+		const char *inc_shirudo_bpf = locate_shirudo_bpf_headers();
+
+		if (inc_shirudo_bpf)
+			push(argv, &n, inc_shirudo_bpf);
 	}
 	push(argv, &n, "-c");
 	push(argv, &n, source);

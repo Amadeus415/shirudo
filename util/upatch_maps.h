@@ -8,9 +8,9 @@
  * (operator pulls the same JSON over SSH).
  *
  * Surface targets the common observability case (counters, small
- * hash tables) and degrades gracefully on richer types: arenas,
- * ringbufs, stack-traces, perf-event arrays are listed as
- * `skipped: "use 'shirudo upatch <verb>' (future work)"`.
+ * hash tables). Richer types degrade gracefully unless an upatch pins
+ * a serializer for the map; arena maps without a serializer are listed
+ * as skipped instead of being read generically.
  */
 
 #ifndef SHIRUDO_UTIL_UPATCH_MAPS_H
@@ -48,6 +48,17 @@ struct shirudo_map_entry {
 
 struct btf;
 
+struct shirudo_serial_page {
+	uint32_t	page_index;
+	uint64_t	cursor;
+	uint64_t	next_cursor;
+	uint32_t	flags;
+	uint32_t	chunks;
+	uint32_t	bytes;
+	bool		done;
+	void		*data;
+};
+
 struct shirudo_map_view {
 	char		upatch[64];
 	char		name[SHIRUDO_MAP_NAME_MAX + 1];
@@ -60,6 +71,10 @@ struct shirudo_map_view {
 	uint32_t	n_cpus;		/* 1 for non-percpu types */
 	bool		truncated;
 	uint32_t	n_truncated_at;
+	bool		serialized;
+	uint32_t	n_serial_pages;
+	uint64_t	serial_bytes_total;
+	struct shirudo_serial_page *serial_pages;
 	bool		skipped;
 	const char	*skipped_reason;
 	char		btf_key_type[SHIRUDO_MAP_TYPENAME_MAX];
@@ -113,11 +128,15 @@ void shirudo_upatch_maps_print_detail(const struct shirudo_map_view *v);
 void shirudo_upatch_map_print_inline(const struct shirudo_map_summary *m);
 
 /*
- * Emit one map view as a JSON object. Caller wraps in `maps[]` and
- * the upatch object. NULL `v` emits nothing. The shape matches the
- * one documented in PLAN.md so target-local status and operator-side
- * nodes show agree.
+ * Emit one map view. The fields-only helper is for callers that are
+ * already inside the object that should carry the map details; the
+ * object helper is for callers wrapping map views in arrays.
+ *
+ * NULL `v` emits nothing. The shape matches the one documented in
+ * PLAN.md so target-local status and operator-side nodes show agree.
  */
+void shirudo_upatch_maps_emit_json_fields(struct shirudo_json_emit *e,
+					  const struct shirudo_map_view *v);
 void shirudo_upatch_maps_emit_json(struct shirudo_json_emit *e,
 				   const struct shirudo_map_view *v);
 

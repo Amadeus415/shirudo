@@ -20,6 +20,7 @@
 
 #include <shirudo/upatch.h>
 
+#include "bpf/lib/shirudo_serializer.h"
 #include "loader.h"
 #include "log.h"
 #include "malloc.h"
@@ -27,6 +28,7 @@
 #include "sign.h"
 
 #define SHIRUDO_MAX_SIG_SIZE	4096
+#define SHIRUDO_SERIALIZER_PREFIX	"shirudo_serialize__"
 
 struct shirudo_unload_params {
 	char	name[SHIRUDO_UPATCH_NAME_MAX];
@@ -182,17 +184,97 @@ static int split_probe_target(const char *src, char *target,
 	return 0;
 }
 
-static int build_attach_metadata(struct bpf_object *obj, uint32_t nr_progs,
-				 void **out, uint32_t *out_len)
+static bool is_syscall_section(const char *sec)
 {
-	struct shirudo_upatch_attach_metadata *md;
+	return sec && strcmp(sec, "syscall") == 0;
+}
+
+static const char *serializer_map_name(const struct bpf_program *p)
+{
+	const char *name = bpf_program__name(p);
+	size_t prefix_len = strlen(SHIRUDO_SERIALIZER_PREFIX);
+
+	if (!name || strncmp(name, SHIRUDO_SERIALIZER_PREFIX, prefix_len) != 0)
+		return NULL;
+	return name + prefix_len;
+}
+
+static bool object_has_map(struct bpf_object *obj, const char *want)
+{
+	struct bpf_map *m;
+
+	bpf_object__for_each_map(m, obj) {
+		const char *name = bpf_map__name(m);
+
+		if (name && strcmp(name, want) == 0)
+			return true;
+	}
+	return false;
+}
+
+static int validate_serializer_output_map(struct bpf_object *obj)
+{
+	struct bpf_map *m;
+
+	bpf_object__for_each_map(m, obj) {
+		const char *name = bpf_map__name(m);
+
+		if (!name || strcmp(name, SHIRUDO_SERIAL_MAP_NAME) != 0)
+			continue;
+		if (bpf_map__type(m) != BPF_MAP_TYPE_ARRAY) {
+			pr_err("%s must be BPF_MAP_TYPE_ARRAY",
+			       SHIRUDO_SERIAL_MAP_NAME);
+			return -EINVAL;
+		}
+		if (bpf_map__key_size(m) != sizeof(uint32_t)) {
+			pr_err("%s must use a u32 key",
+			       SHIRUDO_SERIAL_MAP_NAME);
+			return -EINVAL;
+		}
+		if (bpf_map__value_size(m) !=
+		    sizeof(struct shirudo_serial_chunk)) {
+			pr_err("%s value must be struct shirudo_serial_chunk",
+			       SHIRUDO_SERIAL_MAP_NAME);
+			return -EINVAL;
+		}
+		if (bpf_map__max_entries(m) == 0 ||
+		    bpf_map__max_entries(m) > SHIRUDO_SERIAL_MAX_CHUNKS) {
+			pr_err("%s max_entries must be 1..%u",
+			       SHIRUDO_SERIAL_MAP_NAME,
+			       SHIRUDO_SERIAL_MAX_CHUNKS);
+			return -EINVAL;
+		}
+		return 0;
+	}
+	pr_err("serializer upatch requires %s output map",
+	       SHIRUDO_SERIAL_MAP_NAME);
+	return -EINVAL;
+}
+
+static int build_prog_metadata(struct bpf_object *obj, uint32_t nr_progs,
+			       void **out, uint32_t *out_len)
+{
+	struct shirudo_upatch_prog_metadata *md;
+	char (*seen_maps)[SHIRUDO_UPATCH_PROG_MAP_MAX] = NULL;
 	struct bpf_program *p;
 	size_t len;
-	uint32_t i = 0;
+	uint32_t i = 0, n_seen = 0;
+	bool has_serializer = false;
 	int err;
 
 	*out = NULL;
 	*out_len = 0;
+	bpf_object__for_each_program(p, obj) {
+		if (serializer_map_name(p)) {
+			has_serializer = true;
+			break;
+		}
+	}
+	if (has_serializer) {
+		err = validate_serializer_output_map(obj);
+		if (err)
+			return err;
+	}
 	if (nr_progs >
 	    (UINT32_MAX - sizeof(*md)) / sizeof(md->progs[0]))
 		return -EOVERFLOW;
@@ -201,16 +283,73 @@ static int build_attach_metadata(struct bpf_object *obj, uint32_t nr_progs,
 	if (!md)
 		return -ENOMEM;
 	memset(md, 0, len);
-	md->magic = htole32(SHIRUDO_UPATCH_ATTACH_MAGIC);
-	md->version = htole32(SHIRUDO_UPATCH_ATTACH_VERSION);
+	md->magic = htole32(SHIRUDO_UPATCH_PROG_MAGIC);
+	md->version = htole32(SHIRUDO_UPATCH_PROG_VERSION);
 	md->nr_progs = htole32(nr_progs);
+	seen_maps = xcalloc(nr_progs, sizeof(*seen_maps));
+	if (!seen_maps) {
+		err = -ENOMEM;
+		goto err_free;
+	}
 
 	bpf_object__for_each_program(p, obj) {
 		const char *sec = bpf_program__section_name(p);
+		const char *ser_map = serializer_map_name(p);
 		const char *target = NULL;
 		uint64_t offset = 0;
-		uint32_t kind;
+		uint32_t kind, j;
 
+		if (ser_map) {
+			size_t ser_len = strlen(ser_map);
+
+			if (!is_syscall_section(sec)) {
+				pr_err("serializer '%s' must use SEC(\"syscall\")",
+				       bpf_program__name(p));
+				err = -EINVAL;
+				goto err_free;
+			}
+			if (ser_len == 0 ||
+			    ser_len >= SHIRUDO_UPATCH_PROG_MAP_MAX) {
+				pr_err("serializer '%s' has invalid target map '%s'",
+				       bpf_program__name(p), ser_map);
+				err = -EINVAL;
+				goto err_free;
+			}
+			if (strcmp(ser_map, SHIRUDO_SERIAL_MAP_NAME) == 0) {
+				pr_err("serializer cannot target reserved map %s",
+				       SHIRUDO_SERIAL_MAP_NAME);
+				err = -EINVAL;
+				goto err_free;
+			}
+			if (!object_has_map(obj, ser_map)) {
+				pr_err("serializer '%s' targets missing map '%s'",
+				       bpf_program__name(p), ser_map);
+				err = -EINVAL;
+				goto err_free;
+			}
+			for (j = 0; j < n_seen; j++) {
+				if (strcmp(seen_maps[j], ser_map) == 0) {
+					pr_err("duplicate serializer for map '%s'",
+					       ser_map);
+					err = -EINVAL;
+					goto err_free;
+				}
+			}
+			snprintf(seen_maps[n_seen++], sizeof(seen_maps[0]),
+				 "%s", ser_map);
+			md->progs[i].role =
+				htole32(SHIRUDO_UPATCH_PROG_ROLE_SERIALIZER);
+			snprintf(md->progs[i].map, sizeof(md->progs[i].map),
+				 "%s", ser_map);
+			i++;
+			continue;
+		}
+		if (is_syscall_section(sec)) {
+			pr_err("SEC(\"syscall\") program '%s' must be named %s<map>",
+			       bpf_program__name(p), SHIRUDO_SERIALIZER_PREFIX);
+			err = -EINVAL;
+			goto err_free;
+		}
 		if (unsupported_kprobe_section(sec)) {
 			pr_err("unsupported kprobe section '%s'; use kprobe/<symbol> or kretprobe/<symbol>",
 			       sec);
@@ -218,6 +357,8 @@ static int build_attach_metadata(struct bpf_object *obj, uint32_t nr_progs,
 			goto err_free;
 		}
 		kind = attach_kind_from_section(sec, &target);
+		md->progs[i].role =
+			htole32(SHIRUDO_UPATCH_PROG_ROLE_ATTACH);
 		md->progs[i].kind = htole32(kind);
 		if (target) {
 			err = split_probe_target(target, md->progs[i].target,
@@ -241,9 +382,11 @@ static int build_attach_metadata(struct bpf_object *obj, uint32_t nr_progs,
 
 	*out = md;
 	*out_len = (uint32_t)len;
+	xfree(seen_maps, (size_t)nr_progs * sizeof(*seen_maps));
 	return 0;
 
 err_free:
+	xfree(seen_maps, (size_t)nr_progs * sizeof(*seen_maps));
 	xfree(md, len);
 	return err;
 }
@@ -302,8 +445,8 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 		nr_progs++;
 
 	if (!(flags & SHIRUDO_DIRECTIVE_UNLOAD)) {
-		err = build_attach_metadata(obj, nr_progs,
-					    &attach_meta, &attach_meta_len);
+		err = build_prog_metadata(obj, nr_progs,
+					  &attach_meta, &attach_meta_len);
 		if (err)
 			goto out;
 		write_meta = attach_meta;

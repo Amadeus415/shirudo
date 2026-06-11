@@ -13,8 +13,8 @@
 
 #include <stdbool.h>
 
-/* The kernel verifier log can be large; PLAN.md sizes log_buf at 1 MiB. */
-#define SHIRUDO_VERIFIER_LOG_MAX	(1024 * 1024)
+/* Keep enough room for verbose accepted-program verifier traces. */
+#define SHIRUDO_VERIFIER_LOG_MAX	(4 * 1024 * 1024)
 
 /*
  * Phase strings (failure-report ordering):

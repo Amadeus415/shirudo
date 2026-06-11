@@ -79,9 +79,10 @@ struct shirudo_upatch_extras {
  * bytes are still hash-locked by the signed loader; this blob is attach
  * policy for the target to validate before creating links.
  */
-#define SHIRUDO_UPATCH_ATTACH_MAGIC	0x41545055u	/* "UPTA" le */
-#define SHIRUDO_UPATCH_ATTACH_VERSION	1u
 #define SHIRUDO_UPATCH_ATTACH_TARGET_MAX	128u
+#define SHIRUDO_UPATCH_PROG_MAGIC	0x4d475055u	/* "UPGM" le */
+#define SHIRUDO_UPATCH_PROG_VERSION	1u
+#define SHIRUDO_UPATCH_PROG_MAP_MAX	16u		/* BPF_OBJ_NAME_LEN */
 
 enum shirudo_upatch_attach_kind {
 	SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT = 0,
@@ -89,23 +90,29 @@ enum shirudo_upatch_attach_kind {
 	SHIRUDO_UPATCH_ATTACH_KRETPROBE = 2,
 };
 
-struct shirudo_upatch_attach_prog {
-	uint32_t	kind;		/* enum shirudo_upatch_attach_kind */
-	uint32_t	reserved;
-	uint64_t	offset;		/* kprobe offset; zero for kretprobe */
-	char		target[SHIRUDO_UPATCH_ATTACH_TARGET_MAX];
+enum shirudo_upatch_prog_role {
+	SHIRUDO_UPATCH_PROG_ROLE_ATTACH = 0,
+	SHIRUDO_UPATCH_PROG_ROLE_SERIALIZER = 1,
 };
 
-struct shirudo_upatch_attach_metadata {
-	uint32_t	magic;		/* SHIRUDO_UPATCH_ATTACH_MAGIC */
-	uint32_t	version;		/* SHIRUDO_UPATCH_ATTACH_VERSION */
+struct shirudo_upatch_prog_entry {
+	uint32_t	role;		/* enum shirudo_upatch_prog_role */
+	uint32_t	kind;		/* enum shirudo_upatch_attach_kind */
+	uint64_t	offset;		/* kprobe offset; zero for kretprobe */
+	char		target[SHIRUDO_UPATCH_ATTACH_TARGET_MAX];
+	char		map[SHIRUDO_UPATCH_PROG_MAP_MAX];
+};
+
+struct shirudo_upatch_prog_metadata {
+	uint32_t	magic;		/* SHIRUDO_UPATCH_PROG_MAGIC */
+	uint32_t	version;		/* SHIRUDO_UPATCH_PROG_VERSION */
 	uint32_t	nr_progs;
 	uint32_t	reserved;
 	/*
-	 * Then: nr_progs struct shirudo_upatch_attach_prog entries in
+	 * Then: nr_progs struct shirudo_upatch_prog_entry entries in
 	 * libbpf/gen_loader program iteration order.
 	 */
-	struct shirudo_upatch_attach_prog progs[];
+	struct shirudo_upatch_prog_entry progs[];
 };
 
 #endif /* SHIRUDO_UPATCH_H */

@@ -103,7 +103,9 @@ int BPF_PROG(shirudo_lsm_bpf, int cmd, union bpf_attr *attr,
 
 	/*
 	 * Vetted mutating cmds the signed-loader data-map + attach/pin
-	 * pattern needs from userspace. None can introduce unsigned code:
+	 * pattern needs from userspace, plus MAP_UPDATE_ELEM for clearing
+	 * a serializer's reserved output map before BPF_PROG_TEST_RUN.
+	 * None can introduce unsigned code:
 	 * a prog_fd is only obtainable via the signature-gated
 	 * BPF_PROG_LOAD above or GET_FD_BY_ID of an already-vetted prog,
 	 * and shirudo's own infra maps are BPF_MAP_FREEZE'd at creation
