@@ -8,8 +8,8 @@
  * (operator pulls the same JSON over SSH).
  *
  * Surface targets the common observability case (counters, small
- * hash tables) and degrades gracefully on richer types: ringbufs,
- * stack-traces, perf-event arrays are listed as
+ * hash tables) and degrades gracefully on richer types: arenas,
+ * ringbufs, stack-traces, perf-event arrays are listed as
  * `skipped: "use 'shirudo upatch <verb>' (future work)"`.
  */
 

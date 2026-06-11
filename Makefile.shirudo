@@ -326,7 +326,8 @@ install-operator: install shirudo-build $(BPF_HEADERS_OUT)
 TEST_HELPERS := t/helper/test-json-parser \
                 t/helper/test-chain \
                 t/helper/test-selector \
-                t/helper/test-bpf-load
+                t/helper/test-bpf-load \
+                t/helper/test-upatch-map-types
 
 t/helper/test-json-parser: t/helper/test-json-parser.c util/json.o
 	@printf '  CC      $@\n'
@@ -347,6 +348,10 @@ t/helper/test-selector: t/helper/test-selector.c util/selector.o \
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 t/helper/test-bpf-load: t/helper/test-bpf-load.c
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+t/helper/test-upatch-map-types: t/helper/test-upatch-map-types.c
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 

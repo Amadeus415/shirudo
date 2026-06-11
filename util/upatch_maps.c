@@ -29,6 +29,7 @@
 #include "json.h"
 #include "malloc.h"
 #include "paths.h"
+#include "upatch_map_types.h"
 #include "upatch_maps.h"
 
 /*
@@ -38,24 +39,6 @@
  * pretty-printing in a "shirudo upatch get" view.
  */
 #define SHIRUDO_BTF_MAX_DEPTH		6
-
-/* Map of BPF_MAP_TYPE_* -> short label used in JSON and human render. */
-static const char *map_type_name(uint32_t type)
-{
-	switch (type) {
-	case BPF_MAP_TYPE_ARRAY:		return "array";
-	case BPF_MAP_TYPE_PERCPU_ARRAY:		return "percpu_array";
-	case BPF_MAP_TYPE_HASH:			return "hash";
-	case BPF_MAP_TYPE_PERCPU_HASH:		return "percpu_hash";
-	case BPF_MAP_TYPE_LRU_HASH:		return "lru_hash";
-	case BPF_MAP_TYPE_LRU_PERCPU_HASH:	return "lru_percpu_hash";
-	case BPF_MAP_TYPE_RINGBUF:		return "ringbuf";
-	case BPF_MAP_TYPE_PERF_EVENT_ARRAY:	return "perf_event_array";
-	case BPF_MAP_TYPE_STACK_TRACE:		return "stack_trace";
-	case BPF_MAP_TYPE_PROG_ARRAY:		return "prog_array";
-	default:				return "unknown";
-	}
-}
 
 static bool is_percpu_type(uint32_t type)
 {
@@ -76,31 +59,6 @@ static bool is_hash_type(uint32_t type)
 	       type == BPF_MAP_TYPE_PERCPU_HASH ||
 	       type == BPF_MAP_TYPE_LRU_HASH ||
 	       type == BPF_MAP_TYPE_LRU_PERCPU_HASH;
-}
-
-/*
- * Types for which `--include-maps` should not attempt to dump contents
- * inline: ringbufs are queue-like, stack-traces and perf-event-arrays
- * need bespoke renderers, prog-arrays carry function pointers. Listed
- * (so the operator sees they exist) but content read is deferred to
- * future verbs.
- */
-static const char *skip_reason(uint32_t type)
-{
-	switch (type) {
-	case BPF_MAP_TYPE_RINGBUF:
-		return "use `shirudo upatch ringbuf` (future work)";
-	case BPF_MAP_TYPE_PERF_EVENT_ARRAY:
-		return "perf-event-array: use `shirudo upatch perfbuf` "
-		       "(future work)";
-	case BPF_MAP_TYPE_STACK_TRACE:
-		return "stack-trace: use `shirudo upatch stacktrace` "
-		       "(future work)";
-	case BPF_MAP_TYPE_PROG_ARRAY:
-		return "prog-array carries function pointers; not dumpable";
-	default:
-		return NULL;
-	}
 }
 
 /* Resolve a BTF type id to a printable type name in dst[]. */
@@ -879,16 +837,16 @@ int shirudo_upatch_maps_read(const char *upatch, const char *map,
 	if (rc)
 		return rc;
 	out->type = info.type;
-	out->type_name = map_type_name(info.type);
+	out->type_name = shirudo_map_type_name(info.type);
 	out->key_size = info.key_size;
 	out->value_size = info.value_size;
 	out->max_entries = info.max_entries;
 	out->n_cpus = is_percpu_type(info.type) ?
 			(uint32_t)nproc_possible() : 1;
 
-	if (skip_reason(info.type)) {
+	if (shirudo_map_skip_reason(info.type)) {
 		out->skipped = true;
-		out->skipped_reason = skip_reason(info.type);
+		out->skipped_reason = shirudo_map_skip_reason(info.type);
 		close(fd);
 		return 0;
 	}
@@ -971,7 +929,7 @@ static void scan_upatch_maps(const char *upatch,
 		snprintf(one.name, sizeof(one.name), "%.*s",
 			 (int)(sizeof(one.name) - 1), e->d_name);
 		one.type = info.type;
-		one.type_name = map_type_name(info.type);
+		one.type_name = shirudo_map_type_name(info.type);
 		one.max_entries = info.max_entries;
 		one.n_cpus = is_percpu_type(info.type) ?
 				(uint32_t)nproc_possible() : 1;
