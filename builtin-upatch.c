@@ -677,11 +677,11 @@ static int prog_test_run_ctx(int prog_fd, void *ctx, uint32_t ctx_sz,
 /*
  * Attach a loaded LSM/tracing prog by opening a raw-tracepoint link
  * with a NULL name -- the kernel uses the prog's baked-in
- * attach_btf_id. Same mechanism the light skeleton emits for
- * BPF_PROG_TYPE_LSM (bpftool gen.c:codegen_attach_detach). The gen
- * loader resolves attach_btf_id at load time, so the link target is
- * fixed by the signed program, not chosen here. Returns a link fd.
- * On failure, returns a negative errno.
+ * attach_btf_id. Older kernels required this path, while newer kernels
+ * prefer BPF_LINK_CREATE for BTF-attached programs such as sleepable
+ * LSM. The gen loader resolves attach_btf_id at load time, so the link
+ * target is fixed by the signed program, not chosen here. Returns a link
+ * fd. On failure, returns a negative errno.
  */
 static int prog_attach_raw_tp(int prog_fd)
 {
@@ -692,6 +692,189 @@ static int prog_attach_raw_tp(int prog_fd)
 	attr.raw_tracepoint.prog_fd = (uint32_t)prog_fd;
 	fd = syscall(__NR_bpf, BPF_RAW_TRACEPOINT_OPEN, &attr, sizeof(attr));
 	return fd >= 0 ? (int)fd : -errno;
+}
+
+static int prog_attach_cgroup_skb(int prog_fd,
+				  enum bpf_attach_type attach_type);
+
+static bool attach_type_has_raw_tp_fallback(enum bpf_attach_type attach_type)
+{
+	switch (attach_type) {
+	case BPF_TRACE_RAW_TP:
+	case BPF_TRACE_FENTRY:
+	case BPF_TRACE_FEXIT:
+	case BPF_MODIFY_RETURN:
+	case BPF_LSM_MAC:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static int prog_attach_btf_link(int prog_fd, enum bpf_attach_type attach_type)
+{
+	union bpf_attr attr = {};
+	long fd;
+
+	attr.link_create.prog_fd = (uint32_t)prog_fd;
+	attr.link_create.target_fd = 0;
+	attr.link_create.attach_type = attach_type;
+	fd = syscall(__NR_bpf, BPF_LINK_CREATE, &attr, sizeof(attr));
+	return fd >= 0 ? (int)fd : -errno;
+}
+
+static int prog_func_name(int prog_fd, const struct bpf_prog_info *base,
+			  char *out, size_t cap)
+{
+	struct bpf_prog_info info = {};
+	struct bpf_func_info fi;
+	struct btf *btf;
+	const struct btf_type *t;
+	const char *name;
+	void *recs;
+	size_t recs_sz;
+	uint32_t len;
+	int rc = 0;
+
+	if (!out || cap == 0)
+		return -EINVAL;
+	out[0] = '\0';
+	if (base->nr_func_info == 0 || base->func_info_rec_size == 0 ||
+	    base->btf_id == 0)
+		return -ENOENT;
+	if (base->func_info_rec_size < sizeof(struct bpf_func_info))
+		return -EINVAL;
+	recs_sz = (size_t)base->nr_func_info * base->func_info_rec_size;
+	recs = xmalloc(recs_sz);
+	if (!recs)
+		return -ENOMEM;
+
+	info.nr_func_info = base->nr_func_info;
+	info.func_info_rec_size = base->func_info_rec_size;
+	info.func_info = (uint64_t)(uintptr_t)recs;
+	len = sizeof(info);
+	if (bpf_prog_get_info_by_fd(prog_fd, &info, &len) != 0) {
+		rc = -errno;
+		goto out_free;
+	}
+	memcpy(&fi, recs, sizeof(fi));
+	btf = btf__load_from_kernel_by_id(base->btf_id);
+	if (!btf) {
+		rc = -errno;
+		goto out_free;
+	}
+	t = btf__type_by_id(btf, fi.type_id);
+	name = t ? btf__name_by_offset(btf, t->name_off) : NULL;
+	if (!name || !name[0]) {
+		rc = -ENOENT;
+	} else {
+		snprintf(out, cap, "%s", name);
+		rc = 0;
+	}
+	btf__free(btf);
+out_free:
+	xfree(recs, recs_sz);
+	return rc;
+}
+
+static int cgroup_skb_attach_type_from_name(const char *name,
+					    enum bpf_attach_type *attach_type)
+{
+	if (!name || !name[0])
+		return -EINVAL;
+	if (strstr(name, "egress") || strstr(name, "query") ||
+	    strstr(name, "send")) {
+		*attach_type = BPF_CGROUP_INET_EGRESS;
+		return 0;
+	}
+	if (strstr(name, "ingress") || strstr(name, "response") ||
+	    strstr(name, "recv") || strstr(name, "receive")) {
+		*attach_type = BPF_CGROUP_INET_INGRESS;
+		return 0;
+	}
+	return -EINVAL;
+}
+
+static int prog_attach_cgroup_skb_fallback(int prog_fd,
+					   const struct bpf_prog_info *info)
+{
+	enum bpf_attach_type attach_type;
+	char func[128];
+	int rc;
+
+	snprintf(func, sizeof(func), "%s", info->name);
+	rc = prog_func_name(prog_fd, info, func, sizeof(func));
+	if (rc && !func[0]) {
+		pr_err("program metadata says raw_tracepoint, but loaded "
+		       "program type is cgroup_skb and function name is "
+		       "unavailable; rebuild the upatch with cgroup_skb "
+		       "metadata");
+		return rc;
+	}
+	rc = cgroup_skb_attach_type_from_name(func, &attach_type);
+	if (rc) {
+		pr_err("program metadata says raw_tracepoint, but loaded "
+		       "program type is cgroup_skb and function '%s' does "
+		       "not identify ingress or egress; rebuild the upatch "
+		       "with cgroup_skb metadata", func);
+		return rc;
+	}
+	pr_warn("program metadata says raw_tracepoint, but loaded program "
+		"type is cgroup_skb; inferring %s from function '%s'",
+		attach_type == BPF_CGROUP_INET_EGRESS ? "egress" : "ingress",
+		func);
+	rc = prog_attach_cgroup_skb(prog_fd, attach_type);
+	if (rc >= 0)
+		pr_info("attached cgroup_skb fallback as %s",
+			attach_type == BPF_CGROUP_INET_EGRESS ?
+			"egress" : "ingress");
+	return rc;
+}
+
+static int prog_attach_default(int prog_fd)
+{
+	struct bpf_prog_info info = {};
+	uint32_t info_len = sizeof(info);
+	enum bpf_attach_type attach_type;
+	int rc;
+
+	if (bpf_prog_get_info_by_fd(prog_fd, &info, &info_len) != 0)
+		return prog_attach_raw_tp(prog_fd);
+
+	switch (info.type) {
+	case BPF_PROG_TYPE_LSM:
+		attach_type = BPF_LSM_MAC;
+		break;
+	case BPF_PROG_TYPE_CGROUP_SKB:
+		return prog_attach_cgroup_skb_fallback(prog_fd, &info);
+	default:
+		return prog_attach_raw_tp(prog_fd);
+	}
+
+	rc = prog_attach_btf_link(prog_fd, attach_type);
+	if (rc < 0 && rc == -EINVAL &&
+	    attach_type_has_raw_tp_fallback(attach_type))
+		return prog_attach_raw_tp(prog_fd);
+	return rc;
+}
+
+static int prog_attach_cgroup_skb(int prog_fd, enum bpf_attach_type attach_type)
+{
+	union bpf_attr attr = {};
+	int cgroup_fd, rc;
+	long fd;
+
+	cgroup_fd = open("/sys/fs/cgroup", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	if (cgroup_fd < 0)
+		return -errno;
+
+	attr.link_create.prog_fd = (uint32_t)prog_fd;
+	attr.link_create.target_fd = (uint32_t)cgroup_fd;
+	attr.link_create.attach_type = attach_type;
+	fd = syscall(__NR_bpf, BPF_LINK_CREATE, &attr, sizeof(attr));
+	rc = fd >= 0 ? (int)fd : -errno;
+	close(cgroup_fd);
+	return rc;
 }
 
 static int read_int_file(const char *path, const char *fmt)
@@ -789,6 +972,10 @@ static const char *attach_kind_name(uint32_t kind)
 		return "kprobe";
 	case SHIRUDO_UPATCH_ATTACH_KRETPROBE:
 		return "kretprobe";
+	case SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_INGRESS:
+		return "cgroup_skb/ingress";
+	case SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_EGRESS:
+		return "cgroup_skb/egress";
 	default:
 		return "unknown";
 	}
@@ -850,6 +1037,12 @@ static int prog_spec_for_prog(const void *metadata, uint32_t metadata_len,
 	case SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT:
 		spec->kind = kind;
 		return 0;
+	case SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_INGRESS:
+	case SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_EGRESS:
+		spec->kind = kind;
+		if (prog.target[0] || prog.offset)
+			return -EINVAL;
+		return 0;
 	case SHIRUDO_UPATCH_ATTACH_KPROBE:
 	case SHIRUDO_UPATCH_ATTACH_KRETPROBE:
 		break;
@@ -875,7 +1068,13 @@ static int prog_attach_for_spec(int prog_fd,
 
 	switch (spec->kind) {
 	case SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT:
-		return prog_attach_raw_tp(prog_fd);
+		return prog_attach_default(prog_fd);
+	case SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_INGRESS:
+		return prog_attach_cgroup_skb(prog_fd,
+					      BPF_CGROUP_INET_INGRESS);
+	case SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_EGRESS:
+		return prog_attach_cgroup_skb(prog_fd,
+					      BPF_CGROUP_INET_EGRESS);
 	case SHIRUDO_UPATCH_ATTACH_KPROBE:
 	case SHIRUDO_UPATCH_ATTACH_KRETPROBE:
 		perf_fd = perf_event_open_kprobe(spec->target, spec->offset,

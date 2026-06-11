@@ -136,6 +136,32 @@ static bool unsupported_kprobe_section(const char *sec)
 		strncmp(sec, "kretprobe.multi", 15) == 0);
 }
 
+static bool unsupported_sk_skb_section(const char *sec)
+{
+	return sec && (strcmp(sec, "sk_skb") == 0 ||
+		       strncmp(sec, "sk_skb/", 7) == 0);
+}
+
+static bool unsupported_socket_filter_section(const char *sec)
+{
+	return sec && (strcmp(sec, "socket") == 0 ||
+		       strcmp(sec, "socket_filter") == 0 ||
+		       strncmp(sec, "socket/", 7) == 0 ||
+		       strncmp(sec, "socket_filter/", 14) == 0);
+}
+
+static bool unsupported_cgroup_skb_section(const char *sec)
+{
+	if (!sec)
+		return false;
+	if (strcmp(sec, "cgroup_skb/ingress") == 0 ||
+	    strcmp(sec, "cgroup_skb/egress") == 0)
+		return false;
+	return strcmp(sec, "cgroup/skb") == 0 ||
+	       strcmp(sec, "cgroup_skb") == 0 ||
+	       strncmp(sec, "cgroup_skb/", 11) == 0;
+}
+
 static uint32_t attach_kind_from_section(const char *sec,
 					 const char **target)
 {
@@ -150,6 +176,10 @@ static uint32_t attach_kind_from_section(const char *sec,
 		*target = sec + 10;
 		return SHIRUDO_UPATCH_ATTACH_KRETPROBE;
 	}
+	if (strcmp(sec, "cgroup_skb/ingress") == 0)
+		return SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_INGRESS;
+	if (strcmp(sec, "cgroup_skb/egress") == 0)
+		return SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_EGRESS;
 	return SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT;
 }
 
@@ -356,6 +386,24 @@ static int build_prog_metadata(struct bpf_object *obj, uint32_t nr_progs,
 			err = -EOPNOTSUPP;
 			goto err_free;
 		}
+		if (unsupported_sk_skb_section(sec)) {
+			pr_err("unsupported sk_skb section '%s'; only cgroup_skb/ingress and cgroup_skb/egress are supported for network packet upatches",
+			       sec);
+			err = -EOPNOTSUPP;
+			goto err_free;
+		}
+		if (unsupported_socket_filter_section(sec)) {
+			pr_err("unsupported socket filter section '%s'; Shirudo upatches require a pinnable bpf_link lifecycle",
+			       sec);
+			err = -EOPNOTSUPP;
+			goto err_free;
+		}
+		if (unsupported_cgroup_skb_section(sec)) {
+			pr_err("unsupported cgroup_skb section '%s'; use cgroup_skb/ingress or cgroup_skb/egress",
+			       sec);
+			err = -EOPNOTSUPP;
+			goto err_free;
+		}
 		kind = attach_kind_from_section(sec, &target);
 		md->progs[i].role =
 			htole32(SHIRUDO_UPATCH_PROG_ROLE_ATTACH);
@@ -420,24 +468,15 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 	uint32_t nr_maps = 0, nr_progs = 0;
 	uint32_t src_len = 0, name_len = 0;
 
-	opts.gen_hash = true;
-	err = bpf_object__gen_loader(obj, &opts);
-	if (err) {
-		pr_err("bpf_object__gen_loader: %d", err);
-		goto out;
-	}
-	err = bpf_object__load(obj);
-	if (err) {
-		pr_err("bpf_object__load: %d", err);
-		goto out;
-	}
-
 	/*
 	 * The loader writes map_fd/prog_fd back into descriptor arrays
 	 * trailing its ctx, in the same order libbpf iterates the
 	 * object. The target needs these counts to locate prog_fd[]
 	 * after BPF_PROG_TEST_RUN -- it has only the .upatch, not the
-	 * object. Iteration order here matches gen_loader's.
+	 * object. Iteration order here matches gen_loader's. Build
+	 * attach metadata before loader generation so unsupported section
+	 * names fail with Shirudo's own diagnostics instead of depending
+	 * on host kernel load behavior.
 	 */
 	bpf_object__for_each_map(m, obj)
 		nr_maps++;
@@ -451,6 +490,18 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 			goto out;
 		write_meta = attach_meta;
 		write_meta_len = attach_meta_len;
+	}
+
+	opts.gen_hash = true;
+	err = bpf_object__gen_loader(obj, &opts);
+	if (err) {
+		pr_err("bpf_object__gen_loader: %d", err);
+		goto out;
+	}
+	err = bpf_object__load(obj);
+	if (err) {
+		pr_err("bpf_object__load: %d", err);
+		goto out;
 	}
 
 	sig_buf = xmalloc(SHIRUDO_MAX_SIG_SIZE);

@@ -164,30 +164,35 @@ attach metadata:
 ==========  ====  =====================  ====================================
 offset      size  field                  meaning
 ==========  ====  =====================  ====================================
-+0          4     magic                  ``0x41545055`` (``"UPTA"`` LE)
++0          4     magic                  ``0x4D475055`` (``"UPGM"`` LE)
 +4          4     version                ``1``
 +8          4     nr_progs               number of program entries
 +12         4     reserved               zero
 +16         ...   progs                  one entry per program
 ==========  ====  =====================  ====================================
 
-Each program entry is 144 bytes:
+Each program entry is 160 bytes:
 
 ==========  ====  =====================  ====================================
 offset      size  field                  meaning
 ==========  ====  =====================  ====================================
-+0          4     kind                   ``0`` raw tracepoint, ``1`` kprobe,
-                                         ``2`` kretprobe
-+4          4     reserved               zero
++0          4     role                   ``0`` attach program, ``1`` serializer
++4          4     kind                   ``0`` raw tracepoint, ``1`` kprobe,
+                                         ``2`` kretprobe,
+                                         ``3`` cgroup_skb ingress,
+                                         ``4`` cgroup_skb egress
 +8          8     offset                 kprobe offset, zero for kretprobe
 +16         128   target                 NUL-terminated symbol name
++144        16    map                    NUL-terminated serializer target map
 ==========  ====  =====================  ====================================
 
 Attach metadata is advisory in the container integrity model because
 metadata is not CMS-signed in v1. The loaded program bytes remain
 hash-locked by the signed loader; the target validates this blob before
-creating links and falls back to raw tracepoint attach for older LOAD
-upatches without this metadata.
+creating links. ``cgroup_skb`` support is limited to
+``cgroup_skb/ingress`` and ``cgroup_skb/egress`` sections, attached to
+the cgroup v2 root through a pinned ``bpf_link``. ``sk_skb`` and socket
+filter sections are rejected by ``shirudo build``.
 
 extras (embedded C source)
 --------------------------
