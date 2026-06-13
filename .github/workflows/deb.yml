@@ -10,7 +10,7 @@ on:
 
 jobs:
   deb:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Check out repository
@@ -43,11 +43,8 @@ jobs:
             dpkg-dev \
             file
 
-      - name: Generate package BPF header
-        run: packaging/bpf/gen-vmlinux-h.sh packaging/bpf/vmlinux.h
-
       - name: Build deb package
-        run: make BPF_VMLINUX_H=$PWD/packaging/bpf/vmlinux.h bindeb-pkg
+        run: make bindeb-pkg
 
       - name: Upload deb package
         uses: actions/upload-artifact@v4
@@ -63,7 +60,7 @@ jobs:
           image: kind
           image-version: bpf-next-20260603.072225
           host-mount: ${{ github.workspace }}
-          images-folder-parent: /tmp/lvh
+          images-folder-parent: ${{ github.workspace }}/../lvh
           install-dependencies: true
           cpu: 4
           mem: 8G
