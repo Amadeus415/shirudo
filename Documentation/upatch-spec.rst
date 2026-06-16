@@ -181,7 +181,8 @@ offset      size  field                  meaning
                                          ``2`` kretprobe,
                                          ``3`` cgroup_skb ingress,
                                          ``4`` cgroup_skb egress,
-                                         ``5`` fmod_ret
+                                         ``5`` fmod_ret,
+                                         ``6`` netfilter IPv6 pre-routing
 +8          8     offset                 kprobe offset, zero for kretprobe
 +16         128   target                 NUL-terminated kprobe symbol name
 +144        16    map                    NUL-terminated serializer target map
@@ -192,13 +193,17 @@ metadata is not CMS-signed in v1. The loaded program bytes remain
 hash-locked by the signed loader; the target validates this blob before
 creating links. ``cgroup_skb`` support is limited to
 ``cgroup_skb/ingress`` and ``cgroup_skb/egress`` sections, attached to
-the cgroup v2 root through a pinned ``bpf_link``. ``sk_skb`` and socket
-filter sections are rejected by ``shirudo build``. ``fmod_ret/<symbol>``
-and ``fmod_ret.s/<symbol>`` sections attach as ``BPF_MODIFY_RETURN`` so
-return-value override programs can reject a call before the hooked
-function body runs. Kprobe return override uses a normal
-``kprobe/<symbol>`` section plus the program's ``bpf_override_return()``
-helper call; the attach metadata remains ``kprobe``.
+the cgroup v2 root through a pinned ``bpf_link``. ``netfilter`` sections
+attach as ``BPF_NETFILTER`` at IPv6 ``NF_INET_PRE_ROUTING`` with
+``NF_IP6_PRI_RAW_BEFORE_DEFRAG`` priority, giving packet upatches an
+early IPv6 ingress hook before extension-header protocol delivery.
+``sk_skb`` and socket filter sections are rejected by ``shirudo build``.
+``fmod_ret/<symbol>`` and ``fmod_ret.s/<symbol>`` sections attach as
+``BPF_MODIFY_RETURN`` so return-value override programs can reject a call
+before the hooked function body runs. Kprobe return override uses a
+normal ``kprobe/<symbol>`` section plus the program's
+``bpf_override_return()`` helper call; the attach metadata remains
+``kprobe``.
 
 extras (embedded C source)
 --------------------------

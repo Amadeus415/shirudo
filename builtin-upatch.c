@@ -51,6 +51,16 @@ extern const char shirudo_version_id[];
 
 static bool safe_upatch_name(const char *name);
 
+#ifndef NFPROTO_IPV6
+#define NFPROTO_IPV6			10
+#endif
+#ifndef NF_INET_PRE_ROUTING
+#define NF_INET_PRE_ROUTING		0
+#endif
+#ifndef NF_IP6_PRI_RAW_BEFORE_DEFRAG
+#define NF_IP6_PRI_RAW_BEFORE_DEFRAG	(-450)
+#endif
+
 /* Print embedded C source with line numbers (slices, not NUL-terminated). */
 static void dump_source(const char *name, uint32_t name_len,
 			const char *src, uint32_t src_len)
@@ -864,6 +874,17 @@ static int prog_attach_cgroup_skb(int prog_fd, enum bpf_attach_type attach_type)
 	return rc;
 }
 
+static int prog_attach_netfilter_ipv6_pre_routing(int prog_fd)
+{
+	LIBBPF_OPTS(bpf_link_create_opts, opts,
+		.netfilter.pf = NFPROTO_IPV6,
+		.netfilter.hooknum = NF_INET_PRE_ROUTING,
+		.netfilter.priority = NF_IP6_PRI_RAW_BEFORE_DEFRAG,
+		.netfilter.flags = 0);
+
+	return bpf_link_create(prog_fd, 0, BPF_NETFILTER, &opts);
+}
+
 static int read_int_file(const char *path, const char *fmt)
 {
 	char buf[64];
@@ -965,6 +986,8 @@ static const char *attach_kind_name(uint32_t kind)
 		return "cgroup_skb/egress";
 	case SHIRUDO_UPATCH_ATTACH_FMOD_RET:
 		return "fmod_ret";
+	case SHIRUDO_UPATCH_ATTACH_NETFILTER_IPV6_PRE_ROUTING:
+		return "netfilter/ipv6-pre-routing";
 	default:
 		return "unknown";
 	}
@@ -1028,6 +1051,7 @@ static int prog_spec_for_prog(const void *metadata, uint32_t metadata_len,
 		return 0;
 	case SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_INGRESS:
 	case SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_EGRESS:
+	case SHIRUDO_UPATCH_ATTACH_NETFILTER_IPV6_PRE_ROUTING:
 		spec->kind = kind;
 		if (prog.target[0] || prog.offset)
 			return -EINVAL;
@@ -1072,6 +1096,8 @@ static int prog_attach_for_spec(int prog_fd,
 	case SHIRUDO_UPATCH_ATTACH_FMOD_RET:
 		return prog_attach_btf_link_or_raw_tp(prog_fd,
 						      BPF_MODIFY_RETURN);
+	case SHIRUDO_UPATCH_ATTACH_NETFILTER_IPV6_PRE_ROUTING:
+		return prog_attach_netfilter_ipv6_pre_routing(prog_fd);
 	case SHIRUDO_UPATCH_ATTACH_KPROBE:
 	case SHIRUDO_UPATCH_ATTACH_KRETPROBE:
 		perf_fd = perf_event_open_kprobe(spec->target, spec->offset,

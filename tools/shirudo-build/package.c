@@ -206,6 +206,8 @@ static uint32_t attach_kind_from_section(const char *sec,
 		return SHIRUDO_UPATCH_ATTACH_FMOD_RET;
 	if (strncmp(sec, "fmod_ret.s/", 11) == 0 && sec[11])
 		return SHIRUDO_UPATCH_ATTACH_FMOD_RET;
+	if (strcmp(sec, "netfilter") == 0)
+		return SHIRUDO_UPATCH_ATTACH_NETFILTER_IPV6_PRE_ROUTING;
 	return SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT;
 }
 
@@ -413,7 +415,7 @@ static int build_prog_metadata(struct bpf_object *obj, uint32_t nr_progs,
 			goto err_free;
 		}
 		if (unsupported_sk_skb_section(sec)) {
-			pr_err("unsupported sk_skb section '%s'; only cgroup_skb/ingress and cgroup_skb/egress are supported for network packet upatches",
+			pr_err("unsupported sk_skb section '%s'; supported network packet sections are cgroup_skb/ingress, cgroup_skb/egress, and netfilter",
 			       sec);
 			err = -EOPNOTSUPP;
 			goto err_free;

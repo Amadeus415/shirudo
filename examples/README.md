@@ -100,6 +100,7 @@ shirudo rollout cve-2026-31431.unload.upatch prod-fleet-a prod-fleet-b ...
 | File | Purpose |
 |---|---|
 | [`cve-2026-31431.bpf.c`](cve-2026-31431.bpf.c) | Mitigates CVE-2026-31431 by refusing every userspace `socket(AF_ALG, …)` call. Hooks the BPF LSM `socket_create` hook; returns `-EPERM` when `family == AF_ALG`; allows everything else. Carries the dual `(GPL-2.0 OR BSD-2-Clause)` SPDX header required for BPF LSM programs. |
+| [`cve-2026-43501.bpf.c`](cve-2026-43501.bpf.c) | Mitigates CVE-2026-43501 by dropping IPv6 packets carrying an RPL Segment Routing header before the kernel RPL parser runs. Hooks Shirudo's `SEC("netfilter")` IPv6 pre-routing attach path and counts drops in `blocked_rpl`. |
 | [`arena-tree-serializer.bpf.c`](arena-tree-serializer.bpf.c) | Demonstrates serializer-only map reading for `BPF_MAP_TYPE_ARENA`: a `SEC("syscall")` program named `shirudo_serialize__tree_arena` builds an arena-resident binary tree and writes paged records into the reserved `shirudo_ser` output map. |
 | [`verifier-reject-null-deref.bpf.c`](verifier-reject-null-deref.bpf.c) | Negative test artifact for operator rollout paths. It compiles and packages, but intentionally dereferences a null/scalar pointer so target-side BPF payload load should fail with verifier rejection. |
 

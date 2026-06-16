@@ -24,6 +24,16 @@
 #include "paths.h"
 #include "upatch_resolve.h"
 
+#ifndef NFPROTO_IPV6
+#define NFPROTO_IPV6			10
+#endif
+#ifndef NF_INET_PRE_ROUTING
+#define NF_INET_PRE_ROUTING		0
+#endif
+#ifndef NF_IP6_PRI_RAW_BEFORE_DEFRAG
+#define NF_IP6_PRI_RAW_BEFORE_DEFRAG	(-450)
+#endif
+
 int shirudo_upatch_open_first_link(const char *name)
 {
 	char pin[PATH_MAX];
@@ -50,6 +60,8 @@ static const char *loc_prefix(uint32_t prog_type, uint32_t attach_type)
 {
 	if (prog_type == BPF_PROG_TYPE_LSM)
 		return "lsm";
+	if (prog_type == BPF_PROG_TYPE_NETFILTER)
+		return "netfilter";
 	if (prog_type == BPF_PROG_TYPE_TRACING) {
 		switch (attach_type) {
 		case BPF_TRACE_FENTRY:		return "fentry";
@@ -85,6 +97,13 @@ int shirudo_upatch_resolve_location(struct btf *vbtf, const char *name,
 		return rc ? -errno : -EINVAL;
 	if (linfo.type == BPF_LINK_TYPE_TRACING)
 		attach_type = linfo.tracing.attach_type;
+	if (linfo.type == BPF_LINK_TYPE_NETFILTER &&
+	    linfo.netfilter.pf == NFPROTO_IPV6 &&
+	    linfo.netfilter.hooknum == NF_INET_PRE_ROUTING &&
+	    linfo.netfilter.priority == NF_IP6_PRI_RAW_BEFORE_DEFRAG) {
+		snprintf(out, cap, "netfilter/ipv6-pre-routing");
+		return 0;
+	}
 
 	prog_fd = bpf_prog_get_fd_by_id(linfo.prog_id);
 	if (prog_fd < 0)

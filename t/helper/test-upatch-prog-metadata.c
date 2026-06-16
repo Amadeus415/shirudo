@@ -116,6 +116,10 @@ int main(int argc, char **argv)
 	else if (strcmp(mode, "fmod-ret") == 0)
 		rc = expect_attach(&u, SHIRUDO_UPATCH_ATTACH_FMOD_RET,
 				   NULL, 0);
+	else if (strcmp(mode, "netfilter-ipv6-pre-routing") == 0)
+		rc = expect_attach(&u,
+			SHIRUDO_UPATCH_ATTACH_NETFILTER_IPV6_PRE_ROUTING,
+			NULL, 0);
 	else
 		rc = fail("unknown metadata check mode");
 
