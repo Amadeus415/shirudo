@@ -17,7 +17,8 @@ static int fail(const char *msg)
 	return 1;
 }
 
-static int expect_attach_kind(const struct shirudo_upatch *u, uint32_t kind)
+static int expect_attach(const struct shirudo_upatch *u, uint32_t kind,
+			 const char *target, uint64_t offset)
 {
 	const struct shirudo_upatch_prog_metadata *md;
 	const struct shirudo_upatch_prog_entry *prog;
@@ -40,10 +41,18 @@ static int expect_attach_kind(const struct shirudo_upatch *u, uint32_t kind)
 		return fail("program is not an attach program");
 	if (le32toh(prog->kind) != kind)
 		return fail("attach kind mismatch");
-	if (le64toh(prog->offset) != 0)
+	if (le64toh(prog->offset) != offset)
 		return fail("unexpected attach offset");
-	if (prog->target[0] || prog->map[0])
-		return fail("unexpected attach target/map");
+	if (!memchr(prog->target, '\0', sizeof(prog->target)))
+		return fail("unterminated attach target");
+	if (target) {
+		if (strcmp(prog->target, target) != 0)
+			return fail("attach target mismatch");
+	} else if (prog->target[0]) {
+		return fail("unexpected attach target");
+	}
+	if (prog->map[0])
+		return fail("unexpected attach map");
 	return 0;
 }
 
@@ -94,11 +103,19 @@ int main(int argc, char **argv)
 	if (strcmp(mode, "serializer") == 0)
 		rc = expect_serializer(&u);
 	else if (strcmp(mode, "cgroup-ingress") == 0)
-		rc = expect_attach_kind(&u,
-				SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_INGRESS);
+		rc = expect_attach(&u,
+				SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_INGRESS,
+				NULL, 0);
 	else if (strcmp(mode, "cgroup-egress") == 0)
-		rc = expect_attach_kind(&u,
-				SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_EGRESS);
+		rc = expect_attach(&u,
+				SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_EGRESS,
+				NULL, 0);
+	else if (strcmp(mode, "kprobe-override") == 0)
+		rc = expect_attach(&u, SHIRUDO_UPATCH_ATTACH_KPROBE,
+				   "bpf_modify_return_test", 0);
+	else if (strcmp(mode, "fmod-ret") == 0)
+		rc = expect_attach(&u, SHIRUDO_UPATCH_ATTACH_FMOD_RET,
+				   NULL, 0);
 	else
 		rc = fail("unknown metadata check mode");
 

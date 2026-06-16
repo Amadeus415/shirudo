@@ -703,6 +703,18 @@ static int prog_attach_btf_link(int prog_fd, enum bpf_attach_type attach_type)
 	return fd >= 0 ? (int)fd : -errno;
 }
 
+static int prog_attach_btf_link_or_raw_tp(int prog_fd,
+					  enum bpf_attach_type attach_type)
+{
+	int rc;
+
+	rc = prog_attach_btf_link(prog_fd, attach_type);
+	if (rc < 0 && rc == -EINVAL &&
+	    attach_type_has_raw_tp_fallback(attach_type))
+		return prog_attach_raw_tp(prog_fd);
+	return rc;
+}
+
 static int prog_func_name(int prog_fd, const struct bpf_prog_info *base,
 			  char *out, size_t cap)
 {
@@ -816,7 +828,6 @@ static int prog_attach_default(int prog_fd)
 	struct bpf_prog_info info = {};
 	uint32_t info_len = sizeof(info);
 	enum bpf_attach_type attach_type;
-	int rc;
 
 	if (bpf_prog_get_info_by_fd(prog_fd, &info, &info_len) != 0)
 		return prog_attach_raw_tp(prog_fd);
@@ -831,11 +842,7 @@ static int prog_attach_default(int prog_fd)
 		return prog_attach_raw_tp(prog_fd);
 	}
 
-	rc = prog_attach_btf_link(prog_fd, attach_type);
-	if (rc < 0 && rc == -EINVAL &&
-	    attach_type_has_raw_tp_fallback(attach_type))
-		return prog_attach_raw_tp(prog_fd);
-	return rc;
+	return prog_attach_btf_link_or_raw_tp(prog_fd, attach_type);
 }
 
 static int prog_attach_cgroup_skb(int prog_fd, enum bpf_attach_type attach_type)
@@ -956,6 +963,8 @@ static const char *attach_kind_name(uint32_t kind)
 		return "cgroup_skb/ingress";
 	case SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_EGRESS:
 		return "cgroup_skb/egress";
+	case SHIRUDO_UPATCH_ATTACH_FMOD_RET:
+		return "fmod_ret";
 	default:
 		return "unknown";
 	}
@@ -1023,6 +1032,11 @@ static int prog_spec_for_prog(const void *metadata, uint32_t metadata_len,
 		if (prog.target[0] || prog.offset)
 			return -EINVAL;
 		return 0;
+	case SHIRUDO_UPATCH_ATTACH_FMOD_RET:
+		spec->kind = kind;
+		if (prog.target[0] || prog.offset)
+			return -EINVAL;
+		return 0;
 	case SHIRUDO_UPATCH_ATTACH_KPROBE:
 	case SHIRUDO_UPATCH_ATTACH_KRETPROBE:
 		break;
@@ -1055,6 +1069,9 @@ static int prog_attach_for_spec(int prog_fd,
 	case SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_EGRESS:
 		return prog_attach_cgroup_skb(prog_fd,
 					      BPF_CGROUP_INET_EGRESS);
+	case SHIRUDO_UPATCH_ATTACH_FMOD_RET:
+		return prog_attach_btf_link_or_raw_tp(prog_fd,
+						      BPF_MODIFY_RETURN);
 	case SHIRUDO_UPATCH_ATTACH_KPROBE:
 	case SHIRUDO_UPATCH_ATTACH_KRETPROBE:
 		perf_fd = perf_event_open_kprobe(spec->target, spec->offset,

@@ -127,6 +127,8 @@ static int read_small_file(const char *path, char **out, uint32_t *out_len)
 
 static bool unsupported_kprobe_section(const char *sec)
 {
+	if (sec && sec[0] == '?')
+		sec++;
 	return sec &&
 	       (strcmp(sec, "kprobe") == 0 ||
 		strcmp(sec, "kretprobe") == 0 ||
@@ -138,12 +140,16 @@ static bool unsupported_kprobe_section(const char *sec)
 
 static bool unsupported_sk_skb_section(const char *sec)
 {
+	if (sec && sec[0] == '?')
+		sec++;
 	return sec && (strcmp(sec, "sk_skb") == 0 ||
 		       strncmp(sec, "sk_skb/", 7) == 0);
 }
 
 static bool unsupported_socket_filter_section(const char *sec)
 {
+	if (sec && sec[0] == '?')
+		sec++;
 	return sec && (strcmp(sec, "socket") == 0 ||
 		       strcmp(sec, "socket_filter") == 0 ||
 		       strncmp(sec, "socket/", 7) == 0 ||
@@ -154,6 +160,8 @@ static bool unsupported_cgroup_skb_section(const char *sec)
 {
 	if (!sec)
 		return false;
+	if (sec[0] == '?')
+		sec++;
 	if (strcmp(sec, "cgroup_skb/ingress") == 0 ||
 	    strcmp(sec, "cgroup_skb/egress") == 0)
 		return false;
@@ -162,12 +170,26 @@ static bool unsupported_cgroup_skb_section(const char *sec)
 	       strncmp(sec, "cgroup_skb/", 11) == 0;
 }
 
+static bool unsupported_fmod_ret_section(const char *sec)
+{
+	if (!sec)
+		return false;
+	if (sec[0] == '?')
+		sec++;
+	return strcmp(sec, "fmod_ret") == 0 ||
+	       strcmp(sec, "fmod_ret/") == 0 ||
+	       strcmp(sec, "fmod_ret.s") == 0 ||
+	       strcmp(sec, "fmod_ret.s/") == 0;
+}
+
 static uint32_t attach_kind_from_section(const char *sec,
 					 const char **target)
 {
 	*target = NULL;
 	if (!sec)
 		return SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT;
+	if (sec[0] == '?')
+		sec++;
 	if (strncmp(sec, "kprobe/", 7) == 0 && sec[7]) {
 		*target = sec + 7;
 		return SHIRUDO_UPATCH_ATTACH_KPROBE;
@@ -180,6 +202,10 @@ static uint32_t attach_kind_from_section(const char *sec,
 		return SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_INGRESS;
 	if (strcmp(sec, "cgroup_skb/egress") == 0)
 		return SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_EGRESS;
+	if (strncmp(sec, "fmod_ret/", 9) == 0 && sec[9])
+		return SHIRUDO_UPATCH_ATTACH_FMOD_RET;
+	if (strncmp(sec, "fmod_ret.s/", 11) == 0 && sec[11])
+		return SHIRUDO_UPATCH_ATTACH_FMOD_RET;
 	return SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT;
 }
 
@@ -400,6 +426,12 @@ static int build_prog_metadata(struct bpf_object *obj, uint32_t nr_progs,
 		}
 		if (unsupported_cgroup_skb_section(sec)) {
 			pr_err("unsupported cgroup_skb section '%s'; use cgroup_skb/ingress or cgroup_skb/egress",
+			       sec);
+			err = -EOPNOTSUPP;
+			goto err_free;
+		}
+		if (unsupported_fmod_ret_section(sec)) {
+			pr_err("unsupported fmod_ret section '%s'; use fmod_ret/<symbol> or fmod_ret.s/<symbol>",
 			       sec);
 			err = -EOPNOTSUPP;
 			goto err_free;

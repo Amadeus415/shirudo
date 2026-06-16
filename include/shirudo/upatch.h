@@ -102,6 +102,7 @@ enum shirudo_upatch_attach_kind {
 	SHIRUDO_UPATCH_ATTACH_KRETPROBE = 2,
 	SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_INGRESS = 3,
 	SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_EGRESS = 4,
+	SHIRUDO_UPATCH_ATTACH_FMOD_RET = 5,
 };
 
 enum shirudo_upatch_prog_role {
@@ -113,7 +114,7 @@ struct shirudo_upatch_prog_entry {
 	uint32_t	role;		/* enum shirudo_upatch_prog_role */
 	uint32_t	kind;		/* enum shirudo_upatch_attach_kind */
 	uint64_t	offset;		/* kprobe offset; zero for kretprobe */
-	char		target[SHIRUDO_UPATCH_ATTACH_TARGET_MAX];
+	char		target[SHIRUDO_UPATCH_ATTACH_TARGET_MAX]; /* kprobe symbol */
 	char		map[SHIRUDO_UPATCH_PROG_MAP_MAX];
 };
 
