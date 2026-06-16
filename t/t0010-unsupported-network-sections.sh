@@ -1,0 +1,101 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Authors of shirudo
+#
+# t0010 -- unsupported network attach kinds are rejected with Shirudo-specific
+# diagnostics.
+
+cd "$(dirname "$0")"
+. ./test-lib.sh
+
+SHB=../tools/shirudo-build/shirudo-build
+
+command -v clang >/dev/null 2>&1 || test_skip_all "no clang"
+command -v openssl >/dev/null 2>&1 || test_skip_all "no openssl"
+[ -x "$SHB" ] || test_skip_all "shirudo-build not built (make shirudo-build)"
+[ -e ../bpf/vmlinux.h ] || test_skip_all "no bpf/vmlinux.h (build the tree)"
+[ -e ../bpf/include/bpf/bpf_helpers.h ] || test_skip_all "no in-tree bpf headers"
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+openssl req -x509 -newkey rsa:2048 -nodes -keyout "$WORK/k.pem" \
+	-outform DER -out "$WORK/c.der" -days 1 -sha256 -subj "/CN=t0010" \
+	>/dev/null 2>&1 || test_skip_all "openssl keygen failed"
+
+case "$SHB" in
+/*) B="$SHB" ;;
+*)  B="$(pwd)/$SHB" ;;
+esac
+
+cat > "$WORK/sk-skb.bpf.c" <<'EOF'
+// SPDX-License-Identifier: Dual BSD/GPL
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "Dual BSD/GPL";
+
+SEC("sk_skb/stream_verdict")
+int verdict(struct __sk_buff *skb)
+{
+	return 1;
+}
+EOF
+
+cat > "$WORK/socket-filter.bpf.c" <<'EOF'
+// SPDX-License-Identifier: Dual BSD/GPL
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "Dual BSD/GPL";
+
+SEC("socket")
+int filter(struct __sk_buff *skb)
+{
+	return 0;
+}
+EOF
+
+cat > "$WORK/cgroup-skb-generic.bpf.c" <<'EOF'
+// SPDX-License-Identifier: Dual BSD/GPL
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+
+char _license[] SEC("license") = "Dual BSD/GPL";
+
+SEC("cgroup/skb")
+int generic(struct __sk_buff *skb)
+{
+	return 1;
+}
+EOF
+
+test_expect_success 'sk_skb sections are rejected for now' '
+	! ( cd .. && "$B" "$WORK/sk-skb.bpf.c" \
+		-o "$WORK/sk-skb.upatch" \
+		--vmlinux bpf/vmlinux.h --name sk-skb \
+		--key "$WORK/k.pem" --cert "$WORK/c.der" ) \
+		>"$WORK/sk-skb.out" 2>&1 &&
+	grep -q "unsupported sk_skb section" "$WORK/sk-skb.out"
+'
+
+test_expect_success 'socket filter sections are rejected for lifecycle reasons' '
+	! ( cd .. && "$B" "$WORK/socket-filter.bpf.c" \
+		-o "$WORK/socket-filter.upatch" \
+		--vmlinux bpf/vmlinux.h --name socket-filter \
+		--key "$WORK/k.pem" --cert "$WORK/c.der" ) \
+		>"$WORK/socket-filter.out" 2>&1 &&
+	grep -q "pinnable bpf_link lifecycle" "$WORK/socket-filter.out"
+'
+
+test_expect_success 'generic cgroup skb sections require ingress or egress' '
+	! ( cd .. && "$B" "$WORK/cgroup-skb-generic.bpf.c" \
+		-o "$WORK/cgroup-skb-generic.upatch" \
+		--vmlinux bpf/vmlinux.h --name cgroup-skb-generic \
+		--key "$WORK/k.pem" --cert "$WORK/c.der" ) \
+		>"$WORK/cgroup-skb-generic.out" 2>&1 &&
+	grep -q "use cgroup_skb/ingress or cgroup_skb/egress" \
+		"$WORK/cgroup-skb-generic.out"
+'
+
+test_done
