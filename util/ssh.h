@@ -13,7 +13,8 @@
 struct shirudo_ssh_session;
 
 struct shirudo_ssh_session *shirudo_ssh_connect(const char *user,
-						const char *host, int port);
+						const char *host, int port,
+						const char *identity_file);
 void shirudo_ssh_close(struct shirudo_ssh_session *s);
 
 int shirudo_ssh_sftp_push(struct shirudo_ssh_session *s,

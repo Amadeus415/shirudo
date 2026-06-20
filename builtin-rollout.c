@@ -211,6 +211,7 @@ static void apply_target(const struct shirudo_remote *r,
 			 size_t nfiles, const char *expect_override,
 			 const char *expect_version_id, bool no_version_check,
 			 bool no_precheck, bool dry_run, bool sudo,
+			 const char *identity_file,
 			 struct target_result *t)
 {
 	struct shirudo_ssh_session *s;
@@ -222,7 +223,7 @@ static void apply_target(const struct shirudo_remote *r,
 	t->name = r->name;
 	t->result = R_UNREACHABLE;
 
-	s = shirudo_ssh_connect(r->user, r->host, r->port);
+	s = shirudo_ssh_connect(r->user, r->host, r->port, identity_file);
 	if (!s) {
 		set_msg(t, "ssh connect failed");
 		return;
@@ -452,6 +453,7 @@ static const struct shirudo_help_item rollout_options[] = {
 	{ "--expect-version-id=<x>", "pin the expected target SHIRUDO_VERSION_ID" },
 	{ "--no-precheck",           "skip the pre-flight chain/version check" },
 	{ "--no-version-check",      "skip just the version-id half of pre-flight" },
+	{ "--identity-file=<path>",  "use this SSH private key for target authentication" },
 	{ "--report=<path>",         "emit aggregate JSON report ('-' = stdout)" },
 	{ "--dry-run",               "pre-flight only; no SFTP upload, no load" },
 	{ "--sudo",                  "wrap the remote shirudo invocation in sudo" },
@@ -495,6 +497,7 @@ int cmd_rollout(int argc, const char **argv)
 {
 	const char *report = NULL, *expect_override = NULL, *selexpr = NULL;
 	const char *expect_version_override = NULL, *expect_version_id;
+	const char *identity_file = NULL;
 	const char *filter = NULL;
 	bool dry_run = false, no_precheck = false, sudo = false;
 	bool no_version_check = false;
@@ -537,6 +540,16 @@ int cmd_rollout(int argc, const char **argv)
 			expect_version_override = a + 20;
 		else if (strcmp(a, "--no-version-check") == 0)
 			no_version_check = true;
+		else if (strncmp(a, "--identity-file=", 16) == 0)
+			identity_file = a + 16;
+		else if (strcmp(a, "--identity-file") == 0) {
+			if (++i >= (size_t)argc || !argv[i][0]) {
+				fprintf(stderr, "rollout: --identity-file "
+					"requires a path\n");
+				return 2;
+			}
+			identity_file = argv[i];
+		}
 		else if (a[0] == '-') {
 			fprintf(stderr, "rollout: unknown option '%s'\n", a);
 			return 2;
@@ -563,6 +576,20 @@ int cmd_rollout(int argc, const char **argv)
 	if (nfiles == 0) {
 		shirudo_print_help(&rollout_help);
 		return 2;
+	}
+	if (identity_file && !*identity_file) {
+		fprintf(stderr, "rollout: --identity-file requires a path\n");
+		return 2;
+	}
+	if (identity_file) {
+		FILE *f = fopen(identity_file, "r");
+
+		if (!f) {
+			fprintf(stderr, "rollout: cannot read --identity-file "
+				"%s: %s\n", identity_file, strerror(errno));
+			return 1;
+		}
+		fclose(f);
 	}
 	if (selexpr && nnames) {
 		fprintf(stderr, "rollout: pass either names or --selector, "
@@ -661,7 +688,7 @@ int cmd_rollout(int argc, const char **argv)
 			apply_target(r, files, is_unload, nfiles,
 				     expect_override, expect_version_id,
 				     no_version_check, no_precheck, dry_run,
-				     sudo, &res[n++]);
+				     sudo, identity_file, &res[n++]);
 		}
 	} else {
 		for (i = 0; i < n_remotes; i++) {
@@ -674,7 +701,7 @@ int cmd_rollout(int argc, const char **argv)
 			apply_target(&remotes[i], files, is_unload, nfiles,
 				     expect_override, expect_version_id,
 				     no_version_check, no_precheck, dry_run,
-				     sudo, &res[n++]);
+				     sudo, identity_file, &res[n++]);
 		}
 	}
 

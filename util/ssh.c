@@ -48,7 +48,8 @@ static void shirudo_ssh_set_known_hosts(ssh_session s)
 }
 
 struct shirudo_ssh_session *shirudo_ssh_connect(const char *user,
-						const char *host, int port)
+						const char *host, int port,
+						const char *identity_file)
 {
 	long timeout = SHIRUDO_SSH_CONNECT_TIMEOUT_S;
 	struct shirudo_ssh_session *h;
@@ -69,6 +70,8 @@ struct shirudo_ssh_session *shirudo_ssh_connect(const char *user,
 	ssh_options_set(h->s, SSH_OPTIONS_PORT, &port);
 	ssh_options_set(h->s, SSH_OPTIONS_TIMEOUT, &timeout);
 	ssh_options_set(h->s, SSH_OPTIONS_LOG_VERBOSITY, &verbosity);
+	if (identity_file && *identity_file)
+		ssh_options_set(h->s, SSH_OPTIONS_IDENTITY, identity_file);
 	shirudo_ssh_set_known_hosts(h->s);
 
 	if (ssh_connect(h->s) != SSH_OK) {

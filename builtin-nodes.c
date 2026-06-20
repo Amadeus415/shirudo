@@ -727,7 +727,7 @@ static void fetch_node(const struct shirudo_remote *r,
 					   &d->icmp_rtt_us,
 					   d->resolved_ip,
 					   sizeof(d->resolved_ip));
-	sess = shirudo_ssh_connect(r->user, r->host, r->port);
+	sess = shirudo_ssh_connect(r->user, r->host, r->port, NULL);
 	if (!sess) {
 		d->unreach = "ssh connect failed";
 		return;
@@ -1865,7 +1865,7 @@ static int cmd_nodes_show(int argc, const char **argv)
 			 deep_upatch,
 			 json ? " --json" : "",
 			 show_full ? " --show-full" : "");
-		sess = shirudo_ssh_connect(r->user, r->host, r->port);
+		sess = shirudo_ssh_connect(r->user, r->host, r->port, NULL);
 		if (!sess) {
 			pr_err("nodes show: ssh connect to '%s' failed",
 			       r->name);
