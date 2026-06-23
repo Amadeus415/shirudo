@@ -1259,6 +1259,8 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
  * Skips:
  *  - map_fd <= 0 (loader produced no fd, nothing to pin)
  *  - empty name (kernel will reject the BPF_OBJ_PIN anyway)
+ *  - names containing '.' (bpffs reserves dots in path components;
+ *    libbpf synthetic global-data maps such as .bss use them)
  *  - already-pinned maps_dir/name (idempotent on re-runs)
  */
 static int pin_upatch_maps(const struct shirudo_loader_ctx *cx,
@@ -1302,6 +1304,8 @@ static int pin_upatch_maps(const struct shirudo_loader_ctx *cx,
 			continue;
 		}
 		if (info.name[0] == '\0')
+			continue;
+		if (strchr(info.name, '.'))
 			continue;
 		if (snprintf(pin, sizeof(pin), "%s/%s", maps_dir,
 			     info.name) >= (int)sizeof(pin))
