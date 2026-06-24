@@ -184,7 +184,8 @@ static const char *pkey_algorithm(EVP_PKEY *pkey)
 	}
 }
 
-static int dump_operator_cert(X509 *cert, const char *cert_path)
+static int dump_operator_cert(X509 *cert, const char *cert_path,
+			      const unsigned char cert_spki_fpr[SHA256_DIGEST_LENGTH])
 {
 	X509_NAME *subj = X509_get_subject_name(cert);
 	X509_NAME *iss  = X509_get_issuer_name(cert);
@@ -213,18 +214,18 @@ static int dump_operator_cert(X509 *cert, const char *cert_path)
 		       pkey_algorithm(pub), EVP_PKEY_get_bits(pub));
 	if (compute_cert_fpr(cert, fpr) == 0)
 		print_fpr("Fingerprint:", fpr);
+	print_fpr("SPKI fingerprint:", cert_spki_fpr);
 	printf("  %-22s %s\n", "Valid from:", nb_s);
 	printf("  %-22s %s\n", "Valid until:", na_s);
 	printf("  %-22s %s\n", "Expires in:", exp_s);
 	return 0;
 }
 
-static int dump_signing_key(X509 *cert, const char *pkey_path)
+static int dump_signing_key(const char *pkey_path,
+			    const unsigned char cert_spki_fpr[SHA256_DIGEST_LENGTH])
 {
 	EVP_PKEY *priv;
-	EVP_PKEY *pub_in_cert = X509_get0_pubkey(cert);
 	unsigned char fpr_priv[SHA256_DIGEST_LENGTH];
-	unsigned char fpr_cert[SHA256_DIGEST_LENGTH];
 	int rc = 0;
 
 	if (!path_exists(pkey_path)) {
@@ -243,14 +244,13 @@ static int dump_signing_key(X509 *cert, const char *pkey_path)
 	printf("  %-22s %s-%d\n", "Algorithm:",
 	       pkey_algorithm(priv), EVP_PKEY_get_bits(priv));
 
-	if (compute_spki_fpr(priv, fpr_priv) != 0 ||
-	    compute_spki_fpr(pub_in_cert, fpr_cert) != 0) {
+	if (compute_spki_fpr(priv, fpr_priv) != 0) {
 		rc = -1;
 		goto out;
 	}
 	print_fpr("SPKI fingerprint:", fpr_priv);
 
-	if (memcmp(fpr_priv, fpr_cert, SHA256_DIGEST_LENGTH) == 0) {
+	if (memcmp(fpr_priv, cert_spki_fpr, SHA256_DIGEST_LENGTH) == 0) {
 		printf("  %-22s %s\n", "Cert match:",
 		       "OK  (signing key matches cert)");
 	} else {
@@ -268,16 +268,28 @@ static int keys_dump_disk_material(const char *cert_path,
 				   const char *pkey_path)
 {
 	X509 *cert;
+	EVP_PKEY *pub;
+	unsigned char cert_spki_fpr[SHA256_DIGEST_LENGTH];
 	int rc;
 
 	cert = read_cert_der(cert_path);
 	if (!cert)
 		return 1;
 
-	rc = dump_operator_cert(cert, cert_path);
+	pub = X509_get0_pubkey(cert);
+	if (!pub) {
+		X509_free(cert);
+		return 1;
+	}
+	if (compute_spki_fpr(pub, cert_spki_fpr) != 0) {
+		X509_free(cert);
+		return 1;
+	}
+
+	rc = dump_operator_cert(cert, cert_path, cert_spki_fpr);
 	if (rc == 0) {
 		printf("\n");
-		rc = dump_signing_key(cert, pkey_path);
+		rc = dump_signing_key(pkey_path, cert_spki_fpr);
 	}
 	X509_free(cert);
 	return rc ? 1 : 0;
