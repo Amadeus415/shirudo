@@ -81,6 +81,7 @@ UTIL_SRCS := \
     util/paths.c \
     util/harden.c \
     util/preflight.c \
+    util/kernel_abi.c \
     util/ssh.c \
     util/log.c \
     util/tpm.c \
@@ -336,6 +337,7 @@ TEST_HELPERS := t/helper/test-json-parser \
                 t/helper/test-chain \
                 t/helper/test-selector \
                 t/helper/test-bpf-load \
+                t/helper/test-kernel-abi \
                 t/helper/test-upatch-map-types \
                 t/helper/test-upatch-prog-metadata \
                 t/helper/test-upatch-serializer-pages \
@@ -369,6 +371,11 @@ t/helper/test-signed-load: t/helper/test-signed-load.c
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -Ithird_party/bpf-next/tools/include/uapi \
 	    -o $@ $^ -lcrypto
+
+t/helper/test-kernel-abi: t/helper/test-kernel-abi.c util/kernel_abi.o \
+                          $(LIBBPF_A)
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LIBELF_LIBS) $(ZLIB_LIBS)
 
 t/helper/test-upatch-map-types: t/helper/test-upatch-map-types.c
 	@printf '  CC      $@\n'

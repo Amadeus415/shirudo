@@ -36,6 +36,7 @@
 #include "util/eventlog.h"
 #include "util/help.h"
 #include "util/json.h"
+#include "util/kernel_abi.h"
 #include "util/macros.h"
 #include "util/keyring.h"
 #include "util/log.h"
@@ -1805,20 +1806,31 @@ int shirudo_upatch_apply(const char *path)
 
 /*
  * Operator-side pre-flight gate (PLAN.md "Pre-flight state check").
- * Runs before any BPF_PROG_LOAD: the shirudo keyring must exist, the
- * LSM link must still be pinned (enforcing), and -- when the caller
- * supplied --expect-chain -- the live TPM NV chain must still match
- * what the operator last observed. Any mismatch refuses with
- * category: tampered and a message naming the failed check; no kernel
- * state is touched. This is the optimistic-concurrency / tamper gate:
- * a concurrent operator that advanced the chain, a detached LSM, or a
+ * Runs before any BPF_PROG_LOAD: the live kernel must expose the private
+ * signed-loader ABI, the shirudo keyring must exist, the LSM link must still
+ * be pinned (enforcing), and -- when the caller supplied --expect-chain --
+ * the live TPM NV chain must still match what the operator last observed.
+ * An ABI mismatch is kernel_abi_unsupported; state mismatches are tampered.
+ * No kernel state is touched. This is the optimistic-concurrency / tamper
+ * gate: a concurrent operator that advanced the chain, a detached LSM, or a
  * missing keyring all surface here. Returns 0 to proceed.
  */
-static int upatch_preflight(const char *expect_chain)
+static int upatch_preflight(const char *expect_chain,
+			    struct shirudo_op_report *rep)
 {
 	uint8_t want[SHIRUDO_CHAIN_DIGEST_LEN], have[SHIRUDO_CHAIN_DIGEST_LEN];
 	char have_hex[2 * SHIRUDO_CHAIN_DIGEST_LEN + 1];
+	char abi_detail[SHIRUDO_KERNEL_ABI_DETAIL_MAX];
 	int fd, rc;
+
+	rc = shirudo_kernel_abi_check(abi_detail, sizeof(abi_detail));
+	if (rc) {
+		pr_err("upatch: pre-flight refused (category: "
+		       "kernel_abi_unsupported, message: %s)", abi_detail);
+		rep_fail(rep, "pre_flight", "kernel_abi_unsupported",
+			 EOPNOTSUPP, abi_detail);
+		return rc;
+	}
 
 	if (shirudo_keyring_find(SHIRUDO_KEYRING_NAME) < 0) {
 		pr_err("upatch load: pre-flight refused (category: tampered, "
@@ -2330,9 +2342,10 @@ static int cmd_upatch_load(int argc, const char **argv)
 	if (no_precheck) {
 		pr_warn("upatch load: --no-precheck, pre-flight state check "
 			"skipped");
-	} else if (upatch_preflight(expect_chain) != 0) {
-		rep_fail(&rep, "pre_flight", "tampered", EPERM,
-			 "pre-flight check failed");
+	} else if (upatch_preflight(expect_chain, &rep) != 0) {
+		if (!rep.category)
+			rep_fail(&rep, "pre_flight", "tampered", EPERM,
+				 "pre-flight check failed");
 		goto done;
 	}
 
@@ -2462,9 +2475,10 @@ static int cmd_upatch_unload(int argc, const char **argv)
 	if (no_precheck) {
 		pr_warn("upatch unload: --no-precheck, pre-flight state check "
 			"skipped");
-	} else if (upatch_preflight(expect_chain) != 0) {
-		rep_fail(&rep, "pre_flight", "tampered", EPERM,
-			 "pre-flight check failed");
+	} else if (upatch_preflight(expect_chain, &rep) != 0) {
+		if (!rep.category)
+			rep_fail(&rep, "pre_flight", "tampered", EPERM,
+				 "pre-flight check failed");
 		goto done;
 	}
 

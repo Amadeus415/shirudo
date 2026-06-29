@@ -17,6 +17,7 @@
 #include <linux/keyctl.h>
 
 #include "config.h"
+#include "kernel_abi.h"
 #include "loader.h"
 #include "paths.h"
 #include "preflight.h"
@@ -141,6 +142,20 @@ static void check_bpffs(struct shirudo_preflight_result *r)
 		     "(needs CONFIG_BPF_FS=y)");
 }
 
+static void check_signed_loader_abi(struct shirudo_preflight_result *r)
+{
+	struct shirudo_preflight_check *c =
+		next_slot(r, SHIRUDO_PRE_SIGNED_LOADER_ABI,
+			  "signed_loader_kernel_abi");
+
+	if (shirudo_kernel_abi_check(c->detail, sizeof(c->detail)) == 0)
+		pass(c);
+	else {
+		c->ok = false;
+		r->n_failed++;
+	}
+}
+
 static void check_cert(struct shirudo_preflight_result *r)
 {
 	struct shirudo_preflight_check *c =
@@ -247,6 +262,7 @@ void shirudo_preflight_run(const struct shirudo_preflight_opts *opts,
 	check_root(out);
 	check_bpf_lsm(out);
 	check_bpffs(out);
+	check_signed_loader_abi(out);
 	check_cert(out);
 	check_keyring(out);
 	check_embedded_loader(out);
