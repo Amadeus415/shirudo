@@ -1,0 +1,180 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Authors of shirudo
+
+cd "$(dirname "$0")"
+. ./test-lib.sh
+
+H=helper/test-otel-map
+S=../shirudo
+
+test_expect_success 'OTLP CLI options reject invalid combinations early' '
+	! "$S" upatch map --otel-retries=11 >/dev/null 2>&1 &&
+	! "$S" upatch map --otel-insecure >/dev/null 2>&1 &&
+	! "$S" upatch map --otel=log --metric-kind=gauge >/dev/null 2>&1 &&
+	! "$S" upatch map --emit=otel >/dev/null 2>&1
+'
+
+test_expect_success 'automatic OTLP signal classification is structural' '
+	case "$($H classify-unsigned)" in metric:*) :;; *) false;; esac &&
+	case "$($H classify-hash)" in metric:*) :;; *) false;; esac &&
+	case "$($H classify-lru-hash)" in metric:*) :;; *) false;; esac &&
+	case "$($H classify-signed)" in log:*) :;; *) false;; esac &&
+	case "$($H classify-array)" in log:*) :;; *) false;; esac &&
+	case "$($H classify-no-btf)" in log:*) :;; *) false;; esac &&
+	case "$($H classify-serialized)" in log:*) :;; *) false;; esac
+'
+
+test_expect_success 'local JSON also honors aligned per-CPU strides' '
+	"$H" local-json | python3 -c '\''
+import json,sys
+d=json.load(sys.stdin)
+entry=d["entries"][0]
+assert entry["values_per_cpu"] == ["5", "7"]
+assert entry["sum"] == "12"
+'\''
+'
+
+test_expect_success 'structured OTLP log preserves aligned per-CPU values' '
+	"$H" log | python3 -c '\''
+import json,sys
+d=json.load(sys.stdin)
+r=d["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0]
+vals=r["body"]["kvlistValue"]["values"]
+root={x["key"]:x["value"] for x in vals}
+data={x["key"]:x["value"] for x in root["data"]["kvlistValue"]["values"]}
+entry=data["entries"]["arrayValue"]["values"][0]["kvlistValue"]["values"]
+entry={x["key"]:x["value"] for x in entry}
+assert [x["stringValue"] for x in entry["values_per_cpu"]["arrayValue"]["values"]] == ["5", "7"]
+assert entry["sum"]["stringValue"] == "12"
+'\''
+'
+
+test_expect_success 'OTLP metric emits one aggregated gauge point' '
+	"$H" metric | python3 -c '\''
+import json,sys
+d=json.load(sys.stdin)
+m=d["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]
+assert m["name"] == "shirudo.test.hits"
+p=m["gauge"]["dataPoints"][0]
+assert p["asInt"] == "12"
+assert "startTimeUnixNano" not in p
+'\''
+'
+
+test_expect_success 'OTLP counter is cumulative, monotonic, and carries map lifetime' '
+	"$H" counter | python3 -c '\''
+import json,sys
+d=json.load(sys.stdin)
+s=d["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["sum"]
+assert s["aggregationTemporality"] == 2 and s["isMonotonic"] is True
+p=s["dataPoints"][0]
+assert p["asInt"] == "12"
+assert p["startTimeUnixNano"] == "1544712660300000000"
+'\''
+'
+
+test_expect_success 'metric validation rejects bad semantics and accepts empty no-op' '
+	"$H" metric-errors
+'
+
+test_expect_success 'OTLP base URL always appends the selected signal path' '
+	rm -f otel.port otel.body otel.meta;
+	python3 helper/otel-mock.py success otel.port otel.body otel.meta &
+	server=$!;
+	i=0; while test ! -s otel.port && test $i -lt 50; do i=$((i+1)); sleep .02; done &&
+	port=$(cat otel.port) &&
+	"$H" send-auto-log "http://127.0.0.1:$port/base" &&
+	wait $server &&
+	grep -q "\"path\": \"/base/v1/logs\"" otel.meta &&
+	rm -f otel.port otel.body otel.meta;
+	python3 helper/otel-mock.py success otel.port otel.body otel.meta &
+	server=$!;
+	i=0; while test ! -s otel.port && test $i -lt 50; do i=$((i+1)); sleep .02; done &&
+	port=$(cat otel.port) &&
+	"$H" send-auto-metric "http://127.0.0.1:$port/base" &&
+	wait $server &&
+	python3 -c '\''
+import json
+assert json.load(open("otel.meta"))["path"] == "/base/v1/metrics"
+d=json.load(open("otel.body"))
+assert d["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["sum"]["dataPoints"][0]["asInt"] == "12"
+'\'' &&
+	rm -f otel.port otel.body otel.meta;
+	python3 helper/otel-mock.py success otel.port otel.body otel.meta &
+	server=$!;
+	i=0; while test ! -s otel.port && test $i -lt 50; do i=$((i+1)); sleep .02; done &&
+	port=$(cat otel.port) &&
+	"$H" send-metric "http://127.0.0.1:$port/custom" &&
+	wait $server &&
+	python3 -c '\''
+import json
+assert json.load(open("otel.meta"))["path"] == "/custom/v1/metrics"
+d=json.load(open("otel.body"))
+assert d["resourceMetrics"][0]["scopeMetrics"][0]["metrics"][0]["gauge"]["dataPoints"][0]["asInt"] == "12"
+'\''
+'
+
+test_expect_success 'remote cleartext requires explicit insecure override' '
+	"$H" security
+'
+
+test_expect_success 'OTLP HTTP sends JSON, auth headers, gzip, and retries' '
+	rm -f otel.port otel.body otel.meta;
+	python3 helper/otel-mock.py retry otel.port otel.body otel.meta &
+	server=$!;
+	i=0; while test ! -s otel.port && test $i -lt 50; do i=$((i+1)); sleep .02; done &&
+	port=$(cat otel.port) &&
+	OTEL_EXPORTER_OTLP_LOGS_HEADERS="Authorization=Bearer%20secret" \
+	OTEL_EXPORTER_OTLP_LOGS_COMPRESSION=gzip \
+		"$H" send-log "http://127.0.0.1:$port" 3 &&
+	wait $server &&
+	python3 -c '\''
+import json
+json.load(open("otel.body"))
+m=json.load(open("otel.meta"))
+assert m == {"attempts":3,"path":"/v1/logs","authorization":"Bearer secret","content_encoding":"gzip"}
+'\''
+'
+
+test_expect_success 'OTLP partial success is a non-retryable failure' '
+	rm -f otel.port otel.body otel.meta;
+	python3 helper/otel-mock.py partial otel.port otel.body otel.meta &
+	server=$!;
+	i=0; while test ! -s otel.port && test $i -lt 50; do i=$((i+1)); sleep .02; done &&
+	port=$(cat otel.port) &&
+	! "$H" send-log "http://127.0.0.1:$port" 3 &&
+	wait $server &&
+	python3 -c '\''
+import json
+m=json.load(open("otel.meta"))
+assert m["attempts"] == 1
+'\''
+'
+
+test_expect_success 'HTTPS verifies by default and --otel-insecure disables verification noisily' '
+	command -v openssl >/dev/null || exit 0;
+	rm -f otel.crt otel.key otel.port otel.body otel.meta otel-tls.err;
+	openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+		-subj /CN=localhost -addext subjectAltName=DNS:localhost \
+		-keyout otel.key -out otel.crt >/dev/null 2>&1;
+	python3 helper/otel-mock.py success otel.port otel.body otel.meta otel.crt otel.key &
+	server=$!;
+	i=0; while test ! -s otel.port && test $i -lt 50; do i=$((i+1)); sleep .02; done &&
+	port=$(cat otel.port) &&
+	OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE=otel.crt \
+		"$H" send-log "https://localhost:$port" 0 &&
+	wait $server &&
+	rm -f otel.port otel.body otel.meta;
+	python3 helper/otel-mock.py success otel.port otel.body otel.meta otel.crt otel.key &
+	server=$!;
+	i=0; while test ! -s otel.port && test $i -lt 50; do i=$((i+1)); sleep .02; done &&
+	port=$(cat otel.port) &&
+	"$H" send-log-insecure "https://127.0.0.1:$port" 0 \
+		2>otel-tls.err &&
+	wait $server &&
+	grep -q "disables TLS certificate and hostname verification" otel-tls.err
+'
+
+rm -f otel.port otel.body otel.meta otel-security.err otel-tls.err otel.crt otel.key
+test_done

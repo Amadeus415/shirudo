@@ -47,6 +47,7 @@
 #include "util/timefmt.h"
 #include "util/upatch.h"
 #include "util/upatch_maps.h"
+#include "util/upatch_maps_otel.h"
 #include "util/upatch_resolve.h"
 
 extern const char shirudo_version_id[];
@@ -181,6 +182,14 @@ static const struct shirudo_help upatch_unload_help = {
 static const struct shirudo_help_item upatch_map_options[] = {
 	{ "--json=<path>", "append a schema-1 NDJSON record to path" },
 	{ "--show-full",  "lift the per-map 256-entry truncation cap" },
+	{ "--otel[=log|metric]", "export through OTLP; auto-select signal by default" },
+	{ "--otel-endpoint=<url>", "OTLP base URL (signal path is appended)" },
+	{ "--otel-insecure", "allow cleartext remote OTLP or disable HTTPS verification" },
+	{ "--otel-retries=<0-10>", "OTLP retries after the first attempt (default: 3)" },
+	{ "--metric-kind=<kind>", "OTLP metric kind: counter (default) or gauge" },
+	{ "--metric-name=<name>", "override derived shirudo.<upatch>.<map> name" },
+	{ "--metric-unit=<unit>", "metric UCUM unit (default: 1)" },
+	{ "--metric-description=<text>", "optional metric description" },
 };
 
 static const struct shirudo_help_section upatch_map_sections[] = {
@@ -189,7 +198,16 @@ static const struct shirudo_help_section upatch_map_sections[] = {
 
 static const struct shirudo_help upatch_map_help = {
 	.usage      = "shirudo upatch map [<upatch>] [<map>] "
-		      "[--json=<path>] [--show-full]",
+		      "[--json=<path>] [--show-full]\n"
+		      "                          [--otel[=log|metric]] "
+		      "[--otel-endpoint=<url>]\n"
+		      "                          [--otel-insecure] "
+		      "[--otel-retries=<0-10>] "
+		      "[--metric-kind=<kind>]\n"
+		      "                          [--metric-name=<name>] "
+		      "[--metric-unit=<unit>]\n"
+		      "                          "
+		      "[--metric-description=<text>]",
 	.summary    = "Read the contents of a pinned upatch map from the\n"
 		      "target kernel. With no positional args, list every "
 		      "pinned\nmap across every loaded upatch. With "
@@ -207,6 +225,9 @@ static const struct shirudo_help upatch_map_help = {
 "  shirudo upatch map cve-2026-31431-counter blocked_af_alg\n"
 "  shirudo upatch map cve-2026-31431-counter blocked_af_alg \\\n"
 "    --json=/var/log/shirudo/maps.ndjson\n"
+"  shirudo upatch map cve-2026-31431-counter blocked_af_alg --otel\n"
+"  shirudo upatch map foo values --otel=metric \\\n"
+"    --otel-endpoint=https://collector:4318 --metric-kind=gauge\n"
 "  shirudo upatch map cve-2026-31431-counter big_hash --show-full",
 };
 
@@ -2747,8 +2768,14 @@ static int append_one_map_json(const char *path,
 static int cmd_upatch_map(int argc, const char **argv)
 {
 	struct shirudo_map_summary *list = NULL;
+	struct shirudo_otel_opts otel_opts = {
+		.retries = 3,
+		.metric_kind = SHIRUDO_OTEL_METRIC_COUNTER,
+	};
 	const char *upatch = NULL, *map = NULL, *json_path = NULL;
-	bool show_full = false;
+	enum shirudo_otel_mode otel_mode = SHIRUDO_OTEL_AUTO;
+	bool show_full = false, otel = false, insecure_set = false;
+	bool retries_set = false;
 	size_t n = 0;
 	int i, ret = 0;
 
@@ -2771,6 +2798,83 @@ static int cmd_upatch_map(int argc, const char **argv)
 			return 2;
 		} else if (strcmp(a, "--show-full") == 0) {
 			show_full = true;
+		} else if (strcmp(a, "--otel") == 0) {
+			if (otel) {
+				fprintf(stderr, "upatch map: duplicate --otel\n");
+				return 2;
+			}
+			otel = true;
+			otel_mode = SHIRUDO_OTEL_AUTO;
+		} else if (strncmp(a, "--otel=", 7) == 0) {
+			if (otel) {
+				fprintf(stderr, "upatch map: duplicate --otel\n");
+				return 2;
+			}
+			if (strcmp(a + 7, "log") == 0)
+				otel_mode = SHIRUDO_OTEL_FORCE_LOG;
+			else if (strcmp(a + 7, "metric") == 0)
+				otel_mode = SHIRUDO_OTEL_FORCE_METRIC;
+			else {
+				fprintf(stderr, "upatch map: --otel must be log or metric\n");
+				return 2;
+			}
+			otel = true;
+		} else if (strncmp(a, "--otel-endpoint=", 16) == 0) {
+			if (otel_opts.endpoint || !a[16]) {
+				fprintf(stderr, "upatch map: invalid or duplicate "
+					"--otel-endpoint\n");
+				return 2;
+			}
+			otel_opts.endpoint = a + 16;
+		} else if (strcmp(a, "--otel-insecure") == 0) {
+			if (insecure_set) {
+				fprintf(stderr, "upatch map: duplicate --otel-insecure\n");
+				return 2;
+			}
+			insecure_set = true;
+			otel_opts.allow_insecure = true;
+		} else if (strncmp(a, "--otel-retries=", 15) == 0) {
+			char *end;
+			unsigned long value;
+
+			if (retries_set || !a[15]) {
+				fprintf(stderr, "upatch map: invalid or duplicate "
+					"--otel-retries\n");
+				return 2;
+			}
+			errno = 0;
+			value = strtoul(a + 15, &end, 10);
+			if (errno || *end || value > 10) {
+				fprintf(stderr, "upatch map: --otel-retries must be 0..10\n");
+				return 2;
+			}
+			otel_opts.retries = (unsigned int)value;
+			retries_set = true;
+		} else if (strncmp(a, "--metric-kind=", 14) == 0) {
+			const char *kind = a + 14;
+
+			if (otel_opts.metric_kind_set ||
+			    (strcmp(kind, "counter") != 0 &&
+			     strcmp(kind, "gauge") != 0)) {
+				fprintf(stderr, "upatch map: --metric-kind must be counter or gauge\n");
+				return 2;
+			}
+			otel_opts.metric_kind = strcmp(kind, "gauge") == 0 ?
+				SHIRUDO_OTEL_METRIC_GAUGE :
+				SHIRUDO_OTEL_METRIC_COUNTER;
+			otel_opts.metric_kind_set = true;
+		} else if (strncmp(a, "--metric-name=", 14) == 0) {
+			if (otel_opts.metric_name || !a[14])
+				return fprintf(stderr, "upatch map: invalid or duplicate --metric-name\n"), 2;
+			otel_opts.metric_name = a + 14;
+		} else if (strncmp(a, "--metric-unit=", 14) == 0) {
+			if (otel_opts.metric_unit || !a[14])
+				return fprintf(stderr, "upatch map: invalid or duplicate --metric-unit\n"), 2;
+			otel_opts.metric_unit = a + 14;
+		} else if (strncmp(a, "--metric-description=", 21) == 0) {
+			if (otel_opts.metric_description)
+				return fprintf(stderr, "upatch map: duplicate --metric-description\n"), 2;
+			otel_opts.metric_description = a + 21;
 		} else if (a[0] == '-') {
 			fprintf(stderr, "upatch map: unknown option '%s'\n", a);
 			return 2;
@@ -2781,6 +2885,27 @@ static int cmd_upatch_map(int argc, const char **argv)
 		} else {
 			fprintf(stderr, "upatch map: unexpected argument '%s'\n",
 				a);
+			return 2;
+		}
+	}
+
+	{
+		bool metric_opts = otel_opts.metric_kind_set ||
+			otel_opts.metric_name || otel_opts.metric_unit ||
+			otel_opts.metric_description;
+
+		if ((otel_opts.endpoint || insecure_set || retries_set ||
+		     metric_opts) && !otel) {
+			fprintf(stderr, "upatch map: OTLP options require --otel\n");
+			return 2;
+		}
+		if (otel_mode == SHIRUDO_OTEL_FORCE_LOG && metric_opts) {
+			fprintf(stderr, "upatch map: metric options are invalid with "
+				"--otel=log\n");
+			return 2;
+		}
+		if (otel && (!upatch || !map)) {
+			fprintf(stderr, "upatch map: --otel requires <upatch> and <map>\n");
 			return 2;
 		}
 	}
@@ -2807,7 +2932,17 @@ static int cmd_upatch_map(int argc, const char **argv)
 				       json_path, strerror(-rc));
 				ret = 1;
 			}
-		} else {
+		}
+		if (otel) {
+			rc = shirudo_upatch_maps_otel_send(&v, otel_mode,
+						    &otel_opts);
+			if (rc) {
+				pr_err("upatch map: OTLP export: %s",
+				       strerror(-rc));
+				ret = 1;
+			}
+		}
+		if (!json_path && !otel) {
 			shirudo_upatch_maps_print_detail(&v);
 			if (ferror(stdout))
 				ret = 1;
@@ -3029,8 +3164,7 @@ static void render_one_map_text(const char *upatch, const char *map,
 {
 	struct shirudo_map_view v = {};
 	int rc = shirudo_upatch_maps_read(upatch, map,
-					  cap ? cap
-					      : SHIRUDO_MAP_ENTRIES_DEFAULT,
+					  cap,
 					  &v);
 
 	printf("\n== Map: %s ==\n", map);
@@ -3122,8 +3256,7 @@ static int render_get_json(const struct upatch_get_ctx *c,
 		int rc;
 
 		rc = shirudo_upatch_maps_read(c->upatch, maps[k].name,
-					      map_cap ? map_cap
-						      : SHIRUDO_MAP_ENTRIES_DEFAULT,
+					      map_cap,
 					      &v);
 		if (rc != 0) {
 			shirudo_json_obj_open(&e);

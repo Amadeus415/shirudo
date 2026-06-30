@@ -557,6 +557,52 @@ inline; they need dedicated readers (future work). They appear
 with a ``skipped: "use shirudo upatch <verb> (future work)"``
 marker so they remain discoverable.
 
+Exporting map snapshots to OpenTelemetry
+-----------------------------------------
+
+The detailed map form can export a snapshot over OTLP/HTTP JSON.  ``--otel``
+chooses a cumulative metric for an unsigned scalar per-CPU map and a
+structured log for every other map shape.  The explicit values override that
+choice:
+
+.. code-block:: sh
+
+    # blocked_af_alg is a PERCPU_ARRAY<u32,u64>, so this selects metrics.
+    shirudo upatch map cve-2026-31431-counter blocked_af_alg --otel
+
+    # Preserve any map shape as one structured OTLP log record.
+    shirudo upatch map my-patch events --otel=log
+
+    # Force gauge semantics and select an OTLP base URL.
+    shirudo upatch map my-patch active \
+      --otel=metric --otel-endpoint=https://collector.example \
+      --metric-kind=gauge --metric-unit=1
+
+``--otel-endpoint`` is always a base URL; Shirudo appends ``v1/logs`` or
+``v1/metrics`` for the selected signal.  Without that option, the standard
+``OTEL_EXPORTER_OTLP_LOGS_*``, ``OTEL_EXPORTER_OTLP_METRICS_*``, and generic
+``OTEL_EXPORTER_OTLP_*`` environment variables configure the endpoint,
+headers, CA, mTLS client certificate/key, timeout, and gzip compression.  The
+default is the local Collector at ``http://localhost:4318``.
+
+HTTPS verifies both the certificate chain and host name.
+``--otel-insecure`` is required for remote cleartext HTTP; on HTTPS it
+disables both checks.  Either use prints a prominent warning.  Authentication
+tokens belong in
+``OTEL_EXPORTER_OTLP_LOGS_HEADERS`` or
+``OTEL_EXPORTER_OTLP_METRICS_HEADERS`` rather than the command line, for
+example ``Authorization=Bearer%20TOKEN``.  Shirudo never prints configured
+header values.
+
+The metric emitter exports one point per map key and sums per-CPU replicas.
+It defaults to a monotonic cumulative counter; use ``--metric-kind=gauge`` for
+instantaneous values.  Compound values, maps without numeric BTF, and map
+types with dedicated serializers should use ``--otel=log``.  A truncated metric
+view is rejected instead of silently omitting time series; add
+``--show-full`` when exporting a map with more than 256 entries.  Delivery is
+synchronous and defaults to three retries; ``--otel-retries=0`` disables
+retries.
+
 When the upatch is later unloaded (next section), shirudo
 descends into the ``maps/`` subdir and unpins every map before
 unlinking the link pin -- no orphan map refs left behind.

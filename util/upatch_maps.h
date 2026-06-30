@@ -35,7 +35,7 @@ struct shirudo_json_emit;
  */
 struct shirudo_map_entry {
 	void		*key;		/* key_size bytes */
-	void		*value;		/* value_size * (per-CPU ? n_cpus : 1) */
+	void		*value;		/* value_stride * (per-CPU ? n_cpus : 1) */
 };
 
 /*
@@ -66,9 +66,11 @@ struct shirudo_map_view {
 	const char	*type_name;	/* "percpu_array" / "hash" / ... */
 	uint32_t	key_size;
 	uint32_t	value_size;	/* per-CPU value size (not multiplied) */
+	uint32_t	value_stride;	/* per-CPU kernel ABI stride; else value_size */
 	uint32_t	max_entries;
 	uint32_t	n_entries;	/* live entries iterated */
 	uint32_t	n_cpus;		/* 1 for non-percpu types */
+	uint64_t	lifetime_start_ns; /* pin-dir ctime; metric reset boundary */
 	bool		truncated;
 	uint32_t	n_truncated_at;
 	bool		serialized;
@@ -139,5 +141,17 @@ void shirudo_upatch_maps_emit_json_fields(struct shirudo_json_emit *e,
 					  const struct shirudo_map_view *v);
 void shirudo_upatch_maps_emit_json_object(struct shirudo_json_emit *e,
 					  const struct shirudo_map_view *v);
+
+/* Shared value formatting used by local and telemetry emitters. */
+bool shirudo_upatch_map_is_percpu(uint32_t type);
+uint32_t shirudo_upatch_map_value_stride(const struct shirudo_map_view *v);
+char *shirudo_upatch_map_format_cell(const struct shirudo_map_view *v,
+				     uint32_t type_id, const void *value,
+				     uint32_t value_size,
+				     const char *btf_type);
+char *shirudo_upatch_map_format_percpu_sum(const struct shirudo_map_view *v,
+					   const void *values_per_cpu,
+					   const char *btf_type);
+char *shirudo_upatch_map_hex_alloc(const void *data, uint32_t len);
 
 #endif /* SHIRUDO_UTIL_UPATCH_MAPS_H */

@@ -45,8 +45,12 @@ _shirudo()
 				COMPREPLY=( $(compgen -W "--json" -- "$cur") )
 				;;
 			map)
-				COMPREPLY=( $(compgen -W "--json= --show-full" \
-					-- "$cur") )
+				COMPREPLY=( $(compgen -W "--json= --show-full \
+					--otel --otel=log --otel=metric \
+					--otel-endpoint= --otel-insecure \
+					--otel-retries= --metric-kind= \
+					--metric-name= --metric-unit= \
+					--metric-description=" -- "$cur") )
 				;;
 			get)
 				# no flags beyond --help

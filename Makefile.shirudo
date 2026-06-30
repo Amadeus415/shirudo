@@ -48,7 +48,7 @@ INCLUDES := \
 
 CFLAGS := $(CFLAGS_BASE) $(INCLUDES) \
           $(LIBCRYPTO_CFLAGS) $(LIBSSH_CFLAGS) $(TSS2_CFLAGS) \
-          $(LIBELF_CFLAGS) $(ZLIB_CFLAGS)
+          $(LIBELF_CFLAGS) $(ZLIB_CFLAGS) $(LIBCURL_CFLAGS)
 
 # Static-link these; dynamic-link the rest (libcrypto, libssh, tss2).
 STATIC_LIBS := \
@@ -56,7 +56,7 @@ STATIC_LIBS := \
 
 DYNAMIC_LIBS := \
     $(LIBCRYPTO_LIBS) $(LIBSSH_LIBS) $(TSS2_LIBS) \
-    $(LIBELF_LIBS) $(ZLIB_LIBS)
+    $(LIBELF_LIBS) $(ZLIB_LIBS) $(LIBCURL_LIBS)
 
 ifeq ($(SHIRUDO_BUNDLE_RPATH),1)
 RPATH_LDFLAGS := -Wl,--disable-new-dtags -Wl,-rpath,'$$ORIGIN/../lib/shirudo'
@@ -105,6 +105,7 @@ UTIL_SRCS := \
     util/seal.c \
     util/serializer.c \
     util/upatch_maps.c \
+    util/upatch_maps_otel.c \
     util/upatch_resolve.c \
     util/upatch_table.c
 
@@ -338,6 +339,7 @@ TEST_HELPERS := t/helper/test-json-parser \
                 t/helper/test-selector \
                 t/helper/test-bpf-load \
                 t/helper/test-kernel-abi \
+                t/helper/test-otel-map \
                 t/helper/test-upatch-map-types \
                 t/helper/test-upatch-prog-metadata \
                 t/helper/test-upatch-serializer-pages \
@@ -376,6 +378,12 @@ t/helper/test-kernel-abi: t/helper/test-kernel-abi.c util/kernel_abi.o \
                           $(LIBBPF_A)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LIBELF_LIBS) $(ZLIB_LIBS)
+
+t/helper/test-otel-map: t/helper/test-otel-map.c util/upatch_maps.o \
+                        util/upatch_maps_otel.o util/serializer.o \
+                        util/json.o util/malloc.o $(LIBBPF_A)
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS)
 
 t/helper/test-upatch-map-types: t/helper/test-upatch-map-types.c
 	@printf '  CC      $@\n'
