@@ -233,6 +233,120 @@ static int send_metric(const char *url)
 	return rc ? 1 : 0;
 }
 
+static bool large_serialized_fixture(struct fixture *f)
+{
+	const uint32_t pages = 9;
+	const uint32_t bytes = 512U * 1024U;
+
+	f->view.serialized = true;
+	f->view.n_entries = 0;
+	f->view.n_serial_pages = pages;
+	f->view.serial_bytes_total = (uint64_t)pages * bytes;
+	f->view.serial_pages = xcalloc(pages, sizeof(*f->view.serial_pages));
+	if (!f->view.serial_pages)
+		return false;
+	for (uint32_t i = 0; i < pages; i++) {
+		struct shirudo_serial_page *page = &f->view.serial_pages[i];
+
+		page->page_index = i;
+		page->cursor = i;
+		page->next_cursor = i + 1;
+		page->done = i + 1 == pages;
+		page->flags = page->done ? 1 : 0;
+		page->chunks = 128;
+		page->bytes = bytes;
+		page->data = xmalloc(bytes);
+		if (!page->data)
+			return false;
+		memset(page->data, (int)('A' + i), bytes);
+	}
+	return true;
+}
+
+static void large_serialized_destroy(struct fixture *f)
+{
+	if (!f->view.serial_pages)
+		return;
+	for (uint32_t i = 0; i < f->view.n_serial_pages; i++)
+		xfree(f->view.serial_pages[i].data,
+		      f->view.serial_pages[i].bytes);
+	xfree(f->view.serial_pages,
+	      f->view.n_serial_pages * sizeof(*f->view.serial_pages));
+	f->view.serial_pages = NULL;
+}
+
+static int send_s3(const char *endpoint, unsigned int retries, bool large)
+{
+	struct shirudo_otel_opts opts = {
+		.s3_uri = "s3://test-bucket/prefix",
+		.retries = retries,
+	};
+	struct fixture f;
+	int rc;
+
+	if (setenv("AWS_ENDPOINT_URL_S3", endpoint, 1) != 0)
+		return 1;
+	rc = fixture_init(&f, BPF_MAP_TYPE_PERCPU_ARRAY, false, true);
+	if (rc)
+		return 1;
+	if (large) {
+		if (!large_serialized_fixture(&f)) {
+			large_serialized_destroy(&f);
+			fixture_destroy(&f);
+			return 1;
+		}
+	}
+	rc = shirudo_upatch_maps_otel_send(&f.view, SHIRUDO_OTEL_S3, &opts);
+	large_serialized_destroy(&f);
+	fixture_destroy(&f);
+	return rc ? 1 : 0;
+}
+
+static int s3_validation(void)
+{
+	struct shirudo_otel_opts opts = {
+		.s3_uri = "s3://test-bucket/prefix",
+		.retries = 0,
+	};
+	struct fixture f;
+	int rc;
+
+	if (fixture_init(&f, BPF_MAP_TYPE_PERCPU_ARRAY, false, true))
+		return 1;
+	setenv("AWS_ENDPOINT_URL_S3", "http://127.0.0.1:1", 1);
+	unsetenv("AWS_ACCESS_KEY_ID");
+	unsetenv("AWS_SECRET_ACCESS_KEY");
+	rc = shirudo_upatch_maps_otel_send(&f.view, SHIRUDO_OTEL_S3, &opts);
+	if (rc != -EACCES)
+		goto fail;
+	setenv("AWS_ACCESS_KEY_ID", "test", 1);
+	setenv("AWS_SECRET_ACCESS_KEY", "secret", 1);
+	opts.s3_uri = "s3://BAD_BUCKET/prefix";
+	rc = shirudo_upatch_maps_otel_send(&f.view, SHIRUDO_OTEL_S3, &opts);
+	if (rc != -EINVAL)
+		goto fail;
+	opts.s3_uri = "s3://test-bucket/prefix";
+	f.view.truncated = true;
+	rc = shirudo_upatch_maps_otel_send(&f.view, SHIRUDO_OTEL_S3, &opts);
+	f.view.truncated = false;
+	if (rc != -E2BIG)
+		goto fail;
+	f.view.skipped = true;
+	rc = shirudo_upatch_maps_otel_send(&f.view, SHIRUDO_OTEL_S3, &opts);
+	f.view.skipped = false;
+	if (rc != -EOPNOTSUPP)
+		goto fail;
+	setenv("AWS_ENDPOINT_URL_S3", "http://storage.example", 1);
+	rc = shirudo_upatch_maps_otel_send(&f.view, SHIRUDO_OTEL_S3, &opts);
+	if (rc != -EPERM)
+		goto fail;
+	fixture_destroy(&f);
+	return 0;
+fail:
+	fixture_destroy(&f);
+	return 1;
+}
+
 static int security_check(void)
 {
 	struct shirudo_otel_opts opts = {
@@ -297,6 +411,14 @@ int main(int argc, char **argv)
 		return send_auto(argv[2], false);
 	if (strcmp(argv[1], "send-metric") == 0 && argc == 3)
 		return send_metric(argv[2]);
+	if (strcmp(argv[1], "send-s3") == 0 && argc == 4)
+		return send_s3(argv[2],
+			(unsigned int)strtoul(argv[3], NULL, 10), false);
+	if (strcmp(argv[1], "send-s3-large") == 0 && argc == 4)
+		return send_s3(argv[2],
+			(unsigned int)strtoul(argv[3], NULL, 10), true);
+	if (strcmp(argv[1], "s3-validation") == 0)
+		return s3_validation();
 	if (strcmp(argv[1], "security") == 0)
 		return security_check();
 	return 2;

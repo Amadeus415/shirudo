@@ -16,13 +16,39 @@
 
 #include "json.h"
 
+static int flush_sink(struct shirudo_json_emit *e)
+{
+	int rc;
+
+	if (e->err)
+		return e->err;
+	if (!e->sink || e->len == 0)
+		return 0;
+	rc = e->sink(e->sink_ctx, e->buf, e->len);
+	if (rc) {
+		e->err = rc < 0 ? rc : -EIO;
+		return e->err;
+	}
+	e->len = 0;
+	if (e->cap)
+		e->buf[0] = '\0';
+	return 0;
+}
+
 static void put(struct shirudo_json_emit *e, char c)
 {
 	if (e->err)
 		return;
 	if (e->len + 1 >= e->cap) {
-		e->err = -ENOSPC;
-		return;
+		if (!e->sink || flush_sink(e)) {
+			if (!e->err)
+				e->err = -ENOSPC;
+			return;
+		}
+		if (e->len + 1 >= e->cap) {
+			e->err = -ENOSPC;
+			return;
+		}
 	}
 	e->buf[e->len++] = c;
 	e->buf[e->len] = '\0';
@@ -204,6 +230,13 @@ void shirudo_json_str(struct shirudo_json_emit *e, const char *val)
 {
 	sep(e);
 	put_string(e, val);
+}
+
+int shirudo_json_emit_flush(struct shirudo_json_emit *e)
+{
+	if (!e)
+		return -EINVAL;
+	return flush_sink(e);
 }
 
 /* ---- Schema-driven parser ---------------------------------------- */

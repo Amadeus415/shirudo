@@ -46,16 +46,16 @@ _shirudo()
 				;;
 			map)
 				COMPREPLY=( $(compgen -W "--json= --show-full \
-					--otel --otel=log --otel=metric \
+					--otel --otel=log --otel=metric --otel=s3 \
 					--otel-endpoint= --otel-insecure \
-					--otel-retries= --metric-kind= \
+					--otel-retries= --s3-uri=s3:// --metric-kind= \
 					--metric-name= --metric-unit= \
 					--metric-description=" -- "$cur") )
 				;;
 			get)
 				# no flags beyond --help
 				COMPREPLY=()
-				;;
+			;;
 			esac
 		else
 			COMPREPLY=( $(compgen -f -X '!*.upatch' -- "$cur") \

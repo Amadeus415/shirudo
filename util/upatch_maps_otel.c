@@ -4,12 +4,14 @@
  *
  * OTLP/HTTP JSON export for pinned upatch map snapshots. Automatic mode
  * chooses a signal from the map's structural BTF; explicit log and metric
- * modes bypass that classifier. Network delivery is synchronous and bounded
- * by the caller-selected retry count.
+ * modes bypass that classifier. S3 mode stores the complete snapshot in S3
+ * and sends a small OTLP log reference. Network delivery is synchronous and
+ * bounded by the caller-selected retry count.
  */
 
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -27,6 +29,7 @@
 
 #include <bpf/btf.h>
 #include <curl/curl.h>
+#include <openssl/evp.h>
 #include <zlib.h>
 
 #include "json.h"
@@ -39,6 +42,15 @@
 #define OTEL_DEFAULT_TIMEOUT_MS	10000L
 #define OTEL_MAX_HEADER_BYTES	16384U
 #define OTEL_MAX_TYPE_UNWRAP	32
+
+#define S3_BUCKET_MAX		63
+#define S3_PREFIX_MAX		512
+#define S3_REGION_MAX		64
+#define S3_URL_MAX		4096
+#define S3_KEY_MAX		1024
+#define S3_JSON_BUFFER_SIZE	(64U * 1024U)
+#define S3_GZIP_BUFFER_SIZE	(64U * 1024U)
+#define S3_REFERENCE_MAX	(64U * 1024U)
 
 extern const char shirudo_version[];
 
@@ -60,6 +72,31 @@ struct otel_state {
 	bool gzip;
 	bool insecure_tls;
 	struct curl_slist *headers;
+};
+
+struct s3_snapshot {
+	FILE		*file;
+	uint64_t	json_bytes;
+	uint64_t	object_bytes;
+	unsigned char	sha256[32];
+	char		sha256_hex[65];
+	char		sha256_b64[45];
+};
+
+struct otel_s3_state {
+	struct otel_state *otel;
+	struct shirudo_otel_opts opts;
+	char	bucket[S3_BUCKET_MAX + 1];
+	char	prefix[S3_PREFIX_MAX + 1];
+	char	region[S3_REGION_MAX];
+	char	endpoint[OTEL_ENDPOINT_MAX];
+	char	host[256];
+	char	*credentials;
+	size_t	credentials_len;
+	const char *session_token;
+	const char *ca_file;
+	bool	custom_endpoint;
+	bool	insecure_tls;
 };
 
 struct metric_type {
@@ -1338,6 +1375,786 @@ static int otel_close(void *state)
 	return 0;
 }
 
+/* ---- S3-backed log references ------------------------------------ */
+
+struct snapshot_writer {
+	FILE		*file;
+	z_stream	z;
+	gz_header	header;
+	EVP_MD_CTX	*md;
+	uint64_t	json_bytes;
+	uint64_t	object_bytes;
+	bool		deflate_ready;
+};
+
+static int snapshot_temp_file(FILE **out)
+{
+	const char *tmpdir = getenv("TMPDIR");
+	char path[PATH_MAX];
+	FILE *file;
+	int fd, n;
+
+	if (!tmpdir || !tmpdir[0])
+		tmpdir = "/tmp";
+	n = snprintf(path, sizeof(path), "%s/%s", tmpdir,
+		     "shirudo-map-snapshot.XXXXXX");
+	if (n < 0 || (size_t)n >= sizeof(path))
+		return -ENAMETOOLONG;
+	fd = mkstemp(path);
+	if (fd < 0)
+		return -errno;
+	if (fchmod(fd, 0600) != 0) {
+		int rc = -errno;
+
+		unlink(path);
+		close(fd);
+		return rc;
+	}
+	if (unlink(path) != 0) {
+		int rc = -errno;
+
+		close(fd);
+		return rc;
+	}
+	file = fdopen(fd, "w+b");
+	if (!file) {
+		int rc = -errno;
+
+		close(fd);
+		return rc;
+	}
+	*out = file;
+	return 0;
+}
+
+static int snapshot_write_compressed(struct snapshot_writer *w,
+				     const unsigned char *data, size_t len)
+{
+	if (UINT64_MAX - w->object_bytes < len)
+		return -EOVERFLOW;
+	if (len && fwrite(data, 1, len, w->file) != len)
+		return -EIO;
+	if (len && EVP_DigestUpdate(w->md, data, len) != 1)
+		return -EIO;
+	w->object_bytes += len;
+	return 0;
+}
+
+static int snapshot_writer_init(struct snapshot_writer *w, FILE *file)
+{
+	int zr;
+
+	memset(w, 0, sizeof(*w));
+	w->file = file;
+	w->md = EVP_MD_CTX_new();
+	if (!w->md)
+		return -ENOMEM;
+	if (EVP_DigestInit_ex(w->md, EVP_sha256(), NULL) != 1)
+		return -EIO;
+	zr = deflateInit2(&w->z, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16,
+			  8, Z_DEFAULT_STRATEGY);
+	if (zr != Z_OK)
+		return -EIO;
+	w->deflate_ready = true;
+	/* A zero timestamp makes identical JSON produce identical gzip bytes. */
+	w->header.time = 0;
+	w->header.os = 255;
+	if (deflateSetHeader(&w->z, &w->header) != Z_OK)
+		return -EIO;
+	return 0;
+}
+
+static void snapshot_writer_abort(struct snapshot_writer *w)
+{
+	if (w->deflate_ready)
+		deflateEnd(&w->z);
+	if (w->md)
+		EVP_MD_CTX_free(w->md);
+	w->deflate_ready = false;
+	w->md = NULL;
+}
+
+static int snapshot_json_sink(void *ctx, const char *data, size_t len)
+{
+	struct snapshot_writer *w = ctx;
+	unsigned char out[S3_GZIP_BUFFER_SIZE];
+
+	if (UINT64_MAX - w->json_bytes < len)
+		return -EOVERFLOW;
+	w->json_bytes += len;
+	while (len) {
+		uInt chunk = len > UINT_MAX ? UINT_MAX : (uInt)len;
+
+		w->z.next_in = (unsigned char *)data;
+		w->z.avail_in = chunk;
+		while (w->z.avail_in) {
+			size_t produced;
+			int rc, zr;
+
+			w->z.next_out = out;
+			w->z.avail_out = sizeof(out);
+			zr = deflate(&w->z, Z_NO_FLUSH);
+			if (zr != Z_OK)
+				return -EIO;
+			produced = sizeof(out) - w->z.avail_out;
+			rc = snapshot_write_compressed(w, out, produced);
+			if (rc)
+				return rc;
+		}
+		data += chunk;
+		len -= chunk;
+	}
+	return 0;
+}
+
+static int snapshot_writer_finish(struct snapshot_writer *w,
+				  struct s3_snapshot *snapshot)
+{
+	unsigned char out[S3_GZIP_BUFFER_SIZE];
+	unsigned int digest_len = 0;
+	int zr, rc;
+
+	do {
+		size_t produced;
+
+		w->z.next_out = out;
+		w->z.avail_out = sizeof(out);
+		zr = deflate(&w->z, Z_FINISH);
+		if (zr != Z_OK && zr != Z_STREAM_END)
+			return -EIO;
+		produced = sizeof(out) - w->z.avail_out;
+		rc = snapshot_write_compressed(w, out, produced);
+		if (rc)
+			return rc;
+	} while (zr != Z_STREAM_END);
+	if (deflateEnd(&w->z) != Z_OK)
+		return -EIO;
+	w->deflate_ready = false;
+	if (EVP_DigestFinal_ex(w->md, snapshot->sha256, &digest_len) != 1 ||
+	    digest_len != sizeof(snapshot->sha256))
+		return -EIO;
+	EVP_MD_CTX_free(w->md);
+	w->md = NULL;
+	if (fflush(w->file) != 0 || fseeko(w->file, 0, SEEK_SET) != 0)
+		return -EIO;
+	snapshot->json_bytes = w->json_bytes;
+	snapshot->object_bytes = w->object_bytes;
+	for (size_t i = 0; i < sizeof(snapshot->sha256); i++)
+		snprintf(snapshot->sha256_hex + i * 2, 3, "%02x",
+			 snapshot->sha256[i]);
+	if (EVP_EncodeBlock((unsigned char *)snapshot->sha256_b64,
+			    snapshot->sha256, sizeof(snapshot->sha256)) != 44)
+		return -EIO;
+	snapshot->sha256_b64[44] = '\0';
+	return 0;
+}
+
+static int build_s3_snapshot(const struct shirudo_map_view *v,
+			     struct s3_snapshot *snapshot)
+{
+	struct snapshot_writer writer;
+	struct shirudo_json_emit e = {};
+	char *json_buf;
+	int rc;
+
+	memset(snapshot, 0, sizeof(*snapshot));
+	if (v->skipped)
+		return -EOPNOTSUPP;
+	if (v->truncated)
+		return -E2BIG;
+	rc = snapshot_temp_file(&snapshot->file);
+	if (rc)
+		return rc;
+	rc = snapshot_writer_init(&writer, snapshot->file);
+	if (rc)
+		goto err_writer;
+	json_buf = xmalloc(S3_JSON_BUFFER_SIZE);
+	if (!json_buf) {
+		rc = -ENOMEM;
+		goto err_writer;
+	}
+	e.buf = json_buf;
+	e.cap = S3_JSON_BUFFER_SIZE;
+	e.sink = snapshot_json_sink;
+	e.sink_ctx = &writer;
+	shirudo_json_obj_open(&e);
+	shirudo_json_kv_int(&e, "schema", 1);
+	shirudo_json_kv_string(&e, "upatch", v->upatch);
+	shirudo_json_kv_string(&e, "map", v->name);
+	shirudo_json_obj_open_key(&e, "data");
+	shirudo_upatch_maps_emit_json_fields(&e, v);
+	shirudo_json_obj_close(&e);
+	shirudo_json_obj_close(&e);
+	rc = e.err ? e.err : shirudo_json_emit_flush(&e);
+	xfree(json_buf, S3_JSON_BUFFER_SIZE);
+	if (rc)
+		goto err_writer;
+	rc = snapshot_writer_finish(&writer, snapshot);
+	if (rc)
+		goto err_writer;
+	return 0;
+
+err_writer:
+	snapshot_writer_abort(&writer);
+	fclose(snapshot->file);
+	snapshot->file = NULL;
+	return rc;
+}
+
+static bool valid_bucket(const char *bucket, size_t len)
+{
+	if (len < 3 || len > S3_BUCKET_MAX ||
+	    !isalnum((unsigned char)bucket[0]) ||
+	    !isalnum((unsigned char)bucket[len - 1]))
+		return false;
+	for (size_t i = 0; i < len; i++) {
+		unsigned char c = bucket[i];
+
+		if (!(c >= 'a' && c <= 'z') && !isdigit(c) && c != '-' &&
+		    c != '.')
+			return false;
+	}
+	return true;
+}
+
+static bool valid_region(const char *region)
+{
+	if (!region || !region[0] || strlen(region) >= S3_REGION_MAX)
+		return false;
+	for (const unsigned char *p = (const unsigned char *)region; *p; p++)
+		if (!isalnum(*p) && *p != '-')
+			return false;
+	return true;
+}
+
+static int parse_s3_spec(struct otel_s3_state *st, const char *spec)
+{
+	const char *bucket, *slash, *prefix, *region, *endpoint;
+	const char *access, *secret;
+	size_t bucket_len, prefix_len, credentials_len;
+
+	if (!spec || strncmp(spec, "s3://", 5) != 0)
+		return -EINVAL;
+	bucket = spec + 5;
+	slash = strchr(bucket, '/');
+	bucket_len = slash ? (size_t)(slash - bucket) : strlen(bucket);
+	if (!valid_bucket(bucket, bucket_len))
+		return -EINVAL;
+	memcpy(st->bucket, bucket, bucket_len);
+	st->bucket[bucket_len] = '\0';
+	prefix = slash ? slash + 1 : "";
+	while (*prefix == '/')
+		prefix++;
+	prefix_len = strlen(prefix);
+	while (prefix_len && prefix[prefix_len - 1] == '/')
+		prefix_len--;
+	if (prefix_len > S3_PREFIX_MAX)
+		return -ENAMETOOLONG;
+	for (size_t i = 0; i < prefix_len; i++)
+		if ((unsigned char)prefix[i] < 0x20 || prefix[i] == '?' ||
+		    prefix[i] == '#')
+			return -EINVAL;
+	memcpy(st->prefix, prefix, prefix_len);
+	st->prefix[prefix_len] = '\0';
+	region = getenv("AWS_REGION");
+	if (!region || !region[0])
+		region = getenv("AWS_DEFAULT_REGION");
+	if (!region || !region[0])
+		region = "us-east-1";
+	if (!valid_region(region))
+		return -EINVAL;
+	snprintf(st->region, sizeof(st->region), "%s", region);
+	endpoint = getenv("AWS_ENDPOINT_URL_S3");
+	if (endpoint && endpoint[0]) {
+		size_t len = strlen(endpoint);
+
+		if (len >= sizeof(st->endpoint))
+			return -ENAMETOOLONG;
+		while (len && endpoint[len - 1] == '/')
+			len--;
+		if (!len)
+			return -EINVAL;
+		memcpy(st->endpoint, endpoint, len);
+		st->endpoint[len] = '\0';
+		st->custom_endpoint = true;
+	}
+	access = getenv("AWS_ACCESS_KEY_ID");
+	secret = getenv("AWS_SECRET_ACCESS_KEY");
+	if (!access || !access[0] || !secret || !secret[0] ||
+	    strpbrk(access, "\r\n:") || strpbrk(secret, "\r\n"))
+		return -EACCES;
+	if (strlen(access) > SIZE_MAX - strlen(secret) - 2)
+		return -EOVERFLOW;
+	credentials_len = strlen(access) + strlen(secret) + 2;
+	st->credentials = xmalloc(credentials_len);
+	if (!st->credentials)
+		return -ENOMEM;
+	st->credentials_len = credentials_len;
+	snprintf(st->credentials, credentials_len, "%s:%s", access, secret);
+	st->session_token = getenv("AWS_SESSION_TOKEN");
+	if (st->session_token &&
+	    (!st->session_token[0] || strpbrk(st->session_token, "\r\n")))
+		return -EINVAL;
+	st->ca_file = getenv("AWS_CA_BUNDLE");
+	if (st->ca_file && !st->ca_file[0])
+		st->ca_file = NULL;
+	return 0;
+}
+
+static int validate_s3_endpoint(struct otel_s3_state *st)
+{
+	CURLU *url;
+	char *scheme = NULL, *host = NULL, *user = NULL, *password = NULL;
+	int rc = 0;
+
+	if (!st->custom_endpoint) {
+		if (st->opts.allow_insecure) {
+			st->insecure_tls = true;
+			fprintf(stderr, "WARNING: --otel-insecure disables TLS certificate "
+				"and hostname verification for Amazon S3\n");
+		}
+		return 0;
+	}
+	url = curl_url();
+	if (!url)
+		return -ENOMEM;
+	if (curl_url_set(url, CURLUPART_URL, st->endpoint, 0) ||
+	    curl_url_get(url, CURLUPART_SCHEME, &scheme, 0) ||
+	    curl_url_get(url, CURLUPART_HOST, &host, 0)) {
+		rc = -EINVAL;
+		goto out;
+	}
+	(void)curl_url_get(url, CURLUPART_USER, &user, 0);
+	(void)curl_url_get(url, CURLUPART_PASSWORD, &password, 0);
+	if ((user && user[0]) || (password && password[0]) ||
+	    strchr(st->endpoint, '?') || strchr(st->endpoint, '#')) {
+		rc = -EINVAL;
+		goto out;
+	}
+	if (strlen(host) >= sizeof(st->host)) {
+		rc = -ENAMETOOLONG;
+		goto out;
+	}
+	snprintf(st->host, sizeof(st->host), "%s", host);
+	if (strcmp(scheme, "http") == 0) {
+		if (!loopback_host(host) && !st->opts.allow_insecure) {
+			rc = -EPERM;
+			goto out;
+		}
+		if (st->opts.allow_insecure)
+			fprintf(stderr, "WARNING: --otel-insecure sends S3 snapshots and "
+				"credentials to http://%s without encryption\n", host);
+	} else if (strcmp(scheme, "https") == 0) {
+		st->insecure_tls = st->opts.allow_insecure;
+		if (st->insecure_tls)
+			fprintf(stderr, "WARNING: --otel-insecure disables TLS certificate "
+				"and hostname verification for S3 endpoint %s\n", host);
+	} else {
+		rc = -EPROTONOSUPPORT;
+	}
+out:
+	curl_free(scheme);
+	curl_free(host);
+	curl_free(user);
+	curl_free(password);
+	curl_url_cleanup(url);
+	return rc;
+}
+
+static void safe_key_segment(char *segment)
+{
+	for (unsigned char *p = (unsigned char *)segment; *p; p++)
+		if (!isalnum(*p) && *p != '-' && *p != '_' && *p != '.')
+			*p = '_';
+}
+
+static int escape_s3_path(const char *path, char *out, size_t out_sz)
+{
+	static const char hex[] = "0123456789ABCDEF";
+	size_t n = 0;
+
+	for (const unsigned char *p = (const unsigned char *)path; *p; p++) {
+		bool plain = isalnum(*p) || *p == '-' || *p == '_' || *p == '.' ||
+			     *p == '~' || *p == '/';
+
+		if (plain) {
+			if (n + 1 >= out_sz)
+				return -ENAMETOOLONG;
+			out[n++] = (char)*p;
+		} else {
+			if (n + 3 >= out_sz)
+				return -ENAMETOOLONG;
+			out[n++] = '%';
+			out[n++] = hex[*p >> 4];
+			out[n++] = hex[*p & 0xf];
+		}
+	}
+	out[n] = '\0';
+	return 0;
+}
+
+static int build_s3_urls(const struct otel_s3_state *st,
+			 const struct shirudo_map_view *v,
+			 const struct s3_snapshot *snapshot,
+			 char *url, size_t url_sz, char *uri, size_t uri_sz)
+{
+	char hostname[256] = "unknown";
+	char key[S3_URL_MAX], escaped[S3_URL_MAX];
+	int n, rc;
+
+	if (gethostname(hostname, sizeof(hostname)) != 0)
+		snprintf(hostname, sizeof(hostname), "unknown");
+	hostname[sizeof(hostname) - 1] = '\0';
+	safe_key_segment(hostname);
+	n = snprintf(key, sizeof(key), "%s%s%s/%s/%s/%s.json.gz",
+		     st->prefix, st->prefix[0] ? "/" : "", hostname,
+		     v->upatch, v->name, snapshot->sha256_hex);
+	if (n < 0 || (size_t)n >= sizeof(key))
+		return -ENAMETOOLONG;
+	if ((size_t)n > S3_KEY_MAX)
+		return -ENAMETOOLONG;
+	rc = escape_s3_path(key, escaped, sizeof(escaped));
+	if (rc)
+		return rc;
+	n = snprintf(uri, uri_sz, "s3://%s/%s", st->bucket, escaped);
+	if (n < 0 || (size_t)n >= uri_sz)
+		return -ENAMETOOLONG;
+	if (st->custom_endpoint)
+		n = snprintf(url, url_sz, "%s/%s/%s", st->endpoint,
+			     st->bucket, escaped);
+	else if (strchr(st->bucket, '.'))
+		n = snprintf(url, url_sz, "https://s3.%s.amazonaws.com/%s/%s",
+			     st->region, st->bucket, escaped);
+	else
+		n = snprintf(url, url_sz, "https://%s.s3.%s.amazonaws.com/%s",
+			     st->bucket, st->region, escaped);
+	return n < 0 || (size_t)n >= url_sz ? -ENAMETOOLONG : 0;
+}
+
+static int s3_header(struct curl_slist **headers, const char *line)
+{
+	struct curl_slist *next = curl_slist_append(*headers, line);
+
+	if (!next)
+		return -ENOMEM;
+	*headers = next;
+	return 0;
+}
+
+static int s3_headers(const struct otel_s3_state *st,
+		      const struct shirudo_map_view *v,
+		      const struct s3_snapshot *snapshot,
+		      struct curl_slist **out)
+{
+	char line[512];
+	int rc;
+
+#define S3_HEADER_LITERAL(value) do { \
+	rc = s3_header(out, (value)); \
+	if (rc) return rc; \
+} while (0)
+	S3_HEADER_LITERAL("Content-Type: application/json");
+	S3_HEADER_LITERAL("Content-Encoding: gzip");
+	S3_HEADER_LITERAL("Cache-Control: immutable");
+	S3_HEADER_LITERAL("If-None-Match: *");
+	S3_HEADER_LITERAL("Expect:");
+	snprintf(line, sizeof(line), "x-amz-content-sha256: %s",
+		 snapshot->sha256_hex);
+	S3_HEADER_LITERAL(line);
+	snprintf(line, sizeof(line), "x-amz-checksum-sha256: %s",
+		 snapshot->sha256_b64);
+	S3_HEADER_LITERAL(line);
+	S3_HEADER_LITERAL("x-amz-meta-shirudo-schema: 1");
+	snprintf(line, sizeof(line), "x-amz-meta-shirudo-upatch: %s",
+		 v->upatch);
+	S3_HEADER_LITERAL(line);
+	snprintf(line, sizeof(line), "x-amz-meta-shirudo-map: %s", v->name);
+	S3_HEADER_LITERAL(line);
+	if (st->session_token) {
+		if (strlen(st->session_token) > sizeof(line) - 24)
+			return -E2BIG;
+		snprintf(line, sizeof(line), "x-amz-security-token: %s",
+			 st->session_token);
+		S3_HEADER_LITERAL(line);
+	}
+#undef S3_HEADER_LITERAL
+	return 0;
+}
+
+static bool retryable_s3_http(long status)
+{
+	return status == 408 || status == 409 || status == 500 ||
+	       retryable_http(status);
+}
+
+static int s3_put(struct otel_s3_state *st,
+		  const struct shirudo_map_view *v,
+		  struct s3_snapshot *snapshot, const char *url,
+		  bool *already_present)
+{
+	struct curl_slist *headers = NULL;
+	char sigv4[128];
+	unsigned int max_attempts = st->opts.retries + 1;
+	int rc;
+
+	*already_present = false;
+	rc = s3_headers(st, v, snapshot, &headers);
+	if (rc) {
+		curl_slist_free_all(headers);
+		return rc;
+	}
+	if (snprintf(sigv4, sizeof(sigv4), "aws:amz:%s:s3", st->region) >=
+	    (int)sizeof(sigv4)) {
+		rc = -ENAMETOOLONG;
+		goto out;
+	}
+	for (unsigned int attempt = 0; attempt < max_attempts; attempt++) {
+		struct otel_response response = {};
+		CURL *curl = curl_easy_init();
+		CURLcode cc;
+		long status = 0;
+		bool retry;
+
+		if (!curl) {
+			rc = -ENOMEM;
+			break;
+		}
+		clearerr(snapshot->file);
+		if (fseeko(snapshot->file, 0, SEEK_SET) != 0) {
+			curl_easy_cleanup(curl);
+			rc = -EIO;
+			break;
+		}
+		curl_easy_setopt(curl, CURLOPT_URL, url);
+		curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
+		curl_easy_setopt(curl, CURLOPT_READDATA, snapshot->file);
+		curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE,
+				 (curl_off_t)snapshot->object_bytes);
+		curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+		curl_easy_setopt(curl, CURLOPT_AWS_SIGV4, sigv4);
+		curl_easy_setopt(curl, CURLOPT_USERPWD, st->credentials);
+		curl_easy_setopt(curl, CURLOPT_USERAGENT,
+				 "Shirudo-S3-Exporter-C/1");
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, response_write);
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+		curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, response_header);
+		curl_easy_setopt(curl, CURLOPT_HEADERDATA, &response);
+		curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+		curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS,
+				 OTEL_DEFAULT_TIMEOUT_MS);
+		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER,
+				 st->insecure_tls ? 0L : 1L);
+		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST,
+				 st->insecure_tls ? 0L : 2L);
+		if (st->ca_file)
+			curl_easy_setopt(curl, CURLOPT_CAINFO, st->ca_file);
+		cc = curl_easy_perform(curl);
+		if (cc == CURLE_OK)
+			curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+		if (cc == CURLE_OK &&
+		    (status == 200 || status == 201 || status == 204 ||
+		     status == 412)) {
+			*already_present = status == 412;
+			rc = 0;
+			curl_easy_cleanup(curl);
+			break;
+		}
+		retry = cc != CURLE_OK ? retryable_curl(cc) :
+			retryable_s3_http(status);
+		if (cc != CURLE_OK)
+			fprintf(stderr, "otel.s3: upload attempt %u/%u failed: %s\n",
+				attempt + 1, max_attempts, curl_easy_strerror(cc));
+		else
+			fprintf(stderr, "otel.s3: upload attempt %u/%u received HTTP %ld\n",
+				attempt + 1, max_attempts, status);
+		rc = cc == CURLE_OPERATION_TIMEDOUT ? -ETIMEDOUT :
+		     cc != CURLE_OK ? -EHOSTUNREACH : -EREMOTEIO;
+		curl_easy_cleanup(curl);
+		if (!retry || attempt + 1 == max_attempts)
+			break;
+		retry_wait(attempt, response.retry_after);
+	}
+out:
+	curl_slist_free_all(headers);
+	return rc;
+}
+
+static int build_s3_reference(const struct shirudo_map_view *v,
+			      const struct s3_snapshot *snapshot,
+			      const char *uri, char **out, size_t *out_len)
+{
+	struct shirudo_json_emit e = {};
+	char now[32], description[S3_URL_MAX + 64];
+	char *buf = xmalloc(S3_REFERENCE_MAX);
+
+	if (!buf)
+		return -ENOMEM;
+	e.buf = buf;
+	e.cap = S3_REFERENCE_MAX;
+	u64_decimal(realtime_ns(), now);
+	snprintf(description, sizeof(description),
+		 "BPF map snapshot stored in S3: %s", uri);
+	shirudo_json_obj_open(&e);
+	shirudo_json_arr_open(&e, "resourceLogs");
+	shirudo_json_obj_open(&e);
+	shirudo_json_obj_open_key(&e, "resource");
+	emit_resource_attributes(&e);
+	shirudo_json_obj_close(&e);
+	shirudo_json_arr_open(&e, "scopeLogs");
+	shirudo_json_obj_open(&e);
+	shirudo_json_obj_open_key(&e, "scope");
+	shirudo_json_kv_string(&e, "name", "shirudo.upatch.maps");
+	shirudo_json_kv_string(&e, "version", shirudo_version);
+	shirudo_json_obj_close(&e);
+	shirudo_json_arr_open(&e, "logRecords");
+	shirudo_json_obj_open(&e);
+	shirudo_json_kv_string(&e, "timeUnixNano", now);
+	shirudo_json_kv_string(&e, "observedTimeUnixNano", now);
+	shirudo_json_kv_int(&e, "severityNumber", 9);
+	shirudo_json_kv_string(&e, "severityText", "INFO");
+	shirudo_json_kv_string(&e, "eventName",
+			       "shirudo.bpf.map.snapshot.reference");
+	shirudo_json_obj_open_key(&e, "body");
+	shirudo_json_kv_string(&e, "stringValue", description);
+	shirudo_json_obj_close(&e);
+	shirudo_json_arr_open(&e, "attributes");
+	otlp_kv_string(&e, "shirudo.upatch.name", v->upatch);
+	otlp_kv_string(&e, "shirudo.map.name", v->name);
+	otlp_kv_string(&e, "shirudo.map.type", v->type_name);
+	otlp_kv_int(&e, "shirudo.map.max_entries", v->max_entries);
+	otlp_kv_int(&e, "shirudo.map.n_entries", v->n_entries);
+	otlp_kv_int(&e, "shirudo.map.n_cpus", v->n_cpus);
+	otlp_kv_bool(&e, "shirudo.map.serialized", v->serialized);
+	otlp_kv_bool(&e, "shirudo.map.truncated", v->truncated);
+	otlp_kv_string(&e, "shirudo.map.snapshot.uri", uri);
+	otlp_kv_string(&e, "shirudo.map.snapshot.format",
+		       "shirudo.map.v1+json");
+	otlp_kv_string(&e, "shirudo.map.snapshot.content_type",
+		       "application/json");
+	otlp_kv_string(&e, "shirudo.map.snapshot.content_encoding", "gzip");
+	otlp_kv_int(&e, "shirudo.map.snapshot.size_bytes",
+		    (int64_t)snapshot->object_bytes);
+	otlp_kv_int(&e, "shirudo.map.snapshot.uncompressed_size_bytes",
+		    (int64_t)snapshot->json_bytes);
+	otlp_kv_string(&e, "shirudo.map.snapshot.sha256",
+		       snapshot->sha256_hex);
+	shirudo_json_arr_close(&e);
+	shirudo_json_obj_close(&e);
+	shirudo_json_arr_close(&e);
+	shirudo_json_obj_close(&e);
+	shirudo_json_arr_close(&e);
+	shirudo_json_obj_close(&e);
+	shirudo_json_arr_close(&e);
+	shirudo_json_obj_close(&e);
+	if (e.err || e.depth) {
+		if (!e.err)
+			e.err = -EBADMSG;
+		xfree(buf, S3_REFERENCE_MAX);
+		return e.err;
+	}
+	*out = buf;
+	*out_len = e.len;
+	return 0;
+}
+
+static void otel_s3_state_free(struct otel_s3_state *st)
+{
+	if (!st)
+		return;
+	if (st->otel)
+		otel_close(st->otel);
+	if (st->credentials) {
+		explicit_bzero(st->credentials, st->credentials_len);
+		xfree(st->credentials, st->credentials_len);
+	}
+	xfree(st, sizeof(*st));
+}
+
+static int otel_s3_open(const char *spec, const struct shirudo_map_view *v,
+			const struct shirudo_otel_opts *opts,
+			void **state)
+{
+	struct otel_s3_state *st;
+	void *otel = NULL;
+	int rc;
+
+	if (!v || !state || !spec || !spec[0])
+		return -EINVAL;
+	if (v->skipped)
+		return -EOPNOTSUPP;
+	if (v->truncated)
+		return -E2BIG;
+	if (opts && (opts->metric_kind_set || opts->metric_name ||
+		     opts->metric_unit || opts->metric_description))
+		return -EINVAL;
+	st = xcalloc(1, sizeof(*st));
+	if (!st)
+		return -ENOMEM;
+	st->opts.retries = 3;
+	st->opts.metric_kind = SHIRUDO_OTEL_METRIC_COUNTER;
+	if (opts)
+		st->opts = *opts;
+	rc = parse_s3_spec(st, spec);
+	if (rc)
+		goto err;
+	rc = validate_s3_endpoint(st);
+	if (rc)
+		goto err;
+	rc = otel_open_common(st->opts.endpoint, v, &st->opts, false,
+			      SHIRUDO_OTEL_LOG, &otel);
+	if (rc)
+		goto err;
+	st->otel = otel;
+	*state = st;
+	return 0;
+err:
+	otel_s3_state_free(st);
+	return rc;
+}
+
+static int otel_s3_emit(void *state, const struct shirudo_map_view *v)
+{
+	struct otel_s3_state *st = state;
+	struct s3_snapshot snapshot = {};
+	char url[S3_URL_MAX], uri[S3_URL_MAX];
+	char *payload = NULL;
+	size_t payload_len = 0;
+	bool already_present;
+	int rc;
+
+	if (!st || !v)
+		return -EINVAL;
+	rc = build_s3_snapshot(v, &snapshot);
+	if (rc)
+		return rc;
+	rc = build_s3_urls(st, v, &snapshot, url, sizeof(url), uri,
+			   sizeof(uri));
+	if (rc)
+		goto out;
+	rc = s3_put(st, v, &snapshot, url, &already_present);
+	if (rc)
+		goto out;
+	fprintf(stderr, "otel.s3: %s %s (%" PRIu64 " bytes)\n",
+		already_present ? "found" : "uploaded", uri,
+		snapshot.object_bytes);
+	rc = build_s3_reference(v, &snapshot, uri, &payload, &payload_len);
+	if (rc)
+		goto out;
+	rc = otel_post(st->otel, payload, payload_len);
+out:
+	if (payload)
+		xfree(payload, S3_REFERENCE_MAX);
+	if (snapshot.file)
+		fclose(snapshot.file);
+	return rc;
+}
+
+static int otel_s3_close(void *state)
+{
+	otel_s3_state_free(state);
+	return 0;
+}
+
 int shirudo_upatch_maps_otel_send(const struct shirudo_map_view *v,
 				  enum shirudo_otel_mode mode,
 				  const struct shirudo_otel_opts *opts)
@@ -1348,6 +2165,16 @@ int shirudo_upatch_maps_otel_send(const struct shirudo_map_view *v,
 	void *state = NULL;
 	int rc, close_rc;
 
+	if (mode == SHIRUDO_OTEL_S3) {
+		if (!opts || !opts->s3_uri)
+			return -EINVAL;
+		rc = otel_s3_open(opts->s3_uri, v, opts, &state);
+		if (rc)
+			return rc;
+		rc = otel_s3_emit(state, v);
+		close_rc = otel_s3_close(state);
+		return rc ? rc : close_rc;
+	}
 	if (mode == SHIRUDO_OTEL_FORCE_LOG)
 		signal = SHIRUDO_OTEL_LOG;
 	else if (mode == SHIRUDO_OTEL_FORCE_METRIC)

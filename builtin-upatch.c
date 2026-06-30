@@ -182,10 +182,11 @@ static const struct shirudo_help upatch_unload_help = {
 static const struct shirudo_help_item upatch_map_options[] = {
 	{ "--json=<path>", "append a schema-1 NDJSON record to path" },
 	{ "--show-full",  "lift the per-map 256-entry truncation cap" },
-	{ "--otel[=log|metric]", "export through OTLP; auto-select signal by default" },
+	{ "--otel[=log|metric|s3]", "export through OTLP; auto-select signal by default" },
 	{ "--otel-endpoint=<url>", "OTLP base URL (signal path is appended)" },
 	{ "--otel-insecure", "allow cleartext remote OTLP or disable HTTPS verification" },
 	{ "--otel-retries=<0-10>", "OTLP retries after the first attempt (default: 3)" },
+	{ "--s3-uri=<uri>", "S3 destination for --otel=s3" },
 	{ "--metric-kind=<kind>", "OTLP metric kind: counter (default) or gauge" },
 	{ "--metric-name=<name>", "override derived shirudo.<upatch>.<map> name" },
 	{ "--metric-unit=<unit>", "metric UCUM unit (default: 1)" },
@@ -199,10 +200,10 @@ static const struct shirudo_help_section upatch_map_sections[] = {
 static const struct shirudo_help upatch_map_help = {
 	.usage      = "shirudo upatch map [<upatch>] [<map>] "
 		      "[--json=<path>] [--show-full]\n"
-		      "                          [--otel[=log|metric]] "
+		      "                          [--otel[=log|metric|s3]] "
 		      "[--otel-endpoint=<url>]\n"
 		      "                          [--otel-insecure] "
-		      "[--otel-retries=<0-10>] "
+		      "[--otel-retries=<0-10>] [--s3-uri=<uri>] "
 		      "[--metric-kind=<kind>]\n"
 		      "                          [--metric-name=<name>] "
 		      "[--metric-unit=<unit>]\n"
@@ -226,6 +227,8 @@ static const struct shirudo_help upatch_map_help = {
 "  shirudo upatch map cve-2026-31431-counter blocked_af_alg \\\n"
 "    --json=/var/log/shirudo/maps.ndjson\n"
 "  shirudo upatch map cve-2026-31431-counter blocked_af_alg --otel\n"
+"  shirudo upatch map foo big_map --otel=s3 \\\n"
+"    --s3-uri=s3://telemetry/maps\n"
 "  shirudo upatch map foo values --otel=metric \\\n"
 "    --otel-endpoint=https://collector:4318 --metric-kind=gauge\n"
 "  shirudo upatch map cve-2026-31431-counter big_hash --show-full",
@@ -2814,8 +2817,11 @@ static int cmd_upatch_map(int argc, const char **argv)
 				otel_mode = SHIRUDO_OTEL_FORCE_LOG;
 			else if (strcmp(a + 7, "metric") == 0)
 				otel_mode = SHIRUDO_OTEL_FORCE_METRIC;
+			else if (strcmp(a + 7, "s3") == 0)
+				otel_mode = SHIRUDO_OTEL_S3;
 			else {
-				fprintf(stderr, "upatch map: --otel must be log or metric\n");
+				fprintf(stderr, "upatch map: --otel must be log, metric, "
+					"or s3\n");
 				return 2;
 			}
 			otel = true;
@@ -2850,6 +2856,13 @@ static int cmd_upatch_map(int argc, const char **argv)
 			}
 			otel_opts.retries = (unsigned int)value;
 			retries_set = true;
+		} else if (strncmp(a, "--s3-uri=", 9) == 0) {
+			if (otel_opts.s3_uri || !a[9]) {
+				fprintf(stderr, "upatch map: invalid or duplicate "
+					"--s3-uri\n");
+				return 2;
+			}
+			otel_opts.s3_uri = a + 9;
 		} else if (strncmp(a, "--metric-kind=", 14) == 0) {
 			const char *kind = a + 14;
 
@@ -2895,13 +2908,22 @@ static int cmd_upatch_map(int argc, const char **argv)
 			otel_opts.metric_description;
 
 		if ((otel_opts.endpoint || insecure_set || retries_set ||
-		     metric_opts) && !otel) {
+		     otel_opts.s3_uri || metric_opts) && !otel) {
 			fprintf(stderr, "upatch map: OTLP options require --otel\n");
 			return 2;
 		}
-		if (otel_mode == SHIRUDO_OTEL_FORCE_LOG && metric_opts) {
+		if ((otel_mode == SHIRUDO_OTEL_FORCE_LOG ||
+		     otel_mode == SHIRUDO_OTEL_S3) && metric_opts) {
 			fprintf(stderr, "upatch map: metric options are invalid with "
-				"--otel=log\n");
+				"--otel=log and --otel=s3\n");
+			return 2;
+		}
+		if (otel_mode == SHIRUDO_OTEL_S3 && !otel_opts.s3_uri) {
+			fprintf(stderr, "upatch map: --otel=s3 requires --s3-uri\n");
+			return 2;
+		}
+		if (otel_opts.s3_uri && otel_mode != SHIRUDO_OTEL_S3) {
+			fprintf(stderr, "upatch map: --s3-uri requires --otel=s3\n");
 			return 2;
 		}
 		if (otel && (!upatch || !map)) {
@@ -2912,7 +2934,8 @@ static int cmd_upatch_map(int argc, const char **argv)
 
 	if (upatch && map) {
 		struct shirudo_map_view v = {};
-		uint32_t cap = show_full ? 0 : SHIRUDO_MAP_ENTRIES_DEFAULT;
+		uint32_t cap = show_full || otel_mode == SHIRUDO_OTEL_S3 ? 0 :
+			SHIRUDO_MAP_ENTRIES_DEFAULT;
 		int rc;
 
 		if (!safe_upatch_name(upatch)) {

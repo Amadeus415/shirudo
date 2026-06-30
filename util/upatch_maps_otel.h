@@ -18,6 +18,7 @@ enum shirudo_otel_mode {
 	SHIRUDO_OTEL_AUTO,
 	SHIRUDO_OTEL_FORCE_LOG,
 	SHIRUDO_OTEL_FORCE_METRIC,
+	SHIRUDO_OTEL_S3,
 };
 
 enum shirudo_otel_metric_kind {
@@ -27,6 +28,7 @@ enum shirudo_otel_metric_kind {
 
 struct shirudo_otel_opts {
 	const char	*endpoint;
+	const char	*s3_uri;
 	bool		allow_insecure;
 	unsigned int	retries;
 	enum shirudo_otel_metric_kind metric_kind;

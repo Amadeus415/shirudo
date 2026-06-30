@@ -29,6 +29,14 @@ struct shirudo_json_emit {
 	int		err;	/* sticky; -ENOSPC, -EILSEQ, -E2BIG */
 	unsigned	depth;	/* open-container nesting */
 	uint32_t	nonempty; /* bit d set: container at depth d has a member */
+	/*
+	 * Optional streaming sink.  Buffer-only callers leave these NULL and
+	 * retain the historical NUL-terminated output contract.  Sink callers
+	 * provide a small staging buffer; it is flushed whenever full and once
+	 * explicitly with shirudo_json_emit_flush().
+	 */
+	int		(*sink)(void *ctx, const char *data, size_t len);
+	void		*sink_ctx;
 };
 
 /*
@@ -53,6 +61,9 @@ void shirudo_json_kv_bool(struct shirudo_json_emit *e,
 void shirudo_json_kv_null(struct shirudo_json_emit *e, const char *key);
 /* Bare array element (string), for arrays of scalars. */
 void shirudo_json_str(struct shirudo_json_emit *e, const char *val);
+
+/* Flush pending bytes to a configured sink.  A no-op for buffer emitters. */
+int shirudo_json_emit_flush(struct shirudo_json_emit *e);
 
 /*
  * Schema-driven parser. Not a generic deserialiser: the caller

@@ -557,6 +557,20 @@ inline; they need dedicated readers (future work). They appear
 with a ``skipped: "use shirudo upatch <verb> (future work)"``
 marker so they remain discoverable.
 
+To persist snapshots locally, give ``upatch map`` an explicit NDJSON file:
+
+.. code-block:: sh
+
+    shirudo upatch map cve-2026-31431-counter blocked_af_alg \
+      --json=/var/log/shirudo/maps.ndjson
+
+Each invocation appends one schema-1 record.  The zero- and one-positional
+forms append a map-list record; the detailed two-positional form appends the
+map data.  ``--json`` without a path is rejected.  On the detailed form,
+``--json=<path>`` can be combined with ``--otel``: Shirudo reads the map once,
+attempts both outputs, and exits nonzero if either fails without rolling back
+the output that succeeded.
+
 Exporting map snapshots to OpenTelemetry
 -----------------------------------------
 
@@ -594,7 +608,7 @@ tokens belong in
 example ``Authorization=Bearer%20TOKEN``.  Shirudo never prints configured
 header values.
 
-The metric emitter exports one point per map key and sums per-CPU replicas.
+Metric export produces one point per map key and sums per-CPU replicas.
 It defaults to a monotonic cumulative counter; use ``--metric-kind=gauge`` for
 instantaneous values.  Compound values, maps without numeric BTF, and map
 types with dedicated serializers should use ``--otel=log``.  A truncated metric
@@ -602,6 +616,59 @@ view is rejected instead of silently omitting time series; add
 ``--show-full`` when exporting a map with more than 256 entries.  Delivery is
 synchronous and defaults to three retries; ``--otel-retries=0`` disables
 retries.
+
+Storing large snapshots in S3
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For maps whose serialized form is too large for a useful log record,
+``--otel=s3`` writes the complete schema-1 JSON snapshot to S3 and emits only a
+small OTLP log reference:
+
+.. code-block:: sh
+
+    export AWS_ACCESS_KEY_ID=...
+    export AWS_SECRET_ACCESS_KEY=...
+    export AWS_SESSION_TOKEN=...       # optional temporary credentials
+    export AWS_REGION=us-west-2
+
+    shirudo upatch map dns dns_arena \
+      --otel=s3 --s3-uri=s3://security-telemetry/shirudo/maps
+
+``--s3-uri`` must be ``s3://<bucket>[/<prefix>]``.  S3 mode automatically
+lifts the normal 256-entry display cap; ``--show-full`` is accepted but
+unnecessary.  Unsupported map types without a pinned serializer and any
+unexpectedly truncated view fail without uploading an object.
+``AWS_DEFAULT_REGION`` is used when ``AWS_REGION`` is unset; the final
+fallback is ``us-east-1``.
+
+The object key is content-addressed and partitioned for browsing::
+
+    <prefix>/<host>/<upatch>/<map>/<sha256>.json.gz
+
+The uploaded bytes are deterministic gzip with ``Content-Type:
+application/json``, ``Content-Encoding: gzip``, an S3 SHA-256 checksum, and
+``Cache-Control: immutable``.  A conditional PUT makes a retry of identical
+content idempotent.  The decompressed document has exactly the same top-level
+``schema``, ``upatch``, ``map``, and ``data`` shape written by
+``--json=<path>``.
+
+After the PUT succeeds, shirudo sends an OTLP log event named
+``shirudo.bpf.map.snapshot.reference``.  Its body contains a short description
+and durable ``s3://`` URI; attributes contain map identity, entry counts,
+format, compressed and uncompressed sizes, and the object's SHA-256.  Map
+entries are never copied into this log event.  If upload fails, no event is
+sent.  If OTLP delivery fails, the immutable object is retained and the
+command exits nonzero.
+
+``AWS_ENDPOINT_URL_S3`` selects a path-style S3-compatible endpoint such as
+MinIO; ``AWS_CA_BUNDLE`` supplies its CA.  AWS itself uses virtual-hosted URLs
+(or path style for dotted bucket names).  HTTPS verification is on by default.
+Loopback HTTP is allowed for development; any other cleartext endpoint, or
+disabling HTTPS verification, requires ``--otel-insecure`` and prints a
+warning.  S3 credentials and OTLP authorization headers are read only from the
+environment and are never printed.  Retention, encryption at rest, and read
+access remain bucket-policy concerns; shirudo neither creates public ACLs nor
+puts presigned GET URLs into telemetry.
 
 When the upatch is later unloaded (next section), shirudo
 descends into the ``maps/`` subdir and unpins every map before
