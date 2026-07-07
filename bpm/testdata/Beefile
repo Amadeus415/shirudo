@@ -1,0 +1,7 @@
+[package]
+name = "xdp-drop"
+description = "Drop selected packets"
+license = "Apache-2.0"
+authors = ["BPF Team"]
+
+FROM clang
