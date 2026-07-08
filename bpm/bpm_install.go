@@ -16,21 +16,22 @@ import (
 )
 
 const defaultBPMInstallDir = ".bpm"
+const defaultBPMConfigFile = "config.toml"
 
 var bpmUserHomeDir = os.UserHomeDir
 var bpmShirudoUpatchLoad = runBPMShirudoUpatchLoad
 var bpmShirudoUpatchUnload = runBPMShirudoUpatchUnload
 
-func installBPMPackage(ctx context.Context, rawReference string, installRoot string, httpClient *http.Client, stdout io.Writer, stderr io.Writer) (string, error) {
+func installBPMPackage(ctx context.Context, rawReference string, installRoot string, configPaths []string, httpClient *http.Client, stdout io.Writer, stderr io.Writer) (string, error) {
 	archive, err := loadBPMPackageArchiveFromSource(ctx, rawReference, httpClient)
 	if err != nil {
 		return "", err
 	}
 
-	return installBPMPackageArchive(ctx, archive.Body, installRoot, stdout, stderr)
+	return installBPMPackageArchive(ctx, archive.Body, installRoot, configPaths, stdout, stderr)
 }
 
-func installBPMPackageArchive(ctx context.Context, packageBody []byte, installRoot string, stdout io.Writer, stderr io.Writer) (string, error) {
+func installBPMPackageArchive(ctx context.Context, packageBody []byte, installRoot string, configPaths []string, stdout io.Writer, stderr io.Writer) (string, error) {
 	manifest, err := readBPMPackageManifest(packageBody)
 	if err != nil {
 		return "", fmt.Errorf("read package manifest: %w", err)
@@ -50,6 +51,10 @@ func installBPMPackageArchive(ctx context.Context, packageBody []byte, installRo
 	if err := extractBPMPackageArchive(packageBody, root, packageDir); err != nil {
 		return "", err
 	}
+	configPaths, err = bpmInstallConfigPaths(installDir, configPaths)
+	if err != nil {
+		return "", err
+	}
 
 	for _, upatch := range manifest.Upatches {
 		upatchPath, err := bpmInstalledUpatchPath(installDir, upatch.LoadPath, "upatches.load_target")
@@ -63,7 +68,7 @@ func installBPMPackageArchive(ctx context.Context, packageBody []byte, installRo
 		if info.IsDir() {
 			return "", fmt.Errorf("upatch %s is a directory", upatch.LoadPath)
 		}
-		if err := bpmShirudoUpatchLoad(ctx, upatchPath, stdout, stderr); err != nil {
+		if err := bpmShirudoUpatchLoad(ctx, upatchPath, configPaths, stdout, stderr); err != nil {
 			return "", fmt.Errorf("load upatch %s: %w", upatch.LoadPath, err)
 		}
 	}
@@ -432,8 +437,55 @@ func bpmInstalledUpatchPath(installDir string, packagePath string, field string)
 	return upatchPath, nil
 }
 
-func runBPMShirudoUpatchLoad(ctx context.Context, upatchPath string, stdout io.Writer, stderr io.Writer) error {
-	command := exec.CommandContext(ctx, "shirudo", "upatch", "load", upatchPath)
+func bpmInstalledConfigPath(installDir string) (string, error) {
+	configPath := filepath.Join(installDir, defaultBPMConfigFile)
+	if !pathWithinDir(installDir, configPath) {
+		return "", fmt.Errorf("config path escapes install directory")
+	}
+
+	info, err := os.Lstat(configPath)
+	switch {
+	case err == nil:
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("%s is a symlink", defaultBPMConfigFile)
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf("%s is a directory", defaultBPMConfigFile)
+		}
+		return configPath, nil
+	case os.IsNotExist(err):
+		return "", nil
+	default:
+		return "", fmt.Errorf("stat %s: %w", defaultBPMConfigFile, err)
+	}
+}
+
+func bpmInstallConfigPaths(installDir string, additionalConfigPaths []string) ([]string, error) {
+	packageConfigPath, err := bpmInstalledConfigPath(installDir)
+	if err != nil {
+		return nil, err
+	}
+
+	configPaths := make([]string, 0, len(additionalConfigPaths)+1)
+	if packageConfigPath != "" {
+		configPaths = append(configPaths, packageConfigPath)
+	}
+	configPaths = append(configPaths, additionalConfigPaths...)
+
+	return configPaths, nil
+}
+
+func runBPMShirudoUpatchLoad(ctx context.Context, upatchPath string, configPaths []string, stdout io.Writer, stderr io.Writer) error {
+	args := []string{"upatch", "load"}
+	for _, configPath := range configPaths {
+		if strings.TrimSpace(configPath) == "" {
+			continue
+		}
+		args = append(args, "-f", configPath)
+	}
+	args = append(args, upatchPath)
+
+	command := exec.CommandContext(ctx, "shirudo", args...)
 	command.Stdout = stdout
 	command.Stderr = stderr
 	return command.Run()

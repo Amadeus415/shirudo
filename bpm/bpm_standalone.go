@@ -8,6 +8,7 @@ import (
 )
 
 var bpmStandaloneGetPackage = getBPMPackage
+var bpmStandaloneInstallPackage = installBPMPackage
 
 func NewBPMCommand() *cobra.Command {
 	buildFile := defaultBPMBuildFile
@@ -171,7 +172,8 @@ func newStandaloneBPMKeyListCommand() *cobra.Command {
 }
 
 func newStandaloneBPMInstallCommand() *cobra.Command {
-	return &cobra.Command{
+	var configPaths []string
+	cmd := &cobra.Command{
 		Use:   "install <package-file|package-reference>",
 		Short: "Install an eBPF package",
 		Args:  cobra.ExactArgs(1),
@@ -182,7 +184,7 @@ func newStandaloneBPMInstallCommand() *cobra.Command {
 			}
 			defer cancel()
 
-			installDir, err := installBPMPackage(ctx, args[0], "", nil, cmd.OutOrStdout(), cmd.ErrOrStderr())
+			installDir, err := bpmStandaloneInstallPackage(ctx, args[0], "", configPaths, nil, cmd.OutOrStdout(), cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -190,6 +192,8 @@ func newStandaloneBPMInstallCommand() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringArrayVarP(&configPaths, "file", "f", nil, "Config file passed to shirudo upatch load; may be specified multiple times")
+	return cmd
 }
 
 func newStandaloneBPMListCommand() *cobra.Command {

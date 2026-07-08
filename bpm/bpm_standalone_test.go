@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -108,6 +110,58 @@ func TestStandaloneBPMCommandHasNoRuntimeFlags(t *testing.T) {
 		if command.Flags().Lookup(name) != nil {
 			t.Fatalf("flag %q found", name)
 		}
+	}
+}
+
+func TestStandaloneBPMInstallPassesConfigFilesInOrder(t *testing.T) {
+	oldInstallPackage := bpmStandaloneInstallPackage
+	called := false
+	bpmStandaloneInstallPackage = func(ctx context.Context, rawReference string, installRoot string, configPaths []string, httpClient *http.Client, stdout io.Writer, stderr io.Writer) (string, error) {
+		called = true
+		if rawReference != "hello-bee-world-0.1.0.bee" {
+			t.Fatalf("rawReference = %q", rawReference)
+		}
+		if installRoot != "" {
+			t.Fatalf("installRoot = %q", installRoot)
+		}
+		wantConfigPaths := []string{"first.toml", "second.toml"}
+		if !reflect.DeepEqual(configPaths, wantConfigPaths) {
+			t.Fatalf("configPaths = %#v, want %#v", configPaths, wantConfigPaths)
+		}
+		if httpClient != nil {
+			t.Fatalf("httpClient = %#v, want nil", httpClient)
+		}
+		return "/tmp/hello-bee-world-0.1.0", nil
+	}
+	t.Cleanup(func() {
+		bpmStandaloneInstallPackage = oldInstallPackage
+	})
+
+	command := NewBPMCommand()
+	var output bytes.Buffer
+	command.SetOut(&output)
+	command.SetErr(&output)
+	command.SetArgs([]string{"install", "-f", "first.toml", "-f", "second.toml", "hello-bee-world-0.1.0.bee"})
+
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !called {
+		t.Fatalf("bpmStandaloneInstallPackage was not called")
+	}
+	if got := output.String(); got != "/tmp/hello-bee-world-0.1.0\n" {
+		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestStandaloneBPMListHasNoConfigFlag(t *testing.T) {
+	command := NewBPMCommand()
+	list, _, err := command.Find([]string{"list"})
+	if err != nil {
+		t.Fatalf("Find(list) error = %v", err)
+	}
+	if list.Flags().Lookup("config") != nil {
+		t.Fatalf("list --config flag found")
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -24,16 +25,18 @@ func TestInstallBPMPackageArchiveExtractsAndLoadsUpatches(t *testing.T) {
 	}
 
 	var loaded []string
+	var configs [][]string
 	oldLoad := bpmShirudoUpatchLoad
-	bpmShirudoUpatchLoad = func(ctx context.Context, upatchPath string, stdout io.Writer, stderr io.Writer) error {
+	bpmShirudoUpatchLoad = func(ctx context.Context, upatchPath string, configPaths []string, stdout io.Writer, stderr io.Writer) error {
 		loaded = append(loaded, upatchPath)
+		configs = append(configs, append([]string(nil), configPaths...))
 		return nil
 	}
 	t.Cleanup(func() {
 		bpmShirudoUpatchLoad = oldLoad
 	})
 
-	installDir, err := installBPMPackageArchive(context.Background(), body, installRoot, io.Discard, io.Discard)
+	installDir, err := installBPMPackageArchive(context.Background(), body, installRoot, nil, io.Discard, io.Discard)
 	if err != nil {
 		t.Fatalf("installBPMPackageArchive() error = %v", err)
 	}
@@ -57,30 +60,111 @@ func TestInstallBPMPackageArchiveExtractsAndLoadsUpatches(t *testing.T) {
 	if len(loaded) != 1 || loaded[0] != wantUpatch {
 		t.Fatalf("loaded = %#v, want [%q]", loaded, wantUpatch)
 	}
+	if len(configs) != 1 || len(configs[0]) != 0 {
+		t.Fatalf("configs = %#v, want empty config path", configs)
+	}
 }
 
-func TestInstallBPMPackageArchiveRejectsInstalledVersionOfSamePackage(t *testing.T) {
+func TestInstallBPMPackageArchivePassesPackageConfigBeforeAdditionalConfigFiles(t *testing.T) {
+	configBody := []byte(`# bpm treats this file as opaque input for shirudo upatch load.
+[runtime]
+sample_rate = "not validated by bpm"
+`)
+	body := buildTestBPMPackageBodyWithConfig(t, configBody)
 	installRoot := t.TempDir()
+	additionalConfigs := []string{"/user/first.toml", "/user/second.toml"}
 
 	oldLoad := bpmShirudoUpatchLoad
-	bpmShirudoUpatchLoad = func(ctx context.Context, upatchPath string, stdout io.Writer, stderr io.Writer) error {
+	var loadedUpatch string
+	var loadedConfigs []string
+	bpmShirudoUpatchLoad = func(ctx context.Context, upatchPath string, configPaths []string, stdout io.Writer, stderr io.Writer) error {
+		loadedUpatch = upatchPath
+		loadedConfigs = append([]string(nil), configPaths...)
 		return nil
 	}
 	t.Cleanup(func() {
 		bpmShirudoUpatchLoad = oldLoad
 	})
 
-	if _, err := installBPMPackageArchive(context.Background(), buildTestBPMPackageBodyWithUpatchVersion(t, "0.1.0"), installRoot, io.Discard, io.Discard); err != nil {
+	installDir, err := installBPMPackageArchive(context.Background(), body, installRoot, additionalConfigs, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("installBPMPackageArchive() error = %v", err)
+	}
+
+	wantUpatch := filepath.Join(installDir, "upatches", "hello-userns-counter.upatch")
+	if loadedUpatch != wantUpatch {
+		t.Fatalf("loadedUpatch = %q, want %q", loadedUpatch, wantUpatch)
+	}
+	wantConfig := filepath.Join(installDir, defaultBPMConfigFile)
+	wantConfigs := []string{wantConfig, "/user/first.toml", "/user/second.toml"}
+	if !reflect.DeepEqual(loadedConfigs, wantConfigs) {
+		t.Fatalf("loadedConfigs = %#v, want %#v", loadedConfigs, wantConfigs)
+	}
+	gotConfig, err := os.ReadFile(wantConfig)
+	if err != nil {
+		t.Fatalf("read installed config: %v", err)
+	}
+	if !bytes.Equal(gotConfig, configBody) {
+		t.Fatalf("installed config = %q, want %q", gotConfig, configBody)
+	}
+}
+
+func TestRunBPMShirudoUpatchLoadPassesConfigFlag(t *testing.T) {
+	argsPath := installFakeBPMShirudo(t)
+
+	if err := runBPMShirudoUpatchLoad(context.Background(), "/pkg/upatches/drop.upatch", []string{"/pkg/config.toml", "/user/first.toml", "/user/second.toml"}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("runBPMShirudoUpatchLoad() error = %v", err)
+	}
+
+	want := "upatch\nload\n-f\n/pkg/config.toml\n-f\n/user/first.toml\n-f\n/user/second.toml\n/pkg/upatches/drop.upatch\n"
+	got, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read fake shirudo args: %v", err)
+	}
+	if string(got) != want {
+		t.Fatalf("shirudo args = %q, want %q", got, want)
+	}
+}
+
+func TestRunBPMShirudoUpatchLoadOmitsConfigFlagWithoutConfig(t *testing.T) {
+	argsPath := installFakeBPMShirudo(t)
+
+	if err := runBPMShirudoUpatchLoad(context.Background(), "/pkg/upatches/drop.upatch", nil, io.Discard, io.Discard); err != nil {
+		t.Fatalf("runBPMShirudoUpatchLoad() error = %v", err)
+	}
+
+	want := "upatch\nload\n/pkg/upatches/drop.upatch\n"
+	got, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read fake shirudo args: %v", err)
+	}
+	if string(got) != want {
+		t.Fatalf("shirudo args = %q, want %q", got, want)
+	}
+}
+
+func TestInstallBPMPackageArchiveRejectsInstalledVersionOfSamePackage(t *testing.T) {
+	installRoot := t.TempDir()
+
+	oldLoad := bpmShirudoUpatchLoad
+	bpmShirudoUpatchLoad = func(ctx context.Context, upatchPath string, configPaths []string, stdout io.Writer, stderr io.Writer) error {
+		return nil
+	}
+	t.Cleanup(func() {
+		bpmShirudoUpatchLoad = oldLoad
+	})
+
+	if _, err := installBPMPackageArchive(context.Background(), buildTestBPMPackageBodyWithUpatchVersion(t, "0.1.0"), installRoot, nil, io.Discard, io.Discard); err != nil {
 		t.Fatalf("install old package: %v", err)
 	}
 
 	loadCalled := false
-	bpmShirudoUpatchLoad = func(ctx context.Context, upatchPath string, stdout io.Writer, stderr io.Writer) error {
+	bpmShirudoUpatchLoad = func(ctx context.Context, upatchPath string, configPaths []string, stdout io.Writer, stderr io.Writer) error {
 		loadCalled = true
 		return nil
 	}
 
-	_, err := installBPMPackageArchive(context.Background(), buildTestBPMPackageBodyWithUpatchVersion(t, "0.2.0"), installRoot, io.Discard, io.Discard)
+	_, err := installBPMPackageArchive(context.Background(), buildTestBPMPackageBodyWithUpatchVersion(t, "0.2.0"), installRoot, nil, io.Discard, io.Discard)
 	if err == nil {
 		t.Fatalf("installBPMPackageArchive() error = nil, want error")
 	}
@@ -101,14 +185,14 @@ func TestUninstallBPMPackageUnloadsAndRemovesInstallDir(t *testing.T) {
 	installRoot := t.TempDir()
 
 	oldLoad := bpmShirudoUpatchLoad
-	bpmShirudoUpatchLoad = func(ctx context.Context, upatchPath string, stdout io.Writer, stderr io.Writer) error {
+	bpmShirudoUpatchLoad = func(ctx context.Context, upatchPath string, configPaths []string, stdout io.Writer, stderr io.Writer) error {
 		return nil
 	}
 	t.Cleanup(func() {
 		bpmShirudoUpatchLoad = oldLoad
 	})
 
-	installDir, err := installBPMPackageArchive(context.Background(), body, installRoot, io.Discard, io.Discard)
+	installDir, err := installBPMPackageArchive(context.Background(), body, installRoot, nil, io.Discard, io.Discard)
 	if err != nil {
 		t.Fatalf("installBPMPackageArchive() error = %v", err)
 	}
@@ -225,7 +309,7 @@ func TestInstallBPMPackageDownloadsFromOCI(t *testing.T) {
 
 	var loaded []string
 	oldLoad := bpmShirudoUpatchLoad
-	bpmShirudoUpatchLoad = func(ctx context.Context, upatchPath string, stdout io.Writer, stderr io.Writer) error {
+	bpmShirudoUpatchLoad = func(ctx context.Context, upatchPath string, configPaths []string, stdout io.Writer, stderr io.Writer) error {
 		loaded = append(loaded, upatchPath)
 		return nil
 	}
@@ -234,7 +318,7 @@ func TestInstallBPMPackageDownloadsFromOCI(t *testing.T) {
 	})
 
 	installRoot := t.TempDir()
-	installDir, err := installBPMPackage(context.Background(), "oci://registry.test/isovalent-dev/hello-bee-world:0.1.0", installRoot, httpClient, io.Discard, io.Discard)
+	installDir, err := installBPMPackage(context.Background(), "oci://registry.test/isovalent-dev/hello-bee-world:0.1.0", installRoot, nil, httpClient, io.Discard, io.Discard)
 	if err != nil {
 		t.Fatalf("installBPMPackage() error = %v", err)
 	}
@@ -255,7 +339,7 @@ func TestInstallBPMPackageReadsLocalPackageFile(t *testing.T) {
 
 	var loaded []string
 	oldLoad := bpmShirudoUpatchLoad
-	bpmShirudoUpatchLoad = func(ctx context.Context, upatchPath string, stdout io.Writer, stderr io.Writer) error {
+	bpmShirudoUpatchLoad = func(ctx context.Context, upatchPath string, configPaths []string, stdout io.Writer, stderr io.Writer) error {
 		loaded = append(loaded, upatchPath)
 		return nil
 	}
@@ -264,7 +348,7 @@ func TestInstallBPMPackageReadsLocalPackageFile(t *testing.T) {
 	})
 
 	installRoot := t.TempDir()
-	installDir, err := installBPMPackage(context.Background(), packagePath, installRoot, nil, io.Discard, io.Discard)
+	installDir, err := installBPMPackage(context.Background(), packagePath, installRoot, nil, nil, io.Discard, io.Discard)
 	if err != nil {
 		t.Fatalf("installBPMPackage() error = %v", err)
 	}
@@ -283,7 +367,7 @@ func TestInstallBPMPackageArchiveRejectsTraversal(t *testing.T) {
 		"hello-bee-world-0.1.0/../outside.txt": "outside\n",
 	})
 
-	_, err := installBPMPackageArchive(context.Background(), body, t.TempDir(), io.Discard, io.Discard)
+	_, err := installBPMPackageArchive(context.Background(), body, t.TempDir(), nil, io.Discard, io.Discard)
 	if err == nil {
 		t.Fatalf("installBPMPackageArchive() error = nil, want error")
 	}
@@ -357,6 +441,50 @@ func buildTestBPMPackageBodyWithUpatchVersion(t *testing.T, version string) []by
 		t.Fatalf("read package: %v", err)
 	}
 	return body
+}
+
+func buildTestBPMPackageBodyWithConfig(t *testing.T, config []byte) []byte {
+	t.Helper()
+
+	outputPath, err := buildBPMPackage(t.TempDir(), testBPMBuildFileWithUpatch(), bpmPackageMetadata{
+		Name: "hello-bee-world",
+	}, "0.1.0", bpmPackageFile{
+		Target: "config.toml",
+		Body:   config,
+	}, bpmPackageFile{
+		Target: "upatches/hello-userns-counter.upatch",
+		Body:   []byte("upatch\n"),
+		Upatch: true,
+	}, bpmPackageFile{
+		Target: "upatches/hello-userns-counter.unload.upatch",
+		Body:   []byte("unload\n"),
+		Upatch: true,
+	})
+	if err != nil {
+		t.Fatalf("buildBPMPackage() error = %v", err)
+	}
+
+	body, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read package: %v", err)
+	}
+	return body
+}
+
+func installFakeBPMShirudo(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args")
+	shirudoPath := filepath.Join(dir, "shirudo")
+	body := []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$BPM_FAKE_SHIRUDO_ARGS\"\n")
+	if err := os.WriteFile(shirudoPath, body, 0o755); err != nil {
+		t.Fatalf("write fake shirudo: %v", err)
+	}
+	t.Setenv("BPM_FAKE_SHIRUDO_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	return argsPath
 }
 
 func buildTestBPMPackageBody(t *testing.T, entries map[string]string) []byte {
