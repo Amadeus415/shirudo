@@ -396,6 +396,21 @@ static int init_lsm(void)
 		int32_t		keyring_serial;
 		uint32_t	pad;
 	} id = {};
+	/*
+	 * The four mount-lifecycle guards over shirudo's bpffs. Table-driven
+	 * so the attach loop stays short; each pin is destroyed in the out:
+	 * path via mount_links[].
+	 */
+	static const struct {
+		const char	*prog;
+		const char	*pin;
+	} mount_hooks[] = {
+		{ "shirudo_lsm_sb_umount",  SHIRUDO_SB_UMOUNT_LINK_PIN },
+		{ "shirudo_lsm_move_mount", SHIRUDO_MOVE_MOUNT_LINK_PIN },
+		{ "shirudo_lsm_sb_mount",   SHIRUDO_SB_MOUNT_LINK_PIN },
+		{ "shirudo_lsm_sb_remount", SHIRUDO_SB_REMOUNT_LINK_PIN },
+	};
+	struct bpf_link *mount_links[ARRAY_SIZE(mount_hooks)] = {};
 	const struct shirudo_embedded_bpf *blob = shirudo_bpf2_blob();
 	struct bpf_program *p_bpf, *p_unlink, *p_setx, *p_rmx, *p_pload;
 	struct bpf_object *obj = NULL, *seal_obj = NULL;
@@ -527,6 +542,31 @@ static int init_lsm(void)
 		goto out;
 	}
 
+	/*
+	 * Mount-lifecycle guards over the bpffs -- attached here with the
+	 * other bpffs guards so the mount is immutable before enforcement
+	 * goes live. Without these a `umount` of the bpffs would drop every
+	 * pin and detach all enforcement (the pins are the links' only
+	 * reference, shirudo being agentless).
+	 */
+	for (i = 0; i < (int)ARRAY_SIZE(mount_hooks); i++) {
+		struct bpf_program *p = bpf_object__find_program_by_name(
+						obj, mount_hooks[i].prog);
+
+		if (!p) {
+			pr_err("program %s missing in bpf2 object",
+			       mount_hooks[i].prog);
+			err = -ENOENT;
+			goto out;
+		}
+		err = attach_pin(p, mount_hooks[i].pin, &mount_links[i]);
+		if (err) {
+			pr_err("attach %s: %s", mount_hooks[i].prog,
+			       strerror(-err));
+			goto out;
+		}
+	}
+
 	err = attach_seal(&seal_obj, seal_links);
 	if (err)
 		goto out;
@@ -549,6 +589,8 @@ static int init_lsm(void)
 out:
 	for (i = 0; i < (int)ARRAY_SIZE(seal_links); i++)
 		bpf_link__destroy(seal_links[i]);
+	for (i = 0; i < (int)ARRAY_SIZE(mount_links); i++)
+		bpf_link__destroy(mount_links[i]);
 	bpf_object__close(seal_obj);
 	bpf_link__destroy(link_bpf);
 	bpf_link__destroy(link_pload);

@@ -58,6 +58,17 @@
  *                       but have no observable effect -- the bpffs
  *                       setxattr they gate then fails with -EOPNOTSUPP
  *                       in the VFS regardless of the verdict.
+ *   lsm/sb_umount,
+ *   lsm/move_mount,
+ *   lsm/sb_mount,
+ *   lsm/sb_remount -- mount-lifecycle lockdown of the private bpffs
+ *                       superblock (identified by s_dev). Unconditional
+ *                       deny: no caller, not even shirudo, may unmount,
+ *                       relocate, mount over, or remount it for the boot.
+ *                       Without this a single `umount` of the bpffs drops
+ *                       the pinned links and detaches ALL enforcement,
+ *                       since shirudo is agentless and the pins are the
+ *                       links' only reference. See the hook block below.
  */
 
 #include "vmlinux.h"
@@ -299,4 +310,74 @@ int BPF_PROG(shirudo_lsm_inode_removexattr, struct mnt_idmap *idmap,
 	     struct dentry *dentry, const char *name)
 {
 	return shirudo_bpffs_guard(BPF_CORE_READ(dentry, d_inode, i_sb, s_dev));
+}
+
+/*
+ * Mount-lifecycle lockdown of shirudo's private bpffs superblock.
+ *
+ * The pinned LSM links live only in this bpffs, and shirudo is agentless
+ * -- once `shirudo init` exits no process holds an fd to them, so the
+ * pins are their only reference. Tearing the superblock down therefore
+ * detaches every hook at once: a plain `umount /var/lib/shirudo/bpffs`
+ * drops the pinned inodes, releases the links, and silently disables all
+ * enforcement (no signature, keyring, or TPM involved). The inode guards
+ * above stop `rm` of a pin but a mount is not an inode op, so it slips
+ * past them. Gate the whole mount lifecycle of this one superblock:
+ * unmount, relocate (move_mount), mounting over the pin tree (sb_mount),
+ * and remount. shirudo never performs any of these on its own bpffs
+ * after init, so the deny is unconditional -- the mount is immutable for
+ * the boot's lifetime, for every caller including shirudo itself. The
+ * hooks are self-protecting: their own pins live in the bpffs they keep
+ * mounted.
+ *
+ * Residual: a lazy unmount (MNT_DETACH) of an *ancestor* mount can tear
+ * down the subtree without firing sb_umount on this child; that needs
+ * the ancestor (e.g. /var) to be unmountable, a far higher bar than the
+ * trivial direct unmount closed here.
+ */
+static __always_inline int shirudo_deny_bpffs_mount(__u32 sb_dev)
+{
+	struct shirudo_sb_id *id;
+	__u32 zero = 0;
+
+	id = bpf_map_lookup_elem(&shirudo_bpffs_sb, &zero);
+	if (!id || id->sb_dev == 0)
+		return 0;
+	return sb_dev == id->sb_dev ? -EPERM : 0;
+}
+
+SEC("lsm/sb_umount")
+int BPF_PROG(shirudo_lsm_sb_umount, struct vfsmount *mnt, int flags)
+{
+	return shirudo_deny_bpffs_mount(BPF_CORE_READ(mnt, mnt_sb, s_dev));
+}
+
+SEC("lsm/move_mount")
+int BPF_PROG(shirudo_lsm_move_mount, const struct path *from_path,
+	     const struct path *to_path)
+{
+	if (shirudo_deny_bpffs_mount(BPF_CORE_READ(from_path, mnt, mnt_sb, s_dev)))
+		return -EPERM;
+	return shirudo_deny_bpffs_mount(BPF_CORE_READ(to_path, mnt, mnt_sb, s_dev));
+}
+
+/*
+ * Deny mounting anything whose target path resolves onto shirudo's
+ * bpffs -- i.e. mounting over the pin tree to shadow it. init's own
+ * mount is unaffected: it runs before this hook attaches, and at that
+ * point the mountpoint still resolves to the underlying fs, not the
+ * (not-yet-mounted) bpffs.
+ */
+SEC("lsm/sb_mount")
+int BPF_PROG(shirudo_lsm_sb_mount, const char *dev_name,
+	     const struct path *path, const char *type,
+	     unsigned long flags, void *data)
+{
+	return shirudo_deny_bpffs_mount(BPF_CORE_READ(path, mnt, mnt_sb, s_dev));
+}
+
+SEC("lsm/sb_remount")
+int BPF_PROG(shirudo_lsm_sb_remount, struct super_block *sb, void *mnt_opts)
+{
+	return shirudo_deny_bpffs_mount(BPF_CORE_READ(sb, s_dev));
 }

@@ -228,11 +228,12 @@ load-bearing — consult them directly rather than reasoning from memory:
   discriminator. `kernel == true` means the call came from inside a (signed,
   kernel-verified) loader — those calls are always allowed. `kernel == false`
   is userspace and must be filtered.
-- **bpf2 attaches to four hooks.** In addition to `lsm/bpf`,
-  `bpf/bpf2.c` attaches `lsm/inode_unlink`, `lsm/inode_setxattr`,
-  and `lsm/inode_removexattr`, all scoped to shirudo's private
-  bpffs superblock and gated by one shared exe-identity check
-  (`shirudo_bpffs_guard`). The identity record — shirudo's bpffs
+- **bpf2 attaches to the `lsm/bpf` and `lsm/bpf_prog_load`
+  gates plus a set of bpffs-superblock guards.** In addition to
+  `lsm/bpf` and `lsm/bpf_prog_load`, `bpf/bpf2.c` attaches
+  `lsm/inode_unlink`, `lsm/inode_setxattr`, and `lsm/inode_removexattr`,
+  all scoped to shirudo's private bpffs superblock and gated by one
+  shared exe-identity check (`shirudo_bpffs_guard`). The identity record — shirudo's bpffs
   `s_dev` plus its executable's `(dev, ino)` — is populated and
   `BPF_MAP_FREEZE`d into a one-entry `BPF_MAP_TYPE_ARRAY` **before**
   bpf2's `BPF_LINK_CREATE`; each hook allows the op only when the
@@ -249,7 +250,23 @@ load-bearing — consult them directly rather than reasoning from memory:
   without it the hooks still fire but the bpffs `setxattr` they gate
   fails with `-EOPNOTSUPP` in the VFS regardless, so they have no
   observable effect (and the payload check degrades to unavailable
-  rather than wrong).
+  rather than wrong). bpf2 also attaches four **mount-lifecycle
+  guards** — `lsm/sb_umount`, `lsm/move_mount`, `lsm/sb_mount`,
+  `lsm/sb_remount` — that **unconditionally deny** (for every caller
+  including shirudo) any unmount/relocate/mount-over/remount of the
+  private bpffs, identified by `s_dev`. This is load-bearing, not
+  defense-in-depth: shirudo is agentless, so the pinned links are kept
+  alive only by the bpffs pins, and a single `umount
+  /var/lib/shirudo/bpffs` would otherwise drop every pin and silently
+  detach **all** enforcement — no signature, keyring, or TPM involved.
+  The inode guards stop `rm` of a pin but a mount is not an inode op,
+  so it slips past them; these four close that. The deny is
+  unconditional because shirudo never unmounts its own bpffs mid-boot,
+  making the mount immutable for the boot. Residual: a lazy
+  (`MNT_DETACH`) unmount of an **ancestor** mount can tear down the
+  subtree without firing `sb_umount` on the child — a far higher bar
+  (the ancestor must be unmountable) than the trivial direct unmount
+  these close.
 - The LSM allows **read-only** `bpf()` commands from userspace (BPF_OBJ_GET,
   *_GET_FD_BY_ID, MAP_LOOKUP_*, PROG_QUERY, OBJ_GET_INFO_BY_FD) so
   observability (`bpftool prog show`, `shirudo status`) keeps working.
@@ -628,9 +645,15 @@ Target machine:
   sealing LSM (`bpf/seal.c`). Mounted by `shirudo init`; persists
   across init re-runs; gone after reboot (re-mounted on next init).
 - `/var/lib/shirudo/bpffs/lsm_link` — pinned `lsm/bpf` LSM link.
+- `/var/lib/shirudo/bpffs/bpf2_bpf_prog_load_link` — pinned
+  `lsm/bpf_prog_load` admission hook (keyring-serial gate).
 - `/var/lib/shirudo/bpffs/bpf2_inode_{unlink,setxattr,removexattr}_link`
   — pinned bpf2 bpffs-protection hooks (exe-identity gated; protect
   pins from `rm` and the payload xattr from forging/removal).
+- `/var/lib/shirudo/bpffs/bpf2_{sb_umount,move_mount,sb_mount,sb_remount}_link`
+  — pinned bpf2 mount-lifecycle guards (unconditional deny of any
+  unmount/relocate/mount-over/remount of the private bpffs by `s_dev`;
+  without them a single `umount` detaches all enforcement).
 - `/var/lib/shirudo/bpffs/seal_*_link` — pinned filesystem-sealing
   LSM links (one per attached hook: file_open, inode_unlink,
   inode_rename, inode_setxattr, inode_removexattr). The LSM uses
