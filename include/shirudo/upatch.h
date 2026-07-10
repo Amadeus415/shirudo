@@ -11,6 +11,12 @@
 #include <stdint.h>
 
 #define SHIRUDO_UPATCH_MAGIC		0x53485244554e4150ULL	/* "SHRDUNAP" */
+/*
+ * The PKCS#7 signature covers insns || data (the gen_loader metadata
+ * blob), verified by the kernel at load time; payload_sha256 is SHA-256
+ * of that same concatenation. See Documentation/bpf/signing.rst and
+ * PLAN.md "signed loader scheme".
+ */
 #define SHIRUDO_UPATCH_VERSION		1u
 
 /* Flag bits in struct shirudo_upatch_header.flags. */
@@ -24,6 +30,12 @@ struct shirudo_upatch_header {
 	uint32_t	version;		/* SHIRUDO_UPATCH_VERSION */
 	uint32_t	flags;			/* SHIRUDO_DIRECTIVE_* */
 	char		name[SHIRUDO_UPATCH_NAME_MAX];
+	/*
+	 * SHA-256 of the signed content, insns || data. Distinct from the
+	 * loader's excl_prog_hash (SHA-256 of insns alone), which the target
+	 * recomputes at load. This is the value recorded as the pin xattr,
+	 * the TPM chain event, and the unload match target.
+	 */
 	uint8_t		payload_sha256[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN];
 	uint32_t	loader_insns_off;	/* file offset */
 	uint32_t	loader_insns_len;

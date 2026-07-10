@@ -511,6 +511,8 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 	}
 	sio.insns        = opts.insns;
 	sio.insns_sz     = opts.insns_sz;
+	sio.data         = opts.data;
+	sio.data_sz      = opts.data_sz;
 	sio.signature    = sig_buf;
 	sio.signature_sz = SHIRUDO_MAX_SIG_SIZE;
 	err = shirudo_cms_sign(&sio, pkey_path, cert_path);

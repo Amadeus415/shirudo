@@ -601,33 +601,6 @@ static int loader_map_freeze(int map_fd)
 	return (int)ret;
 }
 
-/*
- * The kernel's "exclusive map" signing flow has two SHA-256s on the
- * map: excl_prog_sha (set at MAP_CREATE, checked at PROG_LOAD against
- * the loader prog's own digest), and bpf_map->sha (computed lazily by
- * BPF_OBJ_GET_INFO_BY_FD with info.hash set, read at runtime by the
- * gen_loader's emit_signature_match guard). Without this call,
- * bpf_map->sha stays zero, the runtime comparison fails, and the
- * loader exits -EINVAL. See KP Singh's "libbpf: Update light skeleton
- * for signing" (fb2b0e290147) and skel_internal.h:skel_obj_get_info_by_fd.
- */
-static int loader_map_seal_hash(int map_fd)
-{
-	struct bpf_map_info info = {};
-	union bpf_attr attr = {};
-	uint8_t sha[32];
-	long ret;
-
-	info.hash = (uint64_t)(uintptr_t)sha;
-	info.hash_size = sizeof(sha);
-
-	attr.info.bpf_fd = (uint32_t)map_fd;
-	attr.info.info = (uint64_t)(uintptr_t)&info;
-	attr.info.info_len = sizeof(info);
-	ret = syscall(__NR_bpf, BPF_OBJ_GET_INFO_BY_FD, &attr, sizeof(attr));
-	return (int)ret;
-}
-
 static int prog_load_signed(const struct bpf_insn *insns, size_t insn_cnt,
 			    const char *prog_name,
 			    const void *signature, uint32_t signature_sz,
@@ -650,6 +623,13 @@ static int prog_load_signed(const struct bpf_insn *insns, size_t insn_cnt,
 	attr.signature_size = signature_sz;
 	attr.keyring_id = keyring_id;
 	attr.fd_array = (uint64_t)(uintptr_t)fd_array;
+	/*
+	 * fd_array_cnt makes the verifier resolve the exclusive metadata
+	 * map up front and fold its frozen contents into the signed buffer
+	 * (insns || metadata). A signed load without it is rejected: the
+	 * kernel refuses to bind a map through the sparse fd_array path.
+	 */
+	attr.fd_array_cnt = 1;
 	memcpy(attr.prog_name, prog_name,
 	       strnlen(prog_name, sizeof(attr.prog_name)));
 
@@ -1532,13 +1512,45 @@ static int upatch_apply(const char *path, bool verify_only,
 	}
 
 	/*
-	 * 1. Create __loader.map with excl_prog_hash = payload_sha256.
-	 *    Binds the data map to a specific (signed) loader prog hash;
-	 *    the kernel checks the binding when the prog is verified.
+	 * Bind the recorded identity to the signed bytes: the header's
+	 * payload_sha256 must equal SHA-256(insns || data), the exact
+	 * content the kernel folds and verifies below. The signature is
+	 * authoritative for the load itself, but payload_sha256 is what
+	 * shirudo records as the pin xattr, the chain event, and the unload
+	 * match target -- so a corrupted or mis-set header value must not be
+	 * trusted as identity even if the signature is valid.
 	 */
-	map_fd = loader_map_create("__loader.map", u.hdr.data_len,
-				   u.hdr.payload_sha256,
-				   SHIRUDO_UPATCH_PAYLOAD_HASH_LEN);
+	{
+		uint8_t content_digest[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN];
+
+		shirudo_sha256_2(insns, u.hdr.loader_insns_len,
+				 data, u.hdr.data_len, content_digest);
+		if (!shirudo_ct_eq(content_digest, u.hdr.payload_sha256,
+				   sizeof(content_digest))) {
+			pr_err("upatch: payload_sha256 does not match signed "
+			       "content (insns || data); refusing");
+			rep_fail(rep, "parse", "parser_rejected", 0,
+				 "payload_sha256 mismatch");
+			rc = 1;
+			goto out;
+		}
+	}
+
+	/*
+	 * 1. Create __loader.map bound to the loader's own digest
+	 *    (excl_prog_hash = SHA-256(insns)). The verifier enforces
+	 *    map->excl_prog_sha == prog->digest, so this frozen metadata map
+	 *    can be used by exactly this signed loader and no other program.
+	 *    Note this is the digest of the instructions alone -- distinct
+	 *    from payload_sha256, which covers insns || data.
+	 */
+	{
+		uint8_t loader_digest[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN];
+
+		shirudo_sha256(insns, u.hdr.loader_insns_len, loader_digest);
+		map_fd = loader_map_create("__loader.map", u.hdr.data_len,
+					   loader_digest, sizeof(loader_digest));
+	}
 	if (map_fd < 0) {
 		pr_err("__loader.map create: %s", strerror(errno));
 		rep_fail(rep, "signed_loader_load", cat_from_load_errno(errno),
@@ -1557,7 +1569,12 @@ static int upatch_apply(const char *path, bool verify_only,
 		goto out;
 	}
 
-	/* 3. Freeze: userspace can no longer mutate. */
+	/*
+	 * 3. Freeze: userspace can no longer mutate the metadata map, so the
+	 *    bytes the kernel folds into the signature cannot change before
+	 *    the loader runs. The kernel refuses a signed load whose bound
+	 *    map is not frozen.
+	 */
 	rc = loader_map_freeze(map_fd);
 	if (rc) {
 		pr_err("__loader.map freeze: %s", strerror(errno));
@@ -1568,26 +1585,14 @@ static int upatch_apply(const char *path, bool verify_only,
 	}
 
 	/*
-	 * 4. OBJ_GET_INFO_BY_FD with info.hash set -- triggers the
-	 *    kernel to compute SHA-256(map_value) and store it in
-	 *    bpf_map->sha. The signed loader reads that field at
-	 *    runtime and compares against a hash baked into its own
-	 *    insns. No-op for the kernel ledger we care about, but
-	 *    skipping it bricks the loader.
-	 */
-	rc = loader_map_seal_hash(map_fd);
-	if (rc) {
-		pr_err("__loader.map OBJ_GET_INFO_BY_FD: %s", strerror(errno));
-		rep_fail(rep, "signed_loader_load", cat_from_load_errno(errno),
-			 errno, "__loader.map hash seal failed");
-		rc = 1;
-		goto out;
-	}
-
-	/*
-	 * 5. BPF_PROG_LOAD with signature + keyring_id + fd_array.
-	 *    Kernel: verify CMS against keyring, then verifier runs
-	 *    with the data map's FD reachable through fd_array[0].
+	 * 4. BPF_PROG_LOAD with signature + keyring_id + fd_array_cnt=1.
+	 *    The kernel resolves the exclusive metadata map from fd_array,
+	 *    appends its frozen contents to the instructions, and verifies
+	 *    the CMS signature over insns || metadata against the keyring --
+	 *    all before the verifier proper and the lsm/bpf_prog_load
+	 *    admission hook run. The loader carries no metadata self-check;
+	 *    the kernel attests the metadata directly (see
+	 *    Documentation/bpf/signing.rst, "Load-time verification").
 	 */
 	vlog[0] = '\0';
 	prog_fd = prog_load_signed(insns, insn_cnt, prog_name,
@@ -2379,12 +2384,17 @@ static int cmd_upatch_unload(int argc, const char **argv)
 
 	/*
 	 * payload_mismatch: confirm the upatch actually loaded under
-	 * <name> is the one the directive was signed to remove. The
-	 * expected value is the directive's signature-covered payload; the
-	 * live value is the xattr bpf2 protects on the pin dir. Skipped
-	 * when the directive carries no expected payload (all-zero), or
-	 * when the live value is unavailable (no xattr / kernel without the
-	 * bpffs-xattr patch) -- in which case the detach proceeds as before.
+	 * <name> is the one the directive was signed to remove. The live
+	 * value is the xattr bpf2 protects on the pin dir (unforgeable). The
+	 * expected value read here is the directive's unsigned metadata
+	 * blob; a signature-covered copy also rides in the loader's .rodata
+	 * (inside insns || data), but the in-kernel detach that would read
+	 * it back is not implementable yet (TODO.kernel item 6), so this
+	 * catches honest/accidental substitution, not a root attacker who
+	 * edits both the metadata and the expected value in lockstep.
+	 * Skipped when the directive carries no expected payload (all-zero),
+	 * or when the live value is unavailable (no xattr / kernel without
+	 * the bpffs-xattr patch) -- the detach then proceeds as before.
 	 */
 	{
 		uint8_t zero[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN] = {};

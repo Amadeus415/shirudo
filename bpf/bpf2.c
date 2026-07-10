@@ -4,18 +4,34 @@
  *
  * The central "BPF on BPF" LSM enforcement program.
  *
- * Two hooks:
+ * Hooks:
  *   lsm/bpf          -- gates the bpf() syscall. PLAN.md "LSM
  *                       enforcement policy": kernel-context (signed
  *                       loader) calls return immediately; userspace
  *                       BPF_PROG_LOAD must be prog_type=SYSCALL AND
- *                       have a non-zero signature (the kernel then
- *                       verifies the CMS against attr->keyring_id);
- *                       a fixed denylist of mutating cmds is denied
- *                       with -EPERM; everything else (readonly ops,
- *                       BPF_PROG_TEST_RUN, BPF_MAP_FREEZE,
- *                       BPF_OBJ_PIN transitionally, plus any future
- *                       readonly cmd) is allowed.
+ *                       have a non-zero signature (a cheap pre-filter;
+ *                       the authoritative verdict is enforced by
+ *                       lsm/bpf_prog_load below, after the kernel has
+ *                       verified the signature); a fixed denylist of
+ *                       mutating cmds is denied with -EPERM; everything
+ *                       else (readonly ops, BPF_PROG_TEST_RUN,
+ *                       BPF_MAP_FREEZE, BPF_OBJ_PIN transitionally,
+ *                       plus any future readonly cmd) is allowed.
+ *   lsm/bpf_prog_load -- the admission gate that runs INSIDE the
+ *                       verifier, after signature verification, so the
+ *                       kernel-recorded verdict is final here. A
+ *                       userspace load is admitted only when the kernel
+ *                       recorded BPF_SIG_VERIFIED against exactly the
+ *                       sealed "shirudo" keyring: sig.verdict must be
+ *                       VERIFIED, sig.keyring_type must be USER, and
+ *                       sig.keyring_serial must equal the serial init
+ *                       froze into the identity map. Everything else --
+ *                       unsigned, signed by any other keyring, or
+ *                       signed against a substituted same-named keyring
+ *                       -- is denied. This is what makes "only
+ *                       shirudo-signed BPF loads from userspace" a
+ *                       kernel-enforced invariant rather than a
+ *                       best-effort keyring_id choice by the caller.
  *   lsm/inode_unlink -- denies VFS unlink on shirudo's private
  *                       bpffs superblock unless the caller is shirudo
  *                       itself (its exe_file inode matches the
@@ -60,14 +76,18 @@ char _license[] SEC("license") = "Dual BSD/GPL";
 
 /*
  * Frozen identity record, populated by `shirudo init` before this
- * program attaches: the private bpffs superblock device and the
- * (dev, ino) of shirudo's own executable. Must match the userspace
- * struct in builtin-init.c byte-for-byte.
+ * program attaches: the private bpffs superblock device, the
+ * (dev, ino) of shirudo's own executable, and the serial of the
+ * sealed "shirudo" keyring (the trust anchor a signed load must have
+ * been verified against). Must match the userspace struct in
+ * builtin-init.c byte-for-byte.
  */
 struct shirudo_sb_id {
 	__u32	sb_dev;
 	__u32	exe_dev;
 	__u64	exe_ino;
+	__s32	keyring_serial;
+	__u32	pad;
 };
 
 struct {
@@ -166,6 +186,52 @@ int BPF_PROG(shirudo_lsm_bpf, int cmd, union bpf_attr *attr,
 	default:
 		return -EACCES;
 	}
+}
+
+/*
+ * Admission gate. Fires from a single call site inside the verifier
+ * (bpf_check), after the kernel has verified any PKCS#7 signature and
+ * recorded the verdict on prog->aux->sig -- so the fields read here are
+ * final. A userspace load is admitted only if the kernel verified it
+ * against exactly shirudo's own sealed keyring; every other program is
+ * denied, fail-closed.
+ *
+ * kernel == true means the load originates from inside an already-vetted
+ * signed loader running in kernel context; those are always allowed
+ * (the loader itself passed this gate when it was loaded from userspace).
+ */
+SEC("lsm/bpf_prog_load")
+int BPF_PROG(shirudo_lsm_bpf_prog_load, struct bpf_prog *prog,
+	     union bpf_attr *attr, struct bpf_token *token, bool kernel)
+{
+	struct shirudo_sb_id *id;
+	__u32 zero = 0, verdict, ktype;
+	__s32 serial;
+
+	if (kernel)
+		return 0;
+
+	/*
+	 * Fail closed if the identity record is missing or carries no
+	 * keyring serial: without the trust anchor there is no way to tell
+	 * a shirudo-signed load from an attacker's, so admit nothing.
+	 */
+	id = bpf_map_lookup_elem(&shirudo_bpffs_sb, &zero);
+	if (!id || id->keyring_serial == 0)
+		return -EACCES;
+
+	verdict = BPF_CORE_READ(prog, aux, sig.verdict);
+	ktype   = BPF_CORE_READ(prog, aux, sig.keyring_type);
+	serial  = BPF_CORE_READ(prog, aux, sig.keyring_serial);
+
+	if (verdict != BPF_SIG_VERIFIED)
+		return -EACCES;
+	if (ktype != BPF_SIG_KEYRING_USER)
+		return -EACCES;
+	if (serial != id->keyring_serial)
+		return -EACCES;
+
+	return 0;
 }
 
 /*

@@ -18,6 +18,11 @@
 
 void shirudo_sha256(const void *data, size_t len,
 		    uint8_t out[SHIRUDO_CHAIN_DIGEST_LEN]);
+
+/* SHA-256 over the concatenation a || b, without allocating a joined buffer. */
+void shirudo_sha256_2(const void *a, size_t a_len,
+		      const void *b, size_t b_len,
+		      uint8_t out[SHIRUDO_CHAIN_DIGEST_LEN]);
 void shirudo_hex_encode(const uint8_t *in, size_t n, char *out);
 
 /* Decode exactly 2*n lowercase/uppercase hex chars. 0 / -EINVAL. */

@@ -40,10 +40,12 @@ int shirudo_unload(void *ctx)
 {
 	/*
 	 * TODO: look up /var/lib/shirudo/bpffs/upatches/<name>/link
-	 * via bpf_sys_bpf(BPF_OBJ_GET), cross-check the loaded
-	 * upatch's payload_sha256 against shirudo_unload_params via
-	 * the pinned upatches_registry map, then BPF_LINK_DETACH +
-	 * BPF_OBJ_UNPIN. Pending the target-side init path.
+	 * via bpf_sys_bpf(BPF_OBJ_GET), cross-check the loaded upatch's
+	 * payload_sha256 against the signature-covered
+	 * shirudo_unload_params.expected_sha256, then BPF_LINK_DETACH +
+	 * BPF_OBJ_UNPIN from kernel context. Blocked on bpf_sys_bpf()
+	 * gaining those ops (TODO.kernel item 6); until then the detach and
+	 * payload compare run in userspace.
 	 */
 	(void)ctx;
 	return 0;

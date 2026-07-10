@@ -393,13 +393,16 @@ static int init_lsm(void)
 		uint32_t	sb_dev;
 		uint32_t	exe_dev;
 		uint64_t	exe_ino;
+		int32_t		keyring_serial;
+		uint32_t	pad;
 	} id = {};
 	const struct shirudo_embedded_bpf *blob = shirudo_bpf2_blob();
-	struct bpf_program *p_bpf, *p_unlink, *p_setx, *p_rmx;
+	struct bpf_program *p_bpf, *p_unlink, *p_setx, *p_rmx, *p_pload;
 	struct bpf_object *obj = NULL, *seal_obj = NULL;
 	struct bpf_link *link_bpf = NULL, *link_unlink = NULL;
-	struct bpf_link *link_setx = NULL, *link_rmx = NULL;
+	struct bpf_link *link_setx = NULL, *link_rmx = NULL, *link_pload = NULL;
 	struct bpf_link *seal_links[5] = {};
+	key_serial_t keyring;
 	struct bpf_map *m_sb;
 	struct stat st;
 	uint32_t zero = 0;
@@ -449,6 +452,22 @@ static int init_lsm(void)
 	id.exe_dev = kernel_dev_t(st.st_dev);
 	id.exe_ino = (uint64_t)st.st_ino;
 
+	/*
+	 * The trust anchor lsm/bpf_prog_load enforces: only a load the
+	 * kernel verified against exactly this sealed keyring is admitted
+	 * from userspace. init_keyring has already linked the cert and
+	 * sealed the keyring, so this resolves the same serial the load
+	 * path passes as keyring_id.
+	 */
+	keyring = shirudo_keyring_find(SHIRUDO_KEYRING_NAME);
+	if (keyring < 0) {
+		err = keyring;
+		pr_err("resolve \"%s\" keyring serial: %s",
+		       SHIRUDO_KEYRING_NAME, strerror(-err));
+		goto out;
+	}
+	id.keyring_serial = (int32_t)keyring;
+
 	m_sb = bpf_object__find_map_by_name(obj, "shirudo_bpffs_sb");
 	if (!m_sb) {
 		pr_err("shirudo_bpffs_sb map not in embedded bpf2");
@@ -473,8 +492,10 @@ static int init_lsm(void)
 						  "shirudo_lsm_inode_setxattr");
 	p_rmx = bpf_object__find_program_by_name(obj,
 						 "shirudo_lsm_inode_removexattr");
+	p_pload = bpf_object__find_program_by_name(obj,
+						   "shirudo_lsm_bpf_prog_load");
 	p_bpf = bpf_object__find_program_by_name(obj, "shirudo_lsm_bpf");
-	if (!p_unlink || !p_setx || !p_rmx || !p_bpf) {
+	if (!p_unlink || !p_setx || !p_rmx || !p_pload || !p_bpf) {
 		pr_err("expected programs missing in bpf2 object");
 		err = -ENOENT;
 		goto out;
@@ -482,9 +503,13 @@ static int init_lsm(void)
 
 	/*
 	 * Order: the bpffs guards (inode_unlink/setxattr/removexattr), then
-	 * seal's five regular-fs hooks, and lsm/bpf LAST. Pinning a link
-	 * creates a bpffs inode, gated by neither guard set; and seal's
-	 * unsigned load must precede the lsm/bpf gate going live.
+	 * seal's five regular-fs hooks, then the two bpf() gates
+	 * (bpf_prog_load admission, then lsm/bpf) LAST. Pinning a link
+	 * creates a bpffs inode, gated by neither guard set; seal's unsigned
+	 * load and the identity-map freeze must both precede the load gates
+	 * going live. lsm/bpf is attached last because its pin is the
+	 * canonical "shirudo active" marker checked for idempotency and by
+	 * `shirudo status`.
 	 */
 	err = attach_pin(p_unlink, SHIRUDO_INODE_UNLINK_LINK_PIN, &link_unlink);
 	if (err) {
@@ -506,6 +531,12 @@ static int init_lsm(void)
 	if (err)
 		goto out;
 
+	err = attach_pin(p_pload, SHIRUDO_LSM_PROG_LOAD_LINK_PIN, &link_pload);
+	if (err) {
+		pr_err("attach lsm/bpf_prog_load: %s", strerror(-err));
+		goto out;
+	}
+
 	err = attach_pin(p_bpf, SHIRUDO_LSM_LINK_PIN, &link_bpf);
 	if (err) {
 		pr_err("attach lsm/bpf: %s", strerror(-err));
@@ -520,6 +551,7 @@ out:
 		bpf_link__destroy(seal_links[i]);
 	bpf_object__close(seal_obj);
 	bpf_link__destroy(link_bpf);
+	bpf_link__destroy(link_pload);
 	bpf_link__destroy(link_rmx);
 	bpf_link__destroy(link_setx);
 	bpf_link__destroy(link_unlink);

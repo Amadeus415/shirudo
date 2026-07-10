@@ -22,6 +22,7 @@
 #define SHIRUDO_KEYRING_SERIAL_PATH	SHIRUDO_VAR_LIB "/keyring.serial"
 #define SHIRUDO_BPFFS_DIR		SHIRUDO_VAR_LIB "/bpffs"
 #define SHIRUDO_LSM_LINK_PIN		SHIRUDO_BPFFS_DIR "/lsm_link"
+#define SHIRUDO_LSM_PROG_LOAD_LINK_PIN	SHIRUDO_BPFFS_DIR "/bpf2_bpf_prog_load_link"
 #define SHIRUDO_INODE_UNLINK_LINK_PIN	SHIRUDO_BPFFS_DIR "/bpf2_inode_unlink_link"
 #define SHIRUDO_INODE_SETXATTR_LINK_PIN	SHIRUDO_BPFFS_DIR "/bpf2_inode_setxattr_link"
 #define SHIRUDO_INODE_RMXATTR_LINK_PIN	SHIRUDO_BPFFS_DIR "/bpf2_inode_removexattr_link"

@@ -28,6 +28,24 @@ void shirudo_sha256(const void *data, size_t len, uint8_t out[32])
 	EVP_Digest(data, len, out, &n, EVP_sha256(), NULL);
 }
 
+void shirudo_sha256_2(const void *a, size_t a_len,
+		      const void *b, size_t b_len, uint8_t out[32])
+{
+	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+
+	if (!ctx) {
+		memset(out, 0, 32);
+		return;
+	}
+	if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
+	    EVP_DigestUpdate(ctx, a, a_len) == 1 &&
+	    (b_len == 0 || EVP_DigestUpdate(ctx, b, b_len) == 1))
+		EVP_DigestFinal_ex(ctx, out, NULL);
+	else
+		memset(out, 0, 32);
+	EVP_MD_CTX_free(ctx);
+}
+
 void shirudo_hex_encode(const uint8_t *in, size_t n, char *out)
 {
 	static const char d[] = "0123456789abcdef";

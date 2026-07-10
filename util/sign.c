@@ -29,6 +29,7 @@
 #include <openssl/x509.h>
 
 #include "log.h"
+#include "malloc.h"
 #include "sign.h"
 
 #define OPEN_SSL_ERR_BUF_LEN	256
@@ -118,10 +119,27 @@ int shirudo_cms_sign(struct shirudo_sign_io *io,
 	EVP_PKEY *private_key = NULL;
 	CMS_ContentInfo *cms = NULL;
 	long actual_sig_len = 0;
+	void *content = NULL;
 	X509 *x509 = NULL;
+	size_t content_sz;
 	int err = 0;
 
-	bd_in = BIO_new_mem_buf(io->insns, io->insns_sz);
+	/*
+	 * The signature and the payload hash both span insns || data --
+	 * the concatenation the kernel folds and verifies at load. Build
+	 * that once and feed it to both CMS_final and the digest.
+	 */
+	content_sz = io->insns_sz + io->data_sz;
+	content = xmalloc(content_sz);
+	if (!content) {
+		err = -ENOMEM;
+		goto cleanup;
+	}
+	memcpy(content, io->insns, io->insns_sz);
+	if (io->data_sz)
+		memcpy((char *)content + io->insns_sz, io->data, io->data_sz);
+
+	bd_in = BIO_new_mem_buf(content, content_sz);
 	if (!bd_in) {
 		err = -ENOMEM;
 		goto cleanup;
@@ -159,7 +177,7 @@ int shirudo_cms_sign(struct shirudo_sign_io *io,
 		goto cleanup;
 	}
 
-	if (EVP_Digest(io->insns, io->insns_sz, io->payload_sha256,
+	if (EVP_Digest(content, content_sz, io->payload_sha256,
 		       &hash_len, EVP_sha256(), NULL) != 1) {
 		err = -EIO;
 		goto cleanup;
@@ -199,6 +217,7 @@ cleanup:
 	X509_free(x509);
 	EVP_PKEY_free(private_key);
 	BIO_free(bd_in);
+	xfree(content, content_sz);
 	DISPLAY_OSSL_ERR(err < 0);
 	return err;
 }

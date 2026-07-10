@@ -1601,14 +1601,17 @@ offset  size            field
   `BPF_PROG_LOAD`. After `BPF_PROG_TEST_RUN`, userspace reads this region
   back and surfaces its contents as the `verifier_log` field of the
   JSON failure report (see "Failure reporting for AI-driven rollouts").
-  Not covered by the signature — `loader_insns` is the only signed
-  section. The `log_buf` region is loader-owned scratch; tampering with
-  it changes only the report, not behavior.
+  Not covered by the signature — the signature spans `loader_insns` and
+  the `data` (metadata) blob. The `log_buf` region is loader-owned
+  scratch; tampering with it changes only the report, not behavior.
 
 The format is intentionally trivial — no encryption, no compression. Integrity
-is provided entirely by the kernel's PKCS#7 verification of `loader_insns`
-against the target's `shirudo` keyring; tampering with any other section either
-breaks parsing or causes the loader's runtime `excl_prog_hash` check to fail.
+is provided entirely by the kernel's PKCS#7 verification of
+`loader_insns || data` (the kernel folds the frozen metadata map into the
+signed buffer at `BPF_PROG_LOAD`; see Documentation/bpf/signing.rst) against
+the target's `shirudo` keyring; tampering with either section makes the
+signature verification fail, and tampering with any other section breaks
+parsing.
 
 A header file `include/shirudo/upatch.h` defines the on-disk layout for both
 sides.
@@ -1740,17 +1743,21 @@ attribute on the pin directory**, not a BPF map. Concretely:
 
 - At every successful `shirudo upatch load`, **after** the program
   is attached and its link pinned, target-side shirudo records the
-  loaded upatch's 32-byte `payload_sha256` (the SHA-256 of the
-  signed `loader_insns`, the same value in the eventlog) as the
-  `security.bpf.shirudo.payload` xattr on the pin directory
+  loaded upatch's 32-byte `payload_sha256` (the SHA-256 of the signed
+  content `loader_insns || data`, the same value in the eventlog) as
+  the `security.bpf.shirudo.payload` xattr on the pin directory
   `/var/lib/shirudo/bpffs/upatches/<name>/`. It is written last, so
   the recorded value always reflects an actually-loaded upatch and
   there is no rollback window if a step fails.
-- The value is **authentic without an in-kernel write**: the kernel
-  already verified, at the signature-gated `BPF_PROG_LOAD`, that the
-  loaded loader's hash equals `payload_sha256` (the `excl_prog_hash`
-  binding on `__loader.map`). So the header value userspace writes is
-  cryptographically bound to what ran.
+- The value is **authentic without an in-kernel write**: it is the
+  SHA-256 of exactly the bytes the kernel verified against the
+  `shirudo` keyring at the signature-gated `BPF_PROG_LOAD` (the
+  signature spans `loader_insns || data`), and before that load
+  shirudo checks the header `payload_sha256` equals
+  SHA-256(`loader_insns || data`) itself. So the header value
+  userspace writes is cryptographically bound to what ran. (This is
+  distinct from `excl_prog_hash` = SHA-256(`loader_insns`), the
+  separate map→loader digest binding on `__loader.map`.)
 - The value is **immutable / unforgeable** via the bpf2
   `lsm/inode_setxattr` and `lsm/inode_removexattr` hooks: scoped to
   shirudo's private bpffs superblock and gated on the same exe
@@ -1767,8 +1774,9 @@ attribute on the pin directory**, not a BPF map. Concretely:
   `category: payload_mismatch`, detaching nothing. The check is
   skipped (warning; detach proceeds) when the directive carries no
   expected payload or the xattr is unavailable.
-- **Residual.** The *stored* value is unforgeable (excl_prog_hash +
-  bpf2 setxattr guard), but the *expected* value the userspace compare
+- **Residual.** The *stored* value is unforgeable (SHA-256 of the
+  kernel-verified signed content + bpf2 setxattr guard), but the
+  *expected* value the userspace compare
   uses comes from the directive's metadata, which — like the target
   name — is not signature-covered (TODO.kernel item 6). So a root
   attacker who edits the unsigned metadata can realign the two. The

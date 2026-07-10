@@ -296,6 +296,19 @@ sealed tree (inherits residual #12, the CAP_SYS_RESOURCE exe-spoof).
 Verified: swap -> find-by-name returns the fake serial -> load refuses
 "keyring serial mismatch (substituted keyring)"; status shows MISMATCH.
 
+Now also enforced in the kernel at the admission point, independent of
+the userspace pin: with the load-time signature scheme the kernel records
+prog->aux->sig.{verdict,keyring_type,keyring_serial}, and bpf2's
+lsm/bpf_prog_load hook (bpf/bpf2.c) admits a userspace load only when
+verdict == BPF_SIG_VERIFIED, keyring_type == BPF_SIG_KEYRING_USER, and
+keyring_serial equals the serial init froze into the shirudo_bpffs_sb
+identity map. So even a load that reached BPF_PROG_LOAD with an
+attacker-chosen keyring_id -- or against a substituted same-named keyring
+resolving to a different serial -- is denied in-kernel (-EACCES), not just
+by the userspace precheck. This does not make the keyring object itself
+un-unlinkable (that is the item below); it makes removing or swapping it
+yield no trust bypass, only a detectable DoS.
+
 A complete (not fail-closed-only) fix needs new kernel code, NOT just a
 seal extension. The natural hook, lsm/key_permission, IS attachable from
 BPF LSM (not in bpf_lsm_disabled_hooks; only key_getsecurity is) and the
