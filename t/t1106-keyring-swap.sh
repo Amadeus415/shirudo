@@ -6,8 +6,16 @@
 # displaces the sealed "shirudo" keyring in @u with a fake same-named
 # one is caught by the serial pin. `status` reports MISMATCH and a load
 # is refused with category tampered (before any BPF_PROG_LOAD). The
-# fake keyring is removed and a fresh real one re-created on EXIT, so the
-# host is left enforcing as before.
+# fake keyring is removed and a fresh sealed one re-created on EXIT.
+#
+# Caveat: the substitution displaces (unlinks) the original keyring from
+# @u, and the seal blocks re-linking it, so its serial cannot be
+# recovered. The lsm/bpf_prog_load gate binds the serial frozen into the
+# bpf2 identity map at the original init, so shirudo-signed loads stay
+# refused until the next boot re-inits from scratch. The host remains
+# fail-closed (enforcing) in the meantime -- the correct posture once the
+# trust anchor has been destroyed -- so this test should be run on a host
+# that will be rebooted, or last.
 
 cd "$(dirname "$0")"
 . ./integration-lib.sh
@@ -19,11 +27,15 @@ ARCH=$(ls /var/lib/shirudo/upatches/*.upatch 2>/dev/null | head -1)
 keyctl search @u keyring shirudo >/dev/null 2>&1 || test_skip_all "no shirudo keyring"
 
 restore() {
-	# Drop whatever "shirudo" keyring is in @u now (fake or real), then
+	# Drop whatever "shirudo" keyring is in @u now (fake or stale), then
 	# let init recreate a fresh sealed one with the cert and re-pin it.
+	# Try a measured init first; fall back to --no-tpm so the keyring is
+	# still recreated on a TPM-less host (where a plain init fails
+	# pre-flight and would otherwise leave @u with no shirudo keyring).
 	k=$(keyctl search @u keyring shirudo 2>/dev/null) &&
 		keyctl unlink "$k" @u >/dev/null 2>&1
-	"$SHIRUDO_BIN" init >/dev/null 2>&1 || true
+	"$SHIRUDO_BIN" init >/dev/null 2>&1 ||
+		"$SHIRUDO_BIN" init --no-tpm >/dev/null 2>&1 || true
 }
 trap restore EXIT
 
