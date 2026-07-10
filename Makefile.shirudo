@@ -337,7 +337,8 @@ TEST_HELPERS := t/helper/test-json-parser \
                 t/helper/test-bpf-load \
                 t/helper/test-upatch-map-types \
                 t/helper/test-upatch-prog-metadata \
-                t/helper/test-upatch-serializer-pages
+                t/helper/test-upatch-serializer-pages \
+                t/helper/test-signed-load
 
 t/helper/test-json-parser: t/helper/test-json-parser.c util/json.o
 	@printf '  CC      $@\n'
@@ -360,6 +361,13 @@ t/helper/test-selector: t/helper/test-selector.c util/selector.o \
 t/helper/test-bpf-load: t/helper/test-bpf-load.c
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+# Needs the vendored uapi bpf.h (excl_prog_hash / fd_array_cnt / keyring_id
+# are newer than a stock system header) and libcrypto for SHA-256.
+t/helper/test-signed-load: t/helper/test-signed-load.c
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -Ithird_party/bpf-next/tools/include/uapi \
+	    -o $@ $^ -lcrypto
 
 t/helper/test-upatch-map-types: t/helper/test-upatch-map-types.c
 	@printf '  CC      $@\n'
