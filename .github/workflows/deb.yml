@@ -10,7 +10,7 @@ on:
 
 jobs:
   deb:
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest-4cores-16gb
 
     steps:
       - name: Check out repository
@@ -23,42 +23,13 @@ jobs:
           git submodule sync -- third_party/bpf-next
           git submodule update --init --force --depth 1 --single-branch -- third_party/bpf-next
 
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            clang \
-            llvm \
-            python3 \
-            pkg-config \
-            libssl-dev \
-            libssh-dev \
-            libtss2-dev \
-            libelf-dev \
-            zlib1g-dev \
-            libcurl4-openssl-dev \
-            libjson-c-dev \
-            uuid-dev \
-            dpkg-dev \
-            file
-
-      - name: Build deb package
-        run: make bindeb-pkg
-
-      - name: Upload deb package
-        uses: actions/upload-artifact@v4
-        with:
-          name: shirudo-deb
-          path: shirudo-*.deb
-          if-no-files-found: error
-
-      - name: Run shirudo in LVH VM
+      - name: Build deb package and run shirudo in LVH VM
         uses: cilium/little-vm-helper@v0.0.30
         with:
           test-name: shirudo-apt
           image: kind
           image-version: bpf-next-20260603.072225
+          kernel-version: bpf-next-main
           host-mount: ${{ github.workspace }}
           images-folder-parent: ${{ github.workspace }}/../lvh
           install-dependencies: true
@@ -73,6 +44,34 @@ jobs:
             cd /host
 
             apt-get update
+            apt-get install -y --no-install-recommends \
+              build-essential \
+              clang \
+              llvm \
+              python3 \
+              pkg-config \
+              libssl-dev \
+              libssh-dev \
+              libtss2-dev \
+              libelf-dev \
+              zlib1g-dev \
+              libcurl4-openssl-dev \
+              libjson-c-dev \
+              uuid-dev \
+              dpkg-dev \
+              file \
+              git
+
+            git config --global --add safe.directory /host
+
+            # The LVH /host mount makes git dirty checks expensive. For CI,
+            # use a fixed package/runtime version instead of asking git.
+            make bindeb-pkg \
+              DEB_RAW_VERSION=0.0.0-ci \
+              DEB_VERSION=0.0.0-ci \
+              SHIRUDO_GIT_DESCRIBE='printf 0.0.0-ci'
+
+            apt-get update
             apt-get install -y /host/shirudo-operator_*.deb
 
             /usr/bin/shirudo genkey
@@ -80,7 +79,14 @@ jobs:
             # Verify that shirudo build works without a local copy of vmlinux.h
             pushd examples
             # TODO: shirudo build should include multiarch include path.
-            shirudo build verifier-reject-null-deref.bpf.c --extra-cflags "-I/usr/include/$(gcc -dumpmachine)"
+            shirudo build verifier-reject-null-deref.bpf.c --extra-cflags "-I/usr/include/\$(gcc -dumpmachine)"
             popd
 
             apt-get remove -y shirudo-operator
+
+      - name: Upload deb package
+        uses: actions/upload-artifact@v4
+        with:
+          name: shirudo-deb
+          path: shirudo-*.deb
+          if-no-files-found: error
