@@ -23,9 +23,12 @@ jobs:
           sudo apt-get clean
 
       - name: Build kernel debs
-        env:
-          KERNEL_PATCHES: kernel/
-        run: contrib/build-kernel-deb.sh
+        run: |
+          if [ -d kernel ]; then
+            KERNEL_PATCHES=kernel/ contrib/build-kernel-deb.sh
+          else
+            contrib/build-kernel-deb.sh
+          fi
 
       - name: Upload kernel deb bundle
         uses: actions/upload-artifact@v4
