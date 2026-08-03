@@ -5,7 +5,11 @@ These are limitations in the upstream kernel and libbpf that shirudo's
 design bumps into. None are blockers for the MVP -- each has a userspace
 workaround noted below -- but resolving them upstream would let shirudo
 tighten its trust model and remove workarounds. File paths below refer to
-the pinned tree under third_party/bpf-next/ (currently 523d2f42b406).
+the pinned tree under third_party/bpf-next/ (currently a4553044d1af).
+
+Numbering is stable: resolved items are dropped, the remaining ones keep
+their number, and gaps are left in place so references elsewhere in the
+tree stay valid.
 
 
 1. gen_loader cannot attach the program it loads
@@ -78,29 +82,6 @@ Workaround in shirudo today: not needed yet (userspace creates the link,
 so it already holds the fd). Becomes relevant only if items 1+2 land.
 
 
-4. bpf_map->sha is populated lazily; skipping the trigger fails silently
-------------------------------------------------------------------------
-kernel/bpf/verifier.c (emit_signature_match read side),
-kernel/bpf/syscall.c (info.hash compute), and the gen_loader runtime guard.
-
-The "exclusive map" signing flow puts a runtime guard in the loader that
-compares SHA256(map_value), baked into the loader insns at sign time,
-against bpf_map->sha read at run time. bpf_map->sha is computed lazily:
-it is only filled in when userspace calls BPF_OBJ_GET_INFO_BY_FD with
-bpf_map_info.hash / .hash_size set, AFTER BPF_MAP_FREEZE and BEFORE
-BPF_PROG_LOAD. Skip that one call and the loader exits -EINVAL at runtime
-with an empty verifier log and no kernel-context bpf() call ever made --
-a hard-to-diagnose failure (cost us a debugging session; see commit
-"Seal __loader.map hash via BPF_OBJ_GET_INFO_BY_FD").
-
-Desired: compute the map hash at BPF_MAP_FREEZE time, or document the
-ordering requirement in the uapi, or have the loader runtime guard return
-a distinguishable error.
-
-Workaround in shirudo today: builtin-upatch.c:loader_map_seal_hash()
-issues the OBJ_GET_INFO_BY_FD call in the right place.
-
-
 5. Signed loaders cannot run from kernel context (no userspace)
 ---------------------------------------------------------------
 Per KP Singh's commit fb2b0e290147 ("libbpf: Update light skeleton for
@@ -110,11 +91,18 @@ BPF_OBJ_GET_INFO_BY_ID to be called from the kernel."
 
 Consequence for shirudo: a future initramfs-stage `shirudo init` (to close
 the boot-time enforcement gap, threat T5) that wanted to load signed
-upatches before userspace is fully up would hit this -- the info-by-id
-hashing path (item 4's trigger) is userspace-only.
+upatches before userspace is fully up would hit this -- the whole
+metadata-map sequence (MAP_CREATE, MAP_UPDATE_ELEM, MAP_FREEZE, then the
+signed PROG_LOAD carrying the map in fd_array) is driven from userspace.
 
-Desired: enable the BPF_OBJ_GET_INFO_BY_ID map-hash path from kernel
-context, so signed loaders can be driven from a kernel/early-boot context.
+Caveat: the quote above predates the load-time verification scheme, in
+which the kernel folds the frozen metadata map into the signature at
+PROG_LOAD rather than the loader self-checking map->sha. bpf_sys_bpf()
+does allow MAP_CREATE / MAP_UPDATE_ELEM / MAP_FREEZE / PROG_LOAD from
+kernel context, so the limitation may no longer hold as stated --
+re-validate against the current kernel before acting on this item.
+
+Desired: signed loaders drivable from a kernel/early-boot context.
 
 Workaround in shirudo today: none needed -- MVP init runs from userspace
 under sshd. Relevant only when the initramfs-stage init lands.
@@ -150,7 +138,7 @@ own baked-in, hash-bound params:
     matches the directive IS now enforced -- but in userspace, not by
     the signed BPF. shirudo reads the security.bpf.shirudo.payload
     xattr on the pin directory (set at load, made unforgeable by bpf2's
-    inode_setxattr guard; see item 7) and constant-time compares it to
+    inode_setxattr guard) and constant-time compares it to
     the directive's signed expected payload before detaching. Moving
     this comparison + the delete into the signed unload program (so it
     is the signed BPF acting on its own hash-bound params) needs the
@@ -164,8 +152,8 @@ payload_mismatch compare would move out of userspace.
 
 Workaround in shirudo today: userspace detach gated by signature
 verification + bpf2 exe-identity inode_unlink; userspace payload_mismatch
-compare against the bpf2-protected pin xattr (item 7); documented
-residual on target binding.
+compare against the bpf2-protected pin xattr; documented residual on
+target binding.
 
 Same gap applies to the per-upatch map pins introduced for
 `shirudo upatch map` / `shirudo status --include-maps`. Each loaded
@@ -181,41 +169,6 @@ would let the signed unload clean both `link` and `maps/<*>` in
 kernel context, removing the userspace step entirely. Until that
 lands, the bpf2 inode_unlink exe-identity check keeps the map pins
 protected from non-shirudo deletion -- same defence as the link.
-
-
-7. bpffs supported no extended attributes (RESOLVED by a local patch)
----------------------------------------------------------------------
-kernel/bpf/inode.c
-
-Status: implemented as a local patch to this tree (kernel/bpf/inode.c);
-not yet upstream. shirudo's option-C payload storage depends on it, so
-the patch must ship with / precede the kernel shirudo targets.
-
-Before the patch, bpffs inodes carried no xattrs: the inode_operations
-were empty stubs and the superblock installed no s_xattr handler array,
-so the VFS short-circuited setxattr/getxattr to -EOPNOTSUPP
-(fs/xattr.c xattr_resolve_name). There was nowhere to attach per-pin
-metadata to a pinned link/map/prog or to the mount root.
-
-The patch gives bpffs a real fs-private inode (struct bpf_fs_inode
-wrapping struct inode, with a lazily-allocated simple_xattrs store), a
-kmem_cache with alloc_inode/free_inode, the trusted/security/user
-xattr_handlers backed by simple_xattr_get/set, sb->s_xattr, and
-.listxattr on the inode ops. The store is in-memory and non-persistent
-(lost on reboot), which is exactly what shirudo wants -- it re-applies
-on init. The security.bpf. xattr namespace and the bpf_get_dentry_xattr
-/ bpf_set_dentry_xattr kfuncs already existed (fs/bpf_fs_kfuncs.c); only
-the bpffs backing store was missing.
-
-How shirudo uses it: every loaded upatch's payload_sha256 is recorded
-as the security.bpf.shirudo.payload xattr on its pin directory
-(/var/lib/shirudo/bpffs/upatches/<name>/), the ground truth for the
-unload payload_mismatch check. Immutability against a root attacker
-comes from bpf2's inode_setxattr / inode_removexattr hooks (exe-identity
-gated over the bpffs superblock), NOT from the xattr store itself --
-bpffs xattrs are settable by any CAP_SYS_ADMIN caller otherwise.
-
-Desired: upstream the patch. Until then it is carried locally.
 
 
 8. libbpf gen_loader cannot bind a pre-existing (pinned) map in the
@@ -244,8 +197,8 @@ a libbpf fork (gen_loader.c + libbpf.c), breaking the "vendor libbpf
 as-is" posture and adding a rebase cost.
 
 shirudo's decision: do NOT carry a libbpf fork. The payload_sha256 is
-stored as a per-pin bpffs xattr instead (item 7), which needs neither a
-shared map nor a signed in-kernel writer.
+stored as a per-pin bpffs xattr instead, which needs neither a shared
+map nor a signed in-kernel writer.
 
 Desired (only if the shared-map design is ever revived): a libbpf
 gen_loader option for "provided maps" -- a map whose fd is supplied
@@ -255,8 +208,8 @@ item 6, shirudo could then keep one shared registry and move the whole
 load-time write and unload-time compare+delete into signed kernel
 context.
 
-Workaround in shirudo today: per-pin bpffs payload xattr (item 7); no
-shared registry map, no libbpf fork.
+Workaround in shirudo today: per-pin bpffs payload xattr; no shared
+registry map, no libbpf fork.
 
 
 9. Scoping BPF signature verification to one keyring -- RESOLVED (userspace)

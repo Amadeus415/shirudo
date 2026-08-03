@@ -1104,9 +1104,9 @@ shirudo defense: **Two layers.**
   stored value is **unforgeable**: ``bpf2``'s ``inode_setxattr`` /
   ``inode_removexattr`` hooks (the same exe-identity gate as
   ``inode_unlink``) let only shirudo's own executable set or remove
-  xattrs on its bpffs, so the attacker cannot rewrite it to lie.
-  (Requires the bpffs-xattr kernel patch, TODO.kernel item 7; without
-  it the check degrades to *unavailable*, never wrong.)
+  xattrs on its bpffs, so the attacker cannot rewrite it to lie. The
+  check is fail-closed: a live pin whose payload xattr cannot be read
+  refuses the unload rather than proceeding unverified.
 
 Residual risk: two.
 

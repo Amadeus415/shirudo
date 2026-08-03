@@ -194,10 +194,7 @@ matches the recorded ``(dev, ino)``, and denied for every other
 caller (including root ``rm``/``setfattr``). This ``(dev, ino)``
 check is the interim of the ``security.bpf.shirudo`` xattr identity
 ``bpf/seal.c`` will use on the regular-fs tree; both are defeatable
-only with ``CAP_SYS_RESOURCE`` (threat-model residual #12). The two
-xattr hooks need the bpffs-xattr kernel patch (TODO.kernel item 7);
-without it they are inert — bpffs ``setxattr`` fails ``-EOPNOTSUPP``
-in the VFS regardless of the verdict.
+only with ``CAP_SYS_RESOURCE`` (threat-model residual #12).
 
 The hook receives a ``bool kernel`` flag (from
 ``include/linux/lsm_hook_defs.h``) that distinguishes calls coming
@@ -352,7 +349,8 @@ whole loader CMS-signed. On the target:
    ``inode_setxattr`` guard) and constant-time compare it against the
    directive's expected value. Mismatch → refuse (catches an attacker
    who substituted a different upatch under the same name), detaching
-   nothing.
+   nothing. Fail-closed: a live pin whose xattr cannot be read is
+   refused too, rather than detached unverified.
 3. **Detach** — VFS-unlink the pin under
    ``/var/lib/shirudo/bpffs/upatches/<name>/``; dropping the link
    refcount detaches the program. bpf2's ``inode_unlink`` permits this

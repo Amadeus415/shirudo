@@ -52,12 +52,7 @@
  *                       the security.bpf.shirudo.payload xattr on the
  *                       pin directory; this gate makes that value
  *                       unforgeable by a root attacker (the unload
- *                       payload_mismatch check trusts it). Requires the
- *                       bpffs-xattr kernel patch (TODO.kernel item 7);
- *                       on a kernel without it these hooks still fire
- *                       but have no observable effect -- the bpffs
- *                       setxattr they gate then fails with -EOPNOTSUPP
- *                       in the VFS regardless of the verdict.
+ *                       payload_mismatch check trusts it).
  *   lsm/sb_umount,
  *   lsm/move_mount,
  *   lsm/sb_mount,

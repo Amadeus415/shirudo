@@ -1308,10 +1308,10 @@ static int pin_upatch_maps(const struct shirudo_loader_ctx *cx,
  * directory. `upatch unload` reads it back to confirm what is actually
  * loaded under <name> matches the directive's signed expectation; the
  * bpf2 inode_setxattr guard restricts this write to shirudo, so a root
- * attacker cannot forge it. Best-effort: the load already succeeded, so
- * a setxattr failure (e.g. -EOPNOTSUPP on a kernel without the
- * bpffs-xattr patch, TODO.kernel item 7) only disables the unload
- * payload_mismatch check for this upatch -- it is logged, not fatal.
+ * attacker cannot forge it. Not fatal -- the load already succeeded and
+ * there is nothing to roll back -- but unload is fail-closed on a
+ * missing value, so a failure here is an error, not a warning: it leaves
+ * <name> loaded and un-unloadable through the normal path.
  */
 static void set_pin_payload(const char *name, const uint8_t payload[32])
 {
@@ -1321,16 +1321,15 @@ static void set_pin_payload(const char *name, const uint8_t payload[32])
 		     name) >= (int)sizeof(dir))
 		return;
 	if (setxattr(dir, SHIRUDO_XATTR_PAYLOAD, payload, 32, 0) != 0)
-		pr_warn("upatch: cannot record payload xattr on %s: %s "
-			"(payload_mismatch check unavailable for this upatch)",
-			dir, strerror(errno));
+		pr_err("upatch: cannot record payload xattr on %s: %s "
+		       "(unload of this upatch will refuse)",
+		       dir, strerror(errno));
 }
 
 /*
  * Read the payload_sha256 recorded on <name>'s pin directory. Returns 0
  * and fills out on success, -ENOENT if the pin dir is gone, -ENODATA if
- * the xattr is absent, or another -errno (notably -EOPNOTSUPP on a
- * kernel without the bpffs-xattr patch).
+ * the xattr is absent, or another -errno.
  */
 static int get_pin_payload(const char *name, uint8_t out[32])
 {
@@ -1733,8 +1732,7 @@ static int upatch_apply(const char *path, bool verify_only,
 	/*
 	 * Record payload_sha256 on the pin dir for the unload-time
 	 * payload_mismatch check. After attach+pin so the dir exists and
-	 * the value reflects an actually-loaded upatch (no rollback window
-	 * -- see TODO.kernel item 7 discussion).
+	 * the value reflects an actually-loaded upatch (no rollback window).
 	 */
 	set_pin_payload(upatch_name, u.hdr.payload_sha256);
 
@@ -2392,9 +2390,10 @@ static int cmd_upatch_unload(int argc, const char **argv)
 	 * it back is not implementable yet (TODO.kernel item 6), so this
 	 * catches honest/accidental substitution, not a root attacker who
 	 * edits both the metadata and the expected value in lockstep.
-	 * Skipped when the directive carries no expected payload (all-zero),
-	 * or when the live value is unavailable (no xattr / kernel without
-	 * the bpffs-xattr patch) -- the detach then proceeds as before.
+	 * Fail-closed: a live pin whose payload cannot be read is refused.
+	 * -ENOENT means there is no pin dir at all, which falls through to
+	 * the idempotent already_unloaded path below. Skipped only when the
+	 * directive carries no expected payload (all-zero).
 	 */
 	{
 		uint8_t zero[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN] = {};
@@ -2414,13 +2413,13 @@ static int cmd_upatch_unload(int argc, const char **argv)
 				goto done;
 			}
 			pr_info("upatch unload: payload matches for '%s'", name);
-		} else if (xrc == -ENODATA || xrc == -ENOENT ||
-			   xrc == -EOPNOTSUPP) {
-			pr_warn("upatch unload: cannot verify payload for '%s' "
-				"(%s); proceeding", name, strerror(-xrc));
-		} else {
-			pr_warn("upatch unload: payload xattr read failed for "
-				"'%s': %s; proceeding", name, strerror(-xrc));
+		} else if (xrc != -ENOENT) {
+			pr_err("upatch unload: cannot read the payload "
+			       "recorded for '%s': %s; refusing", name,
+			       strerror(-xrc));
+			rep_fail(&rep, "pin", "payload_mismatch", -xrc,
+				 "payload xattr unreadable");
+			goto done;
 		}
 	}
 
@@ -2756,8 +2755,8 @@ static int cmd_upatch_map(int argc, const char **argv)
 }
 
 /*
- * Format a payload SHA-256 (32 raw bytes) as lowercase hex; "" if
- * the xattr was absent / kernel without the bpffs-xattr patch.
+ * Format a payload SHA-256 (32 raw bytes) as lowercase hex; "" if the
+ * xattr is not readable (upatch not loaded, or value never recorded).
  */
 static void payload_hex(const char *upatch, char *out, size_t cap)
 {

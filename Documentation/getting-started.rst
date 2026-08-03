@@ -989,21 +989,17 @@ Troubleshooting
    chain-tamper-evidence layer is disabled. Consider this a
    separate trust tier for your fleet.
 
-``shirudo upatch load`` warns ``payload_mismatch check unavailable``
-   The target's bpffs does not support extended attributes
-   (``setxattr`` returns ``-EOPNOTSUPP``), so shirudo cannot record
-   or read the per-upatch ``security.bpf.shirudo.payload`` value.
-   This is **not** a hard failure: ``init``, ``upatch load``, and
-   ``upatch unload`` all still work; only the unload-time
-   ``payload_mismatch`` check is skipped (load logs "payload check
-   unavailable for this upatch", unload logs "cannot verify payload
-   ... proceeding"). Recovery: run a kernel that includes the bpffs
-   simple-xattr support (the ``kernel/bpf/inode.c`` ``simple_xattrs``
-   / ``bpf_fs_*`` patch; TODO.kernel item 7). On a patched kernel the
-   check activates automatically — no shirudo config change. (Until
-   the regular-fs sealing LSM ``bpf/seal.c`` lands and depends on
-   xattrs more deeply, missing bpffs-xattr support stays a soft
-   degradation, not an init blocker.)
+``shirudo upatch load`` logs ``cannot record payload xattr``
+   The target's bpffs rejected ``setxattr`` on the pin directory —
+   almost always a kernel below shirudo's minimum bar, which requires
+   bpffs extended-attribute support (``kernel/bpf/inode.c``, upstream
+   in bpf-next as ``9722955b5430 "bpf: Add simple xattr support to
+   bpffs"``). The load itself already succeeded and is enforcing, but
+   the per-upatch ``security.bpf.shirudo.payload`` value the unload
+   check reads was never recorded, so ``shirudo upatch unload`` for
+   that name will refuse. Recovery: run a kernel that includes the
+   bpffs xattr support; the value is re-recorded on the next load of
+   that upatch, including ``init`` boot-restore.
 
 ``shirudo init`` reports ``failed_checks: [tpm_index_conflict]`` or
 ``[tpm_index_auth_mismatch]``
@@ -1041,10 +1037,13 @@ Troubleshooting
    (set at load, kept unforgeable by bpf2's ``inode_setxattr``
    guard) — does not match the digest the unload directive expects.
    Either (a) an attacker substituted a different upatch under the
-   same name (security incident; investigate), or (b) the
-   operator's unload directive is stale (re-derive the
-   ``--payload-sha256`` from the currently-loaded upatch on the
-   target via ``shirudo upatch info``). shirudo refuses to detach
+   same name (security incident; investigate), (b) the operator's
+   unload directive is stale (re-derive the ``--payload-sha256``
+   from the currently-loaded upatch on the target via ``shirudo
+   upatch info``), or (c) the xattr could not be read at all — the
+   check is fail-closed, so an unreadable payload refuses the
+   unload rather than proceeding unverified (see the ``cannot
+   record payload xattr`` entry above). shirudo refuses to detach
    without confirmation; this protection is intentional. (Pushed
    from the operator, this is a ``shirudo rollout`` of an UNLOAD
    directive — there is no separate ``rollback`` command.)

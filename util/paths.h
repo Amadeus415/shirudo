@@ -47,8 +47,7 @@
 /*
  * Per-upatch payload_sha256 recorded on the pin directory in bpffs.
  * Written at load, read at unload for the payload_mismatch check; made
- * unforgeable by the bpf2 inode_setxattr guard. Needs the bpffs-xattr
- * kernel patch (TODO.kernel item 7).
+ * unforgeable by the bpf2 inode_setxattr guard.
  */
 #define SHIRUDO_XATTR_PAYLOAD		"security.bpf.shirudo.payload"
 

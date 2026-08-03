@@ -245,15 +245,11 @@ load-bearing — consult them directly rather than reasoning from memory:
   `security.bpf.shirudo.payload` xattr — the unload
   `payload_mismatch` ground truth — unforgeable by a root attacker.
   bpf2 still does **not** hook `inode_rename`, which would block
-  shirudo's own pin-then-label calls. The two xattr hooks require
-  the bpffs-xattr kernel patch (TODO.kernel item 7); on a kernel
-  without it the hooks still fire but the bpffs `setxattr` they gate
-  fails with `-EOPNOTSUPP` in the VFS regardless, so they have no
-  observable effect (and the payload check degrades to unavailable
-  rather than wrong). bpf2 also attaches four **mount-lifecycle
-  guards** — `lsm/sb_umount`, `lsm/move_mount`, `lsm/sb_mount`,
-  `lsm/sb_remount` — that **unconditionally deny** (for every caller
-  including shirudo) any unmount/relocate/mount-over/remount of the
+  shirudo's own pin-then-label calls. bpf2 also attaches four
+  **mount-lifecycle guards** — `lsm/sb_umount`, `lsm/move_mount`,
+  `lsm/sb_mount`, `lsm/sb_remount` — that **unconditionally deny**
+  (for every caller including shirudo) any
+  unmount/relocate/mount-over/remount of the
   private bpffs, identified by `s_dev`. This is load-bearing, not
   defense-in-depth: shirudo is agentless, so the pinned links are kept
   alive only by the bpffs pins, and a single `umount
@@ -324,11 +320,11 @@ load-bearing — consult them directly rather than reasoning from memory:
   residual). The check therefore catches honest/accidental
   substitution and any non-tampering path; closing it fully means
   moving the compare into the signed unload BPF (against its
-  signature-covered `.rodata`), which awaits the in-kernel detach. The check is skipped (with a warning, detach
-  proceeds) when the directive carries no expected payload or the
-  xattr is unavailable — e.g. on a kernel without the bpffs-xattr
-  patch (TODO.kernel item 7), where the payload is recorded as an
-  xattr that the kernel rejects with `-EOPNOTSUPP`.
+  signature-covered `.rodata`), which awaits the in-kernel detach.
+  The check is **fail-closed**: a live pin whose payload xattr cannot
+  be read refuses the unload with `category: payload_mismatch` and
+  detaches nothing. It is skipped only when the directive carries no
+  expected payload.
 - **`shirudo init` runs an exhaustive infrastructure pre-flight
   before any state change.** Root privilege, BPF LSM in the
   kernel, bpffs mountable, cert on disk, embedded LSM loader
@@ -540,9 +536,7 @@ load-bearing — consult them directly rather than reasoning from memory:
   can't bind a shared pre-pinned map in its signable insns
   (TODO.kernel item 8). The xattr-on-pin is co-located with the
   object it describes and tamper-proofed by the same exe-identity
-  model shirudo already uses for `inode_unlink`. Requires the
-  bpffs-xattr kernel patch (TODO.kernel item 7); without it the
-  payload check degrades to unavailable, never wrong. See PLAN.md
+  model shirudo already uses for `inode_unlink`. See PLAN.md
   §"How payload_sha256 is verified at unload".
 - **Shirudo infrastructure maps that it does create are
   `BPF_MAP_FREEZE`d at creation.** The sb-identity array bpf2 reads

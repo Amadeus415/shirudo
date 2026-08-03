@@ -261,7 +261,15 @@ coding style (`Documentation/process/coding-style.rst`).
   `BPF_LSM_MAC`, BPF LSM hooks, BPF token (when shirudo eventually
   uses it), and signed-loader CMS verification in
   `kernel/bpf/syscall.c`, the build fails closed with an
-  actionable error. The build-time toolchain (clang for BPF,
+  actionable error. Concretely, the floor is the bpf-next
+  **load-time signing** scheme — the kernel folding a frozen
+  exclusive metadata map into the `insns || metadata` signature at
+  `BPF_PROG_LOAD` (`Documentation/bpf/signing.rst`) rather than the
+  loader self-checking `map->sha` — together with bpffs
+  extended-attribute support (`9722955b5430 "bpf: Add simple xattr
+  support to bpffs"`), which the per-upatch payload xattr depends
+  on. Both landed in bpf-next for 7.2; shirudo carries no fallback
+  for kernels below that line. The build-time toolchain (clang for BPF,
   libbpf, bpftool, tpm2-tss, libssh) is assumed to be current
   enough to expose every API shirudo calls; minimum versions of
   the userspace libraries listed in "Build system §"Linkage and
@@ -1798,10 +1806,12 @@ and is re-set by `shirudo init`'s boot-restore step from
 single boot-restore chain extension. The restored set is what becomes
 `set_digest`.
 
-**Kernel/libbpf prerequisites.** This rests on the bpffs-xattr kernel
-patch (TODO.kernel item 7); without it `setxattr`/`getxattr` on bpffs
-return `-EOPNOTSUPP` and the check degrades to *unavailable* (the load
-and unload still work, the comparison is skipped) — never *wrong*. The
+**Kernel/libbpf prerequisites.** This rests on bpffs xattr support
+(`kernel/bpf/inode.c`, upstream in bpf-next as `9722955b5430 "bpf: Add
+simple xattr support to bpffs"`), which is part of shirudo's minimum
+kernel bar — see §"Bleeding-edge kernel and toolchain assumed". There is
+no degraded mode: the unload check is fail-closed, so a live pin whose
+payload xattr cannot be read refuses the unload. The
 originally-planned single shared, frozen `upatches_registry` BPF map
 written by signed in-kernel BPF was abandoned because a frozen map
 cannot grow per-load (freeze is one-way) and a signed gen_loader'd
