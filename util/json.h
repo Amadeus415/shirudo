@@ -59,6 +59,9 @@ void shirudo_json_kv_int(struct shirudo_json_emit *e,
 void shirudo_json_kv_bool(struct shirudo_json_emit *e,
 			  const char *key, int val);
 void shirudo_json_kv_null(struct shirudo_json_emit *e, const char *key);
+/* Insert an internally-generated, already-valid JSON value verbatim. */
+void shirudo_json_kv_raw(struct shirudo_json_emit *e, const char *key,
+			 const char *value, size_t value_len);
 /* Bare array element (string), for arrays of scalars. */
 void shirudo_json_str(struct shirudo_json_emit *e, const char *val);
 

@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <fcntl.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,9 +31,33 @@
 #define SHIRUDO_MAX_SIG_SIZE	4096
 #define SHIRUDO_SERIALIZER_PREFIX	"shirudo_serialize__"
 
+static struct bpf_map *find_rodata(struct bpf_object *obj);
+
 struct shirudo_unload_params {
 	char	name[SHIRUDO_UPATCH_NAME_MAX];
 	uint8_t	expected_sha256[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN];
+};
+
+struct decoder_manifest_view {
+	uint32_t	language;
+	uint32_t	api_version;
+	uint32_t	input_format;
+	char		upatch[64];
+	char		map[16];
+	char		source[64];
+	char		entrypoint[32];
+};
+
+struct decoder_file {
+	struct decoder_manifest_view	manifest;
+	char				*path;
+	char				*source;
+	uint32_t			source_len;
+};
+
+struct decoder_set {
+	struct decoder_file	*items;
+	uint32_t		nr_items;
 };
 
 static int write_all(int fd, const void *buf, size_t n)
@@ -83,6 +108,22 @@ static void pack_header(struct shirudo_upatch_header *h,
 	h->nr_maps          = htole32(nr_maps);
 	h->nr_progs         = htole32(nr_progs);
 	h->extra_off        = htole32(extra_off);
+}
+
+static uint16_t rd_le16(const void *p)
+{
+	uint16_t v;
+
+	memcpy(&v, p, sizeof(v));
+	return le16toh(v);
+}
+
+static uint32_t rd_le32(const void *p)
+{
+	uint32_t v;
+
+	memcpy(&v, p, sizeof(v));
+	return le32toh(v);
 }
 
 /* Read a small regular file (<= 1 MiB) into a malloc'd buffer. 0/-errno. */
@@ -268,6 +309,325 @@ static bool object_has_map(struct bpf_object *obj, const char *want)
 			return true;
 	}
 	return false;
+}
+
+static bool fixed_cstr_nonempty(const char *s, size_t n)
+{
+	return n && s[0] && memchr(s, '\0', n) != NULL;
+}
+
+static void copy_fixed_cstr(char *dst, size_t dst_sz,
+			    const char *src, size_t src_sz)
+{
+	size_t n = strnlen(src, src_sz);
+
+	if (n >= dst_sz)
+		n = dst_sz - 1;
+	memcpy(dst, src, n);
+	dst[n] = '\0';
+}
+
+static bool relpath_unsafe(const char *path)
+{
+	const char *p = path;
+
+	if (!path[0] || path[0] == '/' || strchr(path, '\\'))
+		return true;
+	while (*p) {
+		const char *slash = strchr(p, '/');
+		size_t len = slash ? (size_t)(slash - p) : strlen(p);
+
+		if (len == 0 || (len == 1 && p[0] == '.') ||
+		    (len == 2 && p[0] == '.' && p[1] == '.'))
+			return true;
+		if (!slash)
+			break;
+		p = slash + 1;
+	}
+	return false;
+}
+
+static int make_decoder_path(const char *src_path, const char *rel,
+			     char **out)
+{
+	const char *slash;
+	size_t dir_len = 0, rel_len = strlen(rel), len;
+	char *path;
+
+	*out = NULL;
+	if (relpath_unsafe(rel))
+		return -EINVAL;
+	if (src_path) {
+		slash = strrchr(src_path, '/');
+		if (slash)
+			dir_len = (size_t)(slash - src_path) + 1;
+	}
+	if (dir_len > UINT32_MAX || rel_len > UINT32_MAX - 1 ||
+	    dir_len > UINT32_MAX - rel_len - 1)
+		return -EOVERFLOW;
+	len = dir_len + rel_len + 1;
+	path = xmalloc(len);
+	if (!path)
+		return -ENOMEM;
+	if (dir_len)
+		memcpy(path, src_path, dir_len);
+	memcpy(path + dir_len, rel, rel_len);
+	path[dir_len + rel_len] = '\0';
+	*out = path;
+	return 0;
+}
+
+static bool parse_decoder_manifest(const unsigned char *p, size_t n,
+				   struct decoder_manifest_view *out)
+{
+	const struct shirudo_decoder_manifest *m = (const void *)p;
+
+	if (n < sizeof(*m))
+		return false;
+	if (rd_le32(p + offsetof(struct shirudo_decoder_manifest, magic)) !=
+	    SHIRUDO_DECODER_MANIFEST_MAGIC)
+		return false;
+	if (rd_le16(p + offsetof(struct shirudo_decoder_manifest, version)) !=
+	    SHIRUDO_UPATCH_DECODER_VERSION)
+		return false;
+	if (!fixed_cstr_nonempty(m->upatch, sizeof(m->upatch)) ||
+	    !fixed_cstr_nonempty(m->map, sizeof(m->map)) ||
+	    !fixed_cstr_nonempty(m->source, sizeof(m->source)) ||
+	    !fixed_cstr_nonempty(m->entrypoint, sizeof(m->entrypoint)))
+		return false;
+
+	memset(out, 0, sizeof(*out));
+	out->language = rd_le16(p + offsetof(struct shirudo_decoder_manifest,
+					     language));
+	out->api_version = rd_le16(p + offsetof(struct shirudo_decoder_manifest,
+						api_version));
+	out->input_format = rd_le16(p + offsetof(struct shirudo_decoder_manifest,
+						 input_format));
+	if (out->language == 0 || out->api_version == 0 ||
+	    out->input_format == 0)
+		return false;
+	copy_fixed_cstr(out->upatch, sizeof(out->upatch),
+			m->upatch, sizeof(m->upatch));
+	copy_fixed_cstr(out->map, sizeof(out->map), m->map, sizeof(m->map));
+	copy_fixed_cstr(out->source, sizeof(out->source),
+			m->source, sizeof(m->source));
+	copy_fixed_cstr(out->entrypoint, sizeof(out->entrypoint),
+			m->entrypoint, sizeof(m->entrypoint));
+	return true;
+}
+
+static void free_decoder_set(struct decoder_set *set)
+{
+	uint32_t i;
+
+	for (i = 0; i < set->nr_items; i++) {
+		xstrfree(set->items[i].path);
+		xfree(set->items[i].source, set->items[i].source_len);
+	}
+	xfree(set->items, (size_t)set->nr_items * sizeof(set->items[0]));
+	memset(set, 0, sizeof(*set));
+}
+
+static int decoder_set_add(struct decoder_set *set,
+			   const struct decoder_manifest_view *manifest,
+			   const char *src_path)
+{
+	struct decoder_file *items;
+	struct decoder_file *item;
+	char *path = NULL;
+	char *source = NULL;
+	uint32_t source_len = 0;
+	int err;
+
+	err = make_decoder_path(src_path, manifest->source, &path);
+	if (err) {
+		pr_err("decoder source path '%s' is invalid", manifest->source);
+		return err;
+	}
+	err = read_small_file(path, &source, &source_len);
+	if (err) {
+		pr_err("read decoder source %s: %s", path, strerror(-err));
+		xstrfree(path);
+		return err;
+	}
+
+	items = xreallocarray(set->items, set->nr_items, set->nr_items + 1,
+			      sizeof(set->items[0]));
+	if (!items) {
+		xstrfree(path);
+		xfree(source, source_len);
+		return -ENOMEM;
+	}
+	set->items = items;
+	item = &set->items[set->nr_items++];
+	item->manifest = *manifest;
+	item->path = path;
+	item->source = source;
+	item->source_len = source_len;
+	return 0;
+}
+
+static int collect_decoder_manifests(struct bpf_object *obj,
+				     const char *src_path,
+				     const char *upatch_name,
+				     struct decoder_set *out)
+{
+	struct bpf_map *rodata = find_rodata(obj);
+	const unsigned char *data;
+	size_t data_sz, off;
+	int err;
+
+	memset(out, 0, sizeof(*out));
+	if (!rodata)
+		return 0;
+	data = bpf_map__initial_value(rodata, &data_sz);
+	if (!data || data_sz < sizeof(struct shirudo_decoder_manifest))
+		return 0;
+
+	for (off = 0; off + sizeof(struct shirudo_decoder_manifest) <= data_sz;
+	     off += 4) {
+		struct decoder_manifest_view manifest;
+
+		if (!parse_decoder_manifest(data + off, data_sz - off,
+					    &manifest))
+			continue;
+		if (manifest.language != SHIRUDO_UPATCH_DECODER_LANG_LUA ||
+		    manifest.api_version != 1 ||
+		    manifest.input_format !=
+			    SHIRUDO_UPATCH_DECODER_INPUT_SERIAL_V2) {
+			pr_err("unsupported decoder ABI for '%s/%s'",
+			       manifest.upatch, manifest.map);
+			err = -EOPNOTSUPP;
+			goto err_free;
+		}
+		if (strcmp(manifest.upatch, upatch_name) != 0) {
+			pr_err("decoder upatch '%s' does not match package name '%s'",
+			       manifest.upatch, upatch_name);
+			err = -EINVAL;
+			goto err_free;
+		}
+		if (!object_has_map(obj, manifest.map)) {
+			pr_err("decoder manifest for missing map '%s'",
+			       manifest.map);
+			err = -EINVAL;
+			goto err_free;
+		}
+		for (uint32_t i = 0; i < out->nr_items; i++) {
+			if (strcmp(out->items[i].manifest.upatch,
+				   manifest.upatch) == 0 &&
+			    strcmp(out->items[i].manifest.map,
+				   manifest.map) == 0) {
+				pr_err("duplicate decoder for '%s/%s'",
+				       manifest.upatch, manifest.map);
+				err = -EEXIST;
+				goto err_free;
+			}
+		}
+		err = decoder_set_add(out, &manifest, src_path);
+		if (err)
+			goto err_free;
+	}
+	return 0;
+
+err_free:
+	free_decoder_set(out);
+	return err;
+}
+
+static int build_decoder_blob(const struct decoder_set *set,
+			      void **out, uint32_t *out_len)
+{
+	struct shirudo_upatch_decoder_blob *blob;
+	uint64_t entries_end, total;
+	uint32_t off;
+	size_t i;
+
+	*out = NULL;
+	*out_len = 0;
+	if (set->nr_items == 0)
+		return 0;
+	entries_end = sizeof(*blob) +
+		      (uint64_t)set->nr_items *
+		      sizeof(struct shirudo_upatch_decoder_entry);
+	total = entries_end;
+	for (i = 0; i < set->nr_items; i++)
+		total += set->items[i].source_len;
+	if (total > UINT32_MAX)
+		return -EOVERFLOW;
+
+	blob = xmalloc((size_t)total);
+	if (!blob)
+		return -ENOMEM;
+	blob->magic = htole32(SHIRUDO_UPATCH_DECODER_MAGIC);
+	blob->version = htole32(SHIRUDO_UPATCH_DECODER_VERSION);
+	blob->nr_decoders = htole32(set->nr_items);
+	blob->reserved = 0;
+
+	off = (uint32_t)entries_end;
+	for (i = 0; i < set->nr_items; i++) {
+		const struct decoder_file *file = &set->items[i];
+		struct shirudo_upatch_decoder_entry *d = &blob->decoders[i];
+
+		d->language = htole32(file->manifest.language);
+		d->api_version = htole32(file->manifest.api_version);
+		d->input_format = htole32(file->manifest.input_format);
+		snprintf(d->upatch, sizeof(d->upatch), "%s",
+			 file->manifest.upatch);
+		snprintf(d->map, sizeof(d->map), "%s", file->manifest.map);
+		snprintf(d->source, sizeof(d->source), "%s",
+			 file->manifest.source);
+		snprintf(d->entrypoint, sizeof(d->entrypoint), "%s",
+			 file->manifest.entrypoint);
+		d->source_off = htole32(off);
+		d->source_len = htole32(file->source_len);
+		memcpy((unsigned char *)blob + off, file->source,
+		       file->source_len);
+		off += file->source_len;
+	}
+
+	*out = blob;
+	*out_len = (uint32_t)total;
+	return 0;
+}
+
+static int compose_signed_data(const void *data, uint32_t data_len,
+			       const void *decoder_blob,
+			       uint32_t decoder_blob_len,
+			       void **out, uint32_t *out_len)
+{
+	struct shirudo_upatch_decoder_trailer trailer = {};
+	uint64_t payload_len, total;
+	uint32_t pad_len;
+	char *buf;
+
+	*out = NULL;
+	*out_len = data_len;
+	if (!decoder_blob_len)
+		return 0;
+	payload_len = (uint64_t)data_len + decoder_blob_len;
+	pad_len = (uint32_t)((8 - (payload_len & 7)) & 7);
+	total = payload_len + pad_len;
+	total += sizeof(trailer);
+	if (total > UINT32_MAX)
+		return -EOVERFLOW;
+	buf = xmalloc((size_t)total);
+	if (!buf)
+		return -ENOMEM;
+	if (data_len)
+		memcpy(buf, data, data_len);
+	memcpy(buf + data_len, decoder_blob, decoder_blob_len);
+	memset(buf + data_len + decoder_blob_len, 0, pad_len);
+
+	trailer.magic = htole32(SHIRUDO_UPATCH_DECODER_TRAILER_MAGIC);
+	trailer.version = htole32(SHIRUDO_UPATCH_DECODER_VERSION);
+	trailer.decoder_off = htole32(data_len);
+	trailer.decoder_len = htole32(decoder_blob_len);
+	memcpy(buf + data_len + decoder_blob_len + pad_len, &trailer,
+	       sizeof(trailer));
+
+	*out = buf;
+	*out_len = (uint32_t)total;
+	return 0;
 }
 
 static int validate_serializer_output_map(struct bpf_object *obj)
@@ -489,17 +849,23 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 	LIBBPF_OPTS(gen_loader_opts, opts);
 	struct shirudo_sign_io sio = {};
 	struct shirudo_upatch_header hdr;
+	struct decoder_set decoders = {};
 	struct bpf_map *m;
 	struct bpf_program *p;
 	void *sig_buf = NULL;
 	void *attach_meta = NULL;
+	void *decoder_blob = NULL;
+	void *signed_data_buf = NULL;
+	const void *signed_data = NULL;
 	const void *write_meta = meta;
 	uint32_t write_meta_len = meta_len, attach_meta_len = 0;
+	uint32_t decoder_blob_len = 0, signed_data_len = 0;
 	char *src_buf = NULL;
 	int fd = -1;
 	int err = 0;
 	uint32_t loader_off, sig_off;
 	uint32_t nr_maps = 0, nr_progs = 0;
+	uint32_t nr_decoders = 0;
 	uint32_t src_len = 0, name_len = 0;
 
 	/*
@@ -524,6 +890,17 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 			goto out;
 		write_meta = attach_meta;
 		write_meta_len = attach_meta_len;
+
+		err = collect_decoder_manifests(obj, src_path, upatch_name,
+						&decoders);
+		if (err)
+			goto out;
+		err = build_decoder_blob(&decoders, &decoder_blob,
+					 &decoder_blob_len);
+		nr_decoders = decoders.nr_items;
+		free_decoder_set(&decoders);
+		if (err)
+			goto out;
 	}
 
 	opts.gen_hash = true;
@@ -537,6 +914,16 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 		pr_err("bpf_object__load: %d", err);
 		goto out;
 	}
+	if (opts.insns_sz > UINT32_MAX || opts.data_sz > UINT32_MAX) {
+		err = -EOVERFLOW;
+		goto out;
+	}
+	err = compose_signed_data(opts.data, (uint32_t)opts.data_sz,
+				  decoder_blob, decoder_blob_len,
+				  &signed_data_buf, &signed_data_len);
+	if (err)
+		goto out;
+	signed_data = signed_data_buf ? signed_data_buf : opts.data;
 
 	sig_buf = xmalloc(SHIRUDO_MAX_SIG_SIZE);
 	if (!sig_buf) {
@@ -545,8 +932,8 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 	}
 	sio.insns        = opts.insns;
 	sio.insns_sz     = opts.insns_sz;
-	sio.data         = opts.data;
-	sio.data_sz      = opts.data_sz;
+	sio.data         = signed_data;
+	sio.data_sz      = signed_data_len;
 	sio.signature    = sig_buf;
 	sio.signature_sz = SHIRUDO_MAX_SIG_SIZE;
 	err = shirudo_cms_sign(&sio, pkey_path, cert_path);
@@ -575,7 +962,7 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 	loader_off = (uint32_t)sizeof(hdr);
 	sig_off    = loader_off + opts.insns_sz;
 	uint32_t data_off = sig_off + (uint32_t)sio.signature_sz;
-	uint32_t data_len = opts.data_sz;
+	uint32_t data_len = signed_data_len;
 	uint32_t meta_off = data_off + data_len;
 	uint32_t extra_off = src_buf ? meta_off + write_meta_len : 0;
 	struct shirudo_upatch_extras ex = {};
@@ -606,7 +993,7 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 	if (!err)
 		err = write_all(fd, sig_buf, sio.signature_sz);
 	if (!err && data_len)
-		err = write_all(fd, opts.data, data_len);
+		err = write_all(fd, signed_data, data_len);
 	if (!err && write_meta_len)
 		err = write_all(fd, write_meta, write_meta_len);
 	if (!err && extra_off) {
@@ -627,13 +1014,18 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 		goto out;
 	}
 
-	pr_info("wrote %s (insns=%u sig=%zu data=%u meta=%u maps=%u progs=%u source=%u name=%s%s)",
+	pr_info("wrote %s (insns=%u sig=%zu data=%u meta=%u maps=%u "
+		"progs=%u decoders=%u source=%u name=%s%s)",
 		out_path, opts.insns_sz, sio.signature_sz, data_len,
-		write_meta_len, nr_maps, nr_progs, src_len, upatch_name,
+		write_meta_len, nr_maps, nr_progs, nr_decoders, src_len,
+		upatch_name,
 		(flags & SHIRUDO_DIRECTIVE_UNLOAD) ? " UNLOAD" : "");
 out:
 	if (fd >= 0)
 		close(fd);
+	free_decoder_set(&decoders);
+	xfree(signed_data_buf, signed_data_len);
+	xfree(decoder_blob, decoder_blob_len);
 	xfree(src_buf, src_len);
 	xfree(sig_buf, SHIRUDO_MAX_SIG_SIZE);
 	bpf_object__close(obj);

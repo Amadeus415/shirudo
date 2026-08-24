@@ -571,6 +571,54 @@ map data.  ``--json`` without a path is rejected.  On the detailed form,
 attempts both outputs, and exits nonzero if either fails without rolling back
 the output that succeeded.
 
+Decoding serialized maps with Lua
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+An upatch can carry a Lua decoder for a serializer-backed map. Declare the
+decoder in the BPF source and keep its Lua file beside the source tree:
+
+.. code-block:: c
+
+    #include "shirudo_decoder.h"
+
+    const struct shirudo_decoder_manifest events_decoder SEC(".rodata") = {
+        .magic = SHIRUDO_DECODER_MANIFEST_MAGIC,
+        .version = SHIRUDO_UPATCH_DECODER_VERSION,
+        .language = SHIRUDO_UPATCH_DECODER_LANG_LUA,
+        .api_version = 1,
+        .input_format = SHIRUDO_UPATCH_DECODER_INPUT_SERIAL_V2,
+        .upatch = "my-patch",
+        .map = "events",
+        .source = "decoders/events.lua",
+        .entrypoint = "decode",
+    };
+
+``shirudo build`` resolves the relative source path, embeds the Lua bytes in
+the upatch's signed data, and rejects a manifest whose upatch or map does not
+match the package. ``shirudo upatch info`` reports the embedded decoder.
+
+The entrypoint receives a table containing the upatch and map identity plus
+the serializer-v2 pages. ``shirudo.fixed_records(input.data.pages,
+slot_size)`` turns fixed-width page data into slots with ``u8``, ``u16``,
+``u32``, ``u64``, and ``cstring`` accessors. The decoder returns a Lua value
+made from tables, strings, finite numbers, booleans, and nil.
+
+For ``--json=<path>``, the returned value is appended as the NDJSON record.
+For ``--otel`` or ``--otel=log``, it becomes the log body: Lua objects map to
+OTLP ``kvlistValue``, arrays to ``arrayValue``, and scalars retain their OTLP
+types. The OTLP resource, event name, map identity attributes, endpoint,
+credentials, and transport remain controlled by Shirudo. ``--otel=metric``
+does not infer metrics from decoder output; it continues to require a
+structurally numeric map. ``--otel=s3`` retains the raw serializer snapshot
+for archival fidelity.
+
+The LuaJIT host removes filesystem, network, package-loading, FFI, debug, and
+dynamic-code globals. Native JIT traces are disabled so the instruction hook
+can enforce its budget. The host also enforces memory, nesting, and
+output-size limits. LuaJIT is an optional build dependency; without it the
+signed manifest remains inspectable and serialized maps fall back to their raw
+page representation.
+
 Exporting map snapshots to OpenTelemetry
 -----------------------------------------
 

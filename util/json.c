@@ -226,6 +226,18 @@ void shirudo_json_kv_null(struct shirudo_json_emit *e, const char *key)
 	put_raw(e, "null");
 }
 
+void shirudo_json_kv_raw(struct shirudo_json_emit *e, const char *key,
+			 const char *value, size_t value_len)
+{
+	size_t i;
+
+	sep(e);
+	put_string(e, key);
+	put(e, ':');
+	for (i = 0; i < value_len && !e->err; i++)
+		put(e, value[i]);
+}
+
 void shirudo_json_str(struct shirudo_json_emit *e, const char *val)
 {
 	sep(e);

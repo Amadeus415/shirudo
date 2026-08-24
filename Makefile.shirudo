@@ -58,6 +58,11 @@ DYNAMIC_LIBS := \
     $(LIBCRYPTO_LIBS) $(LIBSSH_LIBS) $(TSS2_LIBS) \
     $(LIBELF_LIBS) $(ZLIB_LIBS) $(LIBCURL_LIBS)
 
+ifeq ($(HAVE_LUAJIT),yes)
+CFLAGS += $(LUAJIT_CFLAGS) -DSHIRUDO_HAVE_LUAJIT
+DYNAMIC_LIBS += $(LUAJIT_LIBS)
+endif
+
 ifeq ($(SHIRUDO_BUNDLE_RPATH),1)
 RPATH_LDFLAGS := -Wl,--disable-new-dtags -Wl,-rpath,'$$ORIGIN/../lib/shirudo'
 else
@@ -105,6 +110,7 @@ UTIL_SRCS := \
     util/seal.c \
     util/serializer.c \
     util/upatch_maps.c \
+    util/upatch_decode.c \
     util/upatch_maps_otel.c \
     util/upatch_resolve.c \
     util/upatch_table.c
@@ -131,7 +137,8 @@ BPF_VENDOR_HEADERS := bpf_helpers bpf_helper_defs bpf_tracing \
 BPF_HEADERS_OUT    := $(addprefix bpf/include/bpf/,\
                                   $(addsuffix .h,$(BPF_VENDOR_HEADERS)))
 BPF_LIB_HEADERS    := bpf/lib/shirudo_bpf_common.h \
-                      bpf/lib/shirudo_serializer.h
+                      bpf/lib/shirudo_serializer.h \
+                      bpf/lib/shirudo_decoder.h
 
 # bpf/*.bpf.c sources compiled with clang -target bpf and embedded via
 # .incbin into util/loader.o. bpf/lib/ is include-only.
@@ -342,6 +349,7 @@ TEST_HELPERS := t/helper/test-json-parser \
                 t/helper/test-otel-map \
                 t/helper/test-upatch-map-types \
                 t/helper/test-upatch-prog-metadata \
+                t/helper/test-upatch-decode \
                 t/helper/test-upatch-serializer-pages \
                 t/helper/test-signed-load
 
@@ -381,7 +389,8 @@ t/helper/test-kernel-abi: t/helper/test-kernel-abi.c util/kernel_abi.o \
 
 t/helper/test-otel-map: t/helper/test-otel-map.c util/upatch_maps.o \
                         util/upatch_maps_otel.o util/serializer.o \
-                        util/json.o util/malloc.o $(LIBBPF_A)
+                        util/upatch_decode.o util/upatch.o util/json.o \
+                        util/malloc.o $(LIBBPF_A)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS)
 
@@ -399,6 +408,11 @@ t/helper/test-upatch-serializer-pages: t/helper/test-upatch-serializer-pages.c \
                                        util/json.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS)
+
+t/helper/test-upatch-decode: t/helper/test-upatch-decode.c \
+			      util/upatch_decode.o util/upatch.o util/malloc.o
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS)
 
 check test: shirudo $(TEST_HELPERS)
 	@printf '  TEST\n'

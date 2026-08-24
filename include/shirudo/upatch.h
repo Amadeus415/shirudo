@@ -82,6 +82,58 @@ struct shirudo_upatch_extras {
 };
 
 /*
+ * Optional decoder metadata embedded inside the signature-covered data
+ * section. BPF programs declare a shirudo_decoder_manifest in .rodata;
+ * shirudo-build resolves and embeds the decoder source before signing.
+ */
+#define SHIRUDO_DECODER_MANIFEST_MAGIC	0x44434544u	/* "DECD" le */
+#define SHIRUDO_UPATCH_DECODER_MAGIC	0x42444344u	/* "DCDB" le */
+#define SHIRUDO_UPATCH_DECODER_TRAILER_MAGIC 0x52544344u /* "DCTR" le */
+#define SHIRUDO_UPATCH_DECODER_VERSION	1u
+#define SHIRUDO_UPATCH_DECODER_LANG_LUA	1u
+#define SHIRUDO_UPATCH_DECODER_INPUT_SERIAL_V2 1u
+
+struct shirudo_decoder_manifest {
+	uint32_t	magic;
+	uint16_t	version;
+	uint16_t	language;
+	uint16_t	api_version;
+	uint16_t	input_format;
+	uint16_t	_pad0;
+	char	upatch[64];
+	char	map[16];
+	char	source[64];
+	char	entrypoint[32];
+};
+
+struct shirudo_upatch_decoder_entry {
+	uint32_t	language;
+	uint32_t	api_version;
+	uint32_t	input_format;
+	char	upatch[64];
+	char	map[16];
+	char	source[64];
+	char	entrypoint[32];
+	uint32_t	source_off;
+	uint32_t	source_len;
+};
+
+struct shirudo_upatch_decoder_blob {
+	uint32_t	magic;
+	uint32_t	version;
+	uint32_t	nr_decoders;
+	uint32_t	reserved;
+	struct shirudo_upatch_decoder_entry decoders[];
+};
+
+struct shirudo_upatch_decoder_trailer {
+	uint32_t	magic;
+	uint32_t	version;
+	uint32_t	decoder_off;
+	uint32_t	decoder_len;
+};
+
+/*
  * Optional metadata format for LOAD upatches. This tells the target how
  * each program should be attached after the signed loader has created it.
  * Programs without a special attach kind use RAW_TRACEPOINT, preserving

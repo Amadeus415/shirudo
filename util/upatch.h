@@ -21,6 +21,22 @@ struct shirudo_upatch {
 	uint32_t			source_len;
 	const char			*source_name;
 	uint32_t			source_name_len;
+	/* Parsed signed decoder blob (all zero when absent). */
+	const struct shirudo_upatch_decoder_blob *decoder_blob;
+	uint32_t			decoder_blob_len;
+	uint32_t			nr_decoders;
+};
+
+struct shirudo_upatch_decoder_view {
+	uint32_t	language;
+	uint32_t	api_version;
+	uint32_t	input_format;
+	char		upatch[64];
+	char		map[16];
+	char		source_name[64];
+	char		entrypoint[32];
+	const char	*source;
+	uint32_t	source_len;
 };
 
 /*
@@ -43,6 +59,10 @@ bool shirudo_upatch_is_unload(const struct shirudo_upatch *u);
 
 /* True if a parsed extras blob (embedded C source) is present. */
 bool shirudo_upatch_has_source(const struct shirudo_upatch *u);
+
+bool shirudo_upatch_has_decoders(const struct shirudo_upatch *u);
+int shirudo_upatch_decoder_view(const struct shirudo_upatch *u, uint32_t idx,
+				struct shirudo_upatch_decoder_view *out);
 
 /*
  * Validate an externally-provided upatch name: non-empty, doesn't

@@ -35,6 +35,7 @@
 #include "json.h"
 #include "malloc.h"
 #include "paths.h"
+#include "upatch_decode.h"
 #include "upatch_maps_otel.h"
 
 #define OTEL_ENDPOINT_MAX	2048
@@ -400,8 +401,11 @@ int shirudo_upatch_maps_otel_build_log(const struct shirudo_map_view *v,
 				       char **out, size_t *out_len)
 {
 	struct shirudo_json_emit e = {};
+	char *decoded = NULL;
+	size_t decoded_len = 0;
 	char now[32];
 	char *buf;
+	int decode_rc;
 
 	buf = xmalloc(SHIRUDO_JSON_MAX_BYTES);
 	if (!buf)
@@ -429,18 +433,27 @@ int shirudo_upatch_maps_otel_build_log(const struct shirudo_map_view *v,
 	shirudo_json_kv_int(&e, "severityNumber", 9);
 	shirudo_json_kv_string(&e, "severityText", "INFO");
 	shirudo_json_kv_string(&e, "eventName", "shirudo.bpf.map.snapshot");
-	shirudo_json_obj_open_key(&e, "body");
-	shirudo_json_obj_open_key(&e, "kvlistValue");
-	shirudo_json_arr_open(&e, "values");
-	otlp_kv_int(&e, "schema", 1);
-	otlp_kv_string(&e, "upatch", v->upatch);
-	otlp_kv_string(&e, "map", v->name);
-	otlp_kvlist_begin(&e, "data");
-	emit_log_map_data(&e, v);
-	otlp_kvlist_end(&e);
-	shirudo_json_arr_close(&e);
-	shirudo_json_obj_close(&e);
-	shirudo_json_obj_close(&e);
+	decode_rc = shirudo_upatch_decode_map_otel(v, &decoded, &decoded_len);
+	if (decode_rc == 0) {
+		shirudo_json_kv_raw(&e, "body", decoded, decoded_len);
+	} else if (decode_rc == -ENOENT || decode_rc == -EOPNOTSUPP) {
+		shirudo_json_obj_open_key(&e, "body");
+		shirudo_json_obj_open_key(&e, "kvlistValue");
+		shirudo_json_arr_open(&e, "values");
+		otlp_kv_int(&e, "schema", 1);
+		otlp_kv_string(&e, "upatch", v->upatch);
+		otlp_kv_string(&e, "map", v->name);
+		otlp_kvlist_begin(&e, "data");
+		emit_log_map_data(&e, v);
+		otlp_kvlist_end(&e);
+		shirudo_json_arr_close(&e);
+		shirudo_json_obj_close(&e);
+		shirudo_json_obj_close(&e);
+	} else {
+		xfree(buf, SHIRUDO_JSON_MAX_BYTES);
+		return decode_rc;
+	}
+	xfree(decoded, decoded_len + 1);
 	shirudo_json_arr_open(&e, "attributes");
 	otlp_kv_string(&e, "shirudo.upatch.name", v->upatch);
 	otlp_kv_string(&e, "shirudo.map.name", v->name);

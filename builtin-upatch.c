@@ -46,6 +46,7 @@
 #include "util/seal.h"
 #include "util/timefmt.h"
 #include "util/upatch.h"
+#include "util/upatch_decode.h"
 #include "util/upatch_maps.h"
 #include "util/upatch_maps_otel.h"
 #include "util/upatch_resolve.h"
@@ -111,6 +112,17 @@ static const char *cat_from_load_errno(int e)
 static const char *flag_str(const struct shirudo_upatch *u)
 {
 	return shirudo_upatch_is_unload(u) ? "UNLOAD-directive" : "LOAD";
+}
+
+static const char *decoder_language_str(uint32_t language)
+{
+	return language == SHIRUDO_UPATCH_DECODER_LANG_LUA ? "lua" : "unknown";
+}
+
+static const char *decoder_input_str(uint32_t input_format)
+{
+	return input_format == SHIRUDO_UPATCH_DECODER_INPUT_SERIAL_V2 ?
+		"shirudo.serialized-pages.v2" : "unknown";
 }
 
 static int print_sha256_hex(const unsigned char hash[32])
@@ -303,7 +315,8 @@ static int cmd_upatch_info(int argc, const char **argv)
 	name[SHIRUDO_UPATCH_NAME_MAX] = '\0';
 
 	if (json) {
-		size_t cap = 8192 + (size_t)u.source_len * 6 + u.source_name_len;
+		size_t cap = 8192 + (size_t)u.source_len * 6 +
+			u.source_name_len + (size_t)u.nr_decoders * 768;
 		struct shirudo_json_emit e = {};
 		char payload_hex[2 * 32 + 1];
 		char *sname = NULL, *stext = NULL;
@@ -338,6 +351,26 @@ static int cmd_upatch_info(int argc, const char **argv)
 				     shirudo_upatch_has_source(&u));
 		shirudo_json_kv_string(&e, "source_file", sname ? sname : "");
 		shirudo_json_kv_string(&e, "source", stext ? stext : "");
+		shirudo_json_arr_open(&e, "decoders");
+		for (uint32_t j = 0; j < u.nr_decoders; j++) {
+			struct shirudo_upatch_decoder_view d;
+
+			if (shirudo_upatch_decoder_view(&u, j, &d))
+				continue;
+			shirudo_json_obj_open(&e);
+			shirudo_json_kv_string(&e, "language",
+					       decoder_language_str(d.language));
+			shirudo_json_kv_int(&e, "api_version", d.api_version);
+			shirudo_json_kv_string(&e, "input_format",
+					       decoder_input_str(d.input_format));
+			shirudo_json_kv_string(&e, "upatch", d.upatch);
+			shirudo_json_kv_string(&e, "map", d.map);
+			shirudo_json_kv_string(&e, "source_file", d.source_name);
+			shirudo_json_kv_string(&e, "entrypoint", d.entrypoint);
+			shirudo_json_kv_int(&e, "source_len", d.source_len);
+			shirudo_json_obj_close(&e);
+		}
+		shirudo_json_arr_close(&e);
 		shirudo_json_obj_close(&e);
 		if (e.err)
 			fprintf(stderr, "upatch info: json encode failed: %s\n",
@@ -378,6 +411,25 @@ static int cmd_upatch_info(int argc, const char **argv)
 	printf("\nSignature:\n");
 	printf("  %-22s %u\n", "Offset:", u.hdr.signature_off);
 	printf("  %-22s %u bytes\n", "Length:", u.hdr.signature_len);
+
+	printf("\nDecoders:\n");
+	if (!shirudo_upatch_has_decoders(&u)) {
+		printf("  (none)\n");
+	} else {
+		for (uint32_t j = 0; j < u.nr_decoders; j++) {
+			struct shirudo_upatch_decoder_view d;
+
+			if (shirudo_upatch_decoder_view(&u, j, &d))
+				continue;
+			printf("  %-22s %s/%s\n", "Target:", d.upatch, d.map);
+			printf("    %-20s %s (api=%u)\n", "Language:",
+			       decoder_language_str(d.language), d.api_version);
+			printf("    %-20s %s\n", "Input:",
+			       decoder_input_str(d.input_format));
+			printf("    %-20s %s:%s (%u bytes)\n", "Source:",
+			       d.source_name, d.entrypoint, d.source_len);
+		}
+	}
 
 	printf("\n");
 	if (shirudo_upatch_has_source(&u))
@@ -2737,9 +2789,23 @@ static int append_one_map_json(const char *path,
 			       const struct shirudo_map_view *v)
 {
 	struct shirudo_json_emit e = {};
+	char *decoded = NULL;
+	size_t decoded_len = 0;
 	size_t cap;
 	char *buf;
 	int rc;
+
+	rc = shirudo_upatch_decode_map_json(v, &decoded, &decoded_len);
+	if (rc == 0) {
+		while (decoded_len && (decoded[decoded_len - 1] == '\n' ||
+		       decoded[decoded_len - 1] == '\r'))
+			decoded_len--;
+		rc = append_json_record(path, decoded, decoded_len);
+		xfree(decoded, decoded_len + 1);
+		return rc;
+	}
+	if (rc != -ENOENT && rc != -EOPNOTSUPP)
+		return rc;
 
 	if (v->serialized)
 		cap = 8192 + (size_t)v->n_serial_pages * 256 +

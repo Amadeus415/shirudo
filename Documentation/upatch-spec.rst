@@ -47,7 +47,7 @@ File layout
                 +-------------------------------------------+
                 | signature      (CMS/PKCS#7, detached)     |
                 +-------------------------------------------+
-                | data           (gen_loader_opts.data)     |  optional
+                | data           (signature-covered)        |  optional
                 +-------------------------------------------+
                 | metadata                                  |  optional
                 +-------------------------------------------+
@@ -125,7 +125,8 @@ The bytes of ``gen_loader_opts.insns`` after ``bpf_object__gen_loader()``
 ``BPF_PROG_TYPE_SYSCALL`` "light skeleton" loader program: run via
 ``BPF_PROG_TEST_RUN`` on the target, it issues the ``bpf()`` syscalls
 (``BPF_BTF_LOAD``, ``BPF_MAP_CREATE``, ``BPF_PROG_LOAD``, ...) that
-install the payload. **This is the only section the signature covers.**
+install the payload. The signature covers this section concatenated with
+``data``.
 
 For an **UNLOAD directive** (``flags & DIRECTIVE_UNLOAD``), the loader is
 not a gen_loader output but the compiled bytes of the small hand-written
@@ -135,7 +136,7 @@ target name and expected ``payload_sha256``.
 signature
 ---------
 
-A detached CMS / PKCS#7 signature over the **loader_insns bytes only**,
+A detached CMS / PKCS#7 signature over **loader_insns || data**,
 produced by the vendored ``util/sign.c`` (operator side). On the target,
 the kernel's ``bpf_prog_verify_signature()`` checks it against the cert
 in the sealed ``shirudo`` keyring (the keyring's serial is passed as
@@ -148,7 +149,31 @@ The bytes of ``gen_loader_opts.data`` -- the blob the loader
 instructions reference (the program BTF, ``.rodata``/map initial values,
 relocation inputs, ...). The loader is parameterized by this data, so it
 must travel with the instructions. Absent (``data_off == 0``) only for
-artifacts with no such data. **Not signature-covered** (see Integrity).
+artifacts with no such data. Writers may append a decoder blob and trailer;
+older generated loaders ignore those trailing bytes because all their offsets
+refer to the original prefix.
+
+Signed decoder trailer
+~~~~~~~~~~~~~~~~~~~~~~
+
+A BPF source declares ``struct shirudo_decoder_manifest`` in ``.rodata``.
+At build time Shirudo resolves and embeds each referenced decoder source before
+signing ``loader_insns || data``. The final 16 bytes of ``data`` are:
+
+==========  ====  =====================  ====================================
+offset      size  field                  meaning
+==========  ====  =====================  ====================================
++0          4     magic                  ``0x52544344`` (``"DCTR"`` LE)
++4          4     version                ``1``
++8          4     decoder_off            offset from the start of ``data``
++12         4     decoder_len            decoder blob length
+==========  ====  =====================  ====================================
+
+The blob starts with magic ``0x42444344`` (``"DCDB"`` LE), version,
+decoder count, and a reserved word. Each 196-byte entry contains language,
+API version, input format, fixed-size upatch/map/source/entrypoint strings,
+and the source offset and length within the blob. Version 1 defines language
+``1`` as Lua and input format ``1`` as serializer pages v2.
 
 metadata
 --------
@@ -249,23 +274,21 @@ flags
 ``flags`` bit 0 is ``SHIRUDO_DIRECTIVE_UNLOAD``. When clear, the artifact
 is a **LOAD** (install a program); when set, it is a signed **UNLOAD
 directive** (authorize removing a named, previously-loaded upatch). Bits
-1-31 are reserved and must be zero. The flag changes the meaning of
-``loader_insns`` and ``payload_sha256`` but nothing about the container
-layout, the signature path, or kernel verification: both kinds load
+1-31 are reserved and must be zero. The flag changes the loader program and
+metadata semantics but nothing about the container layout, signed-content
+digest, or kernel verification: both kinds load
 through the same ``BPF_PROG_LOAD`` + signature + ``keyring_id`` check.
 
 
 payload_sha256
 ==============
 
-- **LOAD**: SHA-256 of the payload program, equal to the
-  ``excl_prog_hash`` baked into the signed loader instructions. At load,
-  shirudo records it as the ``security.bpf.shirudo.payload`` xattr on the
-  pin directory.
-- **UNLOAD directive**: the *expected* ``payload_sha256`` of the
-  currently-loaded upatch the directive intends to remove. The target
-  refuses (``category: payload_mismatch``) if the loaded upatch under
-  that name has a different digest.
+For both LOAD artifacts and UNLOAD directives this is SHA-256 of
+``loader_insns || data``, the exact bytes covered by the detached CMS
+signature. At load, shirudo recomputes this value. For a loaded upatch it is
+also recorded as the ``security.bpf.shirudo.payload`` xattr on the pin
+directory. An UNLOAD directive's expected target digest is carried separately
+in its loader ``.rodata`` and metadata.
 
 It also lets ``shirudo upatch list`` / ``status`` identify an artifact
 without parsing the instruction stream.
@@ -274,16 +297,15 @@ without parsing the instruction stream.
 Integrity: what is signed
 ==========================
 
-The CMS signature covers **loader_insns only**. ``data``, ``metadata``
-and ``extras`` are **not** signed. The integrity model is therefore:
+The CMS signature covers **loader_insns || data**. ``metadata`` and
+``extras`` are **not** signed. The integrity model is therefore:
 
-- The **loader instructions** are signature-verified by the kernel
-  before anything runs.
-- The **payload program** is hash-locked: ``payload_sha256`` (=
-  ``excl_prog_hash``) is embedded in the signed loader instructions, and
-  the kernel checks the loaded program against it at ``BPF_PROG_LOAD``.
-  Tampering with ``data`` cannot substitute different program *code* --
-  the hash check fails.
+- The **loader instructions and loader data** are signature-verified by the
+  kernel before anything runs.
+- The **payload program** is separately hash-locked by the loader's
+  ``excl_prog_hash`` and checked by the kernel at ``BPF_PROG_LOAD``.
+- Decoder source is signature-covered because it is appended inside ``data``
+  before signing.
 - ``metadata`` and ``extras`` are advisory. Tampering with extras only
   mis-renders the offline ``upatch info`` source dump; the loaded
   program and the kernel-resident ``line_info`` (what ``upatch get``
@@ -291,16 +313,15 @@ and ``extras`` are **not** signed. The integrity model is therefore:
   can only produce a chain value the operator's expectation rejects, or a
   ``payload_mismatch``.
 
-Whether a tampered (unsigned) BTF inside ``data`` could perturb CO-RE
-relocation before the ``excl_prog_hash`` check is a property of the
-upstream gen_loader signing model, not something this format guarantees.
-
-
 Versioning and compatibility
 ============================
 
 ``version`` is ``1``. The format is designed to grow **additively**
 without a version bump:
+
+- A signed decoder blob may be appended inside ``data`` and located by the
+  trailer at the end of ``data``. Older loaders ignore the additional bytes;
+  older readers treat them as opaque loader data.
 
 - ``extra_off`` reuses the slot that was a ``reserved`` u32 in the
   original layout. A reader that predates the extras blob sees
@@ -330,6 +351,10 @@ Reader validation rules
    stay within the file. **Extras are advisory**: a malformed extras blob
    is treated as "no source", never a hard failure -- the signed sections
    are validated independently.
+6. Decoders are parsed only if ``data`` ends with a matching trailer, all blob
+   and entry bounds fit, fixed strings are NUL-terminated, and every source
+   range stays inside the blob. Malformed decoder metadata is treated as
+   absent by offline inspection.
 
 
 Production and consumption
@@ -338,8 +363,9 @@ Production and consumption
 - **Produced by** ``shirudo build`` (which dispatches to the operator-only
   ``shirudo-build``): compile ``.bpf.c`` with ``clang -target bpf -O2
   -g`` (or accept a ``.bpf.o``), run ``bpf_object__gen_loader()`` +
-  ``bpf_object__load()``, CMS-sign the loader bytes, embed the ``.bpf.c``
-  source (extras), and serialize the container. ``--unload <name>`` emits
+  ``bpf_object__load()``, CMS-sign the loader and data bytes, embed any signed
+  decoder sources plus the advisory ``.bpf.c`` source extras, and serialize
+  the container. ``--unload <name>`` emits
   an UNLOAD directive instead.
 - **Inspected by** ``shirudo upatch info <file>`` (offline; header,
   sections, and the advisory embedded source) and ``shirudo upatch
