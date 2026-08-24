@@ -137,7 +137,7 @@ void shirudo_upatch_map_print_inline(const struct shirudo_map_summary *m);
  */
 void shirudo_upatch_maps_emit_json_fields(struct shirudo_json_emit *e,
 					  const struct shirudo_map_view *v);
-void shirudo_upatch_maps_emit_json(struct shirudo_json_emit *e,
-				   const struct shirudo_map_view *v);
+void shirudo_upatch_maps_emit_json_object(struct shirudo_json_emit *e,
+					  const struct shirudo_map_view *v);
 
 #endif /* SHIRUDO_UTIL_UPATCH_MAPS_H */

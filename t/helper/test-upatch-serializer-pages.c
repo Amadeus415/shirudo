@@ -5,10 +5,14 @@
  * Offline checks for the paged serializer map-view output contract.
  */
 
+#include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "json.h"
+#include "serializer.h"
 #include "upatch_maps.h"
 #include "bpf/lib/shirudo_serializer.h"
 
@@ -21,6 +25,84 @@ static int fail(const char *msg)
 static int has(const char *haystack, const char *needle)
 {
 	return strstr(haystack, needle) != NULL;
+}
+
+static int check_abi_and_nonce(void)
+{
+	uint64_t generated = 0;
+	struct shirudo_serial_chunk chunk = {
+		.magic = SHIRUDO_SERIAL_MAGIC,
+		.version = SHIRUDO_SERIAL_VERSION,
+		.chunk_index = 1,
+		.total_chunks = 2,
+		.bytes_total = 1,
+		.bytes_in_chunk = 1,
+		.page_index = 3,
+		.cursor = 10,
+		.next_cursor = 11,
+		.invocation_id = 0x12345678,
+	};
+
+	if (SHIRUDO_SERIAL_VERSION != 3 ||
+	    sizeof(struct shirudo_serialize_ctx) != 40 ||
+	    sizeof(struct shirudo_serial_chunk) != 4096 ||
+	    SHIRUDO_SERIAL_CHUNK_PAYLOAD != 4032)
+		return fail("serializer v3 ABI layout mismatch");
+	if (shirudo_serial_chunk_validate(&chunk, 1, 2, 3, 10, 11, 0x12345678) != 0)
+		return fail("valid serializer nonce rejected");
+	if (shirudo_serial_chunk_validate(&chunk, 1, 2, 3, 10, 11, 0x87654321) != -EBADMSG)
+		return fail("serializer nonce mismatch accepted");
+	if (shirudo_serializer_new_invocation_id(&generated) != 0 || generated == 0)
+		return fail("serializer invocation ID generation failed");
+	return 0;
+}
+
+static int check_map_locks(void)
+{
+	char dir[] = "/tmp/shirudo-serializer-lock-XXXXXX";
+	char path1[256], path2[256];
+	int first = -1, busy = -1, other = -1, again = -1, rc = 1;
+
+	if (!mkdtemp(dir))
+		return fail("mkdtemp failed");
+	first = shirudo_serializer_lock_acquire_at(dir, 101);
+	if (first < 0) {
+		fail("first serializer lock failed");
+		goto out;
+	}
+	busy = shirudo_serializer_lock_acquire_at(dir, 101);
+	if (busy != -EBUSY) {
+		fail("contended serializer lock did not return EBUSY");
+		goto out;
+	}
+	other = shirudo_serializer_lock_acquire_at(dir, 202);
+	if (other < 0) {
+		fail("independent serializer map lock failed");
+		goto out;
+	}
+	close(first);
+	first = -1;
+	again = shirudo_serializer_lock_acquire_at(dir, 101);
+	if (again < 0) {
+		fail("released serializer lock could not be reacquired");
+		goto out;
+	}
+	rc = 0;
+out:
+	if (first >= 0)
+		close(first);
+	if (other >= 0)
+		close(other);
+	if (again >= 0)
+		close(again);
+	if (busy >= 0)
+		close(busy);
+	snprintf(path1, sizeof(path1), "%s/serializer-map-101.lock", dir);
+	snprintf(path2, sizeof(path2), "%s/serializer-map-202.lock", dir);
+	unlink(path1);
+	unlink(path2);
+	rmdir(dir);
+	return rc;
 }
 
 int main(void)
@@ -62,9 +144,12 @@ int main(void)
 	char buf[2048];
 	char doc[4096];
 
+	if (check_abi_and_nonce() || check_map_locks())
+		return 1;
+
 	e.buf = buf;
 	e.cap = sizeof(buf);
-	shirudo_upatch_maps_emit_json(&e, &v);
+	shirudo_upatch_maps_emit_json_object(&e, &v);
 	if (e.err)
 		return fail("json emit failed");
 

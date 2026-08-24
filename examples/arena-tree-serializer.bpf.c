@@ -106,11 +106,13 @@ static __always_inline void set_error(struct shirudo_serialize_ctx *ctx,
 	chunk->reserved = 0;
 	chunk->cursor = cursor;
 	chunk->next_cursor = cursor;
+	chunk->invocation_id = ctx ? ctx->invocation_id : 0;
 }
 
 static __always_inline int init_page_chunks(__u32 records, __u32 flags,
 					    __u32 page_index, __u64 cursor,
-					    __u64 next_cursor)
+					    __u64 next_cursor,
+					    __u64 invocation_id)
 {
 	__u32 page_bytes = records * TREE_RECORD_SIZE;
 	__u32 total_chunks;
@@ -144,6 +146,7 @@ static __always_inline int init_page_chunks(__u32 records, __u32 flags,
 		chunk->reserved = 0;
 		chunk->cursor = cursor;
 		chunk->next_cursor = next_cursor;
+		chunk->invocation_id = invocation_id;
 	}
 	return 0;
 }
@@ -209,7 +212,8 @@ int shirudo_serialize__tree_arena(struct shirudo_serialize_ctx *ctx)
 
 	if (!ctx || ctx->magic != SHIRUDO_SERIAL_MAGIC ||
 	    ctx->version != SHIRUDO_SERIAL_VERSION ||
-	    ctx->chunk_payload_size != SHIRUDO_SERIAL_CHUNK_PAYLOAD)
+	    ctx->chunk_payload_size != SHIRUDO_SERIAL_CHUNK_PAYLOAD ||
+	    ctx->invocation_id == 0)
 		return -EINVAL;
 	if (ctx->max_chunks < TREE_PAGE_CHUNKS) {
 		set_error(ctx, -E2BIG);
@@ -236,7 +240,7 @@ int shirudo_serialize__tree_arena(struct shirudo_serialize_ctx *ctx)
 		flags = SHIRUDO_SERIAL_F_DONE;
 
 	rc = init_page_chunks(records, flags, ctx->page_index, ctx->cursor,
-			      next_cursor);
+			      next_cursor, ctx->invocation_id);
 	if (rc) {
 		set_error(ctx, rc);
 		return rc;

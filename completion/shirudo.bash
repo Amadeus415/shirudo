@@ -44,6 +44,10 @@ _shirudo()
 			info|list)
 				COMPREPLY=( $(compgen -W "--json" -- "$cur") )
 				;;
+			map)
+				COMPREPLY=( $(compgen -W "--json= --show-full" \
+					-- "$cur") )
+				;;
 			get)
 				# no flags beyond --help
 				COMPREPLY=()

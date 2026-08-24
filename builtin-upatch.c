@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/xattr.h>
@@ -177,7 +178,7 @@ static const struct shirudo_help upatch_unload_help = {
 };
 
 static const struct shirudo_help_item upatch_map_options[] = {
-	{ "--json",       "machine-readable JSON output" },
+	{ "--json=<path>", "append a schema-1 NDJSON record to path" },
 	{ "--show-full",  "lift the per-map 256-entry truncation cap" },
 };
 
@@ -186,7 +187,8 @@ static const struct shirudo_help_section upatch_map_sections[] = {
 };
 
 static const struct shirudo_help upatch_map_help = {
-	.usage      = "shirudo upatch map [<upatch>] [<map>] [--json] [--show-full]",
+	.usage      = "shirudo upatch map [<upatch>] [<map>] "
+		      "[--json=<path>] [--show-full]",
 	.summary    = "Read the contents of a pinned upatch map from the\n"
 		      "target kernel. With no positional args, list every "
 		      "pinned\nmap across every loaded upatch. With "
@@ -202,7 +204,8 @@ static const struct shirudo_help upatch_map_help = {
 "  shirudo upatch map\n"
 "  shirudo upatch map cve-2026-31431-counter\n"
 "  shirudo upatch map cve-2026-31431-counter blocked_af_alg\n"
-"  shirudo upatch map cve-2026-31431-counter blocked_af_alg --json | jq\n"
+"  shirudo upatch map cve-2026-31431-counter blocked_af_alg \\\n"
+"    --json=/var/log/shirudo/maps.ndjson\n"
 "  shirudo upatch map cve-2026-31431-counter big_hash --show-full",
 };
 
@@ -2043,6 +2046,61 @@ static int write_all(int fd, const void *buf, size_t n)
 	return 0;
 }
 
+/* Append one complete JSON document as an NDJSON record. */
+static int append_json_record(const char *path, const char *json, size_t len)
+{
+	struct stat st;
+	char last;
+	off_t original_size;
+	int fd, rc = 0;
+
+	if (!path || !path[0] || !json)
+		return -EINVAL;
+	fd = open(path, O_RDWR | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+	if (fd < 0)
+		return -errno;
+	while (flock(fd, LOCK_EX) != 0) {
+		if (errno != EINTR) {
+			rc = -errno;
+			goto out;
+		}
+	}
+	if (fstat(fd, &st) != 0) {
+		rc = -errno;
+		goto out_unlock;
+	}
+	if (!S_ISREG(st.st_mode)) {
+		rc = -EINVAL;
+		goto out_unlock;
+	}
+	original_size = st.st_size;
+	if (original_size > 0) {
+		ssize_t n = pread(fd, &last, 1, original_size - 1);
+
+		if (n != 1) {
+			rc = n < 0 ? -errno : -EIO;
+			goto out_unlock;
+		}
+		if (last != '\n')
+			rc = write_all(fd, "\n", 1);
+	}
+	if (!rc)
+		rc = write_all(fd, json, len);
+	if (!rc)
+		rc = write_all(fd, "\n", 1);
+	if (!rc && fsync(fd) != 0)
+		rc = -errno;
+	if (rc && ftruncate(fd, original_size) != 0)
+		pr_warn("upatch map: could not roll back partial JSON append to %s: %s",
+			path, strerror(errno));
+out_unlock:
+	(void)flock(fd, LOCK_UN);
+out:
+	if (close(fd) != 0 && !rc)
+		rc = -errno;
+	return rc;
+}
+
 static int copy_file_atomic(const char *src, const char *dst)
 {
 	char tmp[PATH_MAX + 8], buf[65536];
@@ -2636,24 +2694,14 @@ static void emit_line_info_json(struct shirudo_json_emit *e,
 	shirudo_json_arr_close(e);
 }
 
-/*
- * Dump the BPF line info (source) of a loaded upatch, read from the
- * kernel: the pinned link -> its prog -> the prog's line_info + BTF
- * (preserved through the signed gen_loader at load). All read-only
- * bpf() cmds, allowed by the LSM. The BTF here was loaded by the signed
- * loader, so this view is authoritative (unlike the .upatch's stored,
- * unsigned copy that `upatch info` shows).
- */
-/*
- * Emit one map view as part of a `{ "schema": 1, "upatch": "...",
- * "map": "...", "data": {...} }` document so consumers don't have to
- * bolt the scaffolding on themselves.
- */
-static int dump_one_map_json(const struct shirudo_map_view *v)
+/* Build and append one detailed schema-1 map snapshot. */
+static int append_one_map_json(const char *path,
+			       const struct shirudo_map_view *v)
 {
 	struct shirudo_json_emit e = {};
 	size_t cap;
 	char *buf;
+	int rc;
 
 	if (v->serialized)
 		cap = 8192 + (size_t)v->n_serial_pages * 256 +
@@ -2666,7 +2714,7 @@ static int dump_one_map_json(const struct shirudo_map_view *v)
 		cap = SHIRUDO_JSON_MAX_BYTES;
 	buf = xmalloc(cap);
 	if (!buf)
-		return 1;
+		return -ENOMEM;
 	e.buf = buf;
 	e.cap = cap;
 	shirudo_json_obj_open(&e);
@@ -2677,22 +2725,16 @@ static int dump_one_map_json(const struct shirudo_map_view *v)
 	shirudo_upatch_maps_emit_json_fields(&e, v);
 	shirudo_json_obj_close(&e);
 	shirudo_json_obj_close(&e);
-	if (e.err) {
-		fprintf(stderr, "upatch map: json encode failed: %s\n",
-			strerror(-e.err));
-		xfree(buf, cap);
-		return 1;
-	}
-	printf("%s\n", buf);
+	rc = e.err ? e.err : append_json_record(path, buf, e.len);
 	xfree(buf, cap);
-	return 0;
+	return rc;
 }
 
 static int cmd_upatch_map(int argc, const char **argv)
 {
 	struct shirudo_map_summary *list = NULL;
-	const char *upatch = NULL, *map = NULL;
-	bool json = false, show_full = false;
+	const char *upatch = NULL, *map = NULL, *json_path = NULL;
+	bool show_full = false;
 	size_t n = 0;
 	int i, ret = 0;
 
@@ -2703,8 +2745,16 @@ static int cmd_upatch_map(int argc, const char **argv)
 			shirudo_print_help(&upatch_map_help);
 			return 0;
 		}
-		if (strcmp(a, "--json") == 0) {
-			json = true;
+		if (strncmp(a, "--json=", 7) == 0) {
+			if (json_path || !a[7]) {
+				fprintf(stderr,
+					"upatch map: invalid or duplicate --json\n");
+				return 2;
+			}
+			json_path = a + 7;
+		} else if (strcmp(a, "--json") == 0) {
+			fprintf(stderr, "upatch map: --json requires a path\n");
+			return 2;
 		} else if (strcmp(a, "--show-full") == 0) {
 			show_full = true;
 		} else if (a[0] == '-') {
@@ -2736,10 +2786,18 @@ static int cmd_upatch_map(int argc, const char **argv)
 			       strerror(-rc));
 			return 1;
 		}
-		if (json)
-			ret = dump_one_map_json(&v);
-		else
+		if (json_path) {
+			rc = append_one_map_json(json_path, &v);
+			if (rc) {
+				pr_err("upatch map: append JSON to %s: %s",
+				       json_path, strerror(-rc));
+				ret = 1;
+			}
+		} else {
 			shirudo_upatch_maps_print_detail(&v);
+			if (ferror(stdout))
+				ret = 1;
+		}
 		shirudo_map_view_free(&v);
 		return ret;
 	}
@@ -2754,7 +2812,7 @@ static int cmd_upatch_map(int argc, const char **argv)
 		shirudo_upatch_maps_list_all(&list, &n);
 	}
 
-	if (json) {
+	if (json_path) {
 		struct shirudo_json_emit e = {};
 		size_t cap = 8192 + 256 * n;
 		char *buf;
@@ -2785,10 +2843,17 @@ static int cmd_upatch_map(int argc, const char **argv)
 		}
 		shirudo_json_arr_close(&e);
 		shirudo_json_obj_close(&e);
-		if (e.err)
+		if (e.err) {
 			ret = 1;
-		else
-			printf("%s\n", buf);
+		} else {
+			int rc = append_json_record(json_path, buf, e.len);
+
+			if (rc) {
+				pr_err("upatch map: append JSON to %s: %s",
+				       json_path, strerror(-rc));
+				ret = 1;
+			}
+		}
 		xfree(buf, cap);
 	} else {
 		shirudo_upatch_maps_print_summary(list, n);
@@ -3056,7 +3121,7 @@ static int render_get_json(const struct upatch_get_ctx *c,
 			shirudo_json_kv_string(&e, "error", strerror(-rc));
 			shirudo_json_obj_close(&e);
 		} else {
-			shirudo_upatch_maps_emit_json(&e, &v);
+			shirudo_upatch_maps_emit_json_object(&e, &v);
 		}
 		shirudo_map_view_free(&v);
 	}

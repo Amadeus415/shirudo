@@ -31,6 +31,7 @@
 #include "json.h"
 #include "malloc.h"
 #include "paths.h"
+#include "serializer.h"
 #include "upatch_map_types.h"
 #include "upatch_maps.h"
 #include "bpf/lib/shirudo_serializer.h"
@@ -757,24 +758,6 @@ static int clear_serial_map(int fd, const struct bpf_map_info *info)
 	return 0;
 }
 
-static int validate_serial_chunk(const struct shirudo_serial_chunk *c,
-				 uint32_t want_index, uint32_t total_chunks,
-				 uint32_t page_index, uint64_t cursor,
-				 uint64_t next_cursor)
-{
-	if (c->magic != SHIRUDO_SERIAL_MAGIC ||
-	    c->version != SHIRUDO_SERIAL_VERSION)
-		return -EBADMSG;
-	if (c->chunk_index != want_index || c->total_chunks != total_chunks)
-		return -EBADMSG;
-	if (c->bytes_in_chunk > SHIRUDO_SERIAL_CHUNK_PAYLOAD)
-		return -EBADMSG;
-	if (c->page_index != page_index || c->cursor != cursor ||
-	    c->next_cursor != next_cursor)
-		return -EBADMSG;
-	return 0;
-}
-
 static int append_serial_page(struct shirudo_map_view *out,
 			      struct shirudo_serial_page *page)
 {
@@ -793,6 +776,7 @@ static int append_serial_page(struct shirudo_map_view *out,
 static int read_serial_page(int serial_fd,
 			    const struct bpf_map_info *serial_info,
 			    uint32_t want_page_index, uint64_t want_cursor,
+			    uint64_t invocation_id,
 			    struct shirudo_serial_page *page)
 {
 	struct shirudo_serial_chunk *chunk;
@@ -811,7 +795,8 @@ static int read_serial_page(int serial_fd,
 		goto out_chunk;
 	}
 	if (chunk->magic != SHIRUDO_SERIAL_MAGIC ||
-	    chunk->version != SHIRUDO_SERIAL_VERSION) {
+	    chunk->version != SHIRUDO_SERIAL_VERSION ||
+	    chunk->invocation_id != invocation_id) {
 		rc = -EBADMSG;
 		goto out_chunk;
 	}
@@ -848,8 +833,9 @@ static int read_serial_page(int serial_fd,
 			rc = -errno;
 			goto out_data;
 		}
-		rc = validate_serial_chunk(chunk, key, total_chunks,
-					   page_index, cursor, next_cursor);
+		rc = shirudo_serial_chunk_validate(chunk, key, total_chunks,
+						   page_index, cursor,
+						   next_cursor, invocation_id);
 		if (rc)
 			goto out_data;
 		if (chunk->status != 0) {
@@ -898,9 +884,9 @@ static int try_read_serialized(const char *upatch, const char *map,
 			       struct shirudo_map_view *out)
 {
 	struct bpf_map_info serial_info = {};
-	uint64_t cursor = 0, bytes_total = 0;
+	uint64_t cursor = 0, bytes_total = 0, invocation_id;
 	uint32_t page_index;
-	int prog_fd = -1, serial_fd = -1, rc;
+	int prog_fd = -1, serial_fd = -1, lock_fd = -1, rc;
 
 	if (strcmp(map, SHIRUDO_SERIAL_MAP_NAME) == 0)
 		return 0;
@@ -915,6 +901,20 @@ static int try_read_serialized(const char *upatch, const char *map,
 	if (rc)
 		goto out;
 	rc = validate_serial_map(&serial_info);
+	if (rc)
+		goto out;
+	/*
+	 * Clearing, running and reading are one transaction. Key the lock by
+	 * the kernel map ID so every process sharing this exact output map
+	 * contends, while unrelated upatches remain independent.
+	 */
+	lock_fd = shirudo_serializer_lock_acquire(serial_info.id);
+	if (lock_fd < 0) {
+		rc = lock_fd;
+		lock_fd = -1;
+		goto out;
+	}
+	rc = shirudo_serializer_new_invocation_id(&invocation_id);
 	if (rc)
 		goto out;
 
@@ -934,6 +934,7 @@ static int try_read_serialized(const char *upatch, const char *map,
 		ctx.chunk_payload_size = SHIRUDO_SERIAL_CHUNK_PAYLOAD;
 		ctx.page_index = page_index;
 		ctx.cursor = cursor;
+		ctx.invocation_id = invocation_id;
 
 		rc = prog_test_run_ctx(prog_fd, &ctx, sizeof(ctx), &retval);
 		if (rc)
@@ -945,13 +946,14 @@ static int try_read_serialized(const char *upatch, const char *map,
 		if (ctx.magic != SHIRUDO_SERIAL_MAGIC ||
 		    ctx.version != SHIRUDO_SERIAL_VERSION ||
 		    ctx.page_index != page_index ||
-		    ctx.cursor != cursor) {
+		    ctx.cursor != cursor ||
+		    ctx.invocation_id != invocation_id) {
 			rc = -EBADMSG;
 			goto out;
 		}
 
 		rc = read_serial_page(serial_fd, &serial_info, page_index,
-				      cursor, &page);
+				      cursor, invocation_id, &page);
 		if (rc)
 			goto out;
 		if (bytes_total + page.bytes > SHIRUDO_SERIAL_MAX_TOTAL_BYTES) {
@@ -983,6 +985,7 @@ static int try_read_serialized(const char *upatch, const char *map,
 
 	out->serialized = true;
 	out->serial_bytes_total = bytes_total;
+	close(lock_fd);
 	close(serial_fd);
 	close(prog_fd);
 	return 1;
@@ -1002,6 +1005,8 @@ out:
 	}
 	if (serial_fd >= 0)
 		close(serial_fd);
+	if (lock_fd >= 0)
+		close(lock_fd);
 	if (prog_fd >= 0)
 		close(prog_fd);
 	return rc;
@@ -1654,8 +1659,8 @@ void shirudo_upatch_maps_emit_json_fields(struct shirudo_json_emit *e,
 	shirudo_json_arr_close(e);
 }
 
-void shirudo_upatch_maps_emit_json(struct shirudo_json_emit *e,
-				   const struct shirudo_map_view *v)
+void shirudo_upatch_maps_emit_json_object(struct shirudo_json_emit *e,
+					  const struct shirudo_map_view *v)
 {
 	if (!v)
 		return;
