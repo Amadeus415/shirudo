@@ -23,7 +23,9 @@ SHIRUDO_BUNDLE_RPATH ?= 0
 CLANG   ?= clang
 BPFTOOL ?= third_party/bpf-next/tools/bpf/bpftool/bpftool
 BPF_VMLINUX_H ?=
-BPF_VMLINUX_BTF ?= /sys/kernel/btf/vmlinux
+# Prefer the BTF emitted by `make bpf-next`; otherwise use the running host.
+# A caller can still override this explicitly for another target kernel.
+BPF_VMLINUX_BTF ?= $(if $(wildcard artifacts/bpf-next-kernel-debs/vmlinux.btf),artifacts/bpf-next-kernel-debs/vmlinux.btf,/sys/kernel/btf/vmlinux)
 
 SHIRUDO_LIBEXEC_DIR ?= $(libexecdir)/shirudo
 

@@ -62,4 +62,6 @@ jobs:
             artifacts/bpf-next-kernel-debs.tar.gz.sha256sum
             artifacts/bpf-next-kernel-debs/bzImage
             artifacts/bpf-next-kernel-debs/bzImage.sha256sum
+            artifacts/bpf-next-kernel-debs/vmlinux.btf
+            artifacts/bpf-next-kernel-debs/vmlinux.btf.sha256sum
             artifacts/bpf-next-kernel-debs/bpf-next-kernel-build

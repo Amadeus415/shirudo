@@ -159,8 +159,15 @@ run the suite in a disposable QEMU/KVM guest backed by swtpm::
     make test-vm
 
 ``make bpf-next`` writes both kernel DEBs and a directly bootable
-``artifacts/bpf-next-kernel-debs/bzImage``.  It uses
+``artifacts/bpf-next-kernel-debs/bzImage`` and the matching detached
+``artifacts/bpf-next-kernel-debs/vmlinux.btf``. It uses
 ``third_party/bpf-next`` and applies patches under ``kernel/``.
+
+When that artifact is present, Shirudo automatically uses it to generate its
+BPF headers instead of the running host's BTF. To select another target BTF
+explicitly, set ``BPF_VMLINUX_BTF``::
+
+    make BPF_VMLINUX_BTF=artifacts/bpf-next-kernel-debs/vmlinux.btf
 ``make test-vm`` verifies that image, boots an Ubuntu 26.04 cloud-image
 overlay with a fresh vTPM, runs measured ``shirudo init``, and then runs
 ``SHIRUDO_INTEGRATION=1 make check``.  The host checkout is mounted

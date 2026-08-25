@@ -11,6 +11,7 @@ KERNEL_SOURCE_DIR="${KERNEL_SOURCE_DIR:-${REPO_ROOT}/third_party/bpf-next}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/artifacts/bpf-next-kernel-debs}"
 BUNDLE_PATH="${BUNDLE_PATH:-${OUTPUT_DIR}.tar.gz}"
 VMLINUX_PATH="${OUTPUT_DIR}/bzImage"
+VMLINUX_BTF_PATH="${OUTPUT_DIR}/vmlinux.btf"
 
 BUILD_DEPENDENCIES=(
   bc
@@ -287,6 +288,22 @@ fi
 cp arch/x86/boot/bzImage "$VMLINUX_PATH"
 cp .config "${OUTPUT_DIR}/kernel.config"
 
+# Keep the exact detached BTF used by this kernel build.  It lets Shirudo
+# generate bpf/vmlinux.h against the artifact kernel before that kernel is
+# booted, rather than accidentally using the build host's /sys BTF.
+if [[ ! -s vmlinux ]]; then
+  echo "kernel vmlinux was not produced" >&2
+  exit 1
+fi
+if ! objcopy --dump-section .BTF="$VMLINUX_BTF_PATH" vmlinux; then
+  echo "failed to extract .BTF from kernel vmlinux" >&2
+  exit 1
+fi
+if [[ ! -s "$VMLINUX_BTF_PATH" ]]; then
+  echo "kernel vmlinux has no usable .BTF section" >&2
+  exit 1
+fi
+
 cat > "${OUTPUT_DIR}/bpf-next-kernel-build" <<EOF
 source_dir=${KERNEL_SOURCE_DIR}
 upstream_commit=${upstream_commit}
@@ -302,7 +319,8 @@ EOF
 (
   cd "$OUTPUT_DIR"
   sha256sum bzImage > bzImage.sha256sum
-  sha256sum *.deb bzImage kernel.config bpf-next-kernel-build > SHA256SUMS
+  sha256sum vmlinux.btf > vmlinux.btf.sha256sum
+  sha256sum *.deb bzImage vmlinux.btf kernel.config bpf-next-kernel-build > SHA256SUMS
 )
 
 mkdir -p "$(dirname "$BUNDLE_PATH")"
@@ -313,4 +331,5 @@ tar -C "$OUTPUT_DIR" -czf "$BUNDLE_PATH" .
 )
 
 echo "Built kernel bzImage: ${VMLINUX_PATH}"
+echo "Built kernel BTF: ${VMLINUX_BTF_PATH}"
 echo "Built kernel deb bundle: ${BUNDLE_PATH}"
