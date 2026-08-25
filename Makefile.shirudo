@@ -342,6 +342,7 @@ install-operator: install shirudo-build bpf/vmlinux.h $(BPF_HEADERS_OUT) $(BPF_L
 # Compiled test helpers (also usable as fuzz entry points).
 TEST_HELPERS := t/helper/test-json-parser \
                 t/helper/test-chain \
+		t/helper/test-config \
                 t/helper/test-selector \
                 t/helper/test-bpf-load \
                 t/helper/test-kernel-abi \
@@ -364,6 +365,10 @@ t/helper/test-chain: t/helper/test-chain.c util/chain.o util/tpm.o util/log.o \
                      util/config.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -ltss2-esys -ltss2-tctildr
+
+t/helper/test-config: t/helper/test-config.c util/config.o util/log.o
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 t/helper/test-selector: t/helper/test-selector.c util/selector.o \
                         util/remotes.o util/malloc.o util/log.o

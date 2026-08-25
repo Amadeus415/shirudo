@@ -37,6 +37,25 @@ static void usage(void)
 	fprintf(stderr, "usage: %s\n", config_help.usage);
 }
 
+static const char *map_export_otel_mode_name(
+		enum shirudo_map_export_otel_mode mode)
+{
+	switch (mode) {
+	case SHIRUDO_MAP_EXPORT_OTEL_AUTO:	return "auto";
+	case SHIRUDO_MAP_EXPORT_OTEL_LOG:	return "log";
+	case SHIRUDO_MAP_EXPORT_OTEL_METRIC:	return "metric";
+	case SHIRUDO_MAP_EXPORT_OTEL_S3:	return "s3";
+	case SHIRUDO_MAP_EXPORT_OTEL_OFF:
+	default:				return "off";
+	}
+}
+
+static const char *map_export_metric_kind_name(
+		enum shirudo_map_export_metric_kind kind)
+{
+	return kind == SHIRUDO_MAP_EXPORT_METRIC_GAUGE ? "gauge" : "counter";
+}
+
 int cmd_config(int argc, const char **argv)
 {
 	struct shirudo_config cfg;
@@ -126,8 +145,30 @@ int cmd_config(int argc, const char **argv)
 	       "# corresponding --include-* flag is dropped). Range 0..100,\n"
 	       "# 0=disabled. Defaults: 10 each.\n");
 	printf("nodes.kernel_log_lines = %u\n", cfg.nodes_kernel_log_lines);
-	printf("nodes.module_loads_lines = %u\n",
+	printf("nodes.module_loads_lines = %u\n\n",
 	       cfg.nodes_module_loads_lines);
 
-	return 0;
+	printf("# Periodic `shirudo upatch map --all` export. An empty JSON\n"
+	       "# path and OTEL mode `off` leave the installed timer idle.\n"
+	       "# OTEL headers, TLS material, and AWS credentials belong in\n"
+	       "# /etc/shirudo/map-export.env for the systemd service.\n");
+	printf("map_export.json_path = %s\n", cfg.map_export_json_path);
+	printf("map_export.otel_mode = %s\n",
+	       map_export_otel_mode_name(cfg.map_export_otel_mode));
+	printf("map_export.otel_endpoint = %s\n",
+	       cfg.map_export_otel_endpoint);
+	printf("map_export.otel_insecure = %s\n",
+	       cfg.map_export_otel_insecure ? "true" : "false");
+	printf("map_export.otel_retries = %u\n",
+	       cfg.map_export_otel_retries);
+	printf("map_export.s3_uri = %s\n", cfg.map_export_s3_uri);
+	printf("map_export.show_full = %s\n",
+	       cfg.map_export_show_full ? "true" : "false");
+	printf("map_export.metric_kind = %s\n",
+	       map_export_metric_kind_name(cfg.map_export_metric_kind));
+	printf("map_export.metric_unit = %s\n", cfg.map_export_metric_unit);
+	printf("map_export.metric_description = %s\n",
+	       cfg.map_export_metric_description);
+
+	return cfg.map_export_valid ? 0 : 1;
 }

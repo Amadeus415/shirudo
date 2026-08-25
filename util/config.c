@@ -29,6 +29,79 @@ static char *trim(char *s)
 	return s;
 }
 
+static void map_export_bad(struct shirudo_config *cfg, const char *key,
+			   const char *val, const char *reason)
+{
+	cfg->map_export_valid = false;
+	pr_warn("config: %s: bad value '%s' (%s)", key, val, reason);
+}
+
+static bool parse_bool(const char *val, bool *out)
+{
+	if (strcmp(val, "true") == 0) {
+		*out = true;
+		return true;
+	}
+	if (strcmp(val, "false") == 0) {
+		*out = false;
+		return true;
+	}
+	return false;
+}
+
+static bool set_string(char *dst, size_t cap, const char *val)
+{
+	if (strlen(val) >= cap)
+		return false;
+	snprintf(dst, cap, "%s", val);
+	return true;
+}
+
+static bool parse_otel_mode(const char *val,
+			    enum shirudo_map_export_otel_mode *out)
+{
+	if (strcmp(val, "off") == 0)
+		*out = SHIRUDO_MAP_EXPORT_OTEL_OFF;
+	else if (strcmp(val, "auto") == 0)
+		*out = SHIRUDO_MAP_EXPORT_OTEL_AUTO;
+	else if (strcmp(val, "log") == 0)
+		*out = SHIRUDO_MAP_EXPORT_OTEL_LOG;
+	else if (strcmp(val, "metric") == 0)
+		*out = SHIRUDO_MAP_EXPORT_OTEL_METRIC;
+	else if (strcmp(val, "s3") == 0)
+		*out = SHIRUDO_MAP_EXPORT_OTEL_S3;
+	else
+		return false;
+	return true;
+}
+
+static bool parse_metric_kind(const char *val,
+			      enum shirudo_map_export_metric_kind *out)
+{
+	if (strcmp(val, "counter") == 0)
+		*out = SHIRUDO_MAP_EXPORT_METRIC_COUNTER;
+	else if (strcmp(val, "gauge") == 0)
+		*out = SHIRUDO_MAP_EXPORT_METRIC_GAUGE;
+	else
+		return false;
+	return true;
+}
+
+static void config_defaults(struct shirudo_config *cfg)
+{
+	*cfg = (struct shirudo_config){};
+	cfg->nodes_icmp_timeout_ms = 1000;
+	cfg->nodes_icmp_probes = 1;
+	cfg->nodes_kernel_log_lines = 10;
+	cfg->nodes_module_loads_lines = 10;
+	cfg->map_export_valid = true;
+	cfg->map_export_otel_mode = SHIRUDO_MAP_EXPORT_OTEL_OFF;
+	cfg->map_export_otel_retries = 3;
+	cfg->map_export_metric_kind = SHIRUDO_MAP_EXPORT_METRIC_COUNTER;
+	snprintf(cfg->map_export_metric_unit,
+		 sizeof(cfg->map_export_metric_unit), "1");
+}
+
 static int hexval(char c)
 {
 	if (c >= '0' && c <= '9')
@@ -80,20 +153,17 @@ static void set_owner_auth(struct shirudo_config *cfg, const char *val)
 	cfg->tpm_owner_auth_len = l;
 }
 
-int shirudo_config_load(struct shirudo_config *cfg)
+int shirudo_config_load_path(struct shirudo_config *cfg, const char *path)
 {
-	const char *env;
 	char line[1024];
 	int rc = 0;
 	FILE *f;
 
-	*cfg = (struct shirudo_config){};	/* defaults: all zero */
-	cfg->nodes_icmp_timeout_ms = 1000;	/* 1s per probe */
-	cfg->nodes_icmp_probes = 1;
-	cfg->nodes_kernel_log_lines = 10;
-	cfg->nodes_module_loads_lines = 10;
+	if (!cfg || !path)
+		return -EINVAL;
+	config_defaults(cfg);
 
-	f = fopen(SHIRUDO_CONF_PATH, "r");
+	f = fopen(path, "r");
 	if (!f) {
 		if (errno != ENOENT)
 			rc = -errno;	/* still apply env override below */
@@ -183,13 +253,89 @@ int shirudo_config_load(struct shirudo_config *cfg)
 				else
 					cfg->nodes_module_loads_lines =
 						(unsigned int)v;
+			} else if (strcmp(key, "map_export.json_path") == 0) {
+				if (!set_string(cfg->map_export_json_path,
+						sizeof(cfg->map_export_json_path), val))
+					map_export_bad(cfg, key, val, "value too long");
+				else if (val[0] && val[0] != '/')
+					map_export_bad(cfg, key, val,
+							"path must be absolute");
+			} else if (strcmp(key, "map_export.otel_mode") == 0) {
+				if (!parse_otel_mode(val,
+						     &cfg->map_export_otel_mode))
+					map_export_bad(cfg, key, val,
+							"expected off, auto, log, metric, or s3");
+			} else if (strcmp(key, "map_export.otel_endpoint") == 0) {
+				if (!set_string(cfg->map_export_otel_endpoint,
+						sizeof(cfg->map_export_otel_endpoint), val))
+					map_export_bad(cfg, key, val, "value too long");
+			} else if (strcmp(key, "map_export.otel_insecure") == 0) {
+				if (!parse_bool(val,
+						&cfg->map_export_otel_insecure))
+					map_export_bad(cfg, key, val,
+							"expected true or false");
+			} else if (strcmp(key, "map_export.otel_retries") == 0) {
+				unsigned long v;
+				char *end;
+
+				errno = 0;
+				v = strtoul(val, &end, 10);
+				if (errno || *end || v > 10)
+					map_export_bad(cfg, key, val,
+							"expected 0..10");
+				else
+					cfg->map_export_otel_retries =
+						(unsigned int)v;
+			} else if (strcmp(key, "map_export.s3_uri") == 0) {
+				if (!set_string(cfg->map_export_s3_uri,
+						sizeof(cfg->map_export_s3_uri), val))
+					map_export_bad(cfg, key, val, "value too long");
+			} else if (strcmp(key, "map_export.show_full") == 0) {
+				if (!parse_bool(val, &cfg->map_export_show_full))
+					map_export_bad(cfg, key, val,
+							"expected true or false");
+			} else if (strcmp(key, "map_export.metric_kind") == 0) {
+				if (!parse_metric_kind(val,
+						       &cfg->map_export_metric_kind))
+					map_export_bad(cfg, key, val,
+							"expected counter or gauge");
+			} else if (strcmp(key, "map_export.metric_unit") == 0) {
+				if (!val[0] ||
+				    !set_string(cfg->map_export_metric_unit,
+						 sizeof(cfg->map_export_metric_unit), val))
+					map_export_bad(cfg, key, val,
+							"expected a non-empty unit");
+			} else if (strcmp(key,
+					  "map_export.metric_description") == 0) {
+				if (!set_string(cfg->map_export_metric_description,
+						sizeof(cfg->map_export_metric_description),
+						val))
+					map_export_bad(cfg, key, val, "value too long");
 			} else {
-				pr_warn("config: unknown key '%s' (ignored)",
-					key);
+				if (strncmp(key, "map_export.", 11) == 0)
+					map_export_bad(cfg, key, val, "unknown key");
+				else
+					pr_warn("config: unknown key '%s' (ignored)",
+						key);
 			}
 		}
 		fclose(f);
 	}
+	if (cfg->map_export_otel_mode == SHIRUDO_MAP_EXPORT_OTEL_S3 &&
+	    !cfg->map_export_s3_uri[0])
+		map_export_bad(cfg, "map_export.s3_uri", "",
+			       "required when otel_mode is s3");
+	return rc;
+}
+
+int shirudo_config_load(struct shirudo_config *cfg)
+{
+	const char *env;
+	int rc;
+
+	rc = shirudo_config_load_path(cfg, SHIRUDO_CONF_PATH);
+	if (rc && rc != -ENOENT)
+		return rc;
 
 	/* Env override (handy for tests / not persisting a secret to disk). */
 	env = getenv("SHIRUDO_TPM_OWNER_AUTH");
@@ -213,5 +359,5 @@ int shirudo_config_load(struct shirudo_config *cfg)
 			pr_warn("SHIRUDO_TPM_TCTI too long (ignored)");
 	}
 
-	return rc;
+	return rc == -ENOENT ? 0 : rc;
 }
