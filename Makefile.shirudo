@@ -290,6 +290,7 @@ tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o \
                                    util/parse-options.o util/upatch.o \
                                    util/log.o util/json.o util/loader.o \
                                    util/malloc.o util/paths.o \
+                                   util/elf_target.o \
                                    $(LIBBPF_A)
 	@printf '  LD      $@\n'
 	$(Q)$(LD) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS)

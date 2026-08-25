@@ -147,6 +147,11 @@ struct shirudo_upatch_decoder_trailer {
 #define SHIRUDO_UPATCH_PROG_MAGIC	0x4d475055u	/* "UPGM" le */
 #define SHIRUDO_UPATCH_PROG_VERSION	1u
 #define SHIRUDO_UPATCH_PROG_MAP_MAX	16u		/* BPF_OBJ_NAME_LEN */
+#define SHIRUDO_UPATCH_UPROBE_TARGET_MAGIC	0x54555055u /* "UPUT" le */
+#define SHIRUDO_UPATCH_UPROBE_TARGET_VERSION	1u
+#define SHIRUDO_UPATCH_UPROBE_PATH_MAX	4096u
+#define SHIRUDO_UPATCH_BUILD_ID_MAX	64u
+#define SHIRUDO_UPATCH_UPROBE_OFFSETS_MAX	(1u << 20)
 
 enum shirudo_upatch_attach_kind {
 	SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT = 0,
@@ -156,6 +161,7 @@ enum shirudo_upatch_attach_kind {
 	SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_EGRESS = 4,
 	SHIRUDO_UPATCH_ATTACH_FMOD_RET = 5,
 	SHIRUDO_UPATCH_ATTACH_NETFILTER_IPV6_PRE_ROUTING = 6,
+	SHIRUDO_UPATCH_ATTACH_UPROBE_MULTI = 7,
 };
 
 enum shirudo_upatch_prog_role {
@@ -181,6 +187,27 @@ struct shirudo_upatch_prog_metadata {
 	 * libbpf/gen_loader program iteration order.
 	 */
 	struct shirudo_upatch_prog_entry progs[];
+};
+
+/*
+ * UPGM v1 optionally appends one UPUT block after the fixed program
+ * entries. It is required when any program has UPROBE_MULTI attach kind
+ * and absent otherwise. Each variable-length record is followed by
+ * path_len path bytes (without NUL), build_id_len build-ID bytes, and
+ * nr_offsets little-endian uint64_t file offsets. Records have no padding.
+ */
+struct shirudo_upatch_uprobe_targets {
+	uint32_t	magic;		/* SHIRUDO_UPATCH_UPROBE_TARGET_MAGIC */
+	uint32_t	version;	/* SHIRUDO_UPATCH_UPROBE_TARGET_VERSION */
+	uint32_t	nr_targets;
+	uint32_t	reserved;
+};
+
+struct shirudo_upatch_uprobe_target {
+	uint32_t	prog_idx;
+	uint32_t	path_len;
+	uint32_t	build_id_len;
+	uint32_t	nr_offsets;
 };
 
 #endif /* SHIRUDO_UPATCH_H */

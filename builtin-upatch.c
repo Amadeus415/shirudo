@@ -34,6 +34,7 @@
 #include "util/chain.h"
 #include "util/config.h"
 #include "util/eventlog.h"
+#include "util/elf_target.h"
 #include "util/help.h"
 #include "util/json.h"
 #include "util/kernel_abi.h"
@@ -1054,6 +1055,14 @@ struct shirudo_prog_spec {
 	uint64_t offset;
 	char target[SHIRUDO_UPATCH_ATTACH_TARGET_MAX];
 	char map[SHIRUDO_UPATCH_PROG_MAP_MAX];
+	char *uprobe_path;
+	uint32_t uprobe_path_len;
+	uint8_t build_id[SHIRUDO_UPATCH_BUILD_ID_MAX];
+	uint32_t build_id_len;
+	uint64_t *uprobe_offsets;
+	uint32_t nr_uprobe_offsets;
+	int target_fd;
+	struct stat target_stat;
 };
 
 static const char *attach_kind_name(uint32_t kind)
@@ -1073,20 +1082,43 @@ static const char *attach_kind_name(uint32_t kind)
 		return "fmod_ret";
 	case SHIRUDO_UPATCH_ATTACH_NETFILTER_IPV6_PRE_ROUTING:
 		return "netfilter/ipv6-pre-routing";
+	case SHIRUDO_UPATCH_ATTACH_UPROBE_MULTI:
+		return "uprobe.multi";
 	default:
 		return "unknown";
 	}
 }
 
-static int prog_spec_for_prog(const void *metadata, uint32_t metadata_len,
-			      uint32_t nr_progs, uint32_t index,
-			      struct shirudo_prog_spec *spec)
+static void prog_specs_free(struct shirudo_prog_spec *specs,
+			    uint32_t nr_progs)
+{
+	uint32_t i;
+
+	if (!specs)
+		return;
+	for (i = 0; i < nr_progs; i++) {
+		if (specs[i].target_fd >= 0)
+			close(specs[i].target_fd);
+		xstrfree(specs[i].uprobe_path);
+		xfree(specs[i].uprobe_offsets,
+		      (size_t)specs[i].nr_uprobe_offsets *
+		      sizeof(*specs[i].uprobe_offsets));
+	}
+	xfree(specs, (size_t)nr_progs * sizeof(*specs));
+}
+
+static int prog_specs_parse(const void *metadata, uint32_t metadata_len,
+			    uint32_t nr_progs,
+			    struct shirudo_prog_spec **out)
 {
 	struct shirudo_upatch_prog_metadata md;
-	struct shirudo_upatch_prog_entry prog;
-	size_t need, off;
-	uint32_t magic, version, count, role, kind;
+	struct shirudo_prog_spec *specs = NULL;
+	const unsigned char *cursor, *end;
+	size_t base_len;
+	uint32_t magic, version, count, i, nr_uprobes = 0;
+	int rc = -EINVAL;
 
+	*out = NULL;
 	if (!metadata || metadata_len < sizeof(uint32_t))
 		return -EINVAL;
 	memcpy(&magic, metadata, sizeof(magic));
@@ -1100,68 +1132,307 @@ static int prog_spec_for_prog(const void *metadata, uint32_t metadata_len,
 	count = le32toh(md.nr_progs);
 	if (version != SHIRUDO_UPATCH_PROG_VERSION)
 		return -EOPNOTSUPP;
-	if (count != nr_progs || index >= count)
+	if (count != nr_progs || le32toh(md.reserved) != 0)
 		return -EINVAL;
-	if (count > (UINT32_MAX - sizeof(md)) / sizeof(prog))
+	if (count > (UINT32_MAX - sizeof(md)) /
+	    sizeof(struct shirudo_upatch_prog_entry))
 		return -EOVERFLOW;
-	need = sizeof(md) + (size_t)count * sizeof(prog);
-	if (metadata_len != need)
+	base_len = sizeof(md) + (size_t)count *
+		   sizeof(struct shirudo_upatch_prog_entry);
+	if (metadata_len < base_len)
 		return -EINVAL;
+	specs = xcalloc(nr_progs, sizeof(*specs));
+	if (!specs)
+		return -ENOMEM;
+	for (i = 0; i < nr_progs; i++)
+		specs[i].target_fd = -1;
 
-	memset(spec, 0, sizeof(*spec));
-	spec->role = SHIRUDO_UPATCH_PROG_ROLE_ATTACH;
-	spec->kind = SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT;
-	off = sizeof(md) + (size_t)index * sizeof(prog);
-	memcpy(&prog, (const char *)metadata + off, sizeof(prog));
-	role = le32toh(prog.role);
-	switch (role) {
+	for (i = 0; i < nr_progs; i++) {
+		struct shirudo_upatch_prog_entry prog;
+		struct shirudo_prog_spec *spec = &specs[i];
+		uint32_t role, kind;
+
+		memcpy(&prog, (const unsigned char *)metadata + sizeof(md) +
+		       (size_t)i * sizeof(prog), sizeof(prog));
+		role = le32toh(prog.role);
+		switch (role) {
 	case SHIRUDO_UPATCH_PROG_ROLE_ATTACH:
 		break;
 	case SHIRUDO_UPATCH_PROG_ROLE_SERIALIZER:
+		if (prog.kind || prog.offset || prog.target[0])
+			goto out;
 		if (!memchr(prog.map, '\0', sizeof(prog.map)) ||
 		    prog.map[0] == '\0')
-			return -EINVAL;
+			goto out;
 		spec->role = role;
 		memcpy(spec->map, prog.map, sizeof(spec->map));
 		spec->map[sizeof(spec->map) - 1] = '\0';
-		return 0;
+		continue;
 	default:
-		return -EINVAL;
-	}
+		goto out;
+		}
+		if (prog.map[0])
+			goto out;
+		spec->role = role;
 
-	kind = le32toh(prog.kind);
-	switch (kind) {
+		kind = le32toh(prog.kind);
+		switch (kind) {
 	case SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT:
 		spec->kind = kind;
-		return 0;
+		if (prog.target[0] || prog.offset)
+			goto out;
+		continue;
 	case SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_INGRESS:
 	case SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_EGRESS:
 	case SHIRUDO_UPATCH_ATTACH_NETFILTER_IPV6_PRE_ROUTING:
 		spec->kind = kind;
 		if (prog.target[0] || prog.offset)
-			return -EINVAL;
-		return 0;
+			goto out;
+		continue;
 	case SHIRUDO_UPATCH_ATTACH_FMOD_RET:
 		spec->kind = kind;
 		if (prog.target[0] || prog.offset)
-			return -EINVAL;
-		return 0;
+			goto out;
+		continue;
 	case SHIRUDO_UPATCH_ATTACH_KPROBE:
 	case SHIRUDO_UPATCH_ATTACH_KRETPROBE:
 		break;
+	case SHIRUDO_UPATCH_ATTACH_UPROBE_MULTI:
+		if (prog.offset)
+			goto out;
+		nr_uprobes++;
+		break;
 	default:
-		return -EINVAL;
+		goto out;
+		}
+		if (!memchr(prog.target, '\0', sizeof(prog.target)) ||
+		    prog.target[0] == '\0')
+			goto out;
+		spec->kind = kind;
+		spec->offset = le64toh(prog.offset);
+		memcpy(spec->target, prog.target, sizeof(spec->target));
+		spec->target[sizeof(spec->target) - 1] = '\0';
+		if (kind == SHIRUDO_UPATCH_ATTACH_KRETPROBE && spec->offset)
+			goto out;
+		if (kind == SHIRUDO_UPATCH_ATTACH_UPROBE_MULTI &&
+		    (strchr(spec->target, ',') || strchr(spec->target, '|')))
+			goto out;
 	}
-	if (!memchr(prog.target, '\0', sizeof(prog.target)) ||
-	    prog.target[0] == '\0')
-		return -EINVAL;
-	spec->kind = kind;
-	spec->offset = le64toh(prog.offset);
-	memcpy(spec->target, prog.target, sizeof(spec->target));
-	spec->target[sizeof(spec->target) - 1] = '\0';
-	if (spec->kind == SHIRUDO_UPATCH_ATTACH_KRETPROBE && spec->offset)
-		return -EINVAL;
+
+	if (!nr_uprobes) {
+		if (metadata_len != base_len)
+			goto out;
+		*out = specs;
+		return 0;
+	}
+
+	cursor = (const unsigned char *)metadata + base_len;
+	end = (const unsigned char *)metadata + metadata_len;
+	if ((size_t)(end - cursor) <
+	    sizeof(struct shirudo_upatch_uprobe_targets))
+		goto out;
+	{
+		struct shirudo_upatch_uprobe_targets targets;
+		uint32_t nr_targets;
+
+		memcpy(&targets, cursor, sizeof(targets));
+		cursor += sizeof(targets);
+		nr_targets = le32toh(targets.nr_targets);
+		if (le32toh(targets.magic) !=
+		    SHIRUDO_UPATCH_UPROBE_TARGET_MAGIC ||
+		    le32toh(targets.version) !=
+		    SHIRUDO_UPATCH_UPROBE_TARGET_VERSION ||
+		    le32toh(targets.reserved) != 0 || nr_targets != nr_uprobes)
+			goto out;
+
+		for (i = 0; i < nr_targets; i++) {
+			struct shirudo_upatch_uprobe_target record;
+			struct shirudo_prog_spec *spec;
+			uint32_t prog_idx, path_len, build_id_len, nr_offsets, j;
+			size_t payload_len;
+
+			if ((size_t)(end - cursor) < sizeof(record))
+				goto out;
+			memcpy(&record, cursor, sizeof(record));
+			cursor += sizeof(record);
+			prog_idx = le32toh(record.prog_idx);
+			path_len = le32toh(record.path_len);
+			build_id_len = le32toh(record.build_id_len);
+			nr_offsets = le32toh(record.nr_offsets);
+			if (prog_idx >= nr_progs ||
+			    specs[prog_idx].kind !=
+			    SHIRUDO_UPATCH_ATTACH_UPROBE_MULTI ||
+			    specs[prog_idx].uprobe_path || path_len == 0 ||
+			    path_len >= SHIRUDO_UPATCH_UPROBE_PATH_MAX ||
+			    build_id_len == 0 ||
+			    build_id_len > SHIRUDO_UPATCH_BUILD_ID_MAX ||
+			    nr_offsets == 0 ||
+			    nr_offsets > SHIRUDO_UPATCH_UPROBE_OFFSETS_MAX)
+				goto out;
+			payload_len = (size_t)path_len + build_id_len +
+				      (size_t)nr_offsets * sizeof(uint64_t);
+			if ((size_t)(end - cursor) < payload_len ||
+			    cursor[0] != '/' || memchr(cursor, '\0', path_len))
+				goto out;
+			spec = &specs[prog_idx];
+			spec->uprobe_path = xstrndup((const char *)cursor,
+						     path_len);
+			if (!spec->uprobe_path) {
+				rc = -ENOMEM;
+				goto out;
+			}
+			spec->uprobe_path_len = path_len;
+			cursor += path_len;
+			memcpy(spec->build_id, cursor, build_id_len);
+			spec->build_id_len = build_id_len;
+			cursor += build_id_len;
+			spec->uprobe_offsets =
+				xcalloc(nr_offsets, sizeof(*spec->uprobe_offsets));
+			if (!spec->uprobe_offsets) {
+				rc = -ENOMEM;
+				goto out;
+			}
+			spec->nr_uprobe_offsets = nr_offsets;
+			for (j = 0; j < nr_offsets; j++) {
+				uint64_t offset;
+
+				memcpy(&offset, cursor, sizeof(offset));
+				cursor += sizeof(offset);
+				spec->uprobe_offsets[j] = le64toh(offset);
+				if (j && spec->uprobe_offsets[j] <=
+					 spec->uprobe_offsets[j - 1])
+					goto out;
+			}
+		}
+	}
+	if (cursor != end)
+		goto out;
+	for (i = 0; i < nr_progs; i++) {
+		if (specs[i].kind == SHIRUDO_UPATCH_ATTACH_UPROBE_MULTI &&
+		    !specs[i].uprobe_path)
+			goto out;
+	}
+	*out = specs;
 	return 0;
+out:
+	prog_specs_free(specs, nr_progs);
+	return rc;
+}
+
+static int prepare_uprobe_targets(struct shirudo_prog_spec *specs,
+				  uint32_t nr_progs)
+{
+	uint32_t i;
+
+	for (i = 0; i < nr_progs; i++) {
+		struct shirudo_prog_spec *spec = &specs[i];
+		uint8_t build_id[SHIRUDO_UPATCH_BUILD_ID_MAX];
+		uint32_t build_id_len = 0;
+		char proc_path[64];
+		struct stat opened_stat;
+		int path_fd, fd, rc;
+
+		if (spec->kind != SHIRUDO_UPATCH_ATTACH_UPROBE_MULTI)
+			continue;
+		path_fd = open(spec->uprobe_path, O_PATH | O_CLOEXEC);
+		if (path_fd < 0)
+			return -errno;
+		if (fstat(path_fd, &spec->target_stat) != 0) {
+			rc = -errno;
+			close(path_fd);
+			return rc;
+		}
+		if (!S_ISREG(spec->target_stat.st_mode)) {
+			close(path_fd);
+			return -ESTALE;
+		}
+		snprintf(proc_path, sizeof(proc_path), "/proc/self/fd/%d", path_fd);
+		fd = open(proc_path, O_RDONLY | O_CLOEXEC);
+		close(path_fd);
+		if (fd < 0)
+			return -errno;
+		if (fstat(fd, &opened_stat) != 0) {
+			rc = -errno;
+			close(fd);
+			return rc;
+		}
+		if (opened_stat.st_dev != spec->target_stat.st_dev ||
+		    opened_stat.st_ino != spec->target_stat.st_ino) {
+			close(fd);
+			return -ESTALE;
+		}
+		for (uint32_t j = 0; j < spec->nr_uprobe_offsets; j++) {
+			if (spec->uprobe_offsets[j] >= (uint64_t)opened_stat.st_size) {
+				close(fd);
+				return -ERANGE;
+			}
+		}
+		rc = shirudo_elf_build_id_fd(fd, build_id, &build_id_len);
+		if (rc) {
+			close(fd);
+			return rc == -EACCES || rc == -EPERM ? rc : -ESTALE;
+		}
+		if (build_id_len != spec->build_id_len ||
+		    memcmp(build_id, spec->build_id, build_id_len) != 0) {
+			close(fd);
+			return -ESTALE;
+		}
+		spec->target_fd = fd;
+	}
+	return 0;
+}
+
+static int prog_attach_uprobe_multi(int prog_fd,
+				    const struct shirudo_prog_spec *spec)
+{
+	union bpf_attr attr = {};
+	struct stat path_stat;
+	long fd;
+	int first_err;
+
+	if (spec->target_fd < 0 || !spec->uprobe_path ||
+	    !spec->uprobe_offsets || !spec->nr_uprobe_offsets)
+		return -EINVAL;
+	attr.link_create.prog_fd = (uint32_t)prog_fd;
+	attr.link_create.attach_type = BPF_TRACE_UPROBE_MULTI;
+	attr.link_create.uprobe_multi.offsets =
+		(uint64_t)(uintptr_t)spec->uprobe_offsets;
+	attr.link_create.uprobe_multi.cnt = spec->nr_uprobe_offsets;
+	attr.link_create.uprobe_multi.flags = BPF_F_UPROBE_MULTI_PATH_FD;
+	attr.link_create.uprobe_multi.path_fd = (uint32_t)spec->target_fd;
+	fd = syscall(__NR_bpf, BPF_LINK_CREATE, &attr, sizeof(attr));
+	if (fd >= 0)
+		return (int)fd;
+	first_err = errno;
+	if (first_err != EINVAL && first_err != EOPNOTSUPP)
+		return -first_err;
+
+	/*
+	 * Older uprobe.multi kernels accept only a pathname. Make sure the
+	 * current name still resolves to the inode whose build ID was checked
+	 * before falling back; the path-fd ABI remains the preferred path.
+	 */
+	if (stat(spec->uprobe_path, &path_stat) != 0)
+		return -errno;
+	if (path_stat.st_dev != spec->target_stat.st_dev ||
+	    path_stat.st_ino != spec->target_stat.st_ino)
+		return -ESTALE;
+	pr_warn("uprobe.multi path-fd attach unsupported; falling back to pathname for %s",
+		spec->uprobe_path);
+	memset(&attr, 0, sizeof(attr));
+	attr.link_create.prog_fd = (uint32_t)prog_fd;
+	attr.link_create.attach_type = BPF_TRACE_UPROBE_MULTI;
+	attr.link_create.uprobe_multi.path =
+		(uint64_t)(uintptr_t)spec->uprobe_path;
+	attr.link_create.uprobe_multi.offsets =
+		(uint64_t)(uintptr_t)spec->uprobe_offsets;
+	attr.link_create.uprobe_multi.cnt = spec->nr_uprobe_offsets;
+	fd = syscall(__NR_bpf, BPF_LINK_CREATE, &attr, sizeof(attr));
+	if (fd >= 0)
+		return (int)fd;
+	if (errno == EINVAL || errno == EOPNOTSUPP)
+		return -EOPNOTSUPP;
+	return -errno;
 }
 
 static int prog_attach_for_spec(int prog_fd,
@@ -1183,6 +1454,8 @@ static int prog_attach_for_spec(int prog_fd,
 						      BPF_MODIFY_RETURN);
 	case SHIRUDO_UPATCH_ATTACH_NETFILTER_IPV6_PRE_ROUTING:
 		return prog_attach_netfilter_ipv6_pre_routing(prog_fd);
+	case SHIRUDO_UPATCH_ATTACH_UPROBE_MULTI:
+		return prog_attach_uprobe_multi(prog_fd, spec);
 	case SHIRUDO_UPATCH_ATTACH_KPROBE:
 	case SHIRUDO_UPATCH_ATTACH_KRETPROBE:
 		perf_fd = perf_event_open_kprobe(spec->target, spec->offset,
@@ -1215,24 +1488,16 @@ static int mkdir_if_absent(const char *path, mode_t mode)
 	return -errno;
 }
 
-static int count_attach_progs(const void *metadata, uint32_t metadata_len,
-			      uint32_t nr_progs, uint32_t *out)
+static void count_attach_progs(const struct shirudo_prog_spec *specs,
+			       uint32_t nr_progs, uint32_t *out)
 {
 	uint32_t i, n = 0;
-	int rc;
 
 	for (i = 0; i < nr_progs; i++) {
-		struct shirudo_prog_spec spec;
-
-		rc = prog_spec_for_prog(metadata, metadata_len,
-					nr_progs, i, &spec);
-		if (rc)
-			return rc;
-		if (spec.role == SHIRUDO_UPATCH_PROG_ROLE_ATTACH)
+		if (specs[i].role == SHIRUDO_UPATCH_PROG_ROLE_ATTACH)
 			n++;
 	}
 	*out = n;
-	return 0;
 }
 
 /*
@@ -1242,8 +1507,8 @@ static int count_attach_progs(const void *metadata, uint32_t metadata_len,
  */
 static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 				size_t prog_desc_off, uint32_t nr_progs,
-				const char *name, const void *metadata,
-				uint32_t metadata_len)
+				const char *name,
+				const struct shirudo_prog_spec *specs)
 {
 	char dir[PATH_MAX], serializers_dir[PATH_MAX + 16];
 	char pin[PATH_MAX + 32];
@@ -1269,12 +1534,7 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 		pr_err("mkdir %s: %s", dir, strerror(-rc));
 		return rc;
 	}
-	rc = count_attach_progs(metadata, metadata_len, nr_progs,
-				&attach_count);
-	if (rc) {
-		pr_err("program metadata: %s", strerror(-rc));
-		return rc;
-	}
+	count_attach_progs(specs, nr_progs, &attach_count);
 	if (snprintf(serializers_dir, sizeof(serializers_dir),
 		     "%s/serializers", dir) >= (int)sizeof(serializers_dir))
 		return -ENAMETOOLONG;
@@ -1284,21 +1544,14 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 			(const void *)((const char *)cx + prog_desc_off +
 				       (size_t)i * sizeof(*pd));
 		int inner_fd = pd->prog_fd;
-		struct shirudo_prog_spec spec;
+		const struct shirudo_prog_spec *spec = &specs[i];
 		int link_fd;
 
 		if (inner_fd <= 0) {
 			pr_err("loader produced no fd for prog %u", i);
 			return -EINVAL;
 		}
-		rc = prog_spec_for_prog(metadata, metadata_len,
-					nr_progs, i, &spec);
-		if (rc) {
-			pr_err("program metadata for prog %u: %s",
-			       i, strerror(-rc));
-			return rc;
-		}
-		if (spec.role == SHIRUDO_UPATCH_PROG_ROLE_SERIALIZER) {
+		if (spec->role == SHIRUDO_UPATCH_PROG_ROLE_SERIALIZER) {
 			struct stat st;
 
 			rc = mkdir_if_absent(serializers_dir, 0700);
@@ -1308,7 +1561,7 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 				return rc;
 			}
 			if (snprintf(pin, sizeof(pin), "%s/%s",
-				     serializers_dir, spec.map) >=
+				     serializers_dir, spec->map) >=
 			    (int)sizeof(pin))
 				return -ENAMETOOLONG;
 			if (stat(pin, &st) == 0)
@@ -1329,15 +1582,20 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 				 attach_seen);
 		attach_seen++;
 
-		link_fd = prog_attach_for_spec(inner_fd, &spec);
+		link_fd = prog_attach_for_spec(inner_fd, spec);
 		if (link_fd < 0) {
-			if (spec.target[0])
+			if (spec->kind == SHIRUDO_UPATCH_ATTACH_UPROBE_MULTI)
+				pr_err("attach prog %u (%s %s:%s): %s", i,
+				       attach_kind_name(spec->kind),
+				       spec->uprobe_path, spec->target,
+				       strerror(-link_fd));
+			else if (spec->target[0])
 				pr_err("attach prog %u (%s %s): %s",
-				       i, attach_kind_name(spec.kind),
-				       spec.target, strerror(-link_fd));
+				       i, attach_kind_name(spec->kind),
+				       spec->target, strerror(-link_fd));
 			else
 				pr_err("attach prog %u (%s): %s",
-				       i, attach_kind_name(spec.kind),
+				       i, attach_kind_name(spec->kind),
 				       strerror(-link_fd));
 			return link_fd;
 		}
@@ -1349,7 +1607,7 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 		}
 		close(link_fd);
 		pr_info("attached + pinned prog %u (%s) -> %s",
-			i, attach_kind_name(spec.kind), pin);
+			i, attach_kind_name(spec->kind), pin);
 	}
 	return 0;
 }
@@ -1485,6 +1743,7 @@ static int upatch_apply(const char *path, bool verify_only,
 			struct shirudo_op_report *rep)
 {
 	struct shirudo_upatch u;
+	struct shirudo_prog_spec *prog_specs = NULL;
 	const struct bpf_insn *insns;
 	const void *sig, *data;
 	key_serial_t keyring;
@@ -1664,6 +1923,48 @@ static int upatch_apply(const char *path, bool verify_only,
 	}
 
 	/*
+	 * Program metadata is intentionally outside the loader signature, so
+	 * parse it strictly and bind every uprobe target to its recorded GNU
+	 * build ID before loading any BPF program. Open target fds stay live
+	 * through link creation to prevent pathname replacement races.
+	 */
+	if (!verify_only) {
+		rc = prog_specs_parse(shirudo_upatch_metadata(&u),
+				      u.hdr.metadata_len, u.hdr.nr_progs,
+				      &prog_specs);
+		if (rc) {
+			pr_err("upatch program metadata rejected: %s",
+			       strerror(-rc));
+			rep_fail(rep, "parse", "parser_rejected", -rc,
+				 "invalid program attach metadata");
+			rc = 1;
+			goto out;
+		}
+		rc = prepare_uprobe_targets(prog_specs, u.hdr.nr_progs);
+		if (rc) {
+			int e = -rc;
+			const char *cat;
+
+			if (e == ENOENT || e == ENOTDIR)
+				cat = "attach_target_missing";
+			else if (e == ESTALE)
+				cat = "binary_mismatch";
+			else if (e == EACCES || e == EPERM)
+				cat = "lsm_denied";
+			else if (e == ERANGE || e == EINVAL || e == E2BIG)
+				cat = "parser_rejected";
+			else
+				cat = "unknown";
+			pr_err("uprobe target verification failed (%s): %s",
+			       cat, strerror(e));
+			rep_fail(rep, "target_verify", cat, e,
+				 "uprobe target verification failed");
+			rc = 1;
+			goto out;
+		}
+	}
+
+	/*
 	 * 1. Create __loader.map bound to the loader's own digest
 	 *    (excl_prog_hash = SHA-256(insns)). The verifier enforces
 	 *    map->excl_prog_sha == prog->digest, so this frozen metadata map
@@ -1836,14 +2137,23 @@ static int upatch_apply(const char *path, bool verify_only,
 	 *    them.
 	 */
 	rc = attach_and_pin_progs(cx, prog_desc_off, u.hdr.nr_progs,
-				  upatch_name, shirudo_upatch_metadata(&u),
-				  u.hdr.metadata_len);
+				  upatch_name, prog_specs);
 	if (rc) {
 		int e = -rc;
+		const char *cat;
 
-		rep_fail(rep, "link_create",
-			 (e == EACCES || e == EPERM) ? "lsm_denied" : "unknown",
-			 e, "attach or pin failed");
+		if (e == ENOENT || e == ENOTDIR)
+			cat = "attach_target_missing";
+		else if (e == ESTALE)
+			cat = "binary_mismatch";
+		else if (e == EOPNOTSUPP)
+			cat = "kernel_abi_unsupported";
+		else if (e == EACCES || e == EPERM)
+			cat = "lsm_denied";
+		else
+			cat = "unknown";
+
+		rep_fail(rep, "link_create", cat, e, "attach or pin failed");
 		rc = 1;
 		goto out;
 	}
@@ -1870,6 +2180,7 @@ static int upatch_apply(const char *path, bool verify_only,
 		rep->loader_return = (int32_t)retval;
 	rc = 0;
 out:
+	prog_specs_free(prog_specs, u.hdr.nr_progs);
 	xfree(vlog, SHIRUDO_VERIFIER_LOG_MAX);
 	xfree(cx, ctx_sz);
 	if (prog_fd >= 0)

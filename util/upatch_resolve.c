@@ -21,6 +21,7 @@
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 
+#include "malloc.h"
 #include "paths.h"
 #include "upatch_resolve.h"
 
@@ -92,9 +93,44 @@ int shirudo_upatch_resolve_location(struct btf *vbtf, const char *name,
 		return link_fd;
 	len = sizeof(linfo);
 	rc = bpf_link_get_info_by_fd(link_fd, &linfo, &len);
-	close(link_fd);
-	if (rc != 0 || linfo.prog_id == 0)
+	if (rc != 0 || linfo.prog_id == 0) {
+		close(link_fd);
 		return rc ? -errno : -EINVAL;
+	}
+	if (linfo.type == BPF_LINK_TYPE_UPROBE_MULTI) {
+		struct bpf_link_info detail = {};
+		uint32_t count = linfo.uprobe_multi.count;
+		uint32_t path_size = linfo.uprobe_multi.path_size;
+		char *path;
+
+		if (!path_size || path_size > PATH_MAX) {
+			close(link_fd);
+			return -EINVAL;
+		}
+		path = xmalloc(path_size);
+		if (!path) {
+			close(link_fd);
+			return -ENOMEM;
+		}
+		detail.uprobe_multi.path = (uint64_t)(uintptr_t)path;
+		detail.uprobe_multi.path_size = path_size;
+		len = sizeof(detail);
+		rc = bpf_link_get_info_by_fd(link_fd, &detail, &len);
+		close(link_fd);
+		if (rc != 0) {
+			rc = -errno;
+			xfree(path, path_size);
+			return rc;
+		}
+		if (!memchr(path, '\0', path_size)) {
+			xfree(path, path_size);
+			return -EINVAL;
+		}
+		snprintf(out, cap, "uprobe.multi/%s (%u funcs)", path, count);
+		xfree(path, path_size);
+		return 0;
+	}
+	close(link_fd);
 	if (linfo.type == BPF_LINK_TYPE_TRACING)
 		attach_type = linfo.tracing.attach_type;
 	if (linfo.type == BPF_LINK_TYPE_NETFILTER &&

@@ -22,6 +22,7 @@
 #include <shirudo/upatch.h>
 
 #include "bpf/lib/shirudo_serializer.h"
+#include "elf_target.h"
 #include "loader.h"
 #include "log.h"
 #include "malloc.h"
@@ -179,6 +180,22 @@ static bool unsupported_kprobe_section(const char *sec)
 		strncmp(sec, "kretprobe.multi", 15) == 0);
 }
 
+static bool unsupported_uprobe_section(const char *sec)
+{
+	if (sec && sec[0] == '?')
+		sec++;
+	if (!sec)
+		return false;
+	if (strncmp(sec, "uprobe.multi/", 13) == 0 && sec[13])
+		return false;
+	return strcmp(sec, "uprobe") == 0 ||
+	       strncmp(sec, "uprobe/", 7) == 0 ||
+	       strncmp(sec, "uprobe.", 7) == 0 ||
+	       strcmp(sec, "uretprobe") == 0 ||
+	       strncmp(sec, "uretprobe/", 10) == 0 ||
+	       strncmp(sec, "uretprobe.", 10) == 0;
+}
+
 static bool unsupported_sk_skb_section(const char *sec)
 {
 	if (sec && sec[0] == '?')
@@ -239,6 +256,10 @@ static uint32_t attach_kind_from_section(const char *sec,
 		*target = sec + 10;
 		return SHIRUDO_UPATCH_ATTACH_KRETPROBE;
 	}
+	if (strncmp(sec, "uprobe.multi/", 13) == 0 && sec[13]) {
+		*target = sec + 13;
+		return SHIRUDO_UPATCH_ATTACH_UPROBE_MULTI;
+	}
 	if (strcmp(sec, "cgroup_skb/ingress") == 0)
 		return SHIRUDO_UPATCH_ATTACH_CGROUP_SKB_INGRESS;
 	if (strcmp(sec, "cgroup_skb/egress") == 0)
@@ -250,6 +271,35 @@ static uint32_t attach_kind_from_section(const char *sec,
 	if (strcmp(sec, "netfilter") == 0)
 		return SHIRUDO_UPATCH_ATTACH_NETFILTER_IPV6_PRE_ROUTING;
 	return SHIRUDO_UPATCH_ATTACH_RAW_TRACEPOINT;
+}
+
+static int split_uprobe_target(const char *src, char **path,
+			       uint32_t *path_len, char *pattern,
+			       size_t pattern_sz)
+{
+	const char *colon;
+	size_t plen, pat_len;
+
+	*path = NULL;
+	*path_len = 0;
+	if (!src || src[0] != '/')
+		return -EINVAL;
+	colon = strchr(src, ':');
+	if (!colon || colon == src || colon[1] == '\0')
+		return -EINVAL;
+	plen = (size_t)(colon - src);
+	pat_len = strlen(colon + 1);
+	if (plen >= SHIRUDO_UPATCH_UPROBE_PATH_MAX ||
+	    pat_len == 0 || pat_len >= pattern_sz)
+		return -ENAMETOOLONG;
+	if (strchr(colon + 1, ',') || strchr(colon + 1, '|'))
+		return -EOPNOTSUPP;
+	*path = xstrndup(src, plen);
+	if (!*path)
+		return -ENOMEM;
+	*path_len = (uint32_t)plen;
+	memcpy(pattern, colon + 1, pat_len + 1);
+	return 0;
 }
 
 static int split_probe_target(const char *src, char *target,
@@ -672,11 +722,18 @@ static int validate_serializer_output_map(struct bpf_object *obj)
 static int build_prog_metadata(struct bpf_object *obj, uint32_t nr_progs,
 			       void **out, uint32_t *out_len)
 {
+	struct build_uprobe_target {
+		uint32_t prog_idx;
+		char *path;
+		uint32_t path_len;
+		struct shirudo_elf_target elf;
+	};
 	struct shirudo_upatch_prog_metadata *md;
+	struct build_uprobe_target *uprobe_targets = NULL;
 	char (*seen_maps)[SHIRUDO_UPATCH_PROG_MAP_MAX] = NULL;
 	struct bpf_program *p;
-	size_t len;
-	uint32_t i = 0, n_seen = 0;
+	size_t len, base_len, md_alloc_len;
+	uint32_t i = 0, n_seen = 0, nr_uprobe_targets = 0;
 	bool has_serializer = false;
 	int err;
 
@@ -696,7 +753,9 @@ static int build_prog_metadata(struct bpf_object *obj, uint32_t nr_progs,
 	if (nr_progs >
 	    (UINT32_MAX - sizeof(*md)) / sizeof(md->progs[0]))
 		return -EOVERFLOW;
-	len = sizeof(*md) + (size_t)nr_progs * sizeof(md->progs[0]);
+	base_len = sizeof(*md) + (size_t)nr_progs * sizeof(md->progs[0]);
+	len = base_len;
+	md_alloc_len = base_len;
 	md = xmalloc(len);
 	if (!md)
 		return -ENOMEM;
@@ -706,6 +765,11 @@ static int build_prog_metadata(struct bpf_object *obj, uint32_t nr_progs,
 	md->nr_progs = htole32(nr_progs);
 	seen_maps = xcalloc(nr_progs, sizeof(*seen_maps));
 	if (!seen_maps) {
+		err = -ENOMEM;
+		goto err_free;
+	}
+	uprobe_targets = xcalloc(nr_progs, sizeof(*uprobe_targets));
+	if (!uprobe_targets) {
 		err = -ENOMEM;
 		goto err_free;
 	}
@@ -774,6 +838,12 @@ static int build_prog_metadata(struct bpf_object *obj, uint32_t nr_progs,
 			err = -EOPNOTSUPP;
 			goto err_free;
 		}
+		if (unsupported_uprobe_section(sec)) {
+			pr_err("unsupported uprobe section '%s'; use uprobe.multi//absolute/path:function_glob (entry probes only)",
+			       sec);
+			err = -EOPNOTSUPP;
+			goto err_free;
+		}
 		if (unsupported_sk_skb_section(sec)) {
 			pr_err("unsupported sk_skb section '%s'; supported network packet sections are cgroup_skb/ingress, cgroup_skb/egress, and netfilter",
 			       sec);
@@ -802,7 +872,36 @@ static int build_prog_metadata(struct bpf_object *obj, uint32_t nr_progs,
 		md->progs[i].role =
 			htole32(SHIRUDO_UPATCH_PROG_ROLE_ATTACH);
 		md->progs[i].kind = htole32(kind);
-		if (target) {
+		if (kind == SHIRUDO_UPATCH_ATTACH_UPROBE_MULTI) {
+			struct build_uprobe_target *ut =
+				&uprobe_targets[nr_uprobe_targets];
+
+			err = split_uprobe_target(target, &ut->path,
+						 &ut->path_len,
+						 md->progs[i].target,
+						 sizeof(md->progs[i].target));
+			if (err) {
+				if (err == -EOPNOTSUPP)
+					pr_err("invalid uprobe.multi section '%s': ',' and '|' alternation are unsupported; use one '*'/'?' glob", sec);
+				else
+					pr_err("invalid uprobe.multi section '%s'; expected uprobe.multi//absolute/path:function_glob", sec);
+				goto err_free;
+			}
+			ut->prog_idx = i;
+			nr_uprobe_targets++;
+			err = shirudo_elf_target_resolve(ut->path,
+						 md->progs[i].target, &ut->elf);
+			if (err) {
+				if (err == -ENOENT)
+					pr_err("uprobe.multi pattern '%s' matched no functions in %s (or the ELF has no GNU build ID)",
+					       md->progs[i].target, ut->path);
+				else
+					pr_err("cannot resolve uprobe.multi target %s:%s: %s",
+					       ut->path, md->progs[i].target,
+					       strerror(-err));
+				goto err_free;
+			}
+		} else if (target) {
 			err = split_probe_target(target, md->progs[i].target,
 						 sizeof(md->progs[i].target),
 						 &offset);
@@ -822,14 +921,86 @@ static int build_prog_metadata(struct bpf_object *obj, uint32_t nr_progs,
 		i++;
 	}
 
+	if (nr_uprobe_targets) {
+		struct shirudo_upatch_uprobe_targets targets = {};
+		unsigned char *cursor;
+		uint32_t j;
+
+		if (len > UINT32_MAX - sizeof(targets)) {
+			err = -EOVERFLOW;
+			goto err_free;
+		}
+		len += sizeof(targets);
+		for (j = 0; j < nr_uprobe_targets; j++) {
+			const struct build_uprobe_target *ut = &uprobe_targets[j];
+			size_t record_len = sizeof(struct shirudo_upatch_uprobe_target) +
+				ut->path_len + ut->elf.build_id_len +
+				(size_t)ut->elf.nr_offsets * sizeof(uint64_t);
+
+			if (record_len > UINT32_MAX || len > UINT32_MAX - record_len) {
+				err = -EOVERFLOW;
+				goto err_free;
+			}
+			len += record_len;
+		}
+		{
+			void *grown = xreallocarray(md, base_len, len, 1);
+
+			if (!grown) {
+				err = -ENOMEM;
+				goto err_free;
+			}
+			md = grown;
+			md_alloc_len = len;
+		}
+		targets.magic = htole32(SHIRUDO_UPATCH_UPROBE_TARGET_MAGIC);
+		targets.version = htole32(SHIRUDO_UPATCH_UPROBE_TARGET_VERSION);
+		targets.nr_targets = htole32(nr_uprobe_targets);
+		cursor = (unsigned char *)md + base_len;
+		memcpy(cursor, &targets, sizeof(targets));
+		cursor += sizeof(targets);
+		for (j = 0; j < nr_uprobe_targets; j++) {
+			const struct build_uprobe_target *ut = &uprobe_targets[j];
+			struct shirudo_upatch_uprobe_target record = {};
+			uint32_t k;
+
+			record.prog_idx = htole32(ut->prog_idx);
+			record.path_len = htole32(ut->path_len);
+			record.build_id_len = htole32(ut->elf.build_id_len);
+			record.nr_offsets = htole32(ut->elf.nr_offsets);
+			memcpy(cursor, &record, sizeof(record));
+			cursor += sizeof(record);
+			memcpy(cursor, ut->path, ut->path_len);
+			cursor += ut->path_len;
+			memcpy(cursor, ut->elf.build_id, ut->elf.build_id_len);
+			cursor += ut->elf.build_id_len;
+			for (k = 0; k < ut->elf.nr_offsets; k++) {
+				uint64_t offset = htole64(ut->elf.offsets[k]);
+
+				memcpy(cursor, &offset, sizeof(offset));
+				cursor += sizeof(offset);
+			}
+		}
+	}
+
 	*out = md;
 	*out_len = (uint32_t)len;
 	xfree(seen_maps, (size_t)nr_progs * sizeof(*seen_maps));
+	for (i = 0; i < nr_uprobe_targets; i++) {
+		xstrfree(uprobe_targets[i].path);
+		shirudo_elf_target_free(&uprobe_targets[i].elf);
+	}
+	xfree(uprobe_targets, (size_t)nr_progs * sizeof(*uprobe_targets));
 	return 0;
 
 err_free:
 	xfree(seen_maps, (size_t)nr_progs * sizeof(*seen_maps));
-	xfree(md, len);
+	for (i = 0; i < nr_uprobe_targets; i++) {
+		xstrfree(uprobe_targets[i].path);
+		shirudo_elf_target_free(&uprobe_targets[i].elf);
+	}
+	xfree(uprobe_targets, (size_t)nr_progs * sizeof(*uprobe_targets));
+	xfree(md, md_alloc_len);
 	return err;
 }
 

@@ -7,6 +7,7 @@
 
 #include <endian.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "upatch.h"
@@ -85,15 +86,77 @@ static int expect_serializer(const struct shirudo_upatch *u)
 	return 0;
 }
 
+static int expect_uprobe_multi(const struct shirudo_upatch *u,
+			       const char *path, const char *pattern,
+			       uint32_t expected_offsets)
+{
+	const struct shirudo_upatch_prog_metadata *md;
+	const struct shirudo_upatch_prog_entry *prog;
+	const struct shirudo_upatch_uprobe_targets *targets;
+	struct shirudo_upatch_uprobe_target record;
+	const unsigned char *cursor, *end;
+	uint32_t path_len, build_id_len, nr_offsets, i;
+	uint64_t previous = 0;
+
+	if (u->hdr.nr_progs != 1)
+		return fail("unexpected metadata prog count");
+	md = shirudo_upatch_metadata(u);
+	if (!md || u->hdr.metadata_len < sizeof(*md) + sizeof(*prog) +
+	    sizeof(*targets) + sizeof(record))
+		return fail("missing uprobe metadata");
+	if (le32toh(md->magic) != SHIRUDO_UPATCH_PROG_MAGIC ||
+	    le32toh(md->version) != SHIRUDO_UPATCH_PROG_VERSION ||
+	    le32toh(md->nr_progs) != 1)
+		return fail("unexpected metadata header");
+	prog = &md->progs[0];
+	if (le32toh(prog->role) != SHIRUDO_UPATCH_PROG_ROLE_ATTACH ||
+	    le32toh(prog->kind) != SHIRUDO_UPATCH_ATTACH_UPROBE_MULTI ||
+	    le64toh(prog->offset) != 0 || strcmp(prog->target, pattern) != 0)
+		return fail("uprobe program entry mismatch");
+	cursor = (const unsigned char *)md + sizeof(*md) + sizeof(*prog);
+	end = (const unsigned char *)md + u->hdr.metadata_len;
+	targets = (const void *)cursor;
+	if (le32toh(targets->magic) != SHIRUDO_UPATCH_UPROBE_TARGET_MAGIC ||
+	    le32toh(targets->version) != SHIRUDO_UPATCH_UPROBE_TARGET_VERSION ||
+	    le32toh(targets->nr_targets) != 1 || targets->reserved)
+		return fail("uprobe target header mismatch");
+	cursor += sizeof(*targets);
+	memcpy(&record, cursor, sizeof(record));
+	cursor += sizeof(record);
+	path_len = le32toh(record.path_len);
+	build_id_len = le32toh(record.build_id_len);
+	nr_offsets = le32toh(record.nr_offsets);
+	if (le32toh(record.prog_idx) != 0 || path_len != strlen(path) ||
+	    !build_id_len || build_id_len > SHIRUDO_UPATCH_BUILD_ID_MAX ||
+	    nr_offsets != expected_offsets)
+		return fail("uprobe target record mismatch");
+	if ((size_t)(end - cursor) != (size_t)path_len + build_id_len +
+	    (size_t)nr_offsets * sizeof(uint64_t) ||
+	    memcmp(cursor, path, path_len) != 0)
+		return fail("uprobe path or metadata length mismatch");
+	cursor += path_len + build_id_len;
+	for (i = 0; i < nr_offsets; i++) {
+		uint64_t offset;
+
+		memcpy(&offset, cursor, sizeof(offset));
+		cursor += sizeof(offset);
+		offset = le64toh(offset);
+		if (i && offset <= previous)
+			return fail("uprobe offsets are not sorted and unique");
+		previous = offset;
+	}
+	return cursor == end ? 0 : fail("trailing uprobe metadata");
+}
+
 int main(int argc, char **argv)
 {
 	struct shirudo_upatch u;
 	const char *mode = "serializer";
 	int rc;
 
-	if (argc != 2 && argc != 3)
-		return fail("usage: test-upatch-prog-metadata <file.upatch> [mode]");
-	if (argc == 3)
+	if (argc != 2 && argc != 3 && argc != 6)
+		return fail("usage: test-upatch-prog-metadata <file.upatch> [mode [path pattern count]]");
+	if (argc >= 3)
 		mode = argv[2];
 
 	rc = shirudo_upatch_open(argv[1], &u);
@@ -120,6 +183,16 @@ int main(int argc, char **argv)
 		rc = expect_attach(&u,
 			SHIRUDO_UPATCH_ATTACH_NETFILTER_IPV6_PRE_ROUTING,
 			NULL, 0);
+	else if (strcmp(mode, "uprobe-multi") == 0 && argc == 6) {
+		char *end = NULL;
+		unsigned long count = strtoul(argv[5], &end, 10);
+
+		if (!end || *end || count > UINT32_MAX)
+			rc = fail("invalid expected uprobe offset count");
+		else
+			rc = expect_uprobe_multi(&u, argv[3], argv[4],
+						 (uint32_t)count);
+	}
 	else
 		rc = fail("unknown metadata check mode");
 

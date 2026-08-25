@@ -164,7 +164,7 @@ signing ``loader_insns || data``. The final 16 bytes of ``data`` are:
 offset      size  field                  meaning
 ==========  ====  =====================  ====================================
 +0          4     magic                  ``0x52544344`` (``"DCTR"`` LE)
-+4          4     version                ``1``
++4          4     version                ``2`` (``1`` remains readable)
 +8          4     decoder_off            offset from the start of ``data``
 +12         4     decoder_len            decoder blob length
 ==========  ====  =====================  ====================================
@@ -207,11 +207,36 @@ offset      size  field                  meaning
                                          ``3`` cgroup_skb ingress,
                                          ``4`` cgroup_skb egress,
                                          ``5`` fmod_ret,
-                                         ``6`` netfilter IPv6 pre-routing
-+8          8     offset                 kprobe offset, zero for kretprobe
-+16         128   target                 NUL-terminated kprobe symbol name
+                                         ``6`` netfilter IPv6 pre-routing,
+                                         ``7`` uprobe.multi entry probe
++8          8     offset                 kprobe offset; otherwise zero
++16         128   target                 NUL-terminated kprobe symbol or
+                                         uprobe function glob
 +144        16    map                    NUL-terminated serializer target map
 ==========  ====  =====================  ====================================
+
+Version 1 ends after the fixed program entries and cannot contain attach
+kind 7. Version 1 ends there when it has no uprobe programs. If any
+entry has attach kind 7, version 2 appends one ``UPUT`` target block:
+
+==========  ====  =====================  ====================================
+offset      size  field                  meaning
+==========  ====  =====================  ====================================
++0          4     magic                  ``0x54555055`` (``"UPUT"`` LE)
++4          4     version                ``1``
++8          4     nr_targets             number of variable target records
++12         4     reserved               zero
++16         ...   targets                one record per uprobe program
+==========  ====  =====================  ====================================
+
+Each target record begins with four little-endian ``u32`` values:
+``prog_idx``, ``path_len``, ``build_id_len``, and ``nr_offsets``. They are
+followed immediately, without padding, by ``path_len`` path bytes (no NUL),
+``build_id_len`` raw GNU build-ID bytes, and ``nr_offsets`` little-endian
+``u64`` ELF file offsets. Paths are absolute and shorter than 4096 bytes;
+build IDs are 1--64 bytes; offset arrays are non-empty, sorted, unique, and
+limited to 1,048,576 entries. The target count must exactly equal the number
+of kind-7 program entries, with each program index appearing once.
 
 Attach metadata is advisory in the container integrity model because
 metadata is not CMS-signed in v1. The loaded program bytes remain
@@ -229,6 +254,24 @@ before the hooked function body runs. Kprobe return override uses a
 normal ``kprobe/<symbol>`` section plus the program's
 ``bpf_override_return()`` helper call; the attach metadata remains
 ``kprobe``.
+
+Uprobe authoring uses the entry-only section form
+``SEC("uprobe.multi//absolute/path:function_glob")``. The function glob has
+libbpf's standard semantics: ``*`` matches any sequence and ``?`` matches one
+character. For example, ``*Func`` can select both ``fooFunc`` and ``barFunc``
+in one ELF. Comma and ``|`` alternation, return probes, and session probes are
+not supported. At build time Shirudo resolves the glob against ``STT_FUNC``
+symbols, converts matches to ELF file offsets, sorts and de-duplicates them,
+and records the target's GNU build ID. A zero-match glob or missing build ID
+is a build error.
+
+Before any BPF load, the target opens the recorded ELF, verifies that its GNU
+build ID is unchanged, and keeps the file descriptor open through link
+creation. It creates a system-wide ``BPF_TRACE_UPROBE_MULTI`` entry link with
+``BPF_F_UPROBE_MULTI_PATH_FD``. If an older kernel rejects that flag with
+``EINVAL`` or ``EOPNOTSUPP``, Shirudo verifies that the pathname still names
+the checked inode and retries with the pathname ABI. Status renders such a
+link as ``uprobe.multi/<path> (<count> funcs)``.
 
 extras (embedded C source)
 --------------------------
