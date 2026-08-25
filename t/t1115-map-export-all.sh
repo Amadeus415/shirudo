@@ -20,6 +20,14 @@ PIN="/var/lib/shirudo/bpffs/upatches/$NAME/link"
 PAYLOAD=""
 SERVER=""
 WORK=$(mktemp -d)
+CONFIG=/etc/shirudo/shirudo.conf
+CONFIG_BACKUP=$WORK/shirudo.conf.backup
+CONFIG_EXISTED=0
+
+if [ -e "$CONFIG" ]; then
+	cp "$CONFIG" "$CONFIG_BACKUP"
+	CONFIG_EXISTED=1
+fi
 
 restore() {
 	if [ -n "$SERVER" ]; then
@@ -33,6 +41,11 @@ restore() {
 				--no-precheck >/dev/null 2>&1
 	fi
 	rm -f "/var/lib/shirudo/upatches/$NAME.upatch"
+	if [ "$CONFIG_EXISTED" -eq 1 ]; then
+		cp "$CONFIG_BACKUP" "$CONFIG"
+	else
+		rm -f "$CONFIG"
+	fi
 	rm -rf "$WORK"
 }
 trap restore EXIT
@@ -99,16 +112,21 @@ import sys
 port_file, meta_file = sys.argv[1:3]
 request_goal = int(sys.argv[3])
 attempts = 0
+tenant_ids = []
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_POST(self):
-        global attempts
+        global attempts, tenant_ids
         attempts += 1
+        tenant_ids.append(self.headers.get("X-Tenant-ID", ""))
         self.rfile.read(int(self.headers.get("Content-Length", "0")))
-        pathlib.Path(meta_file).write_text(json.dumps({"attempts": attempts}))
+        pathlib.Path(meta_file).write_text(json.dumps({
+            "attempts": attempts,
+            "tenant_ids": tenant_ids,
+        }))
         response = b"{}"
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -130,7 +148,7 @@ while not server.done:
 PY
 	rm -f "$WORK/otel.port" "$WORK/otel.meta";
 	python3 "$WORK/otel-multi.py" "$WORK/otel.port" \
-		"$WORK/otel.meta" 2 &
+		"$WORK/otel.meta" 4 &
 	SERVER=$!;
 	i=0;
 	while test ! -s "$WORK/otel.port" && test $i -lt 50
@@ -140,9 +158,18 @@ PY
 	done &&
 	test -s "$WORK/otel.port" &&
 	port=$(cat "$WORK/otel.port") &&
+	mkdir -p "$(dirname "$CONFIG")" &&
+	printf "%s\n" "map_export.tenant_id = tenant-config-0000" \
+		>"$CONFIG" &&
 	command_rc=0 &&
 	"$SHIRUDO_BIN" upatch map --all --otel \
 		--otel-endpoint="http://127.0.0.1:$port/base" || command_rc=$?;
+	if test "$command_rc" -eq 0
+	then
+		"$SHIRUDO_BIN" upatch map --all --otel \
+			--tenant-id=tenant-uuid-1234 \
+			--otel-endpoint="http://127.0.0.1:$port/base" || command_rc=$?
+	fi;
 	kill "$SERVER" >/dev/null 2>&1 || true
 	wait "$SERVER" 2>/dev/null || true
 	SERVER=""
@@ -152,7 +179,10 @@ import json
 import sys
 
 meta = json.load(open(sys.argv[1], encoding="utf-8"))
-assert meta["attempts"] == 2, meta
+assert meta["attempts"] == 4, meta
+assert meta["tenant_ids"] == (
+    ["tenant-config-0000"] * 2 + ["tenant-uuid-1234"] * 2
+), meta
 PY
 '
 

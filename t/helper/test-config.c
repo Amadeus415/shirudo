@@ -48,6 +48,7 @@ static int check_defaults(const char *path)
 		return 1;
 	return !cfg.map_export_valid || cfg.map_export_json_path[0] ||
 	       cfg.map_export_otel_mode != SHIRUDO_MAP_EXPORT_OTEL_OFF ||
+	       cfg.map_export_tenant_id[0] ||
 	       cfg.map_export_otel_retries != 3 ||
 	       cfg.map_export_show_full ||
 	       cfg.map_export_metric_kind != SHIRUDO_MAP_EXPORT_METRIC_COUNTER ||
@@ -60,6 +61,7 @@ static int check_valid(const char *path)
 		"map_export.json_path = /var/log/shirudo/maps.ndjson\n"
 		"map_export.otel_mode = s3\n"
 		"map_export.otel_endpoint = https://collector.example:4318\n"
+		"map_export.tenant_id = tenant-uuid-1234\n"
 		"map_export.otel_insecure = true\n"
 		"map_export.otel_retries = 7\n"
 		"map_export.s3_uri = s3://bucket/prefix\n"
@@ -78,6 +80,7 @@ static int check_valid(const char *path)
 	       cfg.map_export_otel_mode != SHIRUDO_MAP_EXPORT_OTEL_S3 ||
 	       strcmp(cfg.map_export_otel_endpoint,
 		      "https://collector.example:4318") != 0 ||
+	       strcmp(cfg.map_export_tenant_id, "tenant-uuid-1234") != 0 ||
 	       !cfg.map_export_otel_insecure ||
 	       cfg.map_export_otel_retries != 7 ||
 	       strcmp(cfg.map_export_s3_uri, "s3://bucket/prefix") != 0 ||
@@ -110,6 +113,13 @@ int main(void)
 	failed += check_invalid(path, "map_export.json_path = relative.json\n");
 	failed += check_invalid(path, "map_export.otel_retries = 11\n");
 	failed += check_invalid(path, "map_export.otel_insecure = yes\n");
+	failed += check_invalid(path, "map_export.tenant_id = tenant uuid\n");
+	failed += check_invalid(path, "map_export.tenant_id = tenant/id\n");
+	failed += check_invalid(path,
+		"map_export.tenant_id = "
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		"a\n");
 	failed += check_invalid(path, "map_export.otel_mode = s3\n");
 	failed += check_invalid(path, "map_export.unknown = value\n");
 	unlink(path);

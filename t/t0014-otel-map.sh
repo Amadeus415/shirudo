@@ -18,12 +18,19 @@ test_expect_success 'OTLP CLI options reject invalid combinations early' '
 	! "$S" upatch map --all unexpected >/dev/null 2>&1 &&
 	! "$S" upatch map --all --otel --metric-name=shared \
 		>/dev/null 2>&1 &&
+	! "$S" upatch map --tenant-id=tenant-uuid-1234 \
+		>/dev/null 2>&1 &&
+	! "$S" upatch map --otel=log --tenant-id="bad tenant" \
+		>/dev/null 2>&1 &&
+	! "$S" upatch map --otel=log --tenant-id=one --tenant-id=two \
+		>/dev/null 2>&1 &&
 	! "$S" upatch map --emit=otel >/dev/null 2>&1
 '
 
 test_expect_success 'explicit OTEL modes and JSON combination reach map read' '
 	"$S" upatch map missing values \
 		--json=combined.ndjson --otel=log \
+		--tenant-id=tenant-uuid-1234 \
 		--otel-endpoint=http://127.0.0.1:4318 >/dev/null 2>&1;
 	test $? -eq 1 && test ! -e combined.ndjson &&
 	"$S" upatch map missing values --otel=s3 \
@@ -139,6 +146,10 @@ test_expect_success '--otel=s3 validates credentials, destinations, and complete
 	"$H" s3-validation
 '
 
+test_expect_success 'tenant IDs are validated after OTEL header decoding' '
+	"$H" tenant-validation
+'
+
 test_expect_success 'OTLP HTTP sends JSON, auth headers, gzip, and retries' '
 	rm -f otel.port otel.body otel.meta;
 	python3 helper/otel-mock.py retry otel.port otel.body otel.meta &
@@ -205,6 +216,7 @@ test_expect_success '--otel=s3 uploads gzip JSON then emits a small reference ev
 	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=secret \
 	AWS_SESSION_TOKEN=session AWS_REGION=us-east-1 \
 	OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="http://127.0.0.1:$port/v1/logs" \
+	OTEL_EXPORTER_OTLP_LOGS_HEADERS="X-Tenant-ID=ignored-env-tenant" \
 		"$H" send-s3 "http://127.0.0.1:$port" 0 &&
 	wait $server &&
 	python3 -c '\''
@@ -223,7 +235,8 @@ assert put["if_none_match"] == "*" and put["cache_control"] == "immutable"
 assert put["content_sha256"] == digest
 assert put["checksum_sha256"] == base64.b64encode(hashlib.sha256(raw).digest()).decode()
 assert put["security_token"] == "session"
-assert post == {"method":"POST","path":"/v1/logs","content_encoding":""}
+assert put["tenant_id"] == ""
+assert post == {"method":"POST","path":"/v1/logs","content_encoding":"","tenant_id":"tenant-uuid-1234"}
 log=json.load(open("s3.log"))
 record=log["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0]
 assert record["eventName"] == "shirudo.bpf.map.snapshot.reference"
@@ -244,6 +257,7 @@ test_expect_success '--otel=s3 streams snapshots larger than the OTLP JSON ceili
 	port=$(cat s3.port) &&
 	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=secret AWS_REGION=us-east-1 \
 	OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="http://127.0.0.1:$port/v1/logs" \
+	OTEL_EXPORTER_OTLP_LOGS_HEADERS="X-Tenant-ID=tenant-env-5678" \
 		"$H" send-s3-large "http://127.0.0.1:$port" 0 &&
 	wait $server &&
 	python3 -c '\''
@@ -253,6 +267,8 @@ assert len(body) > 8*1024*1024
 d=json.loads(body)
 assert d["data"]["serialized"] is True
 assert d["data"]["serialized_pages"] == 9
+meta=json.load(open("s3.meta")); put,post=meta["requests"]
+assert put["tenant_id"] == "" and post["tenant_id"] == "tenant-env-5678"
 assert len(open("s3.log","rb").read()) < 16384
 '\''
 '

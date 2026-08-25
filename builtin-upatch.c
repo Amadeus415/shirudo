@@ -197,6 +197,7 @@ static const struct shirudo_help_item upatch_map_options[] = {
 	{ "--show-full",  "lift the per-map 256-entry truncation cap" },
 	{ "--otel[=log|metric|s3]", "export through OTLP; auto-select signal by default" },
 	{ "--otel-endpoint=<url>", "OTLP base URL (signal path is appended)" },
+	{ "--tenant-id=<id>", "add X-Tenant-ID to OTLP requests" },
 	{ "--otel-insecure", "allow cleartext remote OTLP or disable HTTPS verification" },
 	{ "--otel-retries=<0-10>", "OTLP retries after the first attempt (default: 3)" },
 	{ "--s3-uri=<uri>", "S3 destination for --otel=s3" },
@@ -2986,6 +2987,15 @@ static int cmd_upatch_map(int argc, const char **argv)
 				return 2;
 			}
 			otel_opts.endpoint = a + 16;
+		} else if (strncmp(a, "--tenant-id=", 12) == 0) {
+			if (otel_opts.tenant_id ||
+			    !shirudo_tenant_id_valid(a + 12)) {
+				fprintf(stderr, "upatch map: invalid or duplicate "
+					"--tenant-id; expected 1..128 characters using "
+					"A-Z, a-z, 0-9, '.', '_', or '-'\n");
+				return 2;
+			}
+			otel_opts.tenant_id = a + 12;
 		} else if (strcmp(a, "--otel-insecure") == 0) {
 			if (insecure_set) {
 				fprintf(stderr, "upatch map: duplicate --otel-insecure\n");
@@ -3081,6 +3091,10 @@ static int cmd_upatch_map(int argc, const char **argv)
 			    export_cfg.map_export_otel_endpoint[0])
 				otel_opts.endpoint =
 					export_cfg.map_export_otel_endpoint;
+			if (!otel_opts.tenant_id &&
+			    export_cfg.map_export_tenant_id[0])
+				otel_opts.tenant_id =
+					export_cfg.map_export_tenant_id;
 			if (!insecure_set)
 				otel_opts.allow_insecure =
 					export_cfg.map_export_otel_insecure;
@@ -3115,7 +3129,8 @@ static int cmd_upatch_map(int argc, const char **argv)
 			otel_opts.metric_name || otel_opts.metric_unit ||
 			otel_opts.metric_description;
 
-		if ((otel_opts.endpoint || insecure_set || retries_set ||
+		if ((otel_opts.endpoint || otel_opts.tenant_id || insecure_set ||
+		     retries_set ||
 		     otel_opts.s3_uri || metric_opts) && !otel) {
 			fprintf(stderr, "upatch map: OTLP options require --otel\n");
 			return 2;

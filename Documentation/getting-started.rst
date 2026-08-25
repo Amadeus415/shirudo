@@ -635,10 +635,15 @@ Configure JSON, OTEL, or both in ``/etc/shirudo/shirudo.conf``. For example::
     map_export.json_path = /var/log/shirudo/maps.ndjson
     map_export.otel_mode = auto
     map_export.otel_endpoint = https://collector.example:4318
+    map_export.tenant_id = tenant-uuid-1234
     map_export.otel_retries = 3
 
 Shirudo appends the JSON file but does not create its parent directory. An
 administrator can prepare it with ``install -d -m 0750 /var/log/shirudo``.
+When set, ``map_export.tenant_id`` adds ``X-Tenant-ID`` to every OTLP request.
+Tenant IDs are optional and must contain 1--128 ASCII letters, digits, dots,
+underscores, or hyphens. ``--tenant-id`` overrides the configured value for a
+one-off export.
 Optional standard OTEL and AWS exporter environment variables can be placed
 in ``/etc/shirudo/map-export.env`` without editing the unit. The operator
 package does not install either map-export unit.
@@ -710,6 +715,7 @@ choice:
     # Force gauge semantics and select an OTLP base URL.
     shirudo upatch map my-patch active \
       --otel=metric --otel-endpoint=https://collector.example \
+      --tenant-id=tenant-uuid-1234 \
       --metric-kind=gauge --metric-unit=1
 
 ``--otel-endpoint`` is always a base URL; Shirudo appends ``v1/logs`` or
@@ -727,6 +733,14 @@ tokens belong in
 ``OTEL_EXPORTER_OTLP_METRICS_HEADERS`` rather than the command line, for
 example ``Authorization=Bearer%20TOKEN``.  Shirudo never prints configured
 header values.
+
+``--tenant-id=<id>`` sends a canonical ``X-Tenant-ID`` HTTP header on OTLP
+log and metric requests. In ``--otel=s3`` mode it annotates the OTLP reference
+event, not the S3 object PUT. The standard ``OTEL_EXPORTER_OTLP_*_HEADERS``
+variables may also provide ``X-Tenant-ID``; a dedicated CLI or
+``map_export.tenant_id`` value takes precedence without duplicating the
+header. Tenant IDs identify routing ownership but are not authentication
+secrets.
 
 Metric export produces one point per map key and sums per-CPU replicas.
 It defaults to a monotonic cumulative counter; use ``--metric-kind=gauge`` for

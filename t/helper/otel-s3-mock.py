@@ -98,6 +98,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "if_none_match": self.headers.get("If-None-Match", ""),
             "cache_control": self.headers.get("Cache-Control", ""),
             "security_token": self.headers.get("x-amz-security-token", ""),
+            "tenant_id": self.headers.get("X-Tenant-ID", ""),
             "sigv4_valid": sigv4_valid(self),
         })
         save_meta()
@@ -120,6 +121,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "method": "POST",
             "path": self.path,
             "content_encoding": self.headers.get("Content-Encoding", ""),
+            "tenant_id": self.headers.get("X-Tenant-ID", ""),
         })
         save_meta()
         if mode == "otel-fail":

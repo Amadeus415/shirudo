@@ -11,6 +11,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "tenant_id.h"
+
 #define SHIRUDO_OWNER_AUTH_MAX	256
 #define SHIRUDO_TPM_TCTI_MAX	256
 #define SHIRUDO_MAP_EXPORT_PATH_MAX	4096
@@ -75,6 +77,7 @@ struct shirudo_config {
 	char		map_export_json_path[SHIRUDO_MAP_EXPORT_PATH_MAX];
 	enum shirudo_map_export_otel_mode map_export_otel_mode;
 	char		map_export_otel_endpoint[SHIRUDO_MAP_EXPORT_ENDPOINT_MAX];
+	char		map_export_tenant_id[SHIRUDO_TENANT_ID_MAX + 1];
 	bool		map_export_otel_insecure;
 	unsigned int	map_export_otel_retries;
 	char		map_export_s3_uri[SHIRUDO_MAP_EXPORT_URI_MAX];

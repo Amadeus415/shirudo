@@ -279,6 +279,7 @@ static int send_s3(const char *endpoint, unsigned int retries, bool large)
 {
 	struct shirudo_otel_opts opts = {
 		.s3_uri = "s3://test-bucket/prefix",
+		.tenant_id = large ? NULL : "tenant-uuid-1234",
 		.retries = retries,
 	};
 	struct fixture f;
@@ -300,6 +301,43 @@ static int send_s3(const char *endpoint, unsigned int retries, bool large)
 	large_serialized_destroy(&f);
 	fixture_destroy(&f);
 	return rc ? 1 : 0;
+}
+
+static int tenant_validation(void)
+{
+	struct shirudo_otel_opts opts = {
+		.endpoint = "http://127.0.0.1:1",
+		.retries = 0,
+	};
+	struct fixture f;
+	int rc, failed = 0;
+
+	if (fixture_init(&f, BPF_MAP_TYPE_PERCPU_ARRAY, false, true))
+		return 1;
+	opts.tenant_id = "bad tenant";
+	rc = shirudo_upatch_maps_otel_send(&f.view, SHIRUDO_OTEL_FORCE_LOG,
+					   &opts);
+	failed += rc != -EINVAL;
+	opts.tenant_id = NULL;
+	setenv("OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+	       "X-Tenant-ID=bad%20tenant", 1);
+	rc = shirudo_upatch_maps_otel_send(&f.view, SHIRUDO_OTEL_FORCE_LOG,
+					   &opts);
+	failed += rc != -EINVAL;
+	setenv("OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+	       "X-Tenant-ID=one,x-tenant-id=two", 1);
+	rc = shirudo_upatch_maps_otel_send(&f.view, SHIRUDO_OTEL_FORCE_LOG,
+					   &opts);
+	failed += rc != -EINVAL;
+	opts.tenant_id = "tenant-cli-1234";
+	setenv("OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+	       "X-Tenant-ID=ignored%20invalid", 1);
+	rc = shirudo_upatch_maps_otel_send(&f.view, SHIRUDO_OTEL_FORCE_LOG,
+					   &opts);
+	failed += rc == -EINVAL;
+	unsetenv("OTEL_EXPORTER_OTLP_LOGS_HEADERS");
+	fixture_destroy(&f);
+	return failed ? 1 : 0;
 }
 
 static int s3_validation(void)
@@ -419,6 +457,8 @@ int main(int argc, char **argv)
 			(unsigned int)strtoul(argv[3], NULL, 10), true);
 	if (strcmp(argv[1], "s3-validation") == 0)
 		return s3_validation();
+	if (strcmp(argv[1], "tenant-validation") == 0)
+		return tenant_validation();
 	if (strcmp(argv[1], "security") == 0)
 		return security_check();
 	return 2;

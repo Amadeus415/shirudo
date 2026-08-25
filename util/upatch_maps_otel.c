@@ -35,6 +35,7 @@
 #include "json.h"
 #include "malloc.h"
 #include "paths.h"
+#include "tenant_id.h"
 #include "upatch_decode.h"
 #include "upatch_maps_otel.h"
 
@@ -963,6 +964,7 @@ static int add_configured_headers(struct otel_state *st, const char *input)
 {
 	char *copy, *save = NULL, *pair;
 	size_t total = input ? strlen(input) : 0;
+	bool tenant_seen = false;
 	int rc = 0;
 
 	if (!input)
@@ -976,6 +978,7 @@ static int add_configured_headers(struct otel_state *st, const char *input)
 	     pair = strtok_r(NULL, ",", &save)) {
 		char *eq = strchr(pair, '=');
 		char *name, *value, *line;
+		bool tenant;
 		size_t n;
 
 		if (!eq) { rc = -EINVAL; break; }
@@ -986,9 +989,20 @@ static int add_configured_headers(struct otel_state *st, const char *input)
 		while (isspace((unsigned char)*value)) value++;
 		for (char *p = name + strlen(name); p > name &&
 		     isspace((unsigned char)p[-1]); p--) p[-1] = '\0';
+		tenant = strcasecmp(name, "x-tenant-id") == 0;
 		if (!name[0] || reserved_header(name) ||
 		    percent_decode(value) != 0 || strpbrk(name, "\r\n:") ||
 		    strpbrk(value, "\r\n")) { rc = -EINVAL; break; }
+		if (tenant) {
+			if (st->opts.tenant_id)
+				continue;
+			if (tenant_seen || !shirudo_tenant_id_valid(value)) {
+				rc = -EINVAL;
+				break;
+			}
+			tenant_seen = true;
+			name = "X-Tenant-ID";
+		}
 		n = strlen(name) + strlen(value) + 3;
 		line = xmalloc(n);
 		if (!line) { rc = -ENOMEM; break; }
@@ -1040,7 +1054,18 @@ static int configure_state(struct otel_state *st, const char *spec,
 		if (rc)
 			return rc;
 	}
-	return add_configured_headers(st, headers);
+	rc = add_configured_headers(st, headers);
+	if (rc || !st->opts.tenant_id)
+		return rc;
+	if (!shirudo_tenant_id_valid(st->opts.tenant_id))
+		return -EINVAL;
+	{
+		char line[sizeof("X-Tenant-ID: ") + SHIRUDO_TENANT_ID_MAX];
+
+		snprintf(line, sizeof(line), "X-Tenant-ID: %s",
+			 st->opts.tenant_id);
+		return append_header(st, line);
+	}
 }
 
 static size_t response_write(char *ptr, size_t size, size_t nmemb, void *ctx)

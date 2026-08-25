@@ -157,6 +157,7 @@ int cmd_config(int argc, const char **argv)
 	       map_export_otel_mode_name(cfg.map_export_otel_mode));
 	printf("map_export.otel_endpoint = %s\n",
 	       cfg.map_export_otel_endpoint);
+	printf("map_export.tenant_id = %s\n", cfg.map_export_tenant_id);
 	printf("map_export.otel_insecure = %s\n",
 	       cfg.map_export_otel_insecure ? "true" : "false");
 	printf("map_export.otel_retries = %u\n",

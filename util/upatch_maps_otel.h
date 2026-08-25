@@ -28,6 +28,7 @@ enum shirudo_otel_metric_kind {
 
 struct shirudo_otel_opts {
 	const char	*endpoint;
+	const char	*tenant_id;
 	const char	*s3_uri;
 	bool		allow_insecure;
 	unsigned int	retries;
