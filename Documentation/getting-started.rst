@@ -605,6 +605,22 @@ map data.  ``--json`` without a path is rejected.  On the detailed form,
 attempts both outputs, and exits nonzero if either fails without rolling back
 the output that succeeded.
 
+To export every pinned map in one pass, use ``--all``. Unlike the existing
+zero-positional inventory form, this reads each map and emits one detailed
+record per map::
+
+    shirudo upatch map --all --json=/var/log/shirudo/maps.ndjson
+
+With no explicit output options, ``--all`` reads the ``map_export.*`` keys
+shown by ``shirudo config``. An empty ``map_export.json_path`` together with
+``map_export.otel_mode = off`` is a successful no-op. JSON and OTEL may be
+enabled together; each map is read once and sent to both destinations.
+Batch export continues after a per-map failure and exits nonzero if any map
+or destination failed. Metric names remain derived from each upatch and map,
+so ``--metric-name`` is rejected with ``--all``. In automatic OTEL mode,
+metric settings apply only to maps classified as metrics; log maps ignore
+those settings.
+
 Decoding serialized maps with Lua
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

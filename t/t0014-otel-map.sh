@@ -15,6 +15,9 @@ test_expect_success 'OTLP CLI options reject invalid combinations early' '
 	! "$S" upatch map --otel=s3 --metric-kind=gauge >/dev/null 2>&1 &&
 	! "$S" upatch map --otel=s3 >/dev/null 2>&1 &&
 	! "$S" upatch map --otel=log --s3-uri=s3://bucket >/dev/null 2>&1 &&
+	! "$S" upatch map --all unexpected >/dev/null 2>&1 &&
+	! "$S" upatch map --all --otel --metric-name=shared \
+		>/dev/null 2>&1 &&
 	! "$S" upatch map --emit=otel >/dev/null 2>&1
 '
 
