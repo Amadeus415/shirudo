@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -125,7 +126,8 @@ void shirudo_ssh_close(struct shirudo_ssh_session *h)
 int shirudo_ssh_sftp_push(struct shirudo_ssh_session *h,
 			  const char *local, const char *remote)
 {
-	char *slash, dir[1024], chunk[65536];
+	const char *slash;
+	char dir[1024], chunk[65536];
 	sftp_session sftp;
 	sftp_file rf;
 	size_t got;
@@ -187,6 +189,7 @@ int shirudo_ssh_exec(struct shirudo_ssh_session *h, const char *cmd,
 {
 	size_t len = 0, cap = 0;
 	int rc, exit_status;
+	uint32_t exit_code;
 	char *buf = NULL;
 	ssh_channel ch;
 
@@ -238,7 +241,15 @@ int shirudo_ssh_exec(struct shirudo_ssh_session *h, const char *cmd,
 		len += (size_t)rc;
 	}
 
-	exit_status = ssh_channel_get_exit_status(ch);
+	if (ssh_channel_get_exit_state(ch, &exit_code, NULL, NULL) != SSH_OK ||
+	    exit_code > INT_MAX) {
+		ssh_channel_send_eof(ch);
+		ssh_channel_close(ch);
+		ssh_channel_free(ch);
+		xfree(buf, cap);
+		return -EIO;
+	}
+	exit_status = (int)exit_code;
 	ssh_channel_send_eof(ch);
 	ssh_channel_close(ch);
 	ssh_channel_free(ch);
