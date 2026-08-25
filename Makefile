@@ -38,9 +38,11 @@ systemdunitdir ?= /usr/lib/systemd/system
 export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdir \
        systemdunitdir
 
-.PHONY: all help shirudo-build install install-target \
-        install-operator bindeb-pkg bintar-pkg clean distclean check test \
-        examples config
+.PHONY: all help shirudo-build bpf-next test-vm test-vm-clean install \
+        install-target install-operator bindeb-pkg bintar-pkg clean \
+        distclean check test examples config
+
+KERNEL_PATCHES ?= $(if $(wildcard kernel/*.patch),kernel/,)
 
 INSTALLER_TARBALL    ?= shirudo.tar.gz
 INSTALLER_STAGE      ?= build/shirudo-installer
@@ -86,6 +88,8 @@ shirudo make targets (run from the repo root):
     make shirudo-build     build the operator-only artifact builder
                            (compile + sign .upatch; ships in the operator
                            package, never to a target)
+    make bpf-next          build the bpf-next kernel DEBs and raw bzImage
+                           (KERNEL_CONFIG=path overrides x86_64_defconfig)
     make clean             remove build artifacts
     make distclean         clean and drop the cached config.mk
 
@@ -97,6 +101,9 @@ shirudo make targets (run from the repo root):
                            additionally run the live integration suite
                            (needs root and a host where `shirudo init`
                            has attached the LSM)
+    make test-vm           boot the built bzImage with QEMU + swtpm and run
+                           SHIRUDO_INTEGRATION=1 make check in the guest
+    make test-vm-clean     remove cached rootfs and disposable VM state
 
   Install   (honors DESTDIR and prefix=/bindir=/libexecdir=/systemdunitdir=)
     make install           shirudo binary + bash completion (common)
@@ -134,6 +141,15 @@ help:
 
 shirudo-build: config
 	+$(Q)$(MAKE) -f Makefile.shirudo shirudo-build
+
+bpf-next:
+	$(Q)KERNEL_PATCHES='$(KERNEL_PATCHES)' contrib/build-kernel-deb.sh
+
+test-vm:
+	$(Q)contrib/test-vm.sh
+
+test-vm-clean:
+	$(Q)rm -rf build/test-vm
 
 # Build two target-installer tarballs (kernel-style `bin*-pkg`):
 #   shirudo.tar.gz         -- expects system libssh/libtss2/libcrypto on

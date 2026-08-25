@@ -2,8 +2,8 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * The generated signed loader reads Shirudo-private fields at the beginning
- * of struct bpf_map.  Stock kernels can expose BPF and the BPF LSM while still
+ * The signed loader requires map hashing, exclusive-map binding, and signed
+ * program metadata.  Stock kernels can expose BPF and the BPF LSM while still
  * lacking this contract, so reject those kernels before BPF_PROG_LOAD.
  */
 
@@ -22,7 +22,6 @@
 #include "kernel_abi.h"
 
 #define SHIRUDO_MAP_SHA_SIZE	32U
-#define SHIRUDO_MAP_EXCL_OFFSET	32U
 #define SHIRUDO_BTF_MAX_UNWRAP	32
 
 static int abi_fail(char *detail, size_t detail_sz, const char *fmt, ...)
@@ -80,14 +79,29 @@ static bool is_unsigned_int(const struct btf_type *t, uint32_t bytes)
 	       !(btf_int_encoding(t) & BTF_INT_SIGNED);
 }
 
+static bool is_signed_int(const struct btf_type *t, uint32_t bytes)
+{
+	return t && btf_is_int(t) && t->size == bytes &&
+	       btf_int_offset(t) == 0 && btf_int_bits(t) == bytes * 8 &&
+	       (btf_int_encoding(t) & BTF_INT_SIGNED);
+}
+
+static bool is_byte_int(const struct btf_type *t)
+{
+	return t && btf_is_int(t) && t->size == 1 &&
+	       btf_int_offset(t) == 0 && btf_int_bits(t) == 8;
+}
+
 int shirudo_kernel_abi_validate_btf(const struct btf *btf,
 				    char *detail, size_t detail_sz)
 {
-	const struct btf_member *sha, *excl;
-	const struct btf_type *map, *sha_type, *elem_type, *excl_type;
+	const struct btf_member *sha, *excl_prog_sha, *sig;
+	const struct btf_member *keyring_serial, *keyring_type, *verdict;
+	const struct btf_type *map, *aux, *sha_type, *elem_type;
+	const struct btf_type *excl_type, *sig_type, *member_type;
 	const struct btf_array *array;
-	uint32_t sha_idx, excl_idx;
-	int map_id;
+	uint32_t member_idx;
+	int map_id, aux_id;
 
 	if (detail && detail_sz)
 		detail[0] = '\0';
@@ -104,14 +118,13 @@ int shirudo_kernel_abi_validate_btf(const struct btf *btf,
 		return abi_fail(detail, detail_sz,
 				"kernel BTF cannot resolve struct bpf_map");
 
-	sha = find_member(btf, map, "sha", &sha_idx);
+	sha = find_member(btf, map, "sha", &member_idx);
 	if (!sha)
 		return abi_fail(detail, detail_sz,
 				"struct bpf_map.sha is missing; boot a Shirudo-patched kernel");
-	if (btf_member_bitfield_size(map, sha_idx) != 0 ||
-	    btf_member_bit_offset(map, sha_idx) != 0)
+	if (btf_member_bitfield_size(map, member_idx) != 0)
 		return abi_fail(detail, detail_sz,
-				"struct bpf_map.sha must be a non-bitfield at byte offset 0");
+				"struct bpf_map.sha must be a non-bitfield");
 	sha_type = unwrap_type(btf, sha->type);
 	if (!sha_type || !btf_is_array(sha_type))
 		return abi_fail(detail, detail_sz,
@@ -123,18 +136,55 @@ int shirudo_kernel_abi_validate_btf(const struct btf *btf,
 		return abi_fail(detail, detail_sz,
 				"struct bpf_map.sha must have type u8[32]");
 
-	excl = find_member(btf, map, "excl", &excl_idx);
-	if (!excl)
+	excl_prog_sha = find_member(btf, map, "excl_prog_sha", &member_idx);
+	if (!excl_prog_sha)
 		return abi_fail(detail, detail_sz,
-				"struct bpf_map.excl is missing; boot a Shirudo-patched kernel");
-	if (btf_member_bitfield_size(map, excl_idx) != 0 ||
-	    btf_member_bit_offset(map, excl_idx) != SHIRUDO_MAP_EXCL_OFFSET * 8)
+				"struct bpf_map.excl_prog_sha is missing; boot a Shirudo-patched kernel");
+	if (btf_member_bitfield_size(map, member_idx) != 0)
 		return abi_fail(detail, detail_sz,
-				"struct bpf_map.excl must be a non-bitfield at byte offset 32");
-	excl_type = unwrap_type(btf, excl->type);
-	if (!is_unsigned_int(excl_type, 4))
+				"struct bpf_map.excl_prog_sha must be a non-bitfield");
+	excl_type = unwrap_type(btf, excl_prog_sha->type);
+	if (!excl_type || !btf_is_ptr(excl_type))
 		return abi_fail(detail, detail_sz,
-				"struct bpf_map.excl must have type u32");
+				"struct bpf_map.excl_prog_sha must have pointer type");
+	elem_type = unwrap_type(btf, excl_type->type);
+	if (!is_byte_int(elem_type))
+		return abi_fail(detail, detail_sz,
+				"struct bpf_map.excl_prog_sha must point to a byte");
+
+	aux_id = btf__find_by_name_kind(btf, "bpf_prog_aux", BTF_KIND_STRUCT);
+	if (aux_id < 0)
+		return abi_fail(detail, detail_sz,
+				"kernel BTF has no struct bpf_prog_aux; boot a Shirudo-patched kernel");
+	aux = btf__type_by_id(btf, (uint32_t)aux_id);
+	if (!aux)
+		return abi_fail(detail, detail_sz,
+				"kernel BTF cannot resolve struct bpf_prog_aux");
+
+	sig = find_member(btf, aux, "sig", &member_idx);
+	if (!sig)
+		return abi_fail(detail, detail_sz,
+				"struct bpf_prog_aux.sig is missing; boot a Shirudo-patched kernel");
+	sig_type = unwrap_type(btf, sig->type);
+	if (!sig_type || !btf_is_struct(sig_type))
+		return abi_fail(detail, detail_sz,
+				"struct bpf_prog_aux.sig must have struct type");
+
+	keyring_serial = find_member(btf, sig_type, "keyring_serial", &member_idx);
+	member_type = keyring_serial ? unwrap_type(btf, keyring_serial->type) : NULL;
+	if (!keyring_serial || !is_signed_int(member_type, 4))
+		return abi_fail(detail, detail_sz,
+				"struct bpf_prog_aux.sig.keyring_serial must have type s32");
+	keyring_type = find_member(btf, sig_type, "keyring_type", &member_idx);
+	member_type = keyring_type ? unwrap_type(btf, keyring_type->type) : NULL;
+	if (!keyring_type || !is_unsigned_int(member_type, 1))
+		return abi_fail(detail, detail_sz,
+				"struct bpf_prog_aux.sig.keyring_type must have type u8");
+	verdict = find_member(btf, sig_type, "verdict", &member_idx);
+	member_type = verdict ? unwrap_type(btf, verdict->type) : NULL;
+	if (!verdict || !is_unsigned_int(member_type, 1))
+		return abi_fail(detail, detail_sz,
+				"struct bpf_prog_aux.sig.verdict must have type u8");
 
 	return 0;
 }

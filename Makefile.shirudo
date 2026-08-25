@@ -198,7 +198,7 @@ libbpf: $(LIBBPF_A)
 # and bpf_helper_defs.h; the .so is harmless byproduct.
 $(LIBBPF_A):
 	@printf '  LIBBPF\n'
-	$(Q)$(MAKE) -C $(LIBBPF_DIR)
+	$(Q)$(MAKE) -C $(LIBBPF_DIR) CC="$(CC)"
 
 BPFTOOL_DIR := third_party/bpf-next/tools/bpf/bpftool
 
@@ -206,7 +206,7 @@ bpftool: $(BPFTOOL)
 
 $(BPFTOOL):
 	@printf '  BPFTOOL\n'
-	$(Q)$(MAKE) -C $(BPFTOOL_DIR)
+	$(Q)$(MAKE) -C $(BPFTOOL_DIR) CC="$(CC)"
 
 # ----- phase 2: generated headers ---------------------------------
 
@@ -230,11 +230,10 @@ endif
 
 # Vendor the BPF-side libbpf headers into bpf/include/bpf/. The
 # generated bpf_helper_defs.h only exists after libbpf is built.
-$(BPF_HEADERS_OUT): bpf/include/bpf/%.h: \
-		    third_party/bpf-next/tools/lib/bpf/%.h | $(LIBBPF_A)
+$(BPF_HEADERS_OUT): bpf/include/bpf/%.h: $(LIBBPF_A)
 	@printf '  COPY    $@\n'
 	$(Q)mkdir -p $(dir $@)
-	$(Q)cp $< $@
+	$(Q)cp $(LIBBPF_DIR)/$*.h $@
 
 # BPF objects pull <bpf/...> headers from the in-tree vendor dir,
 # vmlinux.h from bpf/, and UAPI kernel headers from the submodule.

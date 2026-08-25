@@ -148,6 +148,40 @@ Cross-compile for an embedded target by setting ``CROSS_COMPILE`` and
 ``ARCH`` as you would for any kernel-style build. See PLAN.md
 "Build system" for details.
 
+Live integration tests in a vTPM VM
+-----------------------------------
+
+The live ``t11xx`` tests need a throwaway kernel with BPF LSM support
+and a TPM.  Build the repository's pinned bpf-next kernel first, then
+run the suite in a disposable QEMU/KVM guest backed by swtpm::
+
+    make bpf-next
+    make test-vm
+
+``make bpf-next`` writes both kernel DEBs and a directly bootable
+``artifacts/bpf-next-kernel-debs/bzImage``.  It uses
+``third_party/bpf-next`` and applies patches under ``kernel/``.
+``make test-vm`` verifies that image, boots an Ubuntu 26.04 cloud-image
+overlay with a fresh vTPM, runs measured ``shirudo init``, and then runs
+``SHIRUDO_INTEGRATION=1 make check``.  The host checkout is mounted
+read-only and all guest build writes stay in the disposable overlay.
+
+The VM target requires an x86_64 host with accessible ``/dev/kvm``,
+``qemu-system-x86_64``, ``qemu-img``, ``swtpm``, and
+``cloud-localds``.  It does not install host packages.  To use a kernel
+published elsewhere instead of the local artifact::
+
+    make test-vm \
+        TEST_VM_KERNEL_URL=https://example.invalid/bzImage \
+        TEST_VM_KERNEL_SHA256=<64-hex-digit-sha256>
+
+A local raw kernel can be selected with
+``TEST_VM_KERNEL=/path/to/bzImage``.  CPU count, memory, disk size, and
+timeout are configurable with ``TEST_VM_CPUS``, ``TEST_VM_MEMORY``,
+``TEST_VM_DISK_SIZE``, and ``TEST_VM_TIMEOUT``.  Failure logs are kept
+under ``build/test-vm/logs``; ``TEST_VM_KEEP=1`` also preserves the
+guest disk and TPM state, which contain the ephemeral signing key.
+
 4. Generate the signing key (operator machine, one time)
 =========================================================
 

@@ -1,4 +1,4 @@
-name: Build kernel deb package
+name: Build bpf-next kernel artifacts
 
 on:
   workflow_dispatch:
@@ -22,15 +22,37 @@ jobs:
           sudo rm -rf /opt/ghc /usr/local/lib/android /usr/share/dotnet || true
           sudo apt-get clean
 
-      - name: Build kernel debs
+      - name: Install kernel build dependencies
         run: |
-          if [ -d kernel ]; then
-            KERNEL_PATCHES=kernel/ contrib/build-kernel-deb.sh
-          else
-            contrib/build-kernel-deb.sh
-          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc \
+            bison \
+            build-essential \
+            ca-certificates \
+            cpio \
+            debhelper \
+            dpkg-dev \
+            dwarves \
+            fakeroot \
+            flex \
+            git \
+            kmod \
+            libdw-dev \
+            libelf-dev \
+            libncurses-dev \
+            libssl-dev \
+            openssl \
+            pahole \
+            python3 \
+            rsync \
+            xz-utils \
+            zstd
 
-      - name: Upload kernel deb bundle
+      - name: Build bpf-next kernel artifacts
+        run: make bpf-next
+
+      - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
         with:
           name: bpf-next-kernel-debs-amd64
@@ -38,3 +60,6 @@ jobs:
           path: |
             artifacts/bpf-next-kernel-debs.tar.gz
             artifacts/bpf-next-kernel-debs.tar.gz.sha256sum
+            artifacts/bpf-next-kernel-debs/bzImage
+            artifacts/bpf-next-kernel-debs/bzImage.sha256sum
+            artifacts/bpf-next-kernel-debs/bpf-next-kernel-build
