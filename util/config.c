@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "config.h"
+#include "json.h"
 #include "log.h"
 #include "paths.h"
 
@@ -66,6 +67,8 @@ static void config_defaults(struct shirudo_config *cfg)
 	cfg->nodes_module_loads_lines = 10;
 	cfg->map_export_valid = true;
 	cfg->map_export_otel_retries = 3;
+	cfg->map_export_log_record_max_bytes = SHIRUDO_MAP_EXPORT_LOG_RECORD_MAX_DEFAULT;
+	cfg->map_export_otlp_max_bytes = SHIRUDO_MAP_EXPORT_OTLP_MAX_DEFAULT;
 }
 
 static int hexval(char c)
@@ -260,6 +263,19 @@ int shirudo_config_load_path(struct shirudo_config *cfg, const char *path)
 				if (!set_string(cfg->map_export_s3_uri,
 						sizeof(cfg->map_export_s3_uri), val))
 					map_export_bad(cfg, key, val, "value too long");
+			} else if (strcmp(key, "map_export.log_record_max_bytes") == 0 ||
+				   strcmp(key, "map_export.otlp_max_bytes") == 0) {
+				unsigned long v;
+				char *end;
+
+				errno = 0;
+				v = strtoul(val, &end, 10);
+				if (errno || *end || v == 0 || v > SHIRUDO_JSON_MAX_BYTES)
+					map_export_bad(cfg, key, val, "expected 1..8388608 bytes");
+				else if (strcmp(key, "map_export.log_record_max_bytes") == 0)
+					cfg->map_export_log_record_max_bytes = (unsigned int)v;
+				else
+					cfg->map_export_otlp_max_bytes = (unsigned int)v;
 			} else {
 				if (strncmp(key, "map_export.", 11) == 0)
 					map_export_bad(cfg, key, val, "unknown key");
@@ -276,6 +292,9 @@ int shirudo_config_load_path(struct shirudo_config *cfg, const char *path)
 	if (cfg->map_export_s3_uri[0] && !cfg->map_export_otel_endpoint[0])
 		map_export_bad(cfg, "map_export.s3_uri", "",
 			       "requires map_export.otel_endpoint for its reference event");
+	if (cfg->map_export_log_record_max_bytes > cfg->map_export_otlp_max_bytes)
+		map_export_bad(cfg, "map_export.log_record_max_bytes", "",
+			       "must not exceed otlp_max_bytes");
 	return rc;
 }
 

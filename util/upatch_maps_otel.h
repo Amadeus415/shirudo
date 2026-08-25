@@ -32,6 +32,8 @@ struct shirudo_otel_opts {
 	const char	*s3_uri;
 	bool		allow_insecure;
 	unsigned int	retries;
+	unsigned int	log_record_max_bytes;
+	unsigned int	otlp_max_bytes;
 	enum shirudo_otel_metric_kind metric_kind;
 	bool		metric_kind_set;
 	const char	*metric_name;

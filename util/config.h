@@ -18,6 +18,8 @@
 #define SHIRUDO_MAP_EXPORT_PATH_MAX	4096
 #define SHIRUDO_MAP_EXPORT_ENDPOINT_MAX	2048
 #define SHIRUDO_MAP_EXPORT_URI_MAX	2048
+#define SHIRUDO_MAP_EXPORT_LOG_RECORD_MAX_DEFAULT	(1u * 1024u * 1024u)
+#define SHIRUDO_MAP_EXPORT_OTLP_MAX_DEFAULT		(4u * 1024u * 1024u)
 
 struct shirudo_config {
 	unsigned long	eventlog_max_bytes;	/* 0 = unlimited */
@@ -65,6 +67,8 @@ struct shirudo_config {
 	bool		map_export_otel_insecure;
 	unsigned int	map_export_otel_retries;
 	char		map_export_s3_uri[SHIRUDO_MAP_EXPORT_URI_MAX];
+	unsigned int	map_export_log_record_max_bytes;
+	unsigned int	map_export_otlp_max_bytes;
 };
 
 #define SHIRUDO_NODES_RECENT_MAX	100
