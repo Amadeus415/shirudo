@@ -91,15 +91,21 @@ struct shirudo_upatch_extras {
 #define SHIRUDO_UPATCH_DECODER_TRAILER_MAGIC 0x52544344u /* "DCTR" le */
 #define SHIRUDO_UPATCH_DECODER_VERSION	1u
 #define SHIRUDO_UPATCH_DECODER_LANG_LUA	1u
-#define SHIRUDO_UPATCH_DECODER_INPUT_SERIAL_V2 1u
+#define SHIRUDO_UPATCH_DECODER_INPUT_MAP_V1	1u
+
+enum shirudo_upatch_decoder_export_signal {
+	SHIRUDO_UPATCH_DECODER_EXPORT_LOG = 1,
+	SHIRUDO_UPATCH_DECODER_EXPORT_METRIC = 2,
+};
 
 struct shirudo_decoder_manifest {
 	uint32_t	magic;
 	uint16_t	version;
 	uint16_t	language;
 	uint16_t	api_version;
-	uint16_t	input_format;
-	uint16_t	_pad0;
+	uint16_t	input_format; /* SHIRUDO_UPATCH_DECODER_INPUT_MAP_V1 */
+	uint16_t	export_signal;
+	uint16_t	reserved;
 	char	upatch[64];
 	char	map[16];
 	char	source[64];
@@ -110,6 +116,7 @@ struct shirudo_upatch_decoder_entry {
 	uint32_t	language;
 	uint32_t	api_version;
 	uint32_t	input_format;
+	uint32_t	export_signal;
 	char	upatch[64];
 	char	map[16];
 	char	source[64];
@@ -139,14 +146,21 @@ struct shirudo_upatch_decoder_trailer {
  * Programs without a special attach kind use RAW_TRACEPOINT, preserving
  * the original attach_btf_id behavior.
  *
- * Metadata is not signature-covered in the v1 upatch format. The program
+ * Metadata is not signature-covered in the v1 container format. The program
  * bytes are still hash-locked by the signed loader; this blob is attach
  * policy for the target to validate before creating links.
  */
 #define SHIRUDO_UPATCH_ATTACH_TARGET_MAX	128u
 #define SHIRUDO_UPATCH_PROG_MAGIC	0x4d475055u	/* "UPGM" le */
-#define SHIRUDO_UPATCH_PROG_VERSION	1u
+#define SHIRUDO_UPATCH_PROG_VERSION_LEGACY	1u
+#define SHIRUDO_UPATCH_PROG_VERSION	2u
 #define SHIRUDO_UPATCH_PROG_MAP_MAX	16u		/* BPF_OBJ_NAME_LEN */
+#define SHIRUDO_UPATCH_UPROBE_TARGET_MAGIC	0x54555055u /* "UPUT" le */
+#define SHIRUDO_UPATCH_UPROBE_TARGET_VERSION	1u
+#define SHIRUDO_UPATCH_UPROBE_PATH_MAX	4096u
+#define SHIRUDO_UPATCH_BUILD_ID_MAX	64u
+#define SHIRUDO_UPATCH_UPROBE_OFFSETS_MAX	(1u << 20)
+
 #define SHIRUDO_UPATCH_UPROBE_TARGET_MAGIC	0x54555055u /* "UPUT" le */
 #define SHIRUDO_UPATCH_UPROBE_TARGET_VERSION	1u
 #define SHIRUDO_UPATCH_UPROBE_PATH_MAX	4096u

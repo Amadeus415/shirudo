@@ -37,3 +37,28 @@ the full rationale.
 
 Distribution packagers should put this in a separate `shirudo-build`
 package that depends on `shirudo`, `clang`, and `llvm`.
+
+## Uprobe multi attach points
+
+One upatch BPF program can attach to multiple entry points in one user-space
+ELF with:
+
+```c
+SEC("uprobe.multi//absolute/path/to/program:*Func")
+int probe(struct pt_regs *ctx)
+{
+	return 0;
+}
+```
+
+The portion after the colon is a standard libbpf glob: `*` matches any
+sequence and `?` matches one character. Thus `*Func` can match unrelated
+functions such as `fooFunc` and `barFunc`. Comma/`|` alternation is not
+supported; use a single glob that covers the desired names. Each section
+targets one absolute ELF path, entry probes only.
+
+`shirudo-build` resolves matching `STT_FUNC` symbols to sorted, unique ELF
+file offsets and records the ELF's GNU build ID in UPGM v2 metadata. The build
+fails if the path is not absolute, the glob is empty or longer than 127 bytes,
+no function matches, the ELF lacks a GNU build ID, or more than 1,048,576
+offsets match. The target verifies the build ID before loading any BPF state.

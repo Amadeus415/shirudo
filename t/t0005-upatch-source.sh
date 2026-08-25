@@ -71,7 +71,8 @@ const struct shirudo_decoder_manifest t0005_decoder SEC(".rodata") = {
 	.version = SHIRUDO_UPATCH_DECODER_VERSION,
 	.language = SHIRUDO_UPATCH_DECODER_LANG_LUA,
 	.api_version = 1,
-	.input_format = SHIRUDO_UPATCH_DECODER_INPUT_SERIAL_V2,
+	.input_format = SHIRUDO_UPATCH_DECODER_INPUT_MAP_V1,
+	.export_signal = SHIRUDO_UPATCH_DECODER_EXPORT_LOG,
 	.upatch = "t0005",
 	.map = "t0005_map",
 	.source = "decoders/t0005.lua",
@@ -122,7 +123,7 @@ assert isinstance(decoders, list), decoders
 assert len(decoders) == 1, decoders
 dec = decoders[0]
 assert dec[\"language\"] == \"lua\", dec
-assert dec[\"input_format\"] == \"shirudo.serialized-pages.v2\", dec
+assert dec[\"input_format\"] == \"shirudo.map.v1\", dec
 assert dec[\"upatch\"] == \"t0005\", dec
 assert dec[\"map\"] == \"t0005_map\", dec
 assert dec[\"source_file\"] == \"decoders/t0005.lua\", dec

@@ -9,11 +9,12 @@
 #define SHIRUDO_UTIL_UPATCH_DECODE_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 struct shirudo_map_view;
 
 /*
- * Try to decode a serialized map view with a signed decoder embedded in
+ * Try to decode a complete map view with a signed decoder embedded in
  * /var/lib/shirudo/upatches/<upatch>.upatch.
  *
  * On success, *out receives an xmalloc-owned JSON document and *out_len
@@ -21,7 +22,7 @@ struct shirudo_map_view;
  *
  * Returns:
  *   0        decoded
- *  -ENOENT  no usable decoder; caller may fall back to raw map JSON
+ *  -ENOENT  no usable decoder; export callers must fail the map
  *  -errno   decoder/runtime error; caller should report failure
  */
 int shirudo_upatch_decode_map_json(const struct shirudo_map_view *v,
@@ -41,5 +42,9 @@ int shirudo_upatch_decode_map_file_json(const char *path,
 int shirudo_upatch_decode_map_file_otel(const char *path,
 					const struct shirudo_map_view *v,
 					char **out, size_t *out_len);
+
+/* Return the static, signature-covered export signal of the matching decoder. */
+int shirudo_upatch_decode_map_signal(const struct shirudo_map_view *v,
+				    uint32_t *signal_out);
 
 #endif /* SHIRUDO_UTIL_UPATCH_DECODE_H */

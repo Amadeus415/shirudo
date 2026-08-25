@@ -214,7 +214,8 @@ static void parse_decoders(struct shirudo_upatch *u)
 			return;
 		if (rd_le32(&d->language) == 0 ||
 		    rd_le32(&d->api_version) == 0 ||
-		    rd_le32(&d->input_format) == 0)
+		    rd_le32(&d->input_format) == 0 ||
+		    rd_le32(&d->export_signal) == 0)
 			return;
 
 		source_off = decoder_entry_u32(d, offsetof(
@@ -360,6 +361,7 @@ int shirudo_upatch_decoder_view(const struct shirudo_upatch *u, uint32_t idx,
 	out->language = rd_le32(&d->language);
 	out->api_version = rd_le32(&d->api_version);
 	out->input_format = rd_le32(&d->input_format);
+	out->export_signal = rd_le32(&d->export_signal);
 	memcpy(out->upatch, d->upatch, sizeof(out->upatch));
 	memcpy(out->map, d->map, sizeof(out->map));
 	memcpy(out->source_name, d->source, sizeof(out->source_name));

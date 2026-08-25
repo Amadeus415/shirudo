@@ -58,10 +58,8 @@ DYNAMIC_LIBS := \
     $(LIBCRYPTO_LIBS) $(LIBSSH_LIBS) $(TSS2_LIBS) \
     $(LIBELF_LIBS) $(ZLIB_LIBS) $(LIBCURL_LIBS)
 
-ifeq ($(HAVE_LUAJIT),yes)
 CFLAGS += $(LUAJIT_CFLAGS) -DSHIRUDO_HAVE_LUAJIT
 DYNAMIC_LIBS += $(LUAJIT_LIBS)
-endif
 
 ifeq ($(SHIRUDO_BUNDLE_RPATH),1)
 RPATH_LDFLAGS := -Wl,--disable-new-dtags -Wl,-rpath,'$$ORIGIN/../lib/shirudo'
@@ -112,6 +110,7 @@ UTIL_SRCS := \
     util/upatch_maps.c \
     util/upatch_decode.c \
     util/upatch_maps_otel.c \
+    util/elf_target.c \
     util/upatch_resolve.c \
     util/upatch_table.c
 

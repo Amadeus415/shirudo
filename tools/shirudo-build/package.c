@@ -43,6 +43,7 @@ struct decoder_manifest_view {
 	uint32_t	language;
 	uint32_t	api_version;
 	uint32_t	input_format;
+	uint32_t	export_signal;
 	char		upatch[64];
 	char		map[16];
 	char		source[64];
@@ -453,8 +454,11 @@ static bool parse_decoder_manifest(const unsigned char *p, size_t n,
 						api_version));
 	out->input_format = rd_le16(p + offsetof(struct shirudo_decoder_manifest,
 						 input_format));
+	out->export_signal = rd_le16(p + offsetof(struct shirudo_decoder_manifest,
+						  export_signal));
 	if (out->language == 0 || out->api_version == 0 ||
-	    out->input_format == 0)
+	    out->input_format == 0 || out->export_signal == 0 ||
+	    rd_le16(p + offsetof(struct shirudo_decoder_manifest, reserved)) != 0)
 		return false;
 	copy_fixed_cstr(out->upatch, sizeof(out->upatch),
 			m->upatch, sizeof(m->upatch));
@@ -543,8 +547,9 @@ static int collect_decoder_manifests(struct bpf_object *obj,
 			continue;
 		if (manifest.language != SHIRUDO_UPATCH_DECODER_LANG_LUA ||
 		    manifest.api_version != 1 ||
-		    manifest.input_format !=
-			    SHIRUDO_UPATCH_DECODER_INPUT_SERIAL_V2) {
+		    manifest.input_format != SHIRUDO_UPATCH_DECODER_INPUT_MAP_V1 ||
+		    (manifest.export_signal != SHIRUDO_UPATCH_DECODER_EXPORT_LOG &&
+		     manifest.export_signal != SHIRUDO_UPATCH_DECODER_EXPORT_METRIC)) {
 			pr_err("unsupported decoder ABI for '%s/%s'",
 			       manifest.upatch, manifest.map);
 			err = -EOPNOTSUPP;
@@ -621,6 +626,7 @@ static int build_decoder_blob(const struct decoder_set *set,
 		d->language = htole32(file->manifest.language);
 		d->api_version = htole32(file->manifest.api_version);
 		d->input_format = htole32(file->manifest.input_format);
+		d->export_signal = htole32(file->manifest.export_signal);
 		snprintf(d->upatch, sizeof(d->upatch), "%s",
 			 file->manifest.upatch);
 		snprintf(d->map, sizeof(d->map), "%s", file->manifest.map);

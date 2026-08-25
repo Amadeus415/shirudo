@@ -57,36 +57,6 @@ static bool set_string(char *dst, size_t cap, const char *val)
 	return true;
 }
 
-static bool parse_otel_mode(const char *val,
-			    enum shirudo_map_export_otel_mode *out)
-{
-	if (strcmp(val, "off") == 0)
-		*out = SHIRUDO_MAP_EXPORT_OTEL_OFF;
-	else if (strcmp(val, "auto") == 0)
-		*out = SHIRUDO_MAP_EXPORT_OTEL_AUTO;
-	else if (strcmp(val, "log") == 0)
-		*out = SHIRUDO_MAP_EXPORT_OTEL_LOG;
-	else if (strcmp(val, "metric") == 0)
-		*out = SHIRUDO_MAP_EXPORT_OTEL_METRIC;
-	else if (strcmp(val, "s3") == 0)
-		*out = SHIRUDO_MAP_EXPORT_OTEL_S3;
-	else
-		return false;
-	return true;
-}
-
-static bool parse_metric_kind(const char *val,
-			      enum shirudo_map_export_metric_kind *out)
-{
-	if (strcmp(val, "counter") == 0)
-		*out = SHIRUDO_MAP_EXPORT_METRIC_COUNTER;
-	else if (strcmp(val, "gauge") == 0)
-		*out = SHIRUDO_MAP_EXPORT_METRIC_GAUGE;
-	else
-		return false;
-	return true;
-}
-
 static void config_defaults(struct shirudo_config *cfg)
 {
 	*cfg = (struct shirudo_config){};
@@ -95,11 +65,7 @@ static void config_defaults(struct shirudo_config *cfg)
 	cfg->nodes_kernel_log_lines = 10;
 	cfg->nodes_module_loads_lines = 10;
 	cfg->map_export_valid = true;
-	cfg->map_export_otel_mode = SHIRUDO_MAP_EXPORT_OTEL_OFF;
 	cfg->map_export_otel_retries = 3;
-	cfg->map_export_metric_kind = SHIRUDO_MAP_EXPORT_METRIC_COUNTER;
-	snprintf(cfg->map_export_metric_unit,
-		 sizeof(cfg->map_export_metric_unit), "1");
 }
 
 static int hexval(char c)
@@ -260,11 +226,6 @@ int shirudo_config_load_path(struct shirudo_config *cfg, const char *path)
 				else if (val[0] && val[0] != '/')
 					map_export_bad(cfg, key, val,
 							"path must be absolute");
-			} else if (strcmp(key, "map_export.otel_mode") == 0) {
-				if (!parse_otel_mode(val,
-						     &cfg->map_export_otel_mode))
-					map_export_bad(cfg, key, val,
-							"expected off, auto, log, metric, or s3");
 			} else if (strcmp(key, "map_export.otel_endpoint") == 0) {
 				if (!set_string(cfg->map_export_otel_endpoint,
 						sizeof(cfg->map_export_otel_endpoint), val))
@@ -299,27 +260,6 @@ int shirudo_config_load_path(struct shirudo_config *cfg, const char *path)
 				if (!set_string(cfg->map_export_s3_uri,
 						sizeof(cfg->map_export_s3_uri), val))
 					map_export_bad(cfg, key, val, "value too long");
-			} else if (strcmp(key, "map_export.show_full") == 0) {
-				if (!parse_bool(val, &cfg->map_export_show_full))
-					map_export_bad(cfg, key, val,
-							"expected true or false");
-			} else if (strcmp(key, "map_export.metric_kind") == 0) {
-				if (!parse_metric_kind(val,
-						       &cfg->map_export_metric_kind))
-					map_export_bad(cfg, key, val,
-							"expected counter or gauge");
-			} else if (strcmp(key, "map_export.metric_unit") == 0) {
-				if (!val[0] ||
-				    !set_string(cfg->map_export_metric_unit,
-						 sizeof(cfg->map_export_metric_unit), val))
-					map_export_bad(cfg, key, val,
-							"expected a non-empty unit");
-			} else if (strcmp(key,
-					  "map_export.metric_description") == 0) {
-				if (!set_string(cfg->map_export_metric_description,
-						sizeof(cfg->map_export_metric_description),
-						val))
-					map_export_bad(cfg, key, val, "value too long");
 			} else {
 				if (strncmp(key, "map_export.", 11) == 0)
 					map_export_bad(cfg, key, val, "unknown key");
@@ -328,12 +268,14 @@ int shirudo_config_load_path(struct shirudo_config *cfg, const char *path)
 						key);
 			}
 		}
-		fclose(f);
+		if (ferror(f) && !rc)
+			rc = -EIO;
+		if (fclose(f) && !rc)
+			rc = -errno;
 	}
-	if (cfg->map_export_otel_mode == SHIRUDO_MAP_EXPORT_OTEL_S3 &&
-	    !cfg->map_export_s3_uri[0])
+	if (cfg->map_export_s3_uri[0] && !cfg->map_export_otel_endpoint[0])
 		map_export_bad(cfg, "map_export.s3_uri", "",
-			       "required when otel_mode is s3");
+			       "requires map_export.otel_endpoint for its reference event");
 	return rc;
 }
 

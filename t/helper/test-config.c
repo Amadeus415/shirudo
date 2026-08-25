@@ -47,28 +47,21 @@ static int check_defaults(const char *path)
 	if (shirudo_config_load_path(&cfg, path) != 0)
 		return 1;
 	return !cfg.map_export_valid || cfg.map_export_json_path[0] ||
-	       cfg.map_export_otel_mode != SHIRUDO_MAP_EXPORT_OTEL_OFF ||
 	       cfg.map_export_tenant_id[0] ||
 	       cfg.map_export_otel_retries != 3 ||
-	       cfg.map_export_show_full ||
-	       cfg.map_export_metric_kind != SHIRUDO_MAP_EXPORT_METRIC_COUNTER ||
-	       strcmp(cfg.map_export_metric_unit, "1") != 0;
+	       false;
 }
 
 static int check_valid(const char *path)
 {
 	static const char input[] =
 		"map_export.json_path = /var/log/shirudo/maps.ndjson\n"
-		"map_export.otel_mode = s3\n"
 		"map_export.otel_endpoint = https://collector.example:4318\n"
 		"map_export.tenant_id = tenant-uuid-1234\n"
 		"map_export.otel_insecure = true\n"
 		"map_export.otel_retries = 7\n"
 		"map_export.s3_uri = s3://bucket/prefix\n"
-		"map_export.show_full = true\n"
-		"map_export.metric_kind = gauge\n"
-		"map_export.metric_unit = By\n"
-		"map_export.metric_description = observed bytes\n";
+		"map_export.s3_uri = s3://bucket/prefix\n";
 	struct shirudo_config cfg;
 
 	if (write_config(path, input) != 0 ||
@@ -77,17 +70,12 @@ static int check_valid(const char *path)
 	return !cfg.map_export_valid ||
 	       strcmp(cfg.map_export_json_path,
 		      "/var/log/shirudo/maps.ndjson") != 0 ||
-	       cfg.map_export_otel_mode != SHIRUDO_MAP_EXPORT_OTEL_S3 ||
 	       strcmp(cfg.map_export_otel_endpoint,
 		      "https://collector.example:4318") != 0 ||
 	       strcmp(cfg.map_export_tenant_id, "tenant-uuid-1234") != 0 ||
 	       !cfg.map_export_otel_insecure ||
 	       cfg.map_export_otel_retries != 7 ||
-	       strcmp(cfg.map_export_s3_uri, "s3://bucket/prefix") != 0 ||
-	       !cfg.map_export_show_full ||
-	       cfg.map_export_metric_kind != SHIRUDO_MAP_EXPORT_METRIC_GAUGE ||
-	       strcmp(cfg.map_export_metric_unit, "By") != 0 ||
-	       strcmp(cfg.map_export_metric_description, "observed bytes") != 0;
+	       strcmp(cfg.map_export_s3_uri, "s3://bucket/prefix") != 0;
 }
 
 static int check_invalid(const char *path, const char *input)
@@ -120,7 +108,6 @@ int main(void)
 		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		"a\n");
-	failed += check_invalid(path, "map_export.otel_mode = s3\n");
 	failed += check_invalid(path, "map_export.unknown = value\n");
 	unlink(path);
 	return failed ? EXIT_FAILURE : EXIT_SUCCESS;

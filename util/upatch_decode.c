@@ -880,7 +880,7 @@ static void lua_install_budget(lua_State *L, struct lua_budget *budget)
 
 static void lua_push_map_input(lua_State *L, const struct shirudo_map_view *v)
 {
-	uint32_t p;
+	uint32_t p, i;
 
 	lua_newtable(L);
 	lua_pushinteger(L, 1);
@@ -905,6 +905,35 @@ static void lua_push_map_input(lua_State *L, const struct shirudo_map_view *v)
 	lua_setfield(L, -2, "serialized_pages");
 	lua_pushnumber(L, (lua_Number)v->serial_bytes_total);
 	lua_setfield(L, -2, "serialized_bytes");
+	lua_pushnumber(L, v->key_size);
+	lua_setfield(L, -2, "key_size");
+	lua_pushnumber(L, v->value_size);
+	lua_setfield(L, -2, "value_size");
+	lua_pushnumber(L, v->n_cpus);
+	lua_setfield(L, -2, "n_cpus");
+	lua_pushboolean(L, v->truncated);
+	lua_setfield(L, -2, "truncated");
+
+	/* Raw bytes are always available, including when BTF rendering is not. */
+	lua_newtable(L);
+	for (i = 0; i < v->n_entries; i++) {
+		const struct shirudo_map_entry *entry = &v->entries[i];
+		size_t value_bytes = (size_t)v->value_stride * v->n_cpus;
+		char *key_hex = hex_alloc(entry->key, v->key_size);
+		char *value_hex = hex_alloc(entry->value, value_bytes);
+
+		if (!key_hex || !value_hex)
+			luaL_error(L, "decoder map data is too large");
+		lua_newtable(L);
+		lua_pushstring(L, key_hex);
+		lua_setfield(L, -2, "key_hex");
+		lua_pushstring(L, value_hex);
+		lua_setfield(L, -2, "value_hex");
+		lua_rawseti(L, -2, (int)i + 1);
+		xfree(key_hex, (size_t)v->key_size * 2 + 1);
+		xfree(value_hex, value_bytes * 2 + 1);
+	}
+	lua_setfield(L, -2, "entries");
 
 	lua_newtable(L);
 	for (p = 0; p < v->n_serial_pages; p++) {
@@ -1060,7 +1089,9 @@ static int decoder_matches(const struct shirudo_upatch_decoder_view *d,
 {
 	if (d->language != SHIRUDO_UPATCH_DECODER_LANG_LUA ||
 	    d->api_version != 1 ||
-	    d->input_format != SHIRUDO_UPATCH_DECODER_INPUT_SERIAL_V2)
+	    d->input_format != SHIRUDO_UPATCH_DECODER_INPUT_MAP_V1 ||
+	    (d->export_signal != SHIRUDO_UPATCH_DECODER_EXPORT_LOG &&
+	     d->export_signal != SHIRUDO_UPATCH_DECODER_EXPORT_METRIC))
 		return 0;
 	if (strcmp(d->upatch, v->upatch) != 0)
 		return 0;
@@ -1080,8 +1111,6 @@ static int decode_map_file(const char *path, const struct shirudo_map_view *v,
 		return -EINVAL;
 	*out = NULL;
 	*out_len = 0;
-	if (!v->serialized)
-		return -ENOENT;
 	if (!shirudo_upatch_name_valid(v->upatch))
 		return -EINVAL;
 	rc = shirudo_upatch_open(path, &u);
@@ -1096,6 +1125,37 @@ static int decode_map_file(const char *path, const struct shirudo_map_view *v,
 		if (!decoder_matches(&d, v))
 			continue;
 		rc = run_lua_decoder(&d, v, otel, out, out_len);
+		break;
+	}
+	shirudo_upatch_close(&u);
+	return rc;
+}
+
+int shirudo_upatch_decode_map_signal(const struct shirudo_map_view *v,
+				    uint32_t *signal_out)
+{
+	struct shirudo_upatch u;
+	char path[PATH_MAX];
+	uint32_t i;
+	int rc;
+
+	if (!v || !signal_out || !shirudo_upatch_name_valid(v->upatch))
+		return -EINVAL;
+	if (snprintf(path, sizeof(path), "%s/%s.upatch", SHIRUDO_UPATCHES_DIR,
+		     v->upatch) >= (int)sizeof(path))
+		return -ENAMETOOLONG;
+	rc = shirudo_upatch_open(path, &u);
+	if (rc)
+		return rc == -ENOENT ? -ENOENT : rc;
+	rc = -ENOENT;
+	for (i = 0; i < u.nr_decoders; i++) {
+		struct shirudo_upatch_decoder_view d;
+
+		if (shirudo_upatch_decoder_view(&u, i, &d) ||
+		    !decoder_matches(&d, v))
+			continue;
+		*signal_out = d.export_signal;
+		rc = 0;
 		break;
 	}
 	shirudo_upatch_close(&u);

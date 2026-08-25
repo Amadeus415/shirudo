@@ -18,21 +18,6 @@
 #define SHIRUDO_MAP_EXPORT_PATH_MAX	4096
 #define SHIRUDO_MAP_EXPORT_ENDPOINT_MAX	2048
 #define SHIRUDO_MAP_EXPORT_URI_MAX	2048
-#define SHIRUDO_MAP_EXPORT_METRIC_UNIT_MAX	64
-#define SHIRUDO_MAP_EXPORT_METRIC_DESCRIPTION_MAX	256
-
-enum shirudo_map_export_otel_mode {
-	SHIRUDO_MAP_EXPORT_OTEL_OFF,
-	SHIRUDO_MAP_EXPORT_OTEL_AUTO,
-	SHIRUDO_MAP_EXPORT_OTEL_LOG,
-	SHIRUDO_MAP_EXPORT_OTEL_METRIC,
-	SHIRUDO_MAP_EXPORT_OTEL_S3,
-};
-
-enum shirudo_map_export_metric_kind {
-	SHIRUDO_MAP_EXPORT_METRIC_COUNTER,
-	SHIRUDO_MAP_EXPORT_METRIC_GAUGE,
-};
 
 struct shirudo_config {
 	unsigned long	eventlog_max_bytes;	/* 0 = unlimited */
@@ -70,22 +55,16 @@ struct shirudo_config {
 	unsigned int	nodes_kernel_log_lines;		/* default 10, 0=off */
 	unsigned int	nodes_module_loads_lines;	/* default 10, 0=off */
 	/*
-	 * Periodic `shirudo upatch map --all` export settings. Empty JSON
-	 * path plus OTEL_OFF is an intentionally idle configuration.
+	 * Periodic `shirudo upatch map --all` export settings. Empty sinks
+	 * are intentionally idle.
 	 */
 	bool		map_export_valid;
 	char		map_export_json_path[SHIRUDO_MAP_EXPORT_PATH_MAX];
-	enum shirudo_map_export_otel_mode map_export_otel_mode;
 	char		map_export_otel_endpoint[SHIRUDO_MAP_EXPORT_ENDPOINT_MAX];
 	char		map_export_tenant_id[SHIRUDO_TENANT_ID_MAX + 1];
 	bool		map_export_otel_insecure;
 	unsigned int	map_export_otel_retries;
 	char		map_export_s3_uri[SHIRUDO_MAP_EXPORT_URI_MAX];
-	bool		map_export_show_full;
-	enum shirudo_map_export_metric_kind map_export_metric_kind;
-	char		map_export_metric_unit[SHIRUDO_MAP_EXPORT_METRIC_UNIT_MAX];
-	char		map_export_metric_description[
-			SHIRUDO_MAP_EXPORT_METRIC_DESCRIPTION_MAX];
 };
 
 #define SHIRUDO_NODES_RECENT_MAX	100

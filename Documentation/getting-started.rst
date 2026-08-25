@@ -612,14 +612,12 @@ record per map::
     shirudo upatch map --all --json=/var/log/shirudo/maps.ndjson
 
 With no explicit output options, ``--all`` reads the ``map_export.*`` keys
-shown by ``shirudo config``. An empty ``map_export.json_path`` together with
-``map_export.otel_mode = off`` is a successful no-op. JSON and OTEL may be
+shown by ``shirudo config``. Empty ``map_export.json_path`` and
+``map_export.otel_endpoint`` values are a successful no-op. JSON and OTEL may be
 enabled together; each map is read once and sent to both destinations.
 Batch export continues after a per-map failure and exits nonzero if any map
-or destination failed. Metric names remain derived from each upatch and map,
-so ``--metric-name`` is rejected with ``--all``. In automatic OTEL mode,
-metric settings apply only to maps classified as metrics; log maps ignore
-those settings.
+or destination failed. Every exported map requires a signed Lua decoder; its
+static manifest signal selects logs or metrics before the decoder runs.
 
 Periodic target export
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -633,10 +631,11 @@ configuration makes every invocation a successful no-op.
 Configure JSON, OTEL, or both in ``/etc/shirudo/shirudo.conf``. For example::
 
     map_export.json_path = /var/log/shirudo/maps.ndjson
-    map_export.otel_mode = auto
     map_export.otel_endpoint = https://collector.example:4318
     map_export.tenant_id = tenant-uuid-1234
     map_export.otel_retries = 3
+    map_export.log_record_max_bytes = 1048576
+    map_export.otlp_max_bytes = 4194304
 
 Shirudo appends the JSON file but does not create its parent directory. An
 administrator can prepare it with ``install -d -m 0750 /var/log/shirudo``.
@@ -648,11 +647,11 @@ Optional standard OTEL and AWS exporter environment variables can be placed
 in ``/etc/shirudo/map-export.env`` without editing the unit. The operator
 package does not install either map-export unit.
 
-Decoding serialized maps with Lua
+Decoding maps with Lua
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-An upatch can carry a Lua decoder for a serializer-backed map. Declare the
-decoder in the BPF source and keep its Lua file beside the source tree:
+Every JSON or OTLP export requires a LuaJIT decoder. Declare it in the BPF
+source and keep its Lua file beside the source tree:
 
 .. code-block:: c
 
@@ -663,7 +662,8 @@ decoder in the BPF source and keep its Lua file beside the source tree:
         .version = SHIRUDO_UPATCH_DECODER_VERSION,
         .language = SHIRUDO_UPATCH_DECODER_LANG_LUA,
         .api_version = 1,
-        .input_format = SHIRUDO_UPATCH_DECODER_INPUT_SERIAL_V2,
+        .input_format = SHIRUDO_UPATCH_DECODER_INPUT_MAP_V1,
+        .export_signal = SHIRUDO_UPATCH_DECODER_EXPORT_LOG,
         .upatch = "my-patch",
         .map = "events",
         .source = "decoders/events.lua",
@@ -674,49 +674,38 @@ decoder in the BPF source and keep its Lua file beside the source tree:
 the upatch's signed data, and rejects a manifest whose upatch or map does not
 match the package. ``shirudo upatch info`` reports the embedded decoder.
 
-The entrypoint receives a table containing the upatch and map identity plus
-the serializer-v2 pages. ``shirudo.fixed_records(input.data.pages,
+The entrypoint receives a table containing the upatch and map identity,
+metadata, raw entry bytes, and (when present) serializer-v2 pages.
+``shirudo.fixed_records(input.data.pages,
 slot_size)`` turns fixed-width page data into slots with ``u8``, ``u16``,
 ``u32``, ``u64``, and ``cstring`` accessors. The decoder returns a Lua value
 made from tables, strings, finite numbers, booleans, and nil.
 
 For ``--json=<path>``, the returned value is appended as the NDJSON record.
-For ``--otel`` or ``--otel=log``, it becomes the log body: Lua objects map to
+For a decoder with ``EXPORT_LOG``, ``--otel`` makes it the log body: Lua objects map to
 OTLP ``kvlistValue``, arrays to ``arrayValue``, and scalars retain their OTLP
 types. The OTLP resource, event name, map identity attributes, endpoint,
-credentials, and transport remain controlled by Shirudo. ``--otel=metric``
-does not infer metrics from decoder output; it continues to require a
-structurally numeric map. ``--otel=s3`` retains the raw serializer snapshot
-for archival fidelity.
+credentials, and transport remain controlled by Shirudo. A decoder with
+``EXPORT_METRIC`` returns an array of OTLP Metric objects; this lets Lua
+define metric names, units, kinds, descriptions, and points. LuaJIT is a
+mandatory build dependency.
 
 The LuaJIT host removes filesystem, network, package-loading, FFI, debug, and
 dynamic-code globals. Native JIT traces are disabled so the instruction hook
 can enforce its budget. The host also enforces memory, nesting, and
-output-size limits. LuaJIT is an optional build dependency; without it the
-signed manifest remains inspectable and serialized maps fall back to their raw
-page representation.
+output-size limits. LuaJIT is a mandatory build dependency.
 
 Exporting map snapshots to OpenTelemetry
 -----------------------------------------
 
-The detailed map form can export a snapshot over OTLP/HTTP JSON.  ``--otel``
-chooses a cumulative metric for an unsigned scalar per-CPU map and a
-structured log for every other map shape.  The explicit values override that
-choice:
+The detailed map form exports over OTLP/HTTP JSON when ``--otel`` is set.
+The signed decoder manifest, rather than map shape or a CLI selector, chooses
+the signal.
 
 .. code-block:: sh
 
-    # blocked_af_alg is a PERCPU_ARRAY<u32,u64>, so this selects metrics.
+    # The matching decoder's manifest selects logs or metrics.
     shirudo upatch map cve-2026-31431-counter blocked_af_alg --otel
-
-    # Preserve any map shape as one structured OTLP log record.
-    shirudo upatch map my-patch events --otel=log
-
-    # Force gauge semantics and select an OTLP base URL.
-    shirudo upatch map my-patch active \
-      --otel=metric --otel-endpoint=https://collector.example \
-      --tenant-id=tenant-uuid-1234 \
-      --metric-kind=gauge --metric-unit=1
 
 ``--otel-endpoint`` is always a base URL; Shirudo appends ``v1/logs`` or
 ``v1/metrics`` for the selected signal.  Without that option, the standard
@@ -735,28 +724,22 @@ example ``Authorization=Bearer%20TOKEN``.  Shirudo never prints configured
 header values.
 
 ``--tenant-id=<id>`` sends a canonical ``X-Tenant-ID`` HTTP header on OTLP
-log and metric requests. In ``--otel=s3`` mode it annotates the OTLP reference
-event, not the S3 object PUT. The standard ``OTEL_EXPORTER_OTLP_*_HEADERS``
+log and metric requests. The standard ``OTEL_EXPORTER_OTLP_*_HEADERS``
 variables may also provide ``X-Tenant-ID``; a dedicated CLI or
 ``map_export.tenant_id`` value takes precedence without duplicating the
 header. Tenant IDs identify routing ownership but are not authentication
 secrets.
 
-Metric export produces one point per map key and sums per-CPU replicas.
-It defaults to a monotonic cumulative counter; use ``--metric-kind=gauge`` for
-instantaneous values.  Compound values, maps without numeric BTF, and map
-types with dedicated serializers should use ``--otel=log``.  A truncated metric
-view is rejected instead of silently omitting time series; add
-``--show-full`` when exporting a map with more than 256 entries.  Delivery is
-synchronous and defaults to three retries; ``--otel-retries=0`` disables
-retries.
+Metric decoders return OTLP Metric objects, including names, units, kinds,
+descriptions, and points. Delivery is synchronous and defaults to three
+retries; ``--otel-retries=0`` disables retries.
 
 Storing large snapshots in S3
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-For maps whose serialized form is too large for a useful log record,
-``--otel=s3`` writes the complete schema-1 JSON snapshot to S3 and emits only a
-small OTLP log reference:
+When a canonical OTLP payload exceeds the configured direct limit, a configured
+``--s3-uri`` writes the complete decoder result to S3 and emits only a small
+OTLP log reference:
 
 .. code-block:: sh
 
@@ -765,13 +748,12 @@ small OTLP log reference:
     export AWS_SESSION_TOKEN=...       # optional temporary credentials
     export AWS_REGION=us-west-2
 
-    shirudo upatch map dns dns_arena \
-      --otel=s3 --s3-uri=s3://security-telemetry/shirudo/maps
+    shirudo upatch map dns dns_arena --otel \
+      --s3-uri=s3://security-telemetry/shirudo/maps
 
-``--s3-uri`` must be ``s3://<bucket>[/<prefix>]``.  S3 mode automatically
-lifts the normal 256-entry display cap; ``--show-full`` is accepted but
-unnecessary.  Unsupported map types without a pinned serializer and any
-unexpectedly truncated view fail without uploading an object.
+``--s3-uri`` must be ``s3://<bucket>[/<prefix>]``. Export always reads the
+complete map. A missing decoder or failed upload fails that map while a batch
+continues with the remaining maps.
 ``AWS_DEFAULT_REGION`` is used when ``AWS_REGION`` is unset; the final
 fallback is ``us-east-1``.
 

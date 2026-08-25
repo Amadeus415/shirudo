@@ -51,4 +51,9 @@ int shirudo_upatch_maps_otel_send(const struct shirudo_map_view *v,
 				  enum shirudo_otel_mode mode,
 				  const struct shirudo_otel_opts *opts);
 
+/* Export using the matching decoder's signed, static signal selection. */
+int shirudo_upatch_maps_otel_send_decoded(const struct shirudo_map_view *v,
+					  enum shirudo_otel_signal signal,
+					  const struct shirudo_otel_opts *opts);
+
 #endif /* SHIRUDO_UTIL_UPATCH_MAPS_OTEL_H */

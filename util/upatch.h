@@ -31,6 +31,7 @@ struct shirudo_upatch_decoder_view {
 	uint32_t	language;
 	uint32_t	api_version;
 	uint32_t	input_format;
+	uint32_t	export_signal;
 	char		upatch[64];
 	char		map[16];
 	char		source_name[64];
