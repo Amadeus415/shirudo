@@ -107,15 +107,15 @@ shirudo make targets (run from the repo root):
 
   Install   (honors DESTDIR and prefix=/bindir=/libexecdir=/systemdunitdir=)
     make install           shirudo binary + bash completion (common)
-    make install-target    install + the systemd reboot-persistence unit
-                           (target host)
+    make install-target    install + target systemd units for reboot
+                           persistence and periodic map export
     make install-operator  install + shirudo-build + BPF headers
                            (operator host)
 
   Package   (each rebuilds; pick by target environment)
     make bindeb-pkg        Two binary .deb's for Debian/Ubuntu targets:
                            shirudo-target_<version>_<arch>.deb (binary +
-                           systemd unit) and
+                           target systemd units) and
                            shirudo-operator_<version>_<arch>.deb (binary +
                            shirudo-build).
                            Rebuilds from clean with prefix=/usr.
@@ -199,7 +199,7 @@ bintar-pkg: config packaging/tar/install.sh packaging/tar/bundle-libs.sh
 
 # Build two .deb packages (kernel-style `make bindeb-pkg`):
 #   shirudo-target_<version>_<arch>.deb
-#       shirudo + the systemd reboot unit (target node)
+#       shirudo + the systemd reboot and map-export units (target node)
 #   shirudo-operator_<version>_<arch>.deb
 #       shirudo + shirudo-build + BPF headers, no unit
 # Rebuilds from clean with prefix=$(DEB_PREFIX) because the libexec path is

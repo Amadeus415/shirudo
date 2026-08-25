@@ -301,6 +301,11 @@ systemd/shirudo.service: systemd/shirudo.service.in
 	@printf '  GEN     $@\n'
 	$(Q)sed 's|@bindir@|$(bindir)|g' $< > $@
 
+# The periodic map exporter is target-only and uses the same installed binary.
+systemd/shirudo-map-export.service: systemd/shirudo-map-export.service.in
+	@printf '  GEN     $@\n'
+	$(Q)sed 's|@bindir@|$(bindir)|g' $< > $@
+
 # Common to both roles: the one shirudo binary + its completion.
 install: shirudo
 	@printf '  INSTALL $(DESTDIR)$(bindir)/shirudo\n'
@@ -311,14 +316,17 @@ install: shirudo
 	$(Q)install -m 0644 completion/shirudo.bash \
 	    $(DESTDIR)$(completionsdir)/shirudo
 
-# Target machines additionally get the reboot-persistence unit. It runs
-# `shirudo init`, which is target-only -- the operator never runs it, so
-# the unit is deliberately NOT in install-operator.
-install-target: install systemd/shirudo.service
-	@printf '  INSTALL $(DESTDIR)$(systemdunitdir)/shirudo.service\n'
+# Target machines additionally get the reboot-persistence and periodic map
+# export units. They are deliberately NOT in install-operator.
+install-target: install systemd/shirudo.service \
+		systemd/shirudo-map-export.service \
+		systemd/shirudo-map-export.timer
+	@printf '  INSTALL $(DESTDIR)$(systemdunitdir)/shirudo*.service,timer\n'
 	$(Q)install -d $(DESTDIR)$(systemdunitdir)
 	$(Q)install -m 0644 systemd/shirudo.service \
-	    $(DESTDIR)$(systemdunitdir)/shirudo.service
+	    systemd/shirudo-map-export.service \
+	    systemd/shirudo-map-export.timer \
+	    $(DESTDIR)$(systemdunitdir)/
 
 install-operator: install shirudo-build bpf/vmlinux.h $(BPF_HEADERS_OUT) $(BPF_LIB_HEADERS)
 	@printf '  INSTALL $(DESTDIR)$(libexecdir)/shirudo/shirudo-build\n'
@@ -429,7 +437,8 @@ clean:
 	$(Q)rm -f $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) \
 	          $(BUILD_OBJS) $(VERSION_OBJ) util/version_id.c
 	$(Q)rm -f $(DEPS) t/helper/*.d
-	$(Q)rm -f $(BPF_OBJS) bpf/vmlinux.h systemd/shirudo.service
+	$(Q)rm -f $(BPF_OBJS) bpf/vmlinux.h systemd/shirudo.service \
+	          systemd/shirudo-map-export.service
 	$(Q)rm -rf bpf/include
 
 distclean:

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Authors of shirudo
+
+[Unit]
+Description=shirudo: export loaded upatch maps
+After=shirudo.service
+ConditionPathExists=/var/lib/shirudo/bpffs/lsm_link
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/shirudo/map-export.env
+ExecStart=@bindir@/shirudo upatch map --all

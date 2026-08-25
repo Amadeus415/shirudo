@@ -621,6 +621,28 @@ so ``--metric-name`` is rejected with ``--all``. In automatic OTEL mode,
 metric settings apply only to maps classified as metrics; log maps ignore
 those settings.
 
+Periodic target export
+~~~~~~~~~~~~~~~~~~~~~~
+
+The target package installs and enables ``shirudo-map-export.timer``. It
+starts on the next boot, waits five seconds, and invokes the batch exporter
+again five seconds after each completed run. The service skips while the
+Shirudo LSM is not attached, and the default empty ``map_export``
+configuration makes every invocation a successful no-op.
+
+Configure JSON, OTEL, or both in ``/etc/shirudo/shirudo.conf``. For example::
+
+    map_export.json_path = /var/log/shirudo/maps.ndjson
+    map_export.otel_mode = auto
+    map_export.otel_endpoint = https://collector.example:4318
+    map_export.otel_retries = 3
+
+Shirudo appends the JSON file but does not create its parent directory. An
+administrator can prepare it with ``install -d -m 0750 /var/log/shirudo``.
+Optional standard OTEL and AWS exporter environment variables can be placed
+in ``/etc/shirudo/map-export.env`` without editing the unit. The operator
+package does not install either map-export unit.
+
 Decoding serialized maps with Lua
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -85,9 +85,10 @@ mkdir -p "$stage/DEBIAN"
 " shirudo locks down the bpf() syscall via a BPF LSM so that only signed," \
 " in-kernel BPF loader programs can install BPF code, create maps or attach" \
 " links -- even for CAP_SYS_ADMIN callers. This package installs the" \
-" agentless target-node components: the shirudo binary and the systemd unit" \
-" that re-mounts the private bpffs, re-attaches the LSM and re-applies the" \
-" signed upatch set early on every boot. It carries no private signing key."
+" agentless target-node components: the shirudo binary and systemd units" \
+" that re-mount the private bpffs, re-attach the LSM and re-apply the" \
+" signed upatch set early on every boot, then periodically export upatch" \
+" maps. It carries no private signing key."
 	else
 		printf '%s\n' \
 " shirudo locks down the bpf() syscall via a BPF LSM so that only signed," \
@@ -95,14 +96,14 @@ mkdir -p "$stage/DEBIAN"
 " the operator-side tooling: the shirudo binary plus shirudo-build, which" \
 " compiles and CMS-signs .upatch artifacts. It is for the machine that holds" \
 " the private signing key and drives rollouts; it does not install the" \
-" target systemd unit."
+" target systemd units."
 	fi
 } > "$stage/DEBIAN/control"
 
-# Target-only: enable the reboot-persistence unit on install, disable it
-# on removal. The unit is Type=oneshot and only runs `shirudo init`; we
-# enable (so it activates on the next boot) but never auto-start it, since
-# attaching the LSM is an operator decision, not a side effect of dpkg.
+# Target-only: enable the reboot-persistence service and map-export timer on
+# install, then disable them on removal. They activate on the next boot but
+# are never auto-started by dpkg, since attaching the LSM is an operator
+# decision rather than an installation side effect.
 if [ "$role" = target ]; then
 	cat > "$stage/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
@@ -110,8 +111,10 @@ set -e
 if [ "$1" = configure ] && command -v systemctl >/dev/null 2>&1; then
 	systemctl daemon-reload || true
 	systemctl enable shirudo.service >/dev/null 2>&1 || true
+	systemctl enable shirudo-map-export.timer >/dev/null 2>&1 || true
 	echo "shirudo: shirudo.service enabled; it runs 'shirudo init' early on the"
 	echo "shirudo: next boot. To enforce now: systemctl start shirudo.service"
+	echo "shirudo: shirudo-map-export.timer enabled for the next boot"
 fi
 exit 0
 EOF
@@ -119,6 +122,8 @@ EOF
 #!/bin/sh
 set -e
 if [ "$1" = remove ] && command -v systemctl >/dev/null 2>&1; then
+	systemctl --no-reload disable --now shirudo-map-export.timer \
+		>/dev/null 2>&1 || true
 	systemctl --no-reload disable shirudo.service >/dev/null 2>&1 || true
 fi
 exit 0
