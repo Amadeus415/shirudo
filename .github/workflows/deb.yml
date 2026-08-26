@@ -57,6 +57,7 @@ jobs:
               zlib1g-dev \
               libcurl4-openssl-dev \
               libjson-c-dev \
+              libluajit-5.1-dev \
               uuid-dev \
               dpkg-dev \
               file \
