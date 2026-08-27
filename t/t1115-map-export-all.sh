@@ -50,11 +50,35 @@ restore() {
 }
 trap restore EXIT
 
-cat > "$WORK/maps.bpf.c" <<'EOF'
+mkdir -p "$WORK/decoders"
+
+cat > "$WORK/decoders/first.lua" <<'EOF'
+function decode(input)
+	return {
+		upatch = input.upatch,
+		map = input.map,
+		schema = 1,
+		data = { records = {{ name = "first", count = 1 }} },
+	}
+end
+EOF
+
+cat > "$WORK/decoders/second.lua" <<'EOF'
+function decode(input)
+	return {{
+		name = "shirudo.map_export.second",
+		unit = "1",
+		gauge = { dataPoints = {{ asInt = "1" }} },
+	}}
+end
+EOF
+
+cat > "$WORK/maps.bpf.c" <<EOF
 // SPDX-License-Identifier: Dual BSD/GPL
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
+#include "shirudo_decoder.h"
 
 char _license[] SEC("license") = "Dual BSD/GPL";
 
@@ -71,6 +95,32 @@ struct {
 	__type(key, __u32);
 	__type(value, __u64);
 } second SEC(".maps");
+
+const struct shirudo_decoder_manifest first_decoder SEC(".rodata") = {
+	.magic = SHIRUDO_DECODER_MANIFEST_MAGIC,
+	.version = SHIRUDO_UPATCH_DECODER_VERSION,
+	.language = SHIRUDO_UPATCH_DECODER_LANG_LUA,
+	.api_version = 1,
+	.input_format = SHIRUDO_UPATCH_DECODER_INPUT_MAP_V1,
+	.export_signal = SHIRUDO_UPATCH_DECODER_EXPORT_LOG,
+	.upatch = "$NAME",
+	.map = "first",
+	.source = "decoders/first.lua",
+	.entrypoint = "decode",
+};
+
+const struct shirudo_decoder_manifest second_decoder SEC(".rodata") = {
+	.magic = SHIRUDO_DECODER_MANIFEST_MAGIC,
+	.version = SHIRUDO_UPATCH_DECODER_VERSION,
+	.language = SHIRUDO_UPATCH_DECODER_LANG_LUA,
+	.api_version = 1,
+	.input_format = SHIRUDO_UPATCH_DECODER_INPUT_MAP_V1,
+	.export_signal = SHIRUDO_UPATCH_DECODER_EXPORT_METRIC,
+	.upatch = "$NAME",
+	.map = "second",
+	.source = "decoders/second.lua",
+	.entrypoint = "decode",
+};
 
 SEC("fentry/do_nanosleep")
 int BPF_PROG(probe)
@@ -95,10 +145,13 @@ import json
 import sys
 
 records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-ours = [record for record in records if record.get("upatch") == sys.argv[2]]
-assert {record.get("map") for record in ours} == {"first", "second"}, ours
-assert all(record.get("schema") == 1 for record in ours), ours
-assert all(isinstance(record.get("data"), dict) for record in ours), ours
+log = next(record for record in records
+           if isinstance(record, dict) and record.get("map") == "first")
+metric = next(record for record in records if isinstance(record, list))
+assert log.get("upatch") == sys.argv[2], log
+assert log.get("schema") == 1, log
+assert isinstance(log.get("data"), dict), log
+assert metric[0]["name"] == "shirudo.map_export.second", metric
 PY
 '
 
