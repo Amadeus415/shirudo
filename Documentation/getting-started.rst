@@ -517,6 +517,20 @@ For local introspection on a single host, ``shirudo status``
 own state. On the target it reads kernel state; on the operator
 it reports local on-disk artifacts.
 
+To send the same status snapshot to an OpenTelemetry collector as
+one structured log record, use the OTEL output mode. ``--include-tpm``
+adds the live NV chain and eventlog summary to the record::
+
+    shirudo status --otel --include-tpm
+
+This mode is export-only and uses the effective ``map_export`` OTEL
+settings from ``shirudo.conf``. Standard ``OTEL_EXPORTER_OTLP_*``
+environment variables continue to supply transport settings such as
+headers, certificates, timeout, and compression; the request is sent
+to the collector's ``v1/logs`` endpoint. Add ``--json`` when the local
+status JSON should also be written to stdout. The OTEL body is encoded
+as native OTLP AnyValue data, not as a JSON string.
+
 For the operational log, the journal has the events:
 
 .. code-block:: sh

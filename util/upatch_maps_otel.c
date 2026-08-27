@@ -274,6 +274,320 @@ static void otlp_array_kvlist_end(struct shirudo_json_emit *e)
 	shirudo_json_obj_close(e);
 }
 
+/*
+ * Convert one ordinary JSON value into the OTLP JSON representation of an
+ * AnyValue.  Status already has a stable JSON emitter, so keeping this
+ * adapter here lets status and its machine-readable output share one source
+ * of truth without duplicating every status field in an OTLP renderer.
+ */
+struct json_anyvalue_ctx {
+	const char *p;
+	const char *end;
+	unsigned int depth;
+};
+
+static void json_anyvalue_skip_ws(struct json_anyvalue_ctx *c)
+{
+	while (c->p < c->end && isspace((unsigned char)*c->p))
+		c->p++;
+}
+
+static int json_anyvalue_string(struct json_anyvalue_ctx *c,
+				const char **start, size_t *len)
+{
+	const char *p;
+
+	if (c->p >= c->end || *c->p != '"')
+		return -EINVAL;
+	p = c->p++;
+	while (c->p < c->end) {
+		unsigned char ch = (unsigned char)*c->p++;
+
+		if (ch == '"') {
+			*start = p;
+			*len = (size_t)(c->p - p);
+			return 0;
+		}
+		if (ch == '\\') {
+			if (c->p >= c->end)
+				return -EINVAL;
+			ch = (unsigned char)*c->p++;
+			if (ch == 'u') {
+				int i;
+
+				if ((size_t)(c->end - c->p) < 4)
+					return -EINVAL;
+				for (i = 0; i < 4; i++)
+					if (!isxdigit((unsigned char)c->p[i]))
+						return -EINVAL;
+				c->p += 4;
+			} else if (ch != '"' && ch != '\\' && ch != '/' &&
+				   ch != 'b' && ch != 'f' && ch != 'n' &&
+				   ch != 'r' && ch != 't') {
+				return -EINVAL;
+			}
+		} else if (ch < 0x20) {
+			return -EINVAL;
+		}
+	}
+	return -EINVAL;
+}
+
+static int json_anyvalue_literal(struct json_anyvalue_ctx *c,
+				 const char *literal)
+{
+	size_t len = strlen(literal);
+
+	if ((size_t)(c->end - c->p) < len ||
+	    memcmp(c->p, literal, len) != 0)
+		return -EINVAL;
+	c->p += len;
+	return 0;
+}
+
+static int json_anyvalue_number(struct json_anyvalue_ctx *c,
+				struct shirudo_json_emit *e)
+{
+	const char *start = c->p;
+	bool fraction = false;
+	size_t len;
+	char number[128];
+
+	if (c->p < c->end && *c->p == '-')
+		c->p++;
+	if (c->p >= c->end || !isdigit((unsigned char)*c->p))
+		return -EINVAL;
+	if (*c->p == '0') {
+		c->p++;
+	} else {
+		while (c->p < c->end && isdigit((unsigned char)*c->p))
+			c->p++;
+	}
+	if (c->p < c->end && *c->p == '.') {
+		fraction = true;
+		c->p++;
+		if (c->p >= c->end || !isdigit((unsigned char)*c->p))
+			return -EINVAL;
+		while (c->p < c->end && isdigit((unsigned char)*c->p))
+			c->p++;
+	}
+	if (c->p < c->end && (*c->p == 'e' || *c->p == 'E')) {
+		fraction = true;
+		c->p++;
+		if (c->p < c->end && (*c->p == '+' || *c->p == '-'))
+			c->p++;
+		if (c->p >= c->end || !isdigit((unsigned char)*c->p))
+			return -EINVAL;
+		while (c->p < c->end && isdigit((unsigned char)*c->p))
+			c->p++;
+	}
+	len = (size_t)(c->p - start);
+	if (len == 0 || len >= sizeof(number))
+		return -E2BIG;
+	memcpy(number, start, len);
+	number[len] = '\0';
+	if (fraction)
+		shirudo_json_kv_string(e, "doubleValue", number);
+	else
+		shirudo_json_kv_string(e, "intValue", number);
+	return 0;
+}
+
+static int json_anyvalue_emit_contents(struct json_anyvalue_ctx *c,
+					       struct shirudo_json_emit *e);
+
+static int json_anyvalue_emit(struct json_anyvalue_ctx *c,
+				      struct shirudo_json_emit *e);
+
+static int json_anyvalue_object(struct json_anyvalue_ctx *c,
+					struct shirudo_json_emit *e, bool wrap)
+{
+	int rc;
+
+	if (c->depth++ >= SHIRUDO_JSON_MAX_DEPTH) {
+		c->depth--;
+		return -E2BIG;
+	}
+	c->p++;
+	if (wrap)
+		shirudo_json_obj_open(e);
+	shirudo_json_obj_open_key(e, "kvlistValue");
+	shirudo_json_arr_open(e, "values");
+	json_anyvalue_skip_ws(c);
+	if (c->p < c->end && *c->p == '}') {
+		c->p++;
+		shirudo_json_arr_close(e);
+		shirudo_json_obj_close(e);
+		if (wrap)
+			shirudo_json_obj_close(e);
+		c->depth--;
+		return 0;
+	}
+	for (;;) {
+		const char *key;
+		size_t key_len;
+
+		rc = json_anyvalue_string(c, &key, &key_len);
+		if (rc)
+			break;
+		json_anyvalue_skip_ws(c);
+		if (c->p >= c->end || *c->p++ != ':') {
+			rc = -EINVAL;
+			break;
+		}
+		json_anyvalue_skip_ws(c);
+		shirudo_json_obj_open(e);
+		shirudo_json_kv_raw(e, "key", key, key_len);
+		shirudo_json_obj_open_key(e, "value");
+		rc = json_anyvalue_emit_contents(c, e);
+		shirudo_json_obj_close(e);
+		shirudo_json_obj_close(e);
+		if (rc)
+			break;
+		json_anyvalue_skip_ws(c);
+		if (c->p >= c->end) {
+			rc = -EINVAL;
+			break;
+		}
+		if (*c->p == '}') {
+			c->p++;
+			rc = 0;
+			break;
+		}
+		if (*c->p++ != ',') {
+			rc = -EINVAL;
+			break;
+		}
+		json_anyvalue_skip_ws(c);
+	}
+	shirudo_json_arr_close(e);
+	shirudo_json_obj_close(e);
+	if (wrap)
+		shirudo_json_obj_close(e);
+	c->depth--;
+	return rc;
+}
+
+static int json_anyvalue_array(struct json_anyvalue_ctx *c,
+				       struct shirudo_json_emit *e, bool wrap)
+{
+	int rc = 0;
+
+	if (c->depth++ >= SHIRUDO_JSON_MAX_DEPTH) {
+		c->depth--;
+		return -E2BIG;
+	}
+	c->p++;
+	if (wrap)
+		shirudo_json_obj_open(e);
+	shirudo_json_obj_open_key(e, "arrayValue");
+	shirudo_json_arr_open(e, "values");
+	json_anyvalue_skip_ws(c);
+	if (c->p < c->end && *c->p == ']') {
+		c->p++;
+	} else {
+		for (;;) {
+			json_anyvalue_skip_ws(c);
+			rc = json_anyvalue_emit(c, e);
+			if (rc)
+				break;
+			json_anyvalue_skip_ws(c);
+			if (c->p >= c->end) {
+				rc = -EINVAL;
+				break;
+			}
+			if (*c->p == ']') {
+				c->p++;
+				break;
+			}
+			if (*c->p++ != ',') {
+				rc = -EINVAL;
+				break;
+			}
+		}
+	}
+	shirudo_json_arr_close(e);
+	shirudo_json_obj_close(e);
+	if (wrap)
+		shirudo_json_obj_close(e);
+	c->depth--;
+	return rc;
+}
+
+static int json_anyvalue_emit_contents(struct json_anyvalue_ctx *c,
+					       struct shirudo_json_emit *e)
+{
+	const char *start;
+	size_t len;
+	int rc;
+
+	json_anyvalue_skip_ws(c);
+	if (c->p >= c->end)
+		return -EINVAL;
+	switch (*c->p) {
+	case '{':
+		return json_anyvalue_object(c, e, false);
+	case '[':
+		return json_anyvalue_array(c, e, false);
+	case '"':
+		rc = json_anyvalue_string(c, &start, &len);
+		if (rc)
+			return rc;
+		shirudo_json_kv_raw(e, "stringValue", start, len);
+		return 0;
+	case 't':
+		rc = json_anyvalue_literal(c, "true");
+		if (rc)
+			return rc;
+		shirudo_json_kv_bool(e, "boolValue", true);
+		return 0;
+	case 'f':
+		rc = json_anyvalue_literal(c, "false");
+		if (rc)
+			return rc;
+		shirudo_json_kv_bool(e, "boolValue", false);
+		return 0;
+	case 'n':
+		rc = json_anyvalue_literal(c, "null");
+		if (rc)
+			return rc;
+		/* An empty AnyValue is the OTLP JSON representation of null. */
+		return 0;
+	default:
+		return json_anyvalue_number(c, e);
+	}
+}
+
+static int json_anyvalue_emit(struct json_anyvalue_ctx *c,
+				      struct shirudo_json_emit *e)
+{
+	int rc;
+
+	shirudo_json_obj_open(e);
+	rc = json_anyvalue_emit_contents(c, e);
+	shirudo_json_obj_close(e);
+	return rc;
+}
+
+static int json_anyvalue_from_document(struct shirudo_json_emit *e,
+					       const char *json, size_t len, bool wrap)
+{
+	struct json_anyvalue_ctx c = {
+		.p = json,
+		.end = json + len,
+	};
+	int rc;
+
+	if (!wrap && (c.p >= c.end || *c.p != '{'))
+		return -EINVAL;
+	rc = wrap ? json_anyvalue_emit(&c, e) :
+		json_anyvalue_object(&c, e, false);
+	if (rc)
+		return rc;
+	json_anyvalue_skip_ws(&c);
+	return c.p == c.end ? 0 : -EINVAL;
+}
+
 static void emit_resource_attributes(struct shirudo_json_emit *e)
 {
 	char hostname[256] = "unknown";
@@ -1384,48 +1698,31 @@ static int otel_post(struct otel_state *st, const char *json, size_t json_len)
 
 /* ---- Export lifecycle --------------------------------------------- */
 
-static int otel_open_common(const char *spec, const struct shirudo_map_view *v,
-			    const struct shirudo_otel_opts *opts,
-			    bool automatic, enum shirudo_otel_signal forced,
-			    const char *decoder_path, void **state)
+static int otel_open_transport(enum shirudo_otel_signal signal,
+				       const char *spec,
+				       const struct shirudo_otel_opts *opts,
+				       const char *decoder_path, void **state)
 {
 	struct otel_state *st;
-	char reason[160];
 	int rc;
 
-	if (!v || !state)
+	if (!state)
 		return -EINVAL;
 	st = xcalloc(1, sizeof(*st));
 	if (!st)
 		return -ENOMEM;
+	st->signal = signal;
 	st->opts.retries = 3;
 	st->opts.otlp_max_bytes = SHIRUDO_MAP_EXPORT_OTLP_MAX_DEFAULT;
 	st->opts.metric_kind = SHIRUDO_OTEL_METRIC_COUNTER;
 	if (opts)
 		st->opts = *opts;
 	st->decoder_path = decoder_path;
-	if (automatic) {
-		rc = shirudo_upatch_maps_otel_classify(v, &st->signal,
-						 reason, sizeof(reason));
-		if (rc)
-			goto err;
-		fprintf(stderr, "otel: selected %s for %s map %s: %s\n",
-			st->signal == SHIRUDO_OTEL_LOG ? "log" : "metric",
-			v->type_name, v->name, reason);
-		if (st->signal == SHIRUDO_OTEL_LOG && opts &&
-		    (opts->metric_kind_set || opts->metric_name ||
-		     opts->metric_unit || opts->metric_description)) {
-			rc = -EINVAL;
-			goto err;
-		}
-	} else {
-		st->signal = forced;
-	}
 	if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
 		rc = -EIO;
 		goto err;
 	}
-	/* Explicit CLI endpoints are base URLs for the selected signal. */
+	/* Explicit CLI/config endpoints are base URLs for the selected signal. */
 	rc = configure_state(st, spec, true);
 	if (rc)
 		goto err_global;
@@ -1438,6 +1735,36 @@ err:
 	curl_slist_free_all(st->headers);
 	xfree(st, sizeof(*st));
 	return rc;
+}
+
+static int otel_open_common(const char *spec, const struct shirudo_map_view *v,
+				    const struct shirudo_otel_opts *opts,
+				    bool automatic, enum shirudo_otel_signal forced,
+				    const char *decoder_path, void **state)
+{
+	enum shirudo_otel_signal signal;
+	char reason[160];
+	int rc;
+
+	if (!v || !state)
+		return -EINVAL;
+	if (automatic) {
+		rc = shirudo_upatch_maps_otel_classify(v, &signal,
+						 reason, sizeof(reason));
+		if (rc)
+			return rc;
+		fprintf(stderr, "otel: selected %s for %s map %s: %s\n",
+			signal == SHIRUDO_OTEL_LOG ? "log" : "metric",
+			v->type_name, v->name, reason);
+		if (signal == SHIRUDO_OTEL_LOG && opts &&
+		    (opts->metric_kind_set || opts->metric_name ||
+		     opts->metric_unit || opts->metric_description)) {
+			return -EINVAL;
+		}
+	} else {
+		signal = forced;
+	}
+	return otel_open_transport(signal, spec, opts, decoder_path, state);
 }
 
 static int otel_emit(void *state, const struct shirudo_map_view *v)
@@ -1483,6 +1810,119 @@ static int otel_close(void *state)
 	xfree(st, sizeof(*st));
 	curl_global_cleanup();
 	return 0;
+}
+
+static size_t generic_log_capacity(size_t body_len)
+{
+	if (body_len > (SIZE_MAX - 65536) / 4)
+		return 0;
+	return body_len * 4 + 65536;
+}
+
+static int build_generic_log_payload(
+		const char *scope_name, const char *event_name,
+		int severity_number, const char *severity_text,
+		const char *status, const char *version_id,
+		const char *body_json, size_t body_len,
+		char **out, size_t *out_len, size_t *alloc_len)
+{
+	struct shirudo_json_emit e = {};
+	char now[32];
+	char *buf;
+	int rc;
+	size_t cap;
+
+	if (!scope_name || !event_name || !severity_text || !body_json ||
+	    !out || !out_len || !alloc_len)
+		return -EINVAL;
+	cap = generic_log_capacity(body_len);
+	if (!cap)
+		return -EOVERFLOW;
+	buf = xmalloc(cap);
+	if (!buf)
+		return -ENOMEM;
+	e.buf = buf;
+	e.cap = cap;
+	u64_decimal(realtime_ns(), now);
+
+	shirudo_json_obj_open(&e);
+	shirudo_json_arr_open(&e, "resourceLogs");
+	shirudo_json_obj_open(&e);
+	shirudo_json_obj_open_key(&e, "resource");
+	emit_resource_attributes(&e);
+	shirudo_json_obj_close(&e);
+	shirudo_json_arr_open(&e, "scopeLogs");
+	shirudo_json_obj_open(&e);
+	shirudo_json_obj_open_key(&e, "scope");
+	shirudo_json_kv_string(&e, "name", scope_name);
+	shirudo_json_kv_string(&e, "version", shirudo_version);
+	shirudo_json_obj_close(&e);
+	shirudo_json_arr_open(&e, "logRecords");
+	shirudo_json_obj_open(&e);
+	shirudo_json_kv_string(&e, "timeUnixNano", now);
+	shirudo_json_kv_string(&e, "observedTimeUnixNano", now);
+	shirudo_json_kv_int(&e, "severityNumber", severity_number);
+	shirudo_json_kv_string(&e, "severityText", severity_text);
+	shirudo_json_kv_string(&e, "eventName", event_name);
+	shirudo_json_obj_open_key(&e, "body");
+	rc = json_anyvalue_from_document(&e, body_json, body_len, false);
+	shirudo_json_obj_close(&e);
+	if (rc) {
+		xfree(buf, cap);
+		return rc;
+	}
+	shirudo_json_arr_open(&e, "attributes");
+	if (status)
+		otlp_kv_string(&e, "shirudo.status", status);
+	if (version_id)
+		otlp_kv_string(&e, "shirudo.version_id", version_id);
+	shirudo_json_arr_close(&e);
+	shirudo_json_obj_close(&e);
+	shirudo_json_arr_close(&e);
+	shirudo_json_obj_close(&e);
+	shirudo_json_arr_close(&e);
+	shirudo_json_obj_close(&e);
+	shirudo_json_arr_close(&e);
+	shirudo_json_obj_close(&e);
+	if (e.err) {
+		xfree(buf, cap);
+		return e.err;
+	}
+	*out = buf;
+	*out_len = e.len;
+	*alloc_len = cap;
+	return 0;
+}
+
+int shirudo_otel_send_log_json(const struct shirudo_otel_opts *opts,
+				       const char *scope_name,
+				       const char *event_name,
+				       int severity_number,
+				       const char *severity_text,
+				       const char *status,
+				       const char *version_id,
+				       const char *body_json, size_t body_len)
+{
+	char *payload = NULL;
+	void *state = NULL;
+	size_t payload_len = 0, alloc_len = 0;
+	int rc;
+
+	rc = otel_open_transport(SHIRUDO_OTEL_LOG,
+				 opts ? opts->endpoint : NULL, opts, NULL, &state);
+	if (rc)
+		return rc;
+	rc = build_generic_log_payload(scope_name, event_name,
+					       severity_number, severity_text,
+					       status, version_id,
+					       body_json, body_len,
+					       &payload, &payload_len, &alloc_len);
+	if (!rc)
+		rc = otel_post(state, payload, payload_len);
+	if (payload)
+		xfree(payload, alloc_len);
+	otel_close(state);
+	return rc;
 }
 
 /* ---- S3-backed log references ------------------------------------ */

@@ -2,7 +2,8 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Local readiness + state report: shirudo status [--json] [--include-tpm].
+ * Local readiness + state report: shirudo status [--json] [--otel]
+ * [--include-tpm].
  * Local-only -- never contacts a remote (that is `shirudo nodes`). Safe
  * to run before `init` (everything degrades to "absent"/false).
  */
@@ -36,6 +37,7 @@
 #include "util/json.h"
 #include "util/macros.h"
 #include "util/keyring.h"
+#include "util/log.h"
 #include "util/malloc.h"
 #include "util/paths.h"
 #include "util/kmodules.h"
@@ -44,6 +46,7 @@
 #include "util/sysinfo.h"
 #include "util/timefmt.h"
 #include "util/upatch_maps.h"
+#include "util/upatch_maps_otel.h"
 #include "util/upatch_resolve.h"
 #include "util/upatch_table.h"
 
@@ -360,6 +363,7 @@ static void print_system_human(const struct shirudo_sysinfo *si)
 
 static const struct shirudo_help_item status_options[] = {
 	{ "--json",                 "machine-readable JSON output" },
+	{ "--otel",                 "export the status report as an OTLP log" },
 	{ "--include-tpm",          "read the live NV chain and replay the eventlog" },
 	{ "--include-system",       "add a `system` block (hostname, kernel, arch, cpus, ...)" },
 	{ "--include-eventlog",     "dump eventlog entries (implies --include-tpm)" },
@@ -376,7 +380,7 @@ static const struct shirudo_help_section status_help_sections[] = {
 };
 
 static const struct shirudo_help status_help = {
-	.usage      = "shirudo status [--json] [--include-tpm] "
+	.usage      = "shirudo status [--json] [--otel] [--include-tpm] "
 		      "[--include-system] [--include-eventlog]\n"
 		      "                       [--include-kernellog[=N]] "
 		      "[--include-modules] [--show-full]",
@@ -491,9 +495,25 @@ static const char *roles_str(int is_target, int is_operator)
 	return "none";
 }
 
+static int status_otel_severity(const char *status, const char **text)
+{
+	if (strcmp(status, "ok") == 0) {
+		*text = "INFO";
+		return 9;
+	}
+	if (strcmp(status, "degraded") == 0 ||
+	    strcmp(status, "init-pending") == 0) {
+		*text = "WARN";
+		return 13;
+	}
+	*text = "ERROR";
+	return 17;
+}
+
 int cmd_status(int argc, const char **argv)
 {
 	bool json = false, include_tpm = false;
+	bool json_stdout = false, otel = false;
 	bool include_system = false, include_eventlog = false;
 	bool include_kernel_log = false, include_modules = false;
 	bool show_full = false;
@@ -501,6 +521,8 @@ int cmd_status(int argc, const char **argv)
 	bool lsm_attached, keyring_present, is_operator, cert_present, is_target;
 	key_serial_t keyring_serial, keyring_pinned;
 	struct shirudo_sysinfo sysi = {};
+	struct shirudo_config otel_cfg = {};
+	struct shirudo_otel_opts otel_opts = {};
 	struct asset_view assets;
 	struct dirent **ups = NULL;
 	uint8_t chain[SHIRUDO_CHAIN_DIGEST_LEN];
@@ -512,10 +534,13 @@ int cmd_status(int argc, const char **argv)
 	int chain_rc = 0, ev_rc = -ENOENT;
 	int match = -1;		/* -1 unknown, 0 mismatch, 1 match */
 	int n_ups, i, fd, ret = 0;
+	const char *otel_status = NULL;
 
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--json") == 0)
-			json = true;
+			json_stdout = true;
+		else if (strcmp(argv[i], "--otel") == 0)
+			otel = true;
 		else if (strcmp(argv[i], "--include-tpm") == 0)
 			include_tpm = true;
 		else if (strcmp(argv[i], "--include-system") == 0)
@@ -551,6 +576,26 @@ int cmd_status(int argc, const char **argv)
 			usage();
 			return 2;
 		}
+	}
+	json = json_stdout || otel;
+	if (otel) {
+		int rc = shirudo_config_load(&otel_cfg);
+
+		if (rc) {
+			pr_err("status: load OTEL configuration: %s", strerror(-rc));
+			return 1;
+		}
+		if (!otel_cfg.map_export_valid) {
+			pr_err("status: invalid OTEL configuration");
+			return 2;
+		}
+		otel_opts.endpoint = otel_cfg.map_export_otel_endpoint[0] ?
+			otel_cfg.map_export_otel_endpoint : NULL;
+		otel_opts.tenant_id = otel_cfg.map_export_tenant_id[0] ?
+			otel_cfg.map_export_tenant_id : NULL;
+		otel_opts.allow_insecure = otel_cfg.map_export_otel_insecure;
+		otel_opts.retries = otel_cfg.map_export_otel_retries;
+		otel_opts.otlp_max_bytes = otel_cfg.map_export_otlp_max_bytes;
 	}
 
 	/*
@@ -656,8 +701,9 @@ int cmd_status(int argc, const char **argv)
 				include_tpm && chain_rc == 0,
 				match == 1, match >= 0,
 				include_tpm ? nv_index : NULL);
+			otel_status = shirudo_status_verdict(&cin);
 			shirudo_json_kv_string(&e, "status",
-					       shirudo_status_verdict(&cin));
+					       otel_status);
 			nc = shirudo_conditions(&cin, conds,
 						ARRAY_SIZE(conds));
 			shirudo_json_arr_open(&e, "conditions");
@@ -832,8 +878,29 @@ int cmd_status(int argc, const char **argv)
 		if (e.err)
 			fprintf(stderr, "status: json encode failed: %s\n",
 				strerror(-e.err));
-		else
-			printf("%s\n", json_buf);
+		else {
+			if (otel) {
+				const char *severity_text;
+				int severity_number;
+				int rc;
+
+				severity_number = status_otel_severity(otel_status,
+								      &severity_text);
+				rc = shirudo_otel_send_log_json(
+					&otel_opts, "shirudo.keepalive",
+					"shirudo.keepalive", severity_number,
+					severity_text, otel_status,
+					shirudo_version_id, json_buf,
+					strlen(json_buf));
+				if (rc) {
+					pr_err("status: OTEL export failed: %s",
+					       strerror(-rc));
+					ret = 1;
+				}
+			}
+			if (json_stdout)
+				printf("%s\n", json_buf);
+		}
 	} else {
 		struct shirudo_conditions_input cin;
 		struct shirudo_condition conds[SHIRUDO_CONDITIONS_MAX];
