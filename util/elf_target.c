@@ -20,32 +20,16 @@
 #include "elf_target.h"
 #include "malloc.h"
 
-static bool glob_match(const char *str, const char *pat)
-{
-	while (*str && *pat && *pat != '*') {
-		if (*pat == '?') {
-			str++;
-			pat++;
-			continue;
-		}
-		if (*str != *pat)
-			return false;
-		str++;
-		pat++;
-	}
-	if (*pat == '*') {
-		while (*pat == '*')
-			pat++;
-		if (!*pat)
-			return true;
-		while (*str) {
-			if (glob_match(str, pat))
-				return true;
-			str++;
-		}
-	}
-	return !*str && !*pat;
-}
+/*
+ * libbpf uses this resolver for its uprobe.multi attach path. It is not yet
+ * part of libbpf's installed public headers, so keep the narrow declaration
+ * local instead of including libbpf_internal.h (which requires kernel-only
+ * headers that are not part of Shirudo's userspace build).
+ */
+extern int elf_resolve_pattern_offsets(const char *binary_path,
+					      const char *pattern,
+					      unsigned long **poffsets,
+					      size_t *pcnt);
 
 static int u64_cmp(const void *a, const void *b)
 {
@@ -53,86 +37,6 @@ static int u64_cmp(const void *a, const void *b)
 	uint64_t bv = *(const uint64_t *)b;
 
 	return av > bv ? 1 : av < bv ? -1 : 0;
-}
-
-static int append_offset(uint64_t **offsets, uint32_t *nr, uint32_t *cap,
-			 uint64_t offset)
-{
-	uint64_t *grown;
-	uint32_t next;
-
-	if (*nr == SHIRUDO_UPATCH_UPROBE_OFFSETS_MAX)
-		return -E2BIG;
-	if (*nr < *cap) {
-		(*offsets)[(*nr)++] = offset;
-		return 0;
-	}
-	next = *cap ? *cap * 2 : 16;
-	if (next > SHIRUDO_UPATCH_UPROBE_OFFSETS_MAX || next < *cap)
-		next = SHIRUDO_UPATCH_UPROBE_OFFSETS_MAX;
-	grown = xreallocarray(*offsets, *cap, next, sizeof(**offsets));
-	if (!grown)
-		return -ENOMEM;
-	*offsets = grown;
-	*cap = next;
-	(*offsets)[(*nr)++] = offset;
-	return 0;
-}
-
-static int resolve_symtab(Elf *elf, unsigned int sh_type,
-			  const char *pattern, uint64_t **offsets,
-			  uint32_t *nr, uint32_t *cap)
-{
-	Elf_Scn *scn = NULL;
-	bool found_table = false;
-
-	while ((scn = elf_nextscn(elf, scn)) != NULL) {
-		GElf_Shdr shdr;
-		Elf_Data *data = NULL;
-		size_t i, nr_syms;
-
-		if (!gelf_getshdr(scn, &shdr))
-			return -EINVAL;
-		if (shdr.sh_type != sh_type)
-			continue;
-		found_table = true;
-		if (!shdr.sh_entsize)
-			return -EINVAL;
-		while ((data = elf_getdata(scn, data)) != NULL) {
-			nr_syms = data->d_size / shdr.sh_entsize;
-			for (i = 0; i < nr_syms; i++) {
-				GElf_Shdr target_shdr;
-				GElf_Sym sym;
-				Elf_Scn *target_scn;
-				const char *name;
-				uint64_t offset;
-				int err;
-
-				if (!gelf_getsym(data, (int)i, &sym))
-					continue;
-				if (GELF_ST_TYPE(sym.st_info) != STT_FUNC)
-					continue;
-				name = elf_strptr(elf, shdr.sh_link, sym.st_name);
-				if (!name || !glob_match(name, pattern))
-					continue;
-				if (sym.st_shndx == SHN_UNDEF ||
-				    sym.st_shndx >= SHN_LORESERVE)
-					continue;
-				target_scn = elf_getscn(elf, sym.st_shndx);
-				if (!target_scn ||
-				    !gelf_getshdr(target_scn, &target_shdr))
-					continue;
-				if (sym.st_value < target_shdr.sh_addr)
-					continue;
-				offset = sym.st_value - target_shdr.sh_addr +
-					 target_shdr.sh_offset;
-				err = append_offset(offsets, nr, cap, offset);
-				if (err)
-					return err;
-			}
-		}
-	}
-	return found_table ? 0 : -ENOENT;
 }
 
 static int note_build_id(Elf_Data *data,
@@ -241,8 +145,9 @@ int shirudo_elf_target_resolve(const char *path, const char *pattern,
 			       struct shirudo_elf_target *out)
 {
 	Elf *elf = NULL;
-	uint64_t *offsets = NULL;
-	uint32_t nr = 0, cap = 0, i, unique;
+	unsigned long *resolved_offsets = NULL;
+	uint32_t i, unique;
+	size_t nr_resolved = 0;
 	int fd = -1, err;
 
 	if (!path || path[0] != '/' || !pattern || !pattern[0] || !out)
@@ -261,45 +166,51 @@ int shirudo_elf_target_resolve(const char *path, const char *pattern,
 	err = elf_build_id(elf, out->build_id, &out->build_id_len);
 	if (err)
 		goto out;
-	err = resolve_symtab(elf, SHT_SYMTAB, pattern, &offsets, &nr, &cap);
-	if (err && err != -ENOENT)
+
+	/*
+	 * libbpf owns the ELF symbol matching and virtual-address-to-file-offset
+	 * conversion used by uprobe.multi. Keep only the build-ID extraction above
+	 * in this Shirudo-specific adapter.
+	 */
+	err = elf_resolve_pattern_offsets(path, pattern,
+					  &resolved_offsets, &nr_resolved);
+	if (err)
 		goto out;
-	if (!nr) {
-		err = resolve_symtab(elf, SHT_DYNSYM, pattern,
-				     &offsets, &nr, &cap);
-		if (err && err != -ENOENT)
-			goto out;
-	}
-	if (!nr) {
+	if (nr_resolved == 0) {
 		err = -ENOENT;
 		goto out;
 	}
-	qsort(offsets, nr, sizeof(*offsets), u64_cmp);
-	for (i = 1, unique = 1; i < nr; i++) {
-		if (offsets[i] != offsets[unique - 1])
-			offsets[unique++] = offsets[i];
+	if (nr_resolved > SHIRUDO_UPATCH_UPROBE_OFFSETS_MAX ||
+	    nr_resolved > UINT32_MAX) {
+		err = -E2BIG;
+		goto out;
 	}
-	if (unique != nr) {
-		uint64_t *deduped = xreallocarray(offsets, cap, unique,
-						   sizeof(*offsets));
+	out->offsets = xcalloc(nr_resolved, sizeof(*out->offsets));
+	if (!out->offsets) {
+		err = -ENOMEM;
+		goto out;
+	}
+	for (i = 0; i < nr_resolved; i++)
+		out->offsets[i] = resolved_offsets[i];
+	out->nr_offsets = (uint32_t)nr_resolved;
+	shirudo_libc_free(resolved_offsets);
+	resolved_offsets = NULL;
 
-		if (deduped)
-			offsets = deduped;
-		cap = unique;
-		nr = unique;
+	qsort(out->offsets, out->nr_offsets, sizeof(*out->offsets), u64_cmp);
+	for (i = 1, unique = 1; i < out->nr_offsets; i++) {
+		if (out->offsets[i] != out->offsets[unique - 1])
+			out->offsets[unique++] = out->offsets[i];
 	}
-	out->offsets = offsets;
-	out->nr_offsets = nr;
-	offsets = NULL;
+	out->nr_offsets = unique;
 	err = 0;
 out:
 	if (elf)
 		elf_end(elf);
 	if (fd >= 0)
 		close(fd);
-	xfree(offsets, (size_t)cap * sizeof(*offsets));
+	shirudo_libc_free(resolved_offsets);
 	if (err)
-		memset(out, 0, sizeof(*out));
+		shirudo_elf_target_free(out);
 	return err;
 }
 
