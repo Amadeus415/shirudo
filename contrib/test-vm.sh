@@ -26,6 +26,10 @@ KERNEL_SHA256="${TEST_VM_KERNEL_SHA256:-}"
 KERNEL_OVERRIDE="${TEST_VM_KERNEL:-}"
 ROOTFS_URL="${TEST_VM_ROOTFS_URL:-$DEFAULT_ROOTFS_URL}"
 ROOTFS_SHA256="${TEST_VM_ROOTFS_SHA256:-}"
+MAP_EXPORT_ENDPOINT="${TEST_VM_MAP_EXPORT_ENDPOINT:-}"
+MAP_EXPORT_TENANT_ID="${TEST_VM_MAP_EXPORT_TENANT_ID:-}"
+MAP_EXPORT_INSECURE="${TEST_VM_MAP_EXPORT_INSECURE:-}"
+MAP_EXPORT_ENABLED=0
 RUN_DIR=""
 SWTPM_PIDFILE=""
 QEMU_PID=""
@@ -51,6 +55,29 @@ die()
 {
 	log "error: $*"
 	exit 1
+}
+
+validate_map_export()
+{
+	local configured=0
+
+	[[ -n "$MAP_EXPORT_ENDPOINT" ]] && configured=$((configured + 1))
+	[[ -n "$MAP_EXPORT_TENANT_ID" ]] && configured=$((configured + 1))
+	[[ -n "$MAP_EXPORT_INSECURE" ]] && configured=$((configured + 1))
+	if (( configured == 0 )); then
+		return
+	fi
+	(( configured == 3 )) ||
+		die "TEST_VM_MAP_EXPORT_ENDPOINT, TEST_VM_MAP_EXPORT_TENANT_ID, and TEST_VM_MAP_EXPORT_INSECURE must be set together"
+	[[ "$MAP_EXPORT_INSECURE" == "true" ]] ||
+		die "TEST_VM_MAP_EXPORT_INSECURE must be exactly true"
+	[[ ${#MAP_EXPORT_ENDPOINT} -lt 2048 ]] ||
+		die "TEST_VM_MAP_EXPORT_ENDPOINT is too long"
+	[[ "$MAP_EXPORT_ENDPOINT" != *[[:space:]]* ]] ||
+		die "TEST_VM_MAP_EXPORT_ENDPOINT must not contain whitespace"
+	[[ "$MAP_EXPORT_TENANT_ID" =~ ^[A-Za-z0-9._-]{1,128}$ ]] ||
+		die "TEST_VM_MAP_EXPORT_TENANT_ID must contain 1..128 characters from A-Z, a-z, 0-9, '.', '_', '-'"
+	MAP_EXPORT_ENABLED=1
 }
 
 print_dependency_install_command()
@@ -280,6 +307,7 @@ fetch_rootfs()
 }
 
 validate_kernel_selection
+validate_map_export
 check_host_dependencies
 [[ "$CPUS" =~ ^[1-9][0-9]*$ ]] || die "TEST_VM_CPUS must be a positive integer"
 [[ "$VM_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || die "TEST_VM_TIMEOUT must be a positive integer"
@@ -339,6 +367,18 @@ write_files:
       fi
       exec > >(tee -a /dev/ttyS0 /mnt/shirudo-out/guest.log) 2>&1
       rc=0
+EOF
+if [[ "$MAP_EXPORT_ENABLED" -eq 1 ]]; then
+	{
+		printf '      export TEST_VM_MAP_EXPORT_ENDPOINT=%q\n' \
+			"$MAP_EXPORT_ENDPOINT"
+		printf '      export TEST_VM_MAP_EXPORT_TENANT_ID=%q\n' \
+			"$MAP_EXPORT_TENANT_ID"
+		printf '      export TEST_VM_MAP_EXPORT_INSECURE=%q\n' \
+			"$MAP_EXPORT_INSECURE"
+	} >>"$USER_DATA"
+fi
+cat >>"$USER_DATA" <<'EOF'
       mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,ro shirudo-src /mnt/shirudo-src || rc=$?
       if [ "$rc" -eq 0 ]; then
         bash /mnt/shirudo-src/contrib/test-vm-guest.sh || rc=$?

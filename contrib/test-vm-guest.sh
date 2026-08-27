@@ -22,6 +22,35 @@ log()
 	printf '[test-vm guest] %s\n' "$*"
 }
 
+configure_map_export()
+{
+	local endpoint="${TEST_VM_MAP_EXPORT_ENDPOINT:-}"
+	local tenant_id="${TEST_VM_MAP_EXPORT_TENANT_ID:-}"
+	local insecure="${TEST_VM_MAP_EXPORT_INSECURE:-}"
+
+	if [[ -z "$endpoint" && -z "$tenant_id" && -z "$insecure" ]]; then
+		return 0
+	fi
+	[[ -n "$endpoint" && -n "$tenant_id" && "$insecure" == "true" ]] || {
+		log "invalid map-export bridge settings"
+		return 1
+	}
+
+	log "configuring OTEL map-export bridge"
+	# QEMU user networking exposes the host as 10.0.2.2. Remove any
+	# stale entry first so repeated boots always use the bridge address.
+	sed -E -i '/^[^#]*[[:space:]]otel\.test([[:space:]]|$)/d' /etc/hosts
+	printf '%s\n' '10.0.2.2 otel.test' >>/etc/hosts
+	install -d -m 0755 /etc/shirudo
+	printf '%s\n' \
+		"map_export.otel_endpoint = $endpoint" \
+		'map_export.otel_insecure = true' \
+		"map_export.tenant_id = $tenant_id" \
+		>/etc/shirudo/shirudo.conf
+}
+
+configure_map_export
+
 log "installing Ubuntu build and integration-test dependencies"
 apt-get update
 apt-get install -y --no-install-recommends \

@@ -103,6 +103,7 @@ shirudo make targets (run from the repo root):
                            has attached the LSM)
     make test-vm           boot the built bzImage with QEMU + swtpm and run
                            SHIRUDO_INTEGRATION=1 make check in the guest
+                           (TEST_VM_MAP_EXPORT_* enables host OTEL export)
     make test-vm-clean     remove cached rootfs and disposable VM state
 
   Install   (honors DESTDIR and prefix=/bindir=/libexecdir=/systemdunitdir=)

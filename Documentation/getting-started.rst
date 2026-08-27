@@ -189,6 +189,19 @@ timeout are configurable with ``TEST_VM_CPUS``, ``TEST_VM_MEMORY``,
 under ``build/test-vm/logs``; ``TEST_VM_KEEP=1`` also preserves the
 guest disk and TPM state, which contain the ephemeral signing key.
 
+To export map records to an OTEL collector running on the host, set all
+three map-export variables together::
+
+    make test-vm \
+        TEST_VM_MAP_EXPORT_ENDPOINT=http://otel.test:4318 \
+        TEST_VM_MAP_EXPORT_TENANT_ID=tenant-test \
+        TEST_VM_MAP_EXPORT_INSECURE=true
+
+The guest maps ``otel.test`` to the QEMU host gateway ``10.0.2.2`` and
+writes the corresponding ``map_export`` settings to
+``/etc/shirudo/shirudo.conf``.  Leaving these variables unset keeps the
+normal test-VM bootstrap unchanged.
+
 4. Generate the signing key (operator machine, one time)
 =========================================================
 

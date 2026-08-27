@@ -64,4 +64,35 @@ test_expect_success 'test-vm guest installs optional decoder dependencies' '
 		../contrib/test-vm-guest.sh
 '
 
+test_expect_success 'test-vm has an opt-in map-export bridge contract' '
+	grep -q "TEST_VM_MAP_EXPORT_ENDPOINT, TEST_VM_MAP_EXPORT_TENANT_ID, and TEST_VM_MAP_EXPORT_INSECURE must be set together" \
+		"$RUNNER" &&
+	grep -q "TEST_VM_MAP_EXPORT_INSECURE must be exactly true" "$RUNNER" &&
+	grep -q "export TEST_VM_MAP_EXPORT_ENDPOINT" "$RUNNER" &&
+	grep -q "10.0.2.2 otel.test" ../contrib/test-vm-guest.sh &&
+	grep -q "map_export.otel_endpoint = \$endpoint" ../contrib/test-vm-guest.sh &&
+	grep -q "map_export.otel_insecure = true" ../contrib/test-vm-guest.sh &&
+	grep -q "map_export.tenant_id = \$tenant_id" ../contrib/test-vm-guest.sh
+'
+
+test_expect_success 'test-vm rejects incomplete map-export bridge settings' '
+	printf kernel >"$WORK/map-export-kernel" &&
+	! TEST_VM_WORK_DIR="$WORK/incomplete-map-export" \
+		TEST_VM_KERNEL="$WORK/map-export-kernel" \
+		TEST_VM_MAP_EXPORT_ENDPOINT=http://otel.test:4318 \
+		TEST_VM_MAP_EXPORT_INSECURE=true "$RUNNER" \
+		>"$WORK/incomplete-map-export.out" 2>&1 &&
+	grep -q "must be set together" "$WORK/incomplete-map-export.out"
+'
+
+test_expect_success 'test-vm requires an insecure map-export bridge' '
+	! TEST_VM_WORK_DIR="$WORK/non-insecure-map-export" \
+		TEST_VM_KERNEL="$WORK/map-export-kernel" \
+		TEST_VM_MAP_EXPORT_ENDPOINT=http://otel.test:4318 \
+		TEST_VM_MAP_EXPORT_TENANT_ID=tenant-test \
+		TEST_VM_MAP_EXPORT_INSECURE=false "$RUNNER" \
+		>"$WORK/non-insecure-map-export.out" 2>&1 &&
+	grep -q "must be exactly true" "$WORK/non-insecure-map-export.out"
+'
+
 test_done
