@@ -765,6 +765,7 @@ static int build_log_payload(const char *path,
 	xfree(decoded, decoded_len + 1);
 	shirudo_json_arr_open(&e, "attributes");
 	otlp_kv_string(&e, "shirudo.upatch.name", v->upatch);
+	otlp_kv_string(&e, "shirudo.upatch.location", v->location);
 	otlp_kv_string(&e, "shirudo.map.name", v->name);
 	otlp_kv_string(&e, "shirudo.map.type", v->type_name);
 	otlp_kv_int(&e, "shirudo.map.n_cpus", v->n_cpus);
@@ -1031,6 +1032,7 @@ static __attribute__((unused)) int build_metric_payload(const struct otel_state 
 		shirudo_json_arr_open(&e, "attributes");
 		otlp_kv_string(&e, "shirudo.map.key", key ?: "");
 		otlp_kv_string(&e, "shirudo.upatch.name", v->upatch);
+		otlp_kv_string(&e, "shirudo.upatch.location", v->location);
 		otlp_kv_string(&e, "shirudo.map.name", v->name);
 		otlp_kv_string(&e, "shirudo.map.type", v->type_name);
 		shirudo_json_arr_close(&e);
@@ -2560,6 +2562,7 @@ static int build_s3_reference(const struct shirudo_map_view *v,
 	shirudo_json_obj_close(&e);
 	shirudo_json_arr_open(&e, "attributes");
 	otlp_kv_string(&e, "shirudo.upatch.name", v->upatch);
+	otlp_kv_string(&e, "shirudo.upatch.location", v->location);
 	otlp_kv_string(&e, "shirudo.map.name", v->name);
 	otlp_kv_string(&e, "shirudo.map.type", v->type_name);
 	otlp_kv_int(&e, "shirudo.map.max_entries", v->max_entries);

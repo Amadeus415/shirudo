@@ -20,11 +20,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "upatch_resolve.h"
+
 struct shirudo_json_emit;
 
 struct shirudo_upatch_table_row {
 	char		name[64];
-	char		location[160];	/* SEC()-style, e.g. "fexit/tcp_v4_connect" */
+	char		location[SHIRUDO_UPATCH_LOCATION_MAX];	/* SEC()-style */
 	char		loaded_at[32];	/* ISO-8601 UTC, "" if unknown */
 	uint32_t	n_maps;
 	int64_t		age_sec;	/* derived from loaded_at; -1 if unknown */

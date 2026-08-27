@@ -171,6 +171,8 @@ static int fixture_init(struct fixture *f, uint32_t map_type, bool is_signed,
 	memset(f, 0, sizeof(*f));
 	snprintf(f->view.upatch, sizeof(f->view.upatch), "test-upatch");
 	snprintf(f->view.name, sizeof(f->view.name), "hits_total");
+	snprintf(f->view.location, sizeof(f->view.location),
+		  "fentry/test_hook");
 	f->view.type = map_type;
 	f->view.type_name = map_type == BPF_MAP_TYPE_ARRAY ? "array" :
 		"percpu_array";
@@ -235,7 +237,7 @@ static int print_classification(uint32_t type, bool is_signed, bool with_btf,
 	return rc != 0;
 }
 
-static int print_payload(bool metric, bool counter)
+static int print_payload(bool metric, bool counter, bool with_location)
 {
 	struct shirudo_otel_opts opts = {
 		.metric_kind = counter ? SHIRUDO_OTEL_METRIC_COUNTER :
@@ -252,6 +254,8 @@ static int print_payload(bool metric, bool counter)
 
 	if (rc)
 		return 1;
+	if (!with_location)
+		f.view.location[0] = '\0';
 	rc = make_decoder(metric, counter, false, decoder_path,
 				  sizeof(decoder_path));
 	if (!rc)
@@ -561,11 +565,13 @@ int main(int argc, char **argv)
 		return print_classification(BPF_MAP_TYPE_PERCPU_ARRAY, false,
 					    true, true);
 	if (strcmp(argv[1], "log") == 0)
-		return print_payload(false, false);
+		return print_payload(false, false, true);
+	if (strcmp(argv[1], "log-no-location") == 0)
+		return print_payload(false, false, false);
 	if (strcmp(argv[1], "metric") == 0)
-		return print_payload(true, false);
+		return print_payload(true, false, true);
 	if (strcmp(argv[1], "counter") == 0)
-		return print_payload(true, true);
+		return print_payload(true, true, true);
 	if (strcmp(argv[1], "local-json") == 0)
 		return print_local_json();
 	if (strcmp(argv[1], "send-log") == 0 && argc == 4)

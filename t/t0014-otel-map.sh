@@ -70,6 +70,20 @@ entry=data["entries"]["arrayValue"]["values"][0]["kvlistValue"]["values"]
 entry={x["key"]:x["value"] for x in entry}
 assert [x["stringValue"] for x in entry["values_per_cpu"]["arrayValue"]["values"]] == ["5", "7"]
 assert entry["sum"]["stringValue"] == "12"
+attrs={x["key"]:x["value"] for x in r["attributes"]}
+assert attrs["shirudo.upatch.name"]["stringValue"] == "test-upatch"
+assert attrs["shirudo.upatch.location"]["stringValue"] == "fentry/test_hook"
+assert attrs["shirudo.map.name"]["stringValue"] == "hits_total"
+'\''
+'
+
+test_expect_success 'OTLP log tolerates an unavailable upatch location' '
+	"$H" log-no-location | python3 -c '\''
+import json,sys
+d=json.load(sys.stdin)
+r=d["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0]
+attrs={x["key"]:x["value"] for x in r["attributes"]}
+assert attrs["shirudo.upatch.location"]["stringValue"] == ""
 '\''
 '
 
@@ -238,6 +252,9 @@ record=log["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0]
 assert record["eventName"] == "shirudo.bpf.map.snapshot.reference"
 assert set(record["body"]) == {"stringValue"}
 attrs={x["key"]:x["value"] for x in record["attributes"]}
+assert attrs["shirudo.upatch.name"]["stringValue"] == "test-upatch"
+assert attrs["shirudo.upatch.location"]["stringValue"] == "fentry/test_hook"
+assert attrs["shirudo.map.name"]["stringValue"] == "hits_total"
 uri=attrs["shirudo.map.snapshot.uri"]["stringValue"]
 assert uri.startswith("s3://test-bucket/prefix/") and uri.endswith(digest+".json.gz")
 assert attrs["shirudo.map.snapshot.sha256"]["stringValue"] == digest

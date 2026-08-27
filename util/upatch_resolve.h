@@ -18,6 +18,8 @@
 
 struct btf;
 
+#define SHIRUDO_UPATCH_LOCATION_MAX	160
+
 /*
  * Open the first pinned link for an upatch. Single-program upatches use
  * "link"; multi-program upatches use "link_0", "link_1", ...

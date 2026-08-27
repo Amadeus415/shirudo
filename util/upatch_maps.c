@@ -27,6 +27,7 @@
 
 #include <bpf/bpf.h>
 #include <bpf/btf.h>
+#include <bpf/libbpf.h>
 
 #include "json.h"
 #include "malloc.h"
@@ -34,6 +35,7 @@
 #include "serializer.h"
 #include "upatch_map_types.h"
 #include "upatch_maps.h"
+#include "upatch_resolve.h"
 #include "bpf/lib/shirudo_serializer.h"
 
 /*
@@ -43,6 +45,22 @@
  * pretty-printing in a "shirudo upatch get" view.
  */
 #define SHIRUDO_BTF_MAX_DEPTH		6
+
+/* Resolve the parent upatch location without making it required for reads. */
+static void resolve_map_location(struct shirudo_map_view *v)
+{
+	struct btf *vbtf;
+
+	if (!v)
+		return;
+	vbtf = btf__load_vmlinux_btf();
+	if (libbpf_get_error(vbtf))
+		vbtf = NULL;
+	(void)shirudo_upatch_resolve_location(vbtf, v->upatch,
+					      v->location, sizeof(v->location));
+	if (vbtf)
+		btf__free(vbtf);
+}
 #define SHIRUDO_SERIAL_MAX_BYTES \
 	(SHIRUDO_SERIAL_MAX_CHUNKS * SHIRUDO_SERIAL_CHUNK_PAYLOAD)
 #define SHIRUDO_SERIAL_MAX_TOTAL_BYTES \
@@ -1191,6 +1209,7 @@ int shirudo_upatch_maps_read(const char *upatch, const char *map,
 	out->max_entries = info.max_entries;
 	out->n_cpus = shirudo_upatch_map_is_percpu(info.type) ?
 			(uint32_t)nproc_possible() : 1;
+	resolve_map_location(out);
 	if ((size_t)snprintf(upatch_dir, sizeof(upatch_dir), "%s/%s",
 			     SHIRUDO_BPFFS_UPATCHES_DIR, upatch) <
 	    sizeof(upatch_dir) && stat(upatch_dir, &upatch_st) == 0)

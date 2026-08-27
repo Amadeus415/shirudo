@@ -20,6 +20,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "upatch_resolve.h"
+
 /* Default truncation cap; --show-full lifts it. */
 #define SHIRUDO_MAP_ENTRIES_DEFAULT	256
 
@@ -62,6 +64,7 @@ struct shirudo_serial_page {
 struct shirudo_map_view {
 	char		upatch[64];
 	char		name[SHIRUDO_MAP_NAME_MAX + 1];
+	char		location[SHIRUDO_UPATCH_LOCATION_MAX];
 	uint32_t	type;		/* BPF_MAP_TYPE_* */
 	const char	*type_name;	/* "percpu_array" / "hash" / ... */
 	uint32_t	key_size;

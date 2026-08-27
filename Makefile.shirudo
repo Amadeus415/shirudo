@@ -443,7 +443,8 @@ t/helper/test-upatch-prog-metadata: t/helper/test-upatch-prog-metadata.c \
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 t/helper/test-upatch-serializer-pages: t/helper/test-upatch-serializer-pages.c \
-                                       util/upatch_maps.o util/serializer.o \
+                                       util/upatch_maps.o util/upatch_resolve.o \
+                                       util/serializer.o \
                                        util/json.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS)
