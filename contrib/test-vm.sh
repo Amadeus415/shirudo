@@ -766,7 +766,7 @@ read_guest_status()
 }
 
 if [[ "$VM_MODE" == interactive ]]; then
-	QEMU_ARGS+=( -serial "file=${RUN_DIR}/console.log" )
+	QEMU_ARGS+=( -serial "file:${RUN_DIR}/console.log" )
 	nohup qemu-system-x86_64 "${QEMU_ARGS[@]}" \
 		>"$RUN_DIR/qemu.log" 2>&1 < /dev/null &
 	QEMU_PID=$!
@@ -777,7 +777,7 @@ if [[ "$VM_MODE" == interactive ]]; then
 	log "VM ready: name=$VM_NAME state=$RUN_DIR qemu_pid=$QEMU_PID swtpm_pid=$(<"$SWTPM_PIDFILE")"
 	log "console log: $RUN_DIR/console.log"
 else
-	QEMU_ARGS+=( -serial "file=${RUN_DIR}/console.log" )
+	QEMU_ARGS+=( -serial "file:${RUN_DIR}/console.log" )
 	set +e
 	timeout --signal=TERM --kill-after=30 "$VM_TIMEOUT" \
 		qemu-system-x86_64 "${QEMU_ARGS[@]}" \
