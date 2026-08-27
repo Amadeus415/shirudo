@@ -12,6 +12,7 @@ export HOME=/root
 export LOGNAME=root
 export USER=root
 LOWER=/mnt/shirudo-src
+BUNDLE=/mnt/shirudo-bundle
 UPPER=/var/tmp/shirudo-upper
 OVERLAY_WORK=/var/tmp/shirudo-overlay-work
 WORKSPACE=/workspace/shirudo
@@ -112,20 +113,19 @@ cd "$WORKSPACE"
 git config --global --add safe.directory "$WORKSPACE"
 git config --global --add safe.directory "$WORKSPACE/third_party/bpf-next"
 
-log "building Shirudo and its operator-side builder"
-BPF_MAKE_ARGS=()
-if [[ -f artifacts/bpf-next-kernel-debs/shirudo-bpf-deps/bpftool &&
-      -f artifacts/bpf-next-kernel-debs/shirudo-bpf-deps/bpf/libbpf.a &&
-      -f artifacts/bpf-next-kernel-debs/shirudo-bpf-deps/vmlinux.h ]]; then
-	log "using bpf-next kernel dependency artifacts"
-	BPF_MAKE_ARGS=(USE_BPF_NEXT_DEPS=1)
-else
-	log "bpf-next kernel dependency artifacts unavailable; building vendored tools"
-fi
-make distclean
-make -j "$JOBS" "${BPF_MAKE_ARGS[@]}" all
-make -j "$JOBS" "${BPF_MAKE_ARGS[@]}" shirudo-build
-make "${BPF_MAKE_ARGS[@]}" install-target install-operator
+log "importing host-built Shirudo payload"
+log "host bundle dependency mode: $(<"$BUNDLE/dependency-mode")"
+install -d /usr/local/bin /usr/local/libexec/shirudo
+install -m 0755 "$BUNDLE/root/usr/local/bin/shirudo" /usr/local/bin/shirudo
+install -m 0755 "$BUNDLE/root/usr/local/libexec/shirudo/shirudo-build" \
+	/usr/local/libexec/shirudo/shirudo-build
+install -d "$WORKSPACE/bpf"
+install -m 0644 "$BUNDLE/root/usr/local/share/shirudo/vmlinux.h" \
+	"$WORKSPACE/bpf/vmlinux.h"
+mkdir -p "$WORKSPACE/bpf/include"
+cp -a "$BUNDLE/root/usr/local/share/shirudo/bpf/include/." \
+	"$WORKSPACE/bpf/include/"
+cp -a "$BUNDLE/test-helpers/." "$WORKSPACE/"
 
 log "checking custom-kernel and vTPM prerequisites"
 mountpoint -q /sys/kernel/security || mount -t securityfs securityfs /sys/kernel/security
@@ -158,9 +158,16 @@ if [[ "$VM_MODE" == interactive ]]; then
 	exit 0
 fi
 
-log "running SHIRUDO_INTEGRATION=1 make check"
-SHIRUDO_INTEGRATION=1 \
-	SHIRUDO_BIN=/usr/local/bin/shirudo \
-	SHIRUDO_BUILD_BIN="$WORKSPACE/tools/shirudo-build/shirudo-build" \
-	make check
+log "running SHIRUDO_INTEGRATION=1 test suite"
+: >/mnt/shirudo-out/failed-tests
+: >/mnt/shirudo-out/failed-suites
+(
+	cd t
+	SHIRUDO_INTEGRATION=1 \
+		SHIRUDO_BIN=/usr/local/bin/shirudo \
+		SHIRUDO_BUILD_BIN=/usr/local/libexec/shirudo/shirudo-build \
+		SHIRUDO_TEST_FAILURES_FILE=/mnt/shirudo-out/failed-tests \
+		SHIRUDO_TEST_SUITE_FAILURES_FILE=/mnt/shirudo-out/failed-suites \
+		./run-tests.sh
+)
 log "integration suite passed"

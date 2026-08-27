@@ -35,7 +35,7 @@ test_expect_success 'target install resolves and stages both exporter units' '
 		../systemd/shirudo-map-export.service.in >"$GENERATED" &&
 	(
 		cd .. &&
-		make -Bn -f Makefile.shirudo bindir=/opt/shirudo/bin \
+		make -n -f Makefile.shirudo bindir=/opt/shirudo/bin \
 			DESTDIR="$WORK/target" \
 			systemdunitdir=/usr/lib/systemd/system install-target \
 			>"$WORK/target.plan"

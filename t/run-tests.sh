@@ -12,6 +12,7 @@ cd "$(dirname "$0")"
 
 fail=0
 found=0
+: "${SHIRUDO_TEST_SUITE_FAILURES_FILE:=}"
 for t in t[0-9][0-9][0-9][0-9]-*.sh; do
 	[ -e "$t" ] || continue
 	found=1
@@ -19,6 +20,9 @@ for t in t[0-9][0-9][0-9][0-9]-*.sh; do
 		:
 	else
 		fail=$((fail + 1))
+		if [ -n "$SHIRUDO_TEST_SUITE_FAILURES_FILE" ]; then
+			printf '%s\n' "$t" >>"$SHIRUDO_TEST_SUITE_FAILURES_FILE" 2>/dev/null || :
+		fi
 	fi
 done
 

@@ -9,11 +9,32 @@
 # VM_MODE=test|interactive selects the mode. VM_NAME optionally selects a
 # stable state directory; if omitted, a unique name is allocated atomically.
 # VM_TENANT is used as the map-export tenant when OTEL export is enabled.
+# VM_VERBOSE=1 streams test-mode QEMU output to the terminal as well as the
+# console log.
 
 set -euo pipefail
 
+SECONDS=0
+
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+	COLOR_BOLD=$'\033[1m'
+	COLOR_GREEN=$'\033[32m'
+	COLOR_RED=$'\033[31m'
+	COLOR_YELLOW=$'\033[33m'
+	COLOR_CYAN=$'\033[36m'
+	COLOR_RESET=$'\033[0m'
+else
+	COLOR_BOLD=""
+	COLOR_GREEN=""
+	COLOR_RED=""
+	COLOR_YELLOW=""
+	COLOR_CYAN=""
+	COLOR_RESET=""
+fi
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VM_ROOT="${TEST_VM_WORK_DIR:-${REPO_ROOT}/build/test-vm}"
+TEST_VM_HOST_BUNDLE="${TEST_VM_HOST_BUNDLE:-${VM_ROOT}/host-bundle}"
 CACHE_DIR="${VM_ROOT}/cache"
 VMS_DIR="${VM_ROOT}/vms"
 LOGS_DIR="${VM_ROOT}/logs"
@@ -26,6 +47,7 @@ MEMORY="${TEST_VM_MEMORY:-4G}"
 DISK_SIZE="${TEST_VM_DISK_SIZE:-30G}"
 VM_TIMEOUT="${TEST_VM_TIMEOUT:-3600}"
 VM_MODE="${VM_MODE:-test}"
+VM_VERBOSE="${VM_VERBOSE:-0}"
 VM_NAME_REQUEST="${VM_NAME:-}"
 VM_TENANT="${VM_TENANT:-}"
 KERNEL_URL="${TEST_VM_KERNEL_URL:-}"
@@ -41,6 +63,10 @@ MAP_EXPORT_ENABLED=0
 RUN_DIR=""
 SWTPM_PIDFILE=""
 QEMU_PID=""
+QEMU_STATUS=1
+PROGRESS_LINES=0
+GUEST_STATUS=""
+FAILURE_LOG_DIR=""
 FINAL_STATUS=1
 LEAVE_RUNNING=0
 HOST_DEPENDENCIES=(
@@ -52,12 +78,17 @@ HOST_DEPENDENCIES=(
 	"swtpm:swtpm"
 	"cloud-localds:cloud-image-utils"
 	"timeout:coreutils"
-	"tee:coreutils"
+	"flock:util-linux"
 )
 
 log()
 {
 	printf '[test-vm] %s\n' "$*" >&2
+}
+
+summary_log()
+{
+	printf '[test-vm] %s\n' "$*"
 }
 
 die()
@@ -170,6 +201,16 @@ validate_kernel_selection()
 	fi
 }
 
+validate_host_bundle()
+{
+	[[ -x "$TEST_VM_HOST_BUNDLE/root/usr/local/bin/shirudo" ]] ||
+		die "host VM bundle is missing; run 'make test-vm-bundle' first: $TEST_VM_HOST_BUNDLE"
+	[[ -x "$TEST_VM_HOST_BUNDLE/root/usr/local/libexec/shirudo/shirudo-build" ]] ||
+		die "host VM bundle has no shirudo-build: $TEST_VM_HOST_BUNDLE"
+	[[ -s "$TEST_VM_HOST_BUNDLE/root/usr/local/share/shirudo/vmlinux.h" ]] ||
+		die "host VM bundle has no vmlinux.h: $TEST_VM_HOST_BUNDLE"
+}
+
 stop_swtpm()
 {
 	local pid
@@ -255,7 +296,7 @@ save_failure_logs()
 
 	[[ -n "$RUN_DIR" && -d "$RUN_DIR" ]] || return 0
 	saved="${LOGS_DIR}/$(basename "$RUN_DIR")"
-	for log_file in console.log guest.log swtpm.log; do
+	for log_file in console.log qemu.log guest.log swtpm.log failed-tests failed-suites; do
 		if [[ -f "$RUN_DIR/$log_file" ]]; then
 			path="$RUN_DIR/$log_file"
 		elif [[ -f "$RUN_DIR/result/$log_file" ]]; then
@@ -268,8 +309,151 @@ save_failure_logs()
 		copied=1
 	done
 	if [[ "$copied" -eq 1 ]]; then
-		log "failure logs: $saved"
+		FAILURE_LOG_DIR="$saved"
 	fi
+}
+
+format_elapsed()
+{
+	local elapsed="$1"
+	local hours minutes seconds
+
+	hours=$((elapsed / 3600))
+	minutes=$(((elapsed % 3600) / 60))
+	seconds=$((elapsed % 60))
+	printf '%02d:%02d:%02d' "$hours" "$minutes" "$seconds"
+}
+
+print_test_summary()
+{
+	local result result_color elapsed guest_log console_log qemu_log failed_tests failed_suites
+	local build_mode="unknown"
+	local kind script title suite
+	local individual_failures=0
+	local suite_failures=0
+	local bpffs_warning=0
+	local result_share_warning=0
+	declare -A recorded_suites=()
+
+	[[ "$VM_MODE" == test ]] || return 0
+	[[ -n "$RUN_DIR" && -d "$RUN_DIR" ]] || return 0
+
+	guest_log="$RUN_DIR/result/guest.log"
+	console_log="$RUN_DIR/console.log"
+	qemu_log="$RUN_DIR/qemu.log"
+	failed_tests="$RUN_DIR/result/failed-tests"
+	failed_suites="$RUN_DIR/result/failed-suites"
+	if [[ -f "$guest_log" ]]; then
+		if grep -qF 'host bundle dependency mode: bpf-next-deps' "$guest_log"; then
+			build_mode="host bundle (bpf-next deps)"
+		elif grep -qF 'host bundle dependency mode: vendored-tools' "$guest_log"; then
+			build_mode="host bundle (vendored tools)"
+		fi
+	fi
+
+	if [[ "$FINAL_STATUS" -eq 0 ]]; then
+		result=PASS
+		result_color="$COLOR_GREEN"
+	else
+		result=FAIL
+		result_color="$COLOR_RED"
+	fi
+
+	summary_log "${COLOR_BOLD}summary${COLOR_RESET}"
+	if [[ -n "$GUEST_STATUS" && "$FINAL_STATUS" -ne 0 ]]; then
+		summary_log "result: ${result_color}${result}${COLOR_RESET} (guest status $GUEST_STATUS)"
+	else
+		summary_log "result: ${result_color}${result}${COLOR_RESET}"
+	fi
+	summary_log "vm: $VM_NAME"
+	summary_log "elapsed: $(format_elapsed "$SECONDS")"
+	summary_log "bpf-next dependencies: ${COLOR_CYAN}${build_mode}${COLOR_RESET}"
+
+	if [[ "$FINAL_STATUS" -ne 0 ]]; then
+		if [[ -s "$failed_tests" ]]; then
+			summary_log "${COLOR_RED}failed tests:${COLOR_RESET}"
+			while IFS=$'\t' read -r kind script title; do
+				[[ "$kind" == test ]] || continue
+				script="${script#./}"
+				recorded_suites["$script"]=1
+				summary_log "  ${COLOR_RED}$script: $title${COLOR_RESET}"
+				individual_failures=1
+			done <"$failed_tests"
+		fi
+		if [[ -s "$failed_suites" ]]; then
+			while IFS= read -r suite; do
+				suite="${suite#./}"
+				if [[ -z "${recorded_suites[$suite]+present}" ]]; then
+					if [[ "$suite_failures" -eq 0 ]]; then
+						summary_log "${COLOR_RED}failed suites:${COLOR_RESET}"
+					fi
+					summary_log "  ${COLOR_RED}$suite (no individual TAP failure recorded)${COLOR_RESET}"
+					suite_failures=1
+				fi
+			done <"$failed_suites"
+		fi
+		if [[ "$individual_failures" -eq 0 && ! -s "$failed_suites" ]]; then
+			summary_log "${COLOR_RED}failed tests: none recorded (failure occurred before the test suite)${COLOR_RESET}"
+		fi
+	fi
+
+	summary_log "state: $RUN_DIR"
+	summary_log "guest log: $guest_log"
+	summary_log "console log: $console_log"
+	summary_log "qemu log: $qemu_log"
+	if [[ -n "$FAILURE_LOG_DIR" ]]; then
+		summary_log "failure logs: $FAILURE_LOG_DIR"
+	fi
+
+	if [[ -f "$console_log" ]]; then
+		if grep -Eq 'Failed unmounting .*var-lib-shirudo.*bpffs|Failed to unmount /oldroot/var/lib/shirudo/bpffs: Operation not permitted' "$console_log"; then
+			bpffs_warning=1
+		fi
+		if grep -Eq 'Failed unmounting .*mnt-shirudo.*out|Failed to unmount /oldroot: Device or resource busy' "$console_log"; then
+			result_share_warning=1
+		fi
+	fi
+	if [[ "$bpffs_warning" -eq 1 ]]; then
+		summary_log "cleanup: ${COLOR_YELLOW}bpffs unmount denied by Shirudo lockdown (expected)${COLOR_RESET}"
+	fi
+	if [[ "$result_share_warning" -eq 1 ]]; then
+		summary_log "cleanup: ${COLOR_YELLOW}9p result share was busy during shutdown (non-fatal)${COLOR_RESET}"
+	fi
+}
+
+print_quiet_progress()
+{
+	local guest_log="$RUN_DIR/result/guest.log"
+	local line_count
+
+	[[ "$VM_MODE" == test && "$VM_VERBOSE" != 1 ]] || return 0
+	[[ -f "$guest_log" ]] || return 0
+	line_count="$(wc -l <"$guest_log")"
+	[[ "$line_count" =~ ^[0-9]+$ ]] || return 0
+	(( line_count > PROGRESS_LINES )) || return 0
+	awk -v start=$((PROGRESS_LINES + 1)) '
+		NR >= start && /^(not )?ok [0-9]+ - / {
+			printf "[test-vm] test: %s\n", $0
+			fflush()
+		}
+	' "$guest_log"
+	PROGRESS_LINES="$line_count"
+}
+
+CONSOLE_BYTES=0
+
+stream_verbose_console()
+{
+	local console_log="$RUN_DIR/console.log"
+	local byte_count
+
+	[[ "$VM_MODE" == test && "$VM_VERBOSE" == 1 ]] || return 0
+	[[ -f "$console_log" ]] || return 0
+	byte_count="$(wc -c <"$console_log")"
+	[[ "$byte_count" =~ ^[0-9]+$ ]] || return 0
+	(( byte_count > CONSOLE_BYTES )) || return 0
+	tail -c "+$((CONSOLE_BYTES + 1))" "$console_log"
+	CONSOLE_BYTES="$byte_count"
 }
 
 cleanup()
@@ -281,7 +465,10 @@ cleanup()
 	if [[ "$FINAL_STATUS" -ne 0 ]]; then
 		save_failure_logs
 	fi
-	if [[ -n "$RUN_DIR" && -d "$RUN_DIR" ]]; then
+	if [[ "$VM_MODE" == test && -n "$RUN_DIR" && -d "$RUN_DIR" ]]; then
+		print_test_summary
+		log "warning: the guest overlay contains an ephemeral signing key"
+	elif [[ -n "$RUN_DIR" && -d "$RUN_DIR" ]]; then
 		log "preserved VM state: $RUN_DIR"
 		log "warning: the guest overlay contains an ephemeral signing key"
 	fi
@@ -402,17 +589,28 @@ allocate_run_dir()
 	mkdir -p "$RUN_DIR/result" "$RUN_DIR/tpm"
 }
 
-if [[ "${1:-}" == "--clean" ]]; then
-	[[ "$#" -eq 1 ]] || die "--clean does not accept additional arguments"
-	clean_state
-	exit 0
-fi
-[[ "$#" -eq 0 ]] || die "unknown argument '$1'"
+while [[ "$#" -gt 0 ]]; do
+	case "$1" in
+	--clean)
+		[[ "$#" -eq 1 ]] || die "--clean does not accept additional arguments"
+		clean_state
+		exit 0
+		;;
+	--verbose)
+		VM_VERBOSE=1
+		shift
+		;;
+	*)
+		die "unknown argument '$1'"
+		;;
+	esac
+done
 
 validate_mode
 validate_kernel_selection
 validate_map_export
 check_host_dependencies
+validate_host_bundle
 [[ "$CPUS" =~ ^[1-9][0-9]*$ ]] || die "TEST_VM_CPUS must be a positive integer"
 [[ "$VM_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || die "TEST_VM_TIMEOUT must be a positive integer"
 
@@ -461,9 +659,14 @@ write_files:
     content: |
       #!/usr/bin/env bash
       set -uo pipefail
-      mkdir -p /mnt/shirudo-src /mnt/shirudo-out
+      mkdir -p /mnt/shirudo-src /mnt/shirudo-bundle /mnt/shirudo-out
       if ! mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600 shirudo-out /mnt/shirudo-out; then
         echo "test-vm: could not mount result share" >/dev/ttyS0
+        poweroff -f
+        exit 1
+      fi
+      if ! mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,ro shirudo-bundle /mnt/shirudo-bundle; then
+        echo "test-vm: could not mount host bundle share" >/dev/ttyS0
         poweroff -f
         exit 1
       fi
@@ -526,6 +729,7 @@ QEMU_ARGS=(
 	-netdev user,id=net0 \
 	-device virtio-net-pci,netdev=net0 \
 	-virtfs "local,id=shirudo-src,path=${REPO_ROOT},mount_tag=shirudo-src,security_model=none,readonly=on" \
+	-virtfs "local,id=shirudo-bundle,path=${TEST_VM_HOST_BUNDLE},mount_tag=shirudo-bundle,security_model=none,readonly=on" \
 	-virtfs "local,id=shirudo-out,path=${RUN_DIR}/result,mount_tag=shirudo-out,security_model=none" \
 	-chardev "socket,id=chrtpm,path=${SWTPM_SOCKET}" \
 	-tpmdev emulator,id=tpm0,chardev=chrtpm \
@@ -573,26 +777,43 @@ if [[ "$VM_MODE" == interactive ]]; then
 	log "VM ready: name=$VM_NAME state=$RUN_DIR qemu_pid=$QEMU_PID swtpm_pid=$(<"$SWTPM_PIDFILE")"
 	log "console log: $RUN_DIR/console.log"
 else
-	QEMU_ARGS+=( -serial stdio )
+	QEMU_ARGS+=( -serial "file=${RUN_DIR}/console.log" )
 	set +e
 	timeout --signal=TERM --kill-after=30 "$VM_TIMEOUT" \
 		qemu-system-x86_64 "${QEMU_ARGS[@]}" \
-		> >(tee "$RUN_DIR/console.log") 2>&1 &
+		>"$RUN_DIR/qemu.log" 2>&1 &
 	QEMU_PID=$!
-	printf '%s\n' "$QEMU_PID" >"$RUN_DIR/qemu.pid"
+	while :; do
+		if [[ "$VM_VERBOSE" == 1 ]]; then
+			stream_verbose_console
+		else
+			print_quiet_progress
+		fi
+		[[ -s "$RUN_DIR/result/status" ]] && break
+		kill -0 "$QEMU_PID" 2>/dev/null || break
+		sleep 0.2
+	done
 	wait "$QEMU_PID"
 	QEMU_STATUS=$?
-	QEMU_PID=""
+	for _ in {1..5}; do
+		if [[ "$VM_VERBOSE" == 1 ]]; then
+			stream_verbose_console
+		else
+			print_quiet_progress
+		fi
+		sleep 0.1
+	done
 	set -e
-	rm -f -- "$RUN_DIR/qemu.pid"
 
 	if [[ "$QEMU_STATUS" -eq 124 ]]; then
 		die "VM timed out after ${VM_TIMEOUT}s"
 	fi
 	[[ "$QEMU_STATUS" -eq 0 ]] ||
 		die "QEMU exited with status $QEMU_STATUS"
+	QEMU_PID=""
 	read_guest_status
 
 	FINAL_STATUS=0
-	log "SHIRUDO_INTEGRATION=1 make check passed"
 fi
+
+exit "$FINAL_STATUS"

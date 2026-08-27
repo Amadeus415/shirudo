@@ -13,6 +13,7 @@ set -eu
 
 : "${TAP_COUNT:=0}"
 : "${TAP_FAILED:=0}"
+: "${SHIRUDO_TEST_FAILURES_FILE:=}"
 
 # Skip the whole script (TAP "1..0 # SKIP"). For tests whose
 # prerequisites (root, kernel feature, opt-in env) are absent: a clean
@@ -29,6 +30,10 @@ test_expect_success() {
 		printf 'ok %d - %s\n' "$TAP_COUNT" "$title"
 	else
 		printf 'not ok %d - %s\n' "$TAP_COUNT" "$title"
+		if [ -n "$SHIRUDO_TEST_FAILURES_FILE" ]; then
+			printf 'test\t%s\t%s\n' "$0" "$title" \
+				>>"$SHIRUDO_TEST_FAILURES_FILE" 2>/dev/null || :
+		fi
 		TAP_FAILED=$((TAP_FAILED + 1))
 	fi
 }

@@ -179,6 +179,20 @@ VM name and retains its stopped overlay, TPM state, and logs for inspection.
 The host checkout is mounted read-only and all guest build writes stay in
 the VM state.
 
+On completion, ``make test-vm`` prints a summary with the result, VM name,
+elapsed time, dependency-artifact mode, and retained log paths. If the suite
+fails, the summary also lists the failed test script and title when the TAP
+failure record is available; failures before the suite starts are reported
+with the log paths instead.
+
+In normal test mode, the guest serial console is kept in the reported
+``console.log`` and QEMU's host-side diagnostics are kept in ``qemu.log``.
+TAP ``ok`` and ``not ok`` lines are shown as quiet progress, followed by the
+final PASS/FAIL summary on standard output. To stream the full console while
+the VM runs, use ``make test-vm TEST_VM_VERBOSE=1``. The underlying runner also accepts
+``contrib/test-vm.sh --verbose``; GNU make does not support a target-specific
+``--verbose`` option.
+
 For a prepared VM without the integration suite, use ``make vm``.  It
 allocates a unique persistent VM name when ``VM_NAME`` is omitted, prepares
 the same guest and measured Shirudo installation, leaves QEMU and swtpm

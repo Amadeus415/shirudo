@@ -64,10 +64,16 @@ test_expect_success 'test-vm guest installs optional decoder dependencies' '
 		../contrib/test-vm-guest.sh
 '
 
-test_expect_success 'test-vm consumes bpf-next dependency artifacts' '
-	grep -q "BPF_MAKE_ARGS=(USE_BPF_NEXT_DEPS=1)" \
+test_expect_success 'test-vm imports the host-built payload' '
+	grep -q "TEST_VM_BUNDLE_DIR" ../Makefile &&
+	grep -q "test-vm-bundle" ../Makefile &&
+	grep -q "build-test-vm-bundle.sh" ../Makefile &&
+	grep -q "mount_tag=shirudo-bundle" ../contrib/test-vm.sh &&
+	grep -q "importing host-built Shirudo payload" \
 		../contrib/test-vm-guest.sh &&
-	grep -q "bpf-next kernel dependency artifacts unavailable" \
+	grep -q "SHIRUDO_BUILD_BIN=/usr/local/libexec/shirudo/shirudo-build" \
+		../contrib/test-vm-guest.sh &&
+	! grep -Fq "make \"\${BPF_MAKE_ARGS[@]}\" check" \
 		../contrib/test-vm-guest.sh &&
 	grep -Fq "BPFTOOL ?= \$(BPFTOOL_SOURCE_DIR)/bpftool" \
 		../Makefile.shirudo &&
@@ -75,6 +81,33 @@ test_expect_success 'test-vm consumes bpf-next dependency artifacts' '
 	grep -q "shirudo-bpf-deps" ../Makefile.shirudo &&
 	grep -q "Building Shirudo BPF dependency artifacts" \
 		../contrib/build-kernel-deb.sh
+'
+
+	test_expect_success 'test-vm summary records failed test names' '
+	grep -q "print_test_summary" ../contrib/test-vm.sh &&
+	grep -q "exit \"\$FINAL_STATUS\"" ../contrib/test-vm.sh &&
+	grep -q "failed tests:" ../contrib/test-vm.sh &&
+	grep -q "VM_VERBOSE" ../Makefile &&
+	grep -q "summary_log" ../contrib/test-vm.sh &&
+	grep -q "print_quiet_progress" ../contrib/test-vm.sh &&
+	grep -q "stream_verbose_console" ../contrib/test-vm.sh &&
+	grep -q "qemu.log\\\" 2>&1 &" ../contrib/test-vm.sh &&
+	grep -q "SHIRUDO_TEST_FAILURES_FILE" ../contrib/test-vm-guest.sh &&
+	grep -q "SHIRUDO_TEST_SUITE_FAILURES_FILE" ../contrib/test-vm-guest.sh &&
+	grep -q "SHIRUDO_TEST_FAILURES_FILE" ../t/test-lib.sh &&
+	grep -q "SHIRUDO_TEST_SUITE_FAILURES_FILE" ../t/run-tests.sh
+'
+
+test_expect_success 'test harness records a failed test title' '
+	printf "%s\n" \
+		"#!/bin/sh" \
+		". \"\$PWD/test-lib.sh\"" \
+		"test_expect_success \"synthetic failure\" \"false\"" \
+		"test_done" >"$WORK/failing-suite.sh" &&
+	! SHIRUDO_TEST_FAILURES_FILE="$WORK/failed-tests" \
+		sh "$WORK/failing-suite.sh" >"$WORK/failing-suite.out" 2>&1 &&
+	grep -Fq "test	$WORK/failing-suite.sh	synthetic failure" \
+		"$WORK/failed-tests"
 '
 
 test_expect_success 'make vm and test-vm share named mode support' '

@@ -38,7 +38,7 @@ systemdunitdir ?= /usr/lib/systemd/system
 export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdir \
        systemdunitdir
 
-.PHONY: all help shirudo-build bpf-next vm test-vm test-vm-clean install \
+.PHONY: all help shirudo-build test-helpers test-vm-bundle bpf-next vm test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
         distclean check test examples config
 
@@ -104,8 +104,10 @@ shirudo make targets (run from the repo root):
     make vm                boot a uniquely named persistent vTPM VM, prepare
                            Shirudo, and return without running the test suite
     make test-vm           boot a uniquely named vTPM VM with QEMU + swtpm,
-                           run SHIRUDO_INTEGRATION=1 make check in the guest,
+                           import the host payload, run the integration suite,
                            and retain the stopped state for inspection
+    make test-vm-bundle    build/reuse the host-side Shirudo payload used by
+                           make vm and make test-vm
     make test-vm-clean     stop tracked VMs and remove cached rootfs, VM
                            state, and logs
 
@@ -136,6 +138,8 @@ shirudo make targets (run from the repo root):
 
   Variables: prefix (=/usr/local), bindir, libexecdir, systemdunitdir,
              VM_NAME (optional unique VM name), VM_TENANT (OTEL tenant),
+             TEST_VM_BUNDLE_DIR (host VM payload cache),
+             TEST_VM_VERBOSE=1 (stream test VM QEMU output; otherwise show TAP progress),
              DESTDIR (staged install), V=1 (echo full command lines).
 
 endef
@@ -147,15 +151,27 @@ help:
 shirudo-build: config
 	+$(Q)$(MAKE) -f Makefile.shirudo shirudo-build
 
+test-helpers: config
+	+$(Q)$(MAKE) -f Makefile.shirudo test-helpers
+
+TEST_VM_BUNDLE_DIR ?= build/test-vm/host-bundle
+TEST_VM_VERBOSE ?= 0
+
+test-vm-bundle:
+	$(Q)TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
+		contrib/build-test-vm-bundle.sh
+
 bpf-next:
 	$(Q)KERNEL_PATCHES='$(KERNEL_PATCHES)' contrib/build-kernel-deb.sh
 
-vm:
+vm: test-vm-bundle
 	$(Q)VM_MODE=interactive VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
 
-test-vm:
-	$(Q)VM_MODE=test VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+test-vm: test-vm-bundle
+	$(Q)VM_MODE=test VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
 
 test-vm-clean:

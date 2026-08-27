@@ -201,6 +201,7 @@ DEPS     := $(DEP_OBJS:.o=.d)
 # ----- top-level goals --------------------------------------------
 
 .PHONY: all install install-target install-operator clean distclean check test \
+		test-helpers \
         bpf libbpf bpftool
 
 all: shirudo
@@ -426,7 +427,8 @@ t/helper/test-kernel-abi: t/helper/test-kernel-abi.c util/kernel_abi.o \
 
 t/helper/test-otel-map: t/helper/test-otel-map.c util/upatch_maps.o \
                         util/upatch_maps_otel.o util/serializer.o \
-                        util/upatch_decode.o util/upatch.o util/json.o \
+                        util/upatch_decode.o util/upatch_resolve.o \
+                        util/upatch.o util/json.o \
                         util/malloc.o $(LIBBPF_A)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS)
@@ -450,6 +452,8 @@ t/helper/test-upatch-decode: t/helper/test-upatch-decode.c \
 			      util/upatch_decode.o util/upatch.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS)
+
+test-helpers: $(TEST_HELPERS)
 
 check test: shirudo $(TEST_HELPERS)
 	@printf '  TEST\n'
