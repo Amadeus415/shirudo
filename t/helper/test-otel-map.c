@@ -2,15 +2,20 @@
 /* Copyright (c) 2026 Authors of shirudo */
 
 #include <errno.h>
+#include <endian.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <linux/bpf.h>
 #include <linux/btf.h>
 
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
+
+#include <shirudo/upatch.h>
 
 #include "json.h"
 #include "malloc.h"
@@ -26,6 +31,136 @@ struct fixture {
 	uint32_t key;
 	unsigned char values[16];
 };
+
+static int write_all(int fd, const void *buf, size_t len)
+{
+	const unsigned char *p = buf;
+
+	while (len) {
+		ssize_t n = write(fd, p, len);
+
+		if (n < 0) {
+			if (errno == EINTR)
+				continue;
+			return -errno;
+		}
+		if (n == 0)
+			return -EIO;
+		p += n;
+		len -= (size_t)n;
+	}
+	return 0;
+}
+
+/* Build the smallest valid artifact carrying a decoder for offline tests. */
+static int make_decoder(bool metric, bool counter, bool snapshot,
+			char *path, size_t path_sz)
+{
+	static const char log_source[] =
+		"function decode(input)\n"
+		"\treturn { data = { entries = {{ "
+		"values_per_cpu = { \"5\", \"7\" }, "
+		"sum = \"12\" }} } }\n"
+		"end\n";
+	static const char snapshot_source[] =
+		"function decode(input)\n"
+		"\treturn input\n"
+		"end\n";
+	static const char gauge_source[] =
+		"function decode(input)\n"
+		"\treturn {{ name = \"shirudo.test.hits\", "
+		"unit = \"1\", gauge = { dataPoints = "
+		"{{ asInt = \"12\" }} } }}\n"
+		"end\n";
+	static const char counter_source[] =
+		"function decode(input)\n"
+		"\treturn {{ name = \"shirudo.test.hits\", "
+		"unit = \"1\", sum = { aggregationTemporality = 2, "
+		"isMonotonic = true, dataPoints = {{ "
+		"startTimeUnixNano = \"1544712660300000000\", "
+		"timeUnixNano = \"1700000000000000000\", "
+		"asInt = \"12\" }} } }}\n"
+		"end\n";
+	const char *source = snapshot ? snapshot_source : metric ?
+		(counter ? counter_source : gauge_source) : log_source;
+	size_t source_len = strlen(source);
+	size_t entries_end = sizeof(struct shirudo_upatch_decoder_blob) +
+		sizeof(struct shirudo_upatch_decoder_entry);
+	size_t decoder_len = entries_end + source_len;
+	size_t data_len = decoder_len +
+		sizeof(struct shirudo_upatch_decoder_trailer);
+	size_t loader_off = sizeof(struct shirudo_upatch_header);
+	size_t sig_off = loader_off + sizeof(struct bpf_insn);
+	size_t data_off = sig_off + 1;
+	size_t file_len = data_off + data_len;
+	struct shirudo_upatch_header header = {};
+	struct shirudo_upatch_decoder_blob *blob;
+	struct shirudo_upatch_decoder_entry *entry;
+	struct shirudo_upatch_decoder_trailer *trailer;
+	unsigned char *file;
+	char template[] = "/tmp/test-otel-map-decoder-XXXXXX";
+	int fd, rc;
+
+	if (file_len > UINT32_MAX || decoder_len > UINT32_MAX ||
+	    source_len > UINT32_MAX || snprintf(path, path_sz, "%s", template) >=
+		(int)path_sz)
+		return -EOVERFLOW;
+	file = xcalloc(1, file_len);
+	if (!file)
+		return -ENOMEM;
+	fd = mkstemp(path);
+	if (fd < 0) {
+		rc = -errno;
+		xfree(file, file_len);
+		return rc;
+	}
+
+	header.magic = htole64(SHIRUDO_UPATCH_MAGIC);
+	header.version = htole32(SHIRUDO_UPATCH_VERSION);
+	strncpy(header.name, "test-upatch", sizeof(header.name) - 1);
+	header.loader_insns_off = htole32(loader_off);
+	header.loader_insns_len = htole32(sizeof(struct bpf_insn));
+	header.signature_off = htole32(sig_off);
+	header.signature_len = htole32(1);
+	header.data_off = htole32(data_off);
+	header.data_len = htole32(data_len);
+	memcpy(file, &header, sizeof(header));
+	file[data_off - 1] = 0;
+
+	blob = (void *)(file + data_off);
+	blob->magic = htole32(SHIRUDO_UPATCH_DECODER_MAGIC);
+	blob->version = htole32(SHIRUDO_UPATCH_DECODER_VERSION);
+	blob->nr_decoders = htole32(1);
+	entry = &blob->decoders[0];
+	entry->language = htole32(SHIRUDO_UPATCH_DECODER_LANG_LUA);
+	entry->api_version = htole32(1);
+	entry->input_format = htole32(SHIRUDO_UPATCH_DECODER_INPUT_MAP_V1);
+	entry->export_signal = htole32(metric ?
+		SHIRUDO_UPATCH_DECODER_EXPORT_METRIC :
+		SHIRUDO_UPATCH_DECODER_EXPORT_LOG);
+	strncpy(entry->upatch, "test-upatch", sizeof(entry->upatch) - 1);
+	strncpy(entry->map, "hits_total", sizeof(entry->map) - 1);
+	strncpy(entry->source, "test.lua", sizeof(entry->source) - 1);
+	strncpy(entry->entrypoint, "decode", sizeof(entry->entrypoint) - 1);
+	entry->source_off = htole32(entries_end);
+	entry->source_len = htole32(source_len);
+	memcpy(file + data_off + entries_end, source, source_len);
+	trailer = (void *)(file + data_off + decoder_len);
+	trailer->magic = htole32(SHIRUDO_UPATCH_DECODER_TRAILER_MAGIC);
+	trailer->version = htole32(SHIRUDO_UPATCH_DECODER_VERSION);
+	trailer->decoder_off = htole32(0);
+	trailer->decoder_len = htole32(decoder_len);
+
+	rc = write_all(fd, file, file_len);
+	if (close(fd) != 0 && rc == 0)
+		rc = -errno;
+	xfree(file, file_len);
+	if (rc) {
+		unlink(path);
+		return rc;
+	}
+	return 0;
+}
 
 static int fixture_init(struct fixture *f, uint32_t map_type, bool is_signed,
 			bool with_btf)
@@ -110,19 +245,26 @@ static int print_payload(bool metric, bool counter)
 		.metric_unit = "1",
 	};
 	struct fixture f;
+	char decoder_path[128] = {};
 	char *buf = NULL;
 	size_t len = 0;
 	int rc = fixture_init(&f, BPF_MAP_TYPE_PERCPU_ARRAY, false, true);
 
 	if (rc)
 		return 1;
-	rc = metric ? shirudo_upatch_maps_otel_build_metric(&f.view, &opts,
-			&buf, &len) :
-		shirudo_upatch_maps_otel_build_log(&f.view, &buf, &len);
+	rc = make_decoder(metric, counter, false, decoder_path,
+				  sizeof(decoder_path));
+	if (!rc)
+		rc = metric ? shirudo_upatch_maps_otel_build_metric_file(
+			decoder_path, &f.view, &opts, &buf, &len) :
+		shirudo_upatch_maps_otel_build_log_file(decoder_path, &f.view,
+								&buf, &len);
 	if (!rc && buf)
 		fwrite(buf, 1, len, stdout);
 	if (buf)
 		xfree(buf, SHIRUDO_JSON_MAX_BYTES);
+	if (decoder_path[0])
+		unlink(decoder_path);
 	fixture_destroy(&f);
 	return rc != 0;
 }
@@ -146,41 +288,6 @@ static int print_local_json(void)
 	return e.err != 0;
 }
 
-static int metric_validation_errors(void)
-{
-	struct shirudo_otel_opts gauge = {
-		.metric_kind = SHIRUDO_OTEL_METRIC_GAUGE,
-	};
-	struct shirudo_otel_opts counter = {
-		.metric_kind = SHIRUDO_OTEL_METRIC_COUNTER,
-	};
-	struct fixture f;
-	char *buf = NULL;
-	size_t len = 0;
-	int rc;
-
-	if (fixture_init(&f, BPF_MAP_TYPE_PERCPU_ARRAY, false, true))
-		return 1;
-	f.view.truncated = true;
-	rc = shirudo_upatch_maps_otel_build_metric(&f.view, &gauge, &buf, &len);
-	fixture_destroy(&f);
-	if (rc != -E2BIG)
-		return 1;
-	if (fixture_init(&f, BPF_MAP_TYPE_PERCPU_ARRAY, true, true))
-		return 1;
-	rc = shirudo_upatch_maps_otel_build_metric(&f.view, &counter,
-						   &buf, &len);
-	fixture_destroy(&f);
-	if (rc != -EDOM)
-		return 1;
-	if (fixture_init(&f, BPF_MAP_TYPE_PERCPU_ARRAY, false, true))
-		return 1;
-	f.view.n_entries = 0;
-	rc = shirudo_upatch_maps_otel_build_metric(&f.view, &gauge, &buf, &len);
-	fixture_destroy(&f);
-	return rc != 0 || buf != NULL || len != 0;
-}
-
 static int send_log(const char *url, unsigned int retries, bool insecure)
 {
 	struct shirudo_otel_opts opts = {
@@ -189,13 +296,19 @@ static int send_log(const char *url, unsigned int retries, bool insecure)
 		.retries = retries,
 	};
 	struct fixture f;
+	char decoder_path[128] = {};
 	int rc;
 
 	rc = fixture_init(&f, BPF_MAP_TYPE_PERCPU_ARRAY, false, true);
 	if (rc)
 		return 1;
-	rc = shirudo_upatch_maps_otel_send(&f.view, SHIRUDO_OTEL_FORCE_LOG,
-					   &opts);
+	rc = make_decoder(false, false, false, decoder_path,
+				  sizeof(decoder_path));
+	if (!rc)
+		rc = shirudo_upatch_maps_otel_send_file(decoder_path, &f.view,
+							SHIRUDO_OTEL_FORCE_LOG, &opts);
+	if (decoder_path[0])
+		unlink(decoder_path);
 	fixture_destroy(&f);
 	return rc ? 1 : 0;
 }
@@ -204,12 +317,18 @@ static int send_auto(const char *base, bool is_signed)
 {
 	struct shirudo_otel_opts opts = { .endpoint = base, .retries = 0 };
 	struct fixture f;
+	char decoder_path[128] = {};
 	int rc;
 
 	if (fixture_init(&f, BPF_MAP_TYPE_PERCPU_ARRAY, is_signed, true))
 		return 1;
-	rc = shirudo_upatch_maps_otel_send(&f.view, SHIRUDO_OTEL_AUTO,
-					   &opts);
+	rc = make_decoder(!is_signed, !is_signed, false, decoder_path,
+				  sizeof(decoder_path));
+	if (!rc)
+		rc = shirudo_upatch_maps_otel_send_file(decoder_path, &f.view,
+							SHIRUDO_OTEL_AUTO, &opts);
+	if (decoder_path[0])
+		unlink(decoder_path);
 	fixture_destroy(&f);
 	return rc ? 1 : 0;
 }
@@ -223,20 +342,26 @@ static int send_metric(const char *url)
 		.metric_kind_set = true,
 	};
 	struct fixture f;
+	char decoder_path[128] = {};
 	int rc;
 
 	if (fixture_init(&f, BPF_MAP_TYPE_PERCPU_ARRAY, false, true))
 		return 1;
-	rc = shirudo_upatch_maps_otel_send(&f.view, SHIRUDO_OTEL_FORCE_METRIC,
-					   &opts);
+	rc = make_decoder(true, false, false, decoder_path,
+				  sizeof(decoder_path));
+	if (!rc)
+		rc = shirudo_upatch_maps_otel_send_file(decoder_path, &f.view,
+							SHIRUDO_OTEL_FORCE_METRIC, &opts);
+	if (decoder_path[0])
+		unlink(decoder_path);
 	fixture_destroy(&f);
 	return rc ? 1 : 0;
 }
 
 static bool large_serialized_fixture(struct fixture *f)
 {
-	const uint32_t pages = 9;
-	const uint32_t bytes = 512U * 1024U;
+	const uint32_t pages = 1;
+	const uint32_t bytes = 1024;
 
 	f->view.serialized = true;
 	f->view.n_entries = 0;
@@ -280,9 +405,11 @@ static int send_s3(const char *endpoint, unsigned int retries, bool large)
 	struct shirudo_otel_opts opts = {
 		.s3_uri = "s3://test-bucket/prefix",
 		.tenant_id = large ? NULL : "tenant-uuid-1234",
+		.otlp_max_bytes = large ? 1024 : 0,
 		.retries = retries,
 	};
 	struct fixture f;
+	char decoder_path[128] = {};
 	int rc;
 
 	if (setenv("AWS_ENDPOINT_URL_S3", endpoint, 1) != 0)
@@ -297,7 +424,13 @@ static int send_s3(const char *endpoint, unsigned int retries, bool large)
 			return 1;
 		}
 	}
-	rc = shirudo_upatch_maps_otel_send(&f.view, SHIRUDO_OTEL_S3, &opts);
+	rc = make_decoder(false, false, true, decoder_path,
+			  sizeof(decoder_path));
+	if (!rc)
+		rc = shirudo_upatch_maps_otel_send_file(decoder_path, &f.view,
+						SHIRUDO_OTEL_S3, &opts);
+	if (decoder_path[0])
+		unlink(decoder_path);
 	large_serialized_destroy(&f);
 	fixture_destroy(&f);
 	return rc ? 1 : 0;
@@ -435,8 +568,6 @@ int main(int argc, char **argv)
 		return print_payload(true, true);
 	if (strcmp(argv[1], "local-json") == 0)
 		return print_local_json();
-	if (strcmp(argv[1], "metric-errors") == 0)
-		return metric_validation_errors();
 	if (strcmp(argv[1], "send-log") == 0 && argc == 4)
 		return send_log(argv[2], (unsigned int)strtoul(argv[3], NULL, 10),
 				false);

@@ -3303,6 +3303,10 @@ static int cmd_upatch_map(int argc, const char **argv)
 			if (!retries_set)
 				otel_opts.retries =
 					export_cfg.map_export_otel_retries;
+			otel_opts.log_record_max_bytes =
+				export_cfg.map_export_log_record_max_bytes;
+			otel_opts.otlp_max_bytes =
+				export_cfg.map_export_otlp_max_bytes;
 			if (!otel_opts.s3_uri && export_cfg.map_export_s3_uri[0])
 				otel_opts.s3_uri = export_cfg.map_export_s3_uri;
 		}

@@ -28,6 +28,11 @@ struct shirudo_map_view;
 int shirudo_upatch_decode_map_json(const struct shirudo_map_view *v,
 				   char **out, size_t *out_len);
 
+/* Variant for consumers such as S3 archival with a larger output budget. */
+int shirudo_upatch_decode_map_json_limit(const struct shirudo_map_view *v,
+					 size_t max_bytes,
+					 char **out, size_t *out_len);
+
 /*
  * Decode the map and encode the Lua return value as an OTLP AnyValue JSON
  * fragment. The caller owns *out as above. Return values match the JSON API.
@@ -39,6 +44,9 @@ int shirudo_upatch_decode_map_otel(const struct shirudo_map_view *v,
 int shirudo_upatch_decode_map_file_json(const char *path,
 					const struct shirudo_map_view *v,
 					char **out, size_t *out_len);
+int shirudo_upatch_decode_map_file_json_limit(
+					const char *path, const struct shirudo_map_view *v,
+					size_t max_bytes, char **out, size_t *out_len);
 int shirudo_upatch_decode_map_file_otel(const char *path,
 					const struct shirudo_map_view *v,
 					char **out, size_t *out_len);

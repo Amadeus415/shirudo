@@ -143,6 +143,10 @@ int cmd_config(int argc, const char **argv)
 	printf("map_export.otel_retries = %u\n",
 	       cfg.map_export_otel_retries);
 	printf("map_export.s3_uri = %s\n", cfg.map_export_s3_uri);
+	printf("map_export.log_record_max_bytes = %u\n",
+	       cfg.map_export_log_record_max_bytes);
+	printf("map_export.otlp_max_bytes = %u\n",
+	       cfg.map_export_otlp_max_bytes);
 
 	return cfg.map_export_valid ? 0 : 1;
 }
