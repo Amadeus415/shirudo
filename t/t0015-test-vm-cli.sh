@@ -82,6 +82,15 @@ test_expect_success 'test-vm imports the host-built payload' '
 	grep -q "Building Shirudo BPF dependency artifacts" \
 		../contrib/build-kernel-deb.sh
 '
+	test_expect_success 'test-vm bundle stamp controls incremental rebuilds' '
+	grep -q "TEST_VM_BUNDLE_STAMP" ../Makefile &&
+	grep -q "TEST_VM_BUNDLE_INPUTS" ../Makefile &&
+	grep -q "bundle_is_current" ../contrib/build-test-vm-bundle.sh &&
+	grep -q "flock 9" ../Makefile &&
+	grep -q "bundle_dir.lock" ../Makefile &&
+	! grep -Fq "rm -rf \"\$\$bundle_dir.lock\"" ../Makefile &&
+	grep -Fq "\$\$bundle_dir" ../Makefile
+'
 
 	test_expect_success 'test-vm summary records failed test names' '
 	grep -q "print_test_summary" ../contrib/test-vm.sh &&

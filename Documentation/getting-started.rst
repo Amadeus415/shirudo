@@ -179,6 +179,12 @@ VM name and retains its stopped overlay, TPM state, and logs for inspection.
 The host checkout is mounted read-only and all guest build writes stay in
 the VM state.
 
+The host-side payload is cached in ``build/test-vm/host-bundle``.  Repeated
+``make test-vm`` runs reuse it until a relevant source, Makefile, configuration,
+build-script, or bpf-next artifact changes.  If compiler flags or other
+command-line build-environment variables change, run ``make clean`` first;
+those values are intentionally not tracked by the stamp.
+
 On completion, ``make test-vm`` prints a summary with the result, VM name,
 elapsed time, dependency-artifact mode, and retained log paths. If the suite
 fails, the summary also lists the failed test script and title when the TAP

@@ -107,7 +107,8 @@ shirudo make targets (run from the repo root):
                            import the host payload, run the integration suite,
                            and retain the stopped state for inspection
     make test-vm-bundle    build/reuse the host-side Shirudo payload used by
-                           make vm and make test-vm
+                           make vm and make test-vm; invalidated by source,
+                           Makefile, config, script, and artifact changes
     make test-vm-clean     stop tracked VMs and remove cached rootfs, VM
                            state, and logs
 
@@ -156,9 +157,30 @@ test-helpers: config
 
 TEST_VM_BUNDLE_DIR ?= build/test-vm/host-bundle
 TEST_VM_VERBOSE ?= 0
+TEST_VM_BUNDLE_STAMP := $(TEST_VM_BUNDLE_DIR)/.stamp
+TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
+	*.c *.h include/*.h util/*.c util/*.h \
+	bpf/*.c bpf/lib/*.h \
+	tools/shirudo-build/*.c tools/shirudo-build/*.h \
+	t/helper/*.c completion/* systemd/*.in))
+TEST_VM_BUNDLE_ARTIFACTS := $(sort $(wildcard \
+	artifacts/bpf-next-kernel-debs \
+	artifacts/bpf-next-kernel-debs/* \
+	artifacts/bpf-next-kernel-debs/shirudo-bpf-deps \
+	artifacts/bpf-next-kernel-debs/shirudo-bpf-deps/* \
+	artifacts/bpf-next-kernel-debs/shirudo-bpf-deps/bpf/*))
+TEST_VM_BUNDLE_INPUTS := $(sort \
+	Makefile Makefile.config Makefile.shirudo Makefile.version config.mk \
+	contrib/build-test-vm-bundle.sh contrib/test-vm-guest.sh \
+	$(TEST_VM_BUNDLE_SOURCES) $(TEST_VM_BUNDLE_ARTIFACTS))
 
-test-vm-bundle:
+
+test-vm-bundle: $(TEST_VM_BUNDLE_STAMP)
+
+$(TEST_VM_BUNDLE_STAMP): $(TEST_VM_BUNDLE_INPUTS)
 	$(Q)TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
+		TEST_VM_BUNDLE_STAMP="$(abspath $(TEST_VM_BUNDLE_STAMP))" \
+		TEST_VM_BUNDLE_INPUTS="$(abspath $(TEST_VM_BUNDLE_INPUTS))" \
 		contrib/build-test-vm-bundle.sh
 
 bpf-next:
@@ -275,11 +297,16 @@ check test: all
 	+$(Q)$(MAKE) -f Makefile.shirudo $@
 
 clean:
-	+$(Q)$(MAKE) -f Makefile.shirudo clean
-	$(Q)$(MAKE) -C examples clean
-	$(Q)rm -rf $(INSTALLER_STAGE) $(STATIC_IMAGE_STAGE) \
-	          $(INSTALLER_TARBALL) $(STATIC_IMAGE_TARBALL) \
-	          $(DEB_STAGE) $(DEB_TARGET_PKG) $(DEB_OPERATOR_PKG)
+	+$(Q)set -eu; \
+		bundle_dir="$(abspath $(TEST_VM_BUNDLE_DIR))"; \
+		mkdir -p "$$(dirname "$$bundle_dir")"; \
+		exec 9>"$$bundle_dir.lock"; \
+		flock 9; \
+		$(MAKE) -f Makefile.shirudo clean; \
+		$(MAKE) -C examples clean; \
+		rm -rf "$$bundle_dir" $(INSTALLER_STAGE) $(STATIC_IMAGE_STAGE) \
+		          $(INSTALLER_TARBALL) $(STATIC_IMAGE_TARBALL) \
+		          $(DEB_STAGE) $(DEB_TARGET_PKG) $(DEB_OPERATOR_PKG)
 
 distclean: clean
 	$(Q)rm -f config.mk
