@@ -160,11 +160,15 @@ run the suite in a disposable QEMU/KVM guest backed by swtpm::
 
 ``make bpf-next`` writes both kernel DEBs and a directly bootable
 ``artifacts/bpf-next-kernel-debs/bzImage`` and the matching detached
-``artifacts/bpf-next-kernel-debs/vmlinux.btf``. It uses
-``third_party/bpf-next`` and applies patches under ``kernel/``.
+``artifacts/bpf-next-kernel-debs/vmlinux.btf``. It also writes the
+``artifacts/bpf-next-kernel-debs/shirudo-bpf-deps`` bundle containing
+bpftool, libbpf, generated BPF headers, and a matching ``vmlinux.h``.
+It uses ``third_party/bpf-next`` and applies patches under ``kernel/``.
 
-When that artifact is present, Shirudo automatically uses it to generate its
-BPF headers instead of the running host's BTF. To select another target BTF
+When that artifact is present, Shirudo automatically uses its detached BTF
+to generate its BPF headers instead of the running host's BTF. The vTPM test
+VM additionally consumes the matching bpftool/libbpf dependency bundle, so
+those tools are not rebuilt in every guest. To select another target BTF
 explicitly, set ``BPF_VMLINUX_BTF``::
 
     make BPF_VMLINUX_BTF=artifacts/bpf-next-kernel-debs/vmlinux.btf

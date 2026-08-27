@@ -12,6 +12,8 @@ OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/artifacts/bpf-next-kernel-debs}"
 BUNDLE_PATH="${BUNDLE_PATH:-${OUTPUT_DIR}.tar.gz}"
 VMLINUX_PATH="${OUTPUT_DIR}/bzImage"
 VMLINUX_BTF_PATH="${OUTPUT_DIR}/vmlinux.btf"
+BPF_DEPS_DIR="${OUTPUT_DIR}/shirudo-bpf-deps"
+BPF_DEPS_LIBBPF_DIR="${BPF_DEPS_DIR}/bpf"
 
 BUILD_DEPENDENCIES=(
   bc
@@ -304,6 +306,26 @@ if [[ ! -s "$VMLINUX_BTF_PATH" ]]; then
   exit 1
 fi
 
+# Build the userspace BPF tools against the exact bpf-next checkout used for
+# the kernel. The VM runner consumes these artifacts instead of rebuilding
+# libbpf and bpftool for every fresh guest.
+echo "Building Shirudo BPF dependency artifacts"
+make -C "$SOURCE_DIR/tools/lib/bpf" CC="${CC:-cc}"
+make -C "$SOURCE_DIR/tools/bpf/bpftool" CC="${CC:-cc}"
+mkdir -p "$BPF_DEPS_LIBBPF_DIR"
+cp "$SOURCE_DIR/tools/lib/bpf/libbpf.a" "$BPF_DEPS_LIBBPF_DIR/"
+cp "$SOURCE_DIR/tools/lib/bpf"/*.h "$BPF_DEPS_LIBBPF_DIR/"
+cp "$SOURCE_DIR/tools/bpf/bpftool/bpftool" "$BPF_DEPS_DIR/"
+"$BPF_DEPS_DIR/bpftool" btf dump file "$VMLINUX_BTF_PATH" format c \
+  >"$BPF_DEPS_DIR/vmlinux.h"
+cat >"$BPF_DEPS_DIR/build" <<EOF
+source_dir=${KERNEL_SOURCE_DIR}
+kernel_commit=${kernel_commit}
+libbpf_source=${kernel_commit}:tools/lib/bpf
+bpftool_source=${kernel_commit}:tools/bpf/bpftool
+built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
+
 cat > "${OUTPUT_DIR}/bpf-next-kernel-build" <<EOF
 source_dir=${KERNEL_SOURCE_DIR}
 upstream_commit=${upstream_commit}
@@ -320,7 +342,8 @@ EOF
   cd "$OUTPUT_DIR"
   sha256sum bzImage > bzImage.sha256sum
   sha256sum vmlinux.btf > vmlinux.btf.sha256sum
-  sha256sum *.deb bzImage vmlinux.btf kernel.config bpf-next-kernel-build > SHA256SUMS
+  find . -type f ! -name SHA256SUMS -print0 | sort -z |
+    xargs -0 sha256sum > SHA256SUMS
 )
 
 mkdir -p "$(dirname "$BUNDLE_PATH")"
@@ -332,4 +355,5 @@ tar -C "$OUTPUT_DIR" -czf "$BUNDLE_PATH" .
 
 echo "Built kernel bzImage: ${VMLINUX_PATH}"
 echo "Built kernel BTF: ${VMLINUX_BTF_PATH}"
+echo "Built Shirudo BPF dependency artifacts: ${BPF_DEPS_DIR}"
 echo "Built kernel deb bundle: ${BUNDLE_PATH}"

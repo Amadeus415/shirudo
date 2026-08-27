@@ -21,11 +21,34 @@ LD      := $(CC)
 LDFLAGS ?=
 SHIRUDO_BUNDLE_RPATH ?= 0
 CLANG   ?= clang
-BPFTOOL ?= third_party/bpf-next/tools/bpf/bpftool/bpftool
+BPF_NEXT_DEPS_DIR ?= artifacts/bpf-next-kernel-debs/shirudo-bpf-deps
+USE_BPF_NEXT_DEPS ?= 0
+BPFTOOL_SOURCE_DIR := third_party/bpf-next/tools/bpf/bpftool
+LIBBPF_SOURCE_DIR  := third_party/bpf-next/tools/lib/bpf
 BPF_VMLINUX_H ?=
 # Prefer the BTF emitted by `make bpf-next`; otherwise use the running host.
 # A caller can still override this explicitly for another target kernel.
 BPF_VMLINUX_BTF ?= $(if $(wildcard artifacts/bpf-next-kernel-debs/vmlinux.btf),artifacts/bpf-next-kernel-debs/vmlinux.btf,/sys/kernel/btf/vmlinux)
+
+ifeq ($(USE_BPF_NEXT_DEPS),1)
+  ifneq ($(wildcard $(BPF_NEXT_DEPS_DIR)/bpftool),$(BPF_NEXT_DEPS_DIR)/bpftool)
+    $(error USE_BPF_NEXT_DEPS=1 requires $(BPF_NEXT_DEPS_DIR)/bpftool; run make bpf-next)
+  endif
+  ifneq ($(wildcard $(BPF_NEXT_DEPS_DIR)/bpf/libbpf.a),$(BPF_NEXT_DEPS_DIR)/bpf/libbpf.a)
+    $(error USE_BPF_NEXT_DEPS=1 requires $(BPF_NEXT_DEPS_DIR)/bpf/libbpf.a; run make bpf-next)
+  endif
+  ifneq ($(wildcard $(BPF_NEXT_DEPS_DIR)/vmlinux.h),$(BPF_NEXT_DEPS_DIR)/vmlinux.h)
+    $(error USE_BPF_NEXT_DEPS=1 requires artifacts in $(BPF_NEXT_DEPS_DIR); run make bpf-next)
+  endif
+  BPFTOOL ?= $(BPF_NEXT_DEPS_DIR)/bpftool
+  BPF_TOOLS_LIB_ROOT ?= $(BPF_NEXT_DEPS_DIR)
+  ifeq ($(strip $(BPF_VMLINUX_H)),)
+    BPF_VMLINUX_H := $(BPF_NEXT_DEPS_DIR)/vmlinux.h
+  endif
+else
+  BPFTOOL ?= $(BPFTOOL_SOURCE_DIR)/bpftool
+  BPF_TOOLS_LIB_ROOT ?= third_party/bpf-next/tools/lib
+endif
 
 SHIRUDO_LIBEXEC_DIR ?= $(libexecdir)/shirudo
 
@@ -45,7 +68,7 @@ INCLUDES := \
     -I. \
     -Iinclude \
     -Iutil \
-    -Ithird_party/bpf-next/tools/lib \
+    -I$(BPF_TOOLS_LIB_ROOT) \
     -Ithird_party/bpf-next/tools/include/uapi
 
 CFLAGS := $(CFLAGS_BASE) $(INCLUDES) \
@@ -53,8 +76,8 @@ CFLAGS := $(CFLAGS_BASE) $(INCLUDES) \
           $(LIBELF_CFLAGS) $(ZLIB_CFLAGS) $(LIBCURL_CFLAGS)
 
 # Static-link these; dynamic-link the rest (libcrypto, libssh, tss2).
-STATIC_LIBS := \
-    third_party/bpf-next/tools/lib/bpf/libbpf.a
+STATIC_LIBS = \
+    $(LIBBPF_A)
 
 DYNAMIC_LIBS := \
     $(LIBCRYPTO_LIBS) $(LIBSSH_LIBS) $(TSS2_LIBS) \
@@ -188,8 +211,8 @@ shirudo-build: tools/shirudo-build/shirudo-build
 
 # ----- phase 1: submodule libraries -------------------------------
 
-LIBBPF_DIR := third_party/bpf-next/tools/lib/bpf
-LIBBPF_A   := $(LIBBPF_DIR)/libbpf.a
+LIBBPF_DIR ?= $(BPF_TOOLS_LIB_ROOT)/bpf
+LIBBPF_A   ?= $(LIBBPF_DIR)/libbpf.a
 
 libbpf: $(LIBBPF_A)
 
@@ -199,9 +222,9 @@ libbpf: $(LIBBPF_A)
 # and bpf_helper_defs.h; the .so is harmless byproduct.
 $(LIBBPF_A):
 	@printf '  LIBBPF\n'
-	$(Q)$(MAKE) -C $(LIBBPF_DIR) CC="$(CC)"
+	$(Q)$(MAKE) -C $(LIBBPF_SOURCE_DIR) CC="$(CC)"
 
-BPFTOOL_DIR := third_party/bpf-next/tools/bpf/bpftool
+BPFTOOL_DIR := $(BPFTOOL_SOURCE_DIR)
 
 bpftool: $(BPFTOOL)
 
@@ -444,5 +467,5 @@ clean:
 	$(Q)rm -rf bpf/include
 
 distclean:
-	$(Q)$(MAKE) -C $(LIBBPF_DIR) clean 2>/dev/null || true
-	$(Q)$(MAKE) -C $(BPFTOOL_DIR) clean 2>/dev/null || true
+	$(Q)$(MAKE) -C $(LIBBPF_SOURCE_DIR) clean 2>/dev/null || true
+	$(Q)$(MAKE) -C $(BPFTOOL_SOURCE_DIR) clean 2>/dev/null || true

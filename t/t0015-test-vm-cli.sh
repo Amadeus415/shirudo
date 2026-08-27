@@ -64,6 +64,19 @@ test_expect_success 'test-vm guest installs optional decoder dependencies' '
 		../contrib/test-vm-guest.sh
 '
 
+test_expect_success 'test-vm consumes bpf-next dependency artifacts' '
+	grep -q "BPF_MAKE_ARGS=(USE_BPF_NEXT_DEPS=1)" \
+		../contrib/test-vm-guest.sh &&
+	grep -q "bpf-next kernel dependency artifacts unavailable" \
+		../contrib/test-vm-guest.sh &&
+	grep -Fq "BPFTOOL ?= \$(BPFTOOL_SOURCE_DIR)/bpftool" \
+		../Makefile.shirudo &&
+	grep -Fq "\$(LIBBPF_A)" ../Makefile.shirudo &&
+	grep -q "shirudo-bpf-deps" ../Makefile.shirudo &&
+	grep -q "Building Shirudo BPF dependency artifacts" \
+		../contrib/build-kernel-deb.sh
+'
+
 test_expect_success 'make vm and test-vm share named mode support' '
 	grep -q "^[[:space:]]*vm:" ../Makefile &&
 	grep -q "VM_MODE=interactive" ../Makefile &&

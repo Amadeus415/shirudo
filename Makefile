@@ -88,7 +88,7 @@ shirudo make targets (run from the repo root):
     make shirudo-build     build the operator-only artifact builder
                            (compile + sign .upatch; ships in the operator
                            package, never to a target)
-    make bpf-next          build the bpf-next kernel DEBs and raw bzImage
+    make bpf-next          build bpf-next kernel DEBs, BTF, and BPF tools
                            (KERNEL_CONFIG=path overrides x86_64_defconfig)
     make clean             remove build artifacts
     make distclean         clean and drop the cached config.mk

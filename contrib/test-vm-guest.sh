@@ -100,6 +100,12 @@ else
 	mkdir -p "$WORKSPACE"
 	rsync -a --exclude=/.git/ --exclude=/artifacts/ --exclude=/build/ \
 		"$LOWER"/ "$WORKSPACE"/
+	if [[ -d "$LOWER/artifacts/bpf-next-kernel-debs/shirudo-bpf-deps" ]]; then
+		mkdir -p "$WORKSPACE/artifacts/bpf-next-kernel-debs"
+		rsync -a \
+			"$LOWER/artifacts/bpf-next-kernel-debs/shirudo-bpf-deps/" \
+			"$WORKSPACE/artifacts/bpf-next-kernel-debs/shirudo-bpf-deps/"
+	fi
 fi
 
 cd "$WORKSPACE"
@@ -107,10 +113,19 @@ git config --global --add safe.directory "$WORKSPACE"
 git config --global --add safe.directory "$WORKSPACE/third_party/bpf-next"
 
 log "building Shirudo and its operator-side builder"
+BPF_MAKE_ARGS=()
+if [[ -f artifacts/bpf-next-kernel-debs/shirudo-bpf-deps/bpftool &&
+      -f artifacts/bpf-next-kernel-debs/shirudo-bpf-deps/bpf/libbpf.a &&
+      -f artifacts/bpf-next-kernel-debs/shirudo-bpf-deps/vmlinux.h ]]; then
+	log "using bpf-next kernel dependency artifacts"
+	BPF_MAKE_ARGS=(USE_BPF_NEXT_DEPS=1)
+else
+	log "bpf-next kernel dependency artifacts unavailable; building vendored tools"
+fi
 make distclean
-make -j "$JOBS" all
-make -j "$JOBS" shirudo-build
-make install-target install-operator
+make -j "$JOBS" "${BPF_MAKE_ARGS[@]}" all
+make -j "$JOBS" "${BPF_MAKE_ARGS[@]}" shirudo-build
+make "${BPF_MAKE_ARGS[@]}" install-target install-operator
 
 log "checking custom-kernel and vTPM prerequisites"
 mountpoint -q /sys/kernel/security || mount -t securityfs securityfs /sys/kernel/security
