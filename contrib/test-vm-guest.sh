@@ -16,6 +16,7 @@ UPPER=/var/tmp/shirudo-upper
 OVERLAY_WORK=/var/tmp/shirudo-overlay-work
 WORKSPACE=/workspace/shirudo
 JOBS="${TEST_VM_CPUS:-$(nproc)}"
+VM_MODE="${VM_MODE:-test}"
 
 log()
 {
@@ -136,6 +137,11 @@ if not tpm.get("chain"):
 if tpm.get("chain_matches_eventlog") is not True:
     raise SystemExit("TPM chain does not match the Shirudo event log")
 PY
+
+if [[ "$VM_MODE" == interactive ]]; then
+	log "guest prepared; interactive mode skipping integration tests"
+	exit 0
+fi
 
 log "running SHIRUDO_INTEGRATION=1 make check"
 SHIRUDO_INTEGRATION=1 \

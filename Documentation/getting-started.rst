@@ -170,8 +170,25 @@ explicitly, set ``BPF_VMLINUX_BTF``::
     make BPF_VMLINUX_BTF=artifacts/bpf-next-kernel-debs/vmlinux.btf
 ``make test-vm`` verifies that image, boots an Ubuntu 26.04 cloud-image
 overlay with a fresh vTPM, runs measured ``shirudo init``, and then runs
-``SHIRUDO_INTEGRATION=1 make check``.  The host checkout is mounted
-read-only and all guest build writes stay in the disposable overlay.
+``SHIRUDO_INTEGRATION=1 make check``.  Each invocation receives a unique
+VM name and retains its stopped overlay, TPM state, and logs for inspection.
+The host checkout is mounted read-only and all guest build writes stay in
+the VM state.
+
+For a prepared VM without the integration suite, use ``make vm``.  It
+allocates a unique persistent VM name when ``VM_NAME`` is omitted, prepares
+the same guest and measured Shirudo installation, leaves QEMU and swtpm
+running in the background, and returns once the guest is ready.  For example::
+
+    make vm VM_NAME=policy-session VM_TENANT=tenant-uuid-1234
+
+Multiple ``make vm`` invocations can run in parallel.  Multiple test runs can
+also run in parallel from separate shell processes, for example::
+
+    make test-vm & make test-vm & wait
+
+Use ``make test-vm-clean`` to stop tracked VMs and remove all retained VM
+state and logs under ``build/test-vm``.
 
 The VM target requires an x86_64 host with accessible ``/dev/kvm``,
 ``qemu-system-x86_64``, ``qemu-img``, ``swtpm``, and
@@ -185,16 +202,18 @@ published elsewhere instead of the local artifact::
 A local raw kernel can be selected with
 ``TEST_VM_KERNEL=/path/to/bzImage``.  CPU count, memory, disk size, and
 timeout are configurable with ``TEST_VM_CPUS``, ``TEST_VM_MEMORY``,
-``TEST_VM_DISK_SIZE``, and ``TEST_VM_TIMEOUT``.  Failure logs are kept
-under ``build/test-vm/logs``; ``TEST_VM_KEEP=1`` also preserves the
-guest disk and TPM state, which contain the ephemeral signing key.
+``TEST_VM_DISK_SIZE``, and ``TEST_VM_TIMEOUT``.  ``VM_NAME`` selects an
+explicit safe name; omitted names are generated uniquely.  ``VM_TENANT`` is
+used as the OTEL tenant when map export is configured.  Retained VM state
+contains an ephemeral signing key and is ignored by git; use
+``make test-vm-clean`` when it is no longer needed.
 
 To export map records to an OTEL collector running on the host, set all
-three map-export variables together::
+three map-export settings together::
 
     make test-vm \
         TEST_VM_MAP_EXPORT_ENDPOINT=http://otel.test:4318 \
-        TEST_VM_MAP_EXPORT_TENANT_ID=tenant-test \
+        VM_TENANT=tenant-test \
         TEST_VM_MAP_EXPORT_INSECURE=true
 
 The guest maps ``otel.test`` to the QEMU host gateway ``10.0.2.2`` and

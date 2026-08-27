@@ -2,15 +2,20 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Authors of shirudo
 #
-# Boot a disposable Ubuntu guest with the bpf-next kernel and an swtpm
-# vTPM, then run the live Shirudo integration suite inside it.
+# Boot an Ubuntu guest with the bpf-next kernel and an swtpm vTPM.
+# In test mode it runs the live Shirudo integration suite; in interactive
+# mode it prepares the guest and leaves QEMU and swtpm running.
+#
+# VM_MODE=test|interactive selects the mode. VM_NAME optionally selects a
+# stable state directory; if omitted, a unique name is allocated atomically.
+# VM_TENANT is used as the map-export tenant when OTEL export is enabled.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VM_ROOT="${TEST_VM_WORK_DIR:-${REPO_ROOT}/build/test-vm}"
 CACHE_DIR="${VM_ROOT}/cache"
-RUNS_DIR="${VM_ROOT}/runs"
+VMS_DIR="${VM_ROOT}/vms"
 LOGS_DIR="${VM_ROOT}/logs"
 DEFAULT_KERNEL="${REPO_ROOT}/artifacts/bpf-next-kernel-debs/bzImage"
 DEFAULT_ROOTFS_URL="https://cloud-images.ubuntu.com/releases/server/26.04/release/ubuntu-26.04-server-cloudimg-amd64.img"
@@ -20,20 +25,24 @@ CPUS="${TEST_VM_CPUS:-4}"
 MEMORY="${TEST_VM_MEMORY:-4G}"
 DISK_SIZE="${TEST_VM_DISK_SIZE:-30G}"
 VM_TIMEOUT="${TEST_VM_TIMEOUT:-3600}"
-KEEP="${TEST_VM_KEEP:-0}"
+VM_MODE="${VM_MODE:-test}"
+VM_NAME_REQUEST="${VM_NAME:-}"
+VM_TENANT="${VM_TENANT:-}"
 KERNEL_URL="${TEST_VM_KERNEL_URL:-}"
 KERNEL_SHA256="${TEST_VM_KERNEL_SHA256:-}"
 KERNEL_OVERRIDE="${TEST_VM_KERNEL:-}"
 ROOTFS_URL="${TEST_VM_ROOTFS_URL:-$DEFAULT_ROOTFS_URL}"
 ROOTFS_SHA256="${TEST_VM_ROOTFS_SHA256:-}"
 MAP_EXPORT_ENDPOINT="${TEST_VM_MAP_EXPORT_ENDPOINT:-}"
-MAP_EXPORT_TENANT_ID="${TEST_VM_MAP_EXPORT_TENANT_ID:-}"
+LEGACY_MAP_EXPORT_TENANT_ID="${TEST_VM_MAP_EXPORT_TENANT_ID:-}"
 MAP_EXPORT_INSECURE="${TEST_VM_MAP_EXPORT_INSECURE:-}"
+MAP_EXPORT_TENANT_ID=""
 MAP_EXPORT_ENABLED=0
 RUN_DIR=""
 SWTPM_PIDFILE=""
 QEMU_PID=""
 FINAL_STATUS=1
+LEAVE_RUNNING=0
 HOST_DEPENDENCIES=(
 	"curl:curl"
 	"sha256sum:coreutils"
@@ -57,18 +66,41 @@ die()
 	exit 1
 }
 
+valid_vm_name()
+{
+	[[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]]
+}
+
+validate_mode()
+{
+	case "$VM_MODE" in
+	interactive|test) ;;
+	*) die "VM_MODE must be 'interactive' or 'test'" ;;
+	esac
+}
+
 validate_map_export()
 {
 	local configured=0
 
+	if [[ -n "$VM_TENANT" && -n "$LEGACY_MAP_EXPORT_TENANT_ID" &&
+	      "$VM_TENANT" != "$LEGACY_MAP_EXPORT_TENANT_ID" ]]; then
+		die "VM_TENANT and TEST_VM_MAP_EXPORT_TENANT_ID conflict"
+	fi
+	if [[ -z "$VM_TENANT" ]]; then
+		VM_TENANT="$LEGACY_MAP_EXPORT_TENANT_ID"
+	fi
+	MAP_EXPORT_TENANT_ID="$VM_TENANT"
+
 	[[ -n "$MAP_EXPORT_ENDPOINT" ]] && configured=$((configured + 1))
-	[[ -n "$MAP_EXPORT_TENANT_ID" ]] && configured=$((configured + 1))
 	[[ -n "$MAP_EXPORT_INSECURE" ]] && configured=$((configured + 1))
 	if (( configured == 0 )); then
 		return
 	fi
-	(( configured == 3 )) ||
+	[[ -n "$MAP_EXPORT_TENANT_ID" ]] ||
 		die "TEST_VM_MAP_EXPORT_ENDPOINT, TEST_VM_MAP_EXPORT_TENANT_ID, and TEST_VM_MAP_EXPORT_INSECURE must be set together"
+	(( configured == 2 )) ||
+		die "TEST_VM_MAP_EXPORT_ENDPOINT and TEST_VM_MAP_EXPORT_INSECURE must be set together"
 	[[ "$MAP_EXPORT_INSECURE" == "true" ]] ||
 		die "TEST_VM_MAP_EXPORT_INSECURE must be exactly true"
 	[[ ${#MAP_EXPORT_ENDPOINT} -lt 2048 ]] ||
@@ -76,7 +108,7 @@ validate_map_export()
 	[[ "$MAP_EXPORT_ENDPOINT" != *[[:space:]]* ]] ||
 		die "TEST_VM_MAP_EXPORT_ENDPOINT must not contain whitespace"
 	[[ "$MAP_EXPORT_TENANT_ID" =~ ^[A-Za-z0-9._-]{1,128}$ ]] ||
-		die "TEST_VM_MAP_EXPORT_TENANT_ID must contain 1..128 characters from A-Z, a-z, 0-9, '.', '_', '-'"
+		die "VM_TENANT must contain 1..128 characters from A-Z, a-z, 0-9, '.', '_', '-'"
 	MAP_EXPORT_ENABLED=1
 }
 
@@ -144,15 +176,16 @@ stop_swtpm()
 
 	[[ -n "$SWTPM_PIDFILE" && -s "$SWTPM_PIDFILE" ]] || return 0
 	pid="$(<"$SWTPM_PIDFILE")"
-	[[ "$pid" =~ ^[0-9]+$ ]] || return 0
+	[[ "$pid" =~ ^[0-9]+$ ]] || { rm -f -- "$SWTPM_PIDFILE"; return 0; }
 	if kill -0 "$pid" 2>/dev/null; then
 		kill "$pid" 2>/dev/null || true
 		for _ in {1..20}; do
-			kill -0 "$pid" 2>/dev/null || return 0
+			kill -0 "$pid" 2>/dev/null || break
 			sleep 0.1
 		done
 		kill -KILL "$pid" 2>/dev/null || true
 	fi
+	rm -f -- "$SWTPM_PIDFILE"
 }
 
 stop_qemu()
@@ -161,11 +194,57 @@ stop_qemu()
 	if kill -0 "$QEMU_PID" 2>/dev/null; then
 		kill "$QEMU_PID" 2>/dev/null || true
 		for _ in {1..50}; do
-			kill -0 "$QEMU_PID" 2>/dev/null || return 0
+			kill -0 "$QEMU_PID" 2>/dev/null || break
 			sleep 0.1
 		done
 		kill -KILL "$QEMU_PID" 2>/dev/null || true
 	fi
+	if [[ -n "$RUN_DIR" ]]; then
+		rm -f -- "$RUN_DIR/qemu.pid"
+	fi
+	QEMU_PID=""
+}
+
+stop_pid_file()
+{
+	local pidfile="$1" pid cmdline state_dir expected
+
+	[[ -s "$pidfile" ]] || return 0
+	pid="$(<"$pidfile")"
+	[[ "$pid" =~ ^[0-9]+$ ]] || { rm -f -- "$pidfile"; return 0; }
+	state_dir="$(dirname "$pidfile")"
+	expected=swtpm
+	if [[ "$(basename "$pidfile")" == qemu.pid ]]; then
+		state_dir="$(dirname "$state_dir")"
+		expected=qemu-system-x86_64
+	fi
+	if kill -0 "$pid" 2>/dev/null; then
+		cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+		if [[ "$cmdline" == *"$expected"* && "$cmdline" == *"$state_dir"* ]]; then
+			kill "$pid" 2>/dev/null || true
+			for _ in {1..50}; do
+				kill -0 "$pid" 2>/dev/null || break
+				sleep 0.1
+			done
+			kill -KILL "$pid" 2>/dev/null || true
+		fi
+	fi
+	rm -f -- "$pidfile"
+}
+
+clean_state()
+{
+	local pidfile
+
+	[[ -n "$VM_ROOT" && "$VM_ROOT" != "/" ]] ||
+		die "refusing to clean unsafe VM root '$VM_ROOT'"
+	if [[ -d "$VMS_DIR" ]]; then
+		while IFS= read -r -d '' pidfile; do
+			stop_pid_file "$pidfile"
+		done < <(find "$VMS_DIR" -type f \( -name qemu.pid -o -name swtpm.pid \) -print0)
+	fi
+	rm -rf -- "$VM_ROOT"
+	log "removed VM state and logs: $VM_ROOT"
 }
 
 save_failure_logs()
@@ -195,18 +274,16 @@ save_failure_logs()
 
 cleanup()
 {
-	stop_qemu
-	stop_swtpm
+	if [[ "$LEAVE_RUNNING" -eq 0 ]]; then
+		stop_qemu
+		stop_swtpm
+	fi
 	if [[ "$FINAL_STATUS" -ne 0 ]]; then
 		save_failure_logs
 	fi
 	if [[ -n "$RUN_DIR" && -d "$RUN_DIR" ]]; then
-		if [[ "$KEEP" == "1" ]]; then
-			log "preserved VM state: $RUN_DIR"
-			log "warning: the guest overlay contains an ephemeral signing key"
-		else
-			rm -rf -- "$RUN_DIR"
-		fi
+		log "preserved VM state: $RUN_DIR"
+		log "warning: the guest overlay contains an ephemeral signing key"
 	fi
 }
 trap cleanup EXIT
@@ -306,16 +383,41 @@ fetch_rootfs()
 	printf '%s\n' "$rootfs"
 }
 
+allocate_run_dir()
+{
+	mkdir -p "$VMS_DIR" "$LOGS_DIR"
+	if [[ -n "$VM_NAME_REQUEST" ]]; then
+		valid_vm_name "$VM_NAME_REQUEST" ||
+			die "VM_NAME must start with an alphanumeric and contain only A-Z, a-z, 0-9, '.', '_', or '-' (max 63 characters)"
+		RUN_DIR="${VMS_DIR}/${VM_NAME_REQUEST}"
+		[[ ! -e "$RUN_DIR" ]] ||
+			die "VM_NAME '$VM_NAME_REQUEST' already has state at $RUN_DIR"
+		mkdir "$RUN_DIR" || die "could not create VM state directory $RUN_DIR"
+		VM_NAME="$VM_NAME_REQUEST"
+	else
+		RUN_DIR="$(mktemp -d "${VMS_DIR}/${VM_MODE}-XXXXXX")" ||
+			die "could not allocate a unique VM state directory"
+		VM_NAME="$(basename "$RUN_DIR")"
+	fi
+	mkdir -p "$RUN_DIR/result" "$RUN_DIR/tpm"
+}
+
+if [[ "${1:-}" == "--clean" ]]; then
+	[[ "$#" -eq 1 ]] || die "--clean does not accept additional arguments"
+	clean_state
+	exit 0
+fi
+[[ "$#" -eq 0 ]] || die "unknown argument '$1'"
+
+validate_mode
 validate_kernel_selection
 validate_map_export
 check_host_dependencies
 [[ "$CPUS" =~ ^[1-9][0-9]*$ ]] || die "TEST_VM_CPUS must be a positive integer"
 [[ "$VM_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || die "TEST_VM_TIMEOUT must be a positive integer"
-[[ "$KEEP" == "0" || "$KEEP" == "1" ]] || die "TEST_VM_KEEP must be 0 or 1"
 
-mkdir -p "$CACHE_DIR" "$RUNS_DIR" "$LOGS_DIR"
-RUN_DIR="$(mktemp -d "${RUNS_DIR}/run.XXXXXX")"
-mkdir -p "$RUN_DIR/result" "$RUN_DIR/tpm"
+mkdir -p "$CACHE_DIR"
+allocate_run_dir
 KERNEL="$(resolve_kernel)"
 
 [[ "$(uname -m)" == "x86_64" ]] || die "test-vm currently supports x86_64 hosts only"
@@ -334,8 +436,8 @@ qemu-img create -q -f qcow2 -F qcow2 -b "$ROOTFS" "$OVERLAY"
 qemu-img resize -q "$OVERLAY" "$DISK_SIZE"
 
 cat >"$META_DATA" <<EOF
-instance-id: shirudo-$(basename "$RUN_DIR")
-local-hostname: shirudo-test-vm
+instance-id: shirudo-${VM_NAME}
+local-hostname: ${VM_NAME}
 EOF
 
 cat >"$NETWORK_CONFIG" <<'EOF'
@@ -368,6 +470,7 @@ write_files:
       exec > >(tee -a /dev/ttyS0 /mnt/shirudo-out/guest.log) 2>&1
       rc=0
 EOF
+printf '      export VM_MODE=%q\n' "$VM_MODE" >>"$USER_DATA"
 if [[ "$MAP_EXPORT_ENABLED" -eq 1 ]]; then
 	{
 		printf '      export TEST_VM_MAP_EXPORT_ENDPOINT=%q\n' \
@@ -385,6 +488,9 @@ cat >>"$USER_DATA" <<'EOF'
       fi
       printf '%s\n' "$rc" >/mnt/shirudo-out/status
       sync
+      if [ "${VM_MODE:-test}" = interactive ] && [ "$rc" -eq 0 ]; then
+        while :; do sleep 3600; done
+      fi
       poweroff
       sleep 10
       poweroff -f
@@ -406,9 +512,8 @@ done
 [[ -S "$SWTPM_SOCKET" ]] || die "swtpm control socket did not appear"
 
 log "booting $(basename "$KERNEL") with ${CPUS} CPUs and ${MEMORY} memory"
-set +e
-timeout --signal=TERM --kill-after=30 "$VM_TIMEOUT" \
-	qemu-system-x86_64 \
+
+QEMU_ARGS=(
 	-enable-kvm \
 	-cpu host \
 	-machine q35 \
@@ -426,23 +531,68 @@ timeout --signal=TERM --kill-after=30 "$VM_TIMEOUT" \
 	-tpmdev emulator,id=tpm0,chardev=chrtpm \
 	-device tpm-tis,tpmdev=tpm0 \
 	-display none \
-	-serial stdio \
 	-monitor none \
-	-no-reboot > >(tee "$RUN_DIR/console.log") 2>&1 &
-QEMU_PID=$!
-wait "$QEMU_PID"
-QEMU_STATUS=$?
-QEMU_PID=""
-set -e
+	-no-reboot
+)
 
-if [[ "$QEMU_STATUS" -eq 124 ]]; then
-	die "VM timed out after ${VM_TIMEOUT}s"
+wait_for_guest_status()
+{
+	local elapsed=0
+
+	while [[ ! -s "$RUN_DIR/result/status" ]]; do
+		kill -0 "$QEMU_PID" 2>/dev/null ||
+			die "QEMU exited before guest preparation completed"
+		(( elapsed < VM_TIMEOUT )) ||
+			die "VM timed out after ${VM_TIMEOUT}s"
+		sleep 1
+		elapsed=$((elapsed + 1))
+	done
+	read_guest_status
+}
+
+read_guest_status()
+{
+	[[ -s "$RUN_DIR/result/status" ]] ||
+		die "guest did not publish a test result"
+	GUEST_STATUS="$(<"$RUN_DIR/result/status")"
+	[[ "$GUEST_STATUS" =~ ^[0-9]+$ ]] ||
+		die "invalid guest result: $GUEST_STATUS"
+	[[ "$GUEST_STATUS" -eq 0 ]] ||
+		die "guest preparation/test failed with status $GUEST_STATUS"
+}
+
+if [[ "$VM_MODE" == interactive ]]; then
+	QEMU_ARGS+=( -serial "file=${RUN_DIR}/console.log" )
+	nohup qemu-system-x86_64 "${QEMU_ARGS[@]}" \
+		>"$RUN_DIR/qemu.log" 2>&1 < /dev/null &
+	QEMU_PID=$!
+	printf '%s\n' "$QEMU_PID" >"$RUN_DIR/qemu.pid"
+	wait_for_guest_status
+	LEAVE_RUNNING=1
+	FINAL_STATUS=0
+	log "VM ready: name=$VM_NAME state=$RUN_DIR qemu_pid=$QEMU_PID swtpm_pid=$(<"$SWTPM_PIDFILE")"
+	log "console log: $RUN_DIR/console.log"
+else
+	QEMU_ARGS+=( -serial stdio )
+	set +e
+	timeout --signal=TERM --kill-after=30 "$VM_TIMEOUT" \
+		qemu-system-x86_64 "${QEMU_ARGS[@]}" \
+		> >(tee "$RUN_DIR/console.log") 2>&1 &
+	QEMU_PID=$!
+	printf '%s\n' "$QEMU_PID" >"$RUN_DIR/qemu.pid"
+	wait "$QEMU_PID"
+	QEMU_STATUS=$?
+	QEMU_PID=""
+	set -e
+	rm -f -- "$RUN_DIR/qemu.pid"
+
+	if [[ "$QEMU_STATUS" -eq 124 ]]; then
+		die "VM timed out after ${VM_TIMEOUT}s"
+	fi
+	[[ "$QEMU_STATUS" -eq 0 ]] ||
+		die "QEMU exited with status $QEMU_STATUS"
+	read_guest_status
+
+	FINAL_STATUS=0
+	log "SHIRUDO_INTEGRATION=1 make check passed"
 fi
-[[ "$QEMU_STATUS" -eq 0 ]] || die "QEMU exited with status $QEMU_STATUS"
-[[ -s "$RUN_DIR/result/status" ]] || die "guest did not publish a test result"
-GUEST_STATUS="$(<"$RUN_DIR/result/status")"
-[[ "$GUEST_STATUS" =~ ^[0-9]+$ ]] || die "invalid guest result: $GUEST_STATUS"
-[[ "$GUEST_STATUS" -eq 0 ]] || die "guest test suite failed with status $GUEST_STATUS"
-
-FINAL_STATUS=0
-log "SHIRUDO_INTEGRATION=1 make check passed"

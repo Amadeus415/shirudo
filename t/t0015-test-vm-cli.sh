@@ -64,6 +64,23 @@ test_expect_success 'test-vm guest installs optional decoder dependencies' '
 		../contrib/test-vm-guest.sh
 '
 
+test_expect_success 'make vm and test-vm share named mode support' '
+	grep -q "^[[:space:]]*vm:" ../Makefile &&
+	grep -q "VM_MODE=interactive" ../Makefile &&
+	grep -q "VM_MODE=test" ../Makefile &&
+	grep -Fq "VMS_DIR=\"\${VM_ROOT}/vms\"" ../contrib/test-vm.sh &&
+	grep -Fq "mktemp -d \"\${VMS_DIR}/\${VM_MODE}-XXXXXX\"" \
+		../contrib/test-vm.sh &&
+	grep -q "VM_TENANT" ../contrib/test-vm.sh &&
+	grep -q "while :; do sleep 3600; done" ../contrib/test-vm.sh
+'
+
+test_expect_success 'test-vm-clean uses the VM runner cleanup path' '
+	grep -q "contrib/test-vm.sh --clean" ../Makefile &&
+	grep -q "stop_pid_file" ../contrib/test-vm.sh &&
+	grep -q "removed VM state and logs" ../contrib/test-vm.sh
+'
+
 test_expect_success 'test-vm has an opt-in map-export bridge contract' '
 	grep -q "TEST_VM_MAP_EXPORT_ENDPOINT, TEST_VM_MAP_EXPORT_TENANT_ID, and TEST_VM_MAP_EXPORT_INSECURE must be set together" \
 		"$RUNNER" &&

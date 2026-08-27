@@ -38,7 +38,7 @@ systemdunitdir ?= /usr/lib/systemd/system
 export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdir \
        systemdunitdir
 
-.PHONY: all help shirudo-build bpf-next test-vm test-vm-clean install \
+.PHONY: all help shirudo-build bpf-next vm test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
         distclean check test examples config
 
@@ -101,10 +101,13 @@ shirudo make targets (run from the repo root):
                            additionally run the live integration suite
                            (needs root and a host where `shirudo init`
                            has attached the LSM)
-    make test-vm           boot the built bzImage with QEMU + swtpm and run
-                           SHIRUDO_INTEGRATION=1 make check in the guest
-                           (TEST_VM_MAP_EXPORT_* enables host OTEL export)
-    make test-vm-clean     remove cached rootfs and disposable VM state
+    make vm                boot a uniquely named persistent vTPM VM, prepare
+                           Shirudo, and return without running the test suite
+    make test-vm           boot a uniquely named vTPM VM with QEMU + swtpm,
+                           run SHIRUDO_INTEGRATION=1 make check in the guest,
+                           and retain the stopped state for inspection
+    make test-vm-clean     stop tracked VMs and remove cached rootfs, VM
+                           state, and logs
 
   Install   (honors DESTDIR and prefix=/bindir=/libexecdir=/systemdunitdir=)
     make install           shirudo binary + bash completion (common)
@@ -132,6 +135,7 @@ shirudo make targets (run from the repo root):
     make help              show this overview
 
   Variables: prefix (=/usr/local), bindir, libexecdir, systemdunitdir,
+             VM_NAME (optional unique VM name), VM_TENANT (OTEL tenant),
              DESTDIR (staged install), V=1 (echo full command lines).
 
 endef
@@ -146,11 +150,16 @@ shirudo-build: config
 bpf-next:
 	$(Q)KERNEL_PATCHES='$(KERNEL_PATCHES)' contrib/build-kernel-deb.sh
 
+vm:
+	$(Q)VM_MODE=interactive VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		contrib/test-vm.sh
+
 test-vm:
-	$(Q)contrib/test-vm.sh
+	$(Q)VM_MODE=test VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		contrib/test-vm.sh
 
 test-vm-clean:
-	$(Q)rm -rf build/test-vm
+	$(Q)TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" contrib/test-vm.sh --clean
 
 # Build two target-installer tarballs (kernel-style `bin*-pkg`):
 #   shirudo.tar.gz         -- expects system libssh/libtss2/libcrypto on
