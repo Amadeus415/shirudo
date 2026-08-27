@@ -3150,7 +3150,7 @@ static int export_one_map(const char *upatch, const char *map,
 		rc = shirudo_upatch_decode_map_signal(&v, &decoder_signal);
 		if (!rc)
 			rc = shirudo_upatch_maps_otel_send_decoded(&v, decoder_signal,
-							    otel_opts);
+								    otel_opts);
 		if (rc) {
 			pr_err("upatch map: OTLP export %s/%s: %s", upatch, map,
 			       strerror(-rc));

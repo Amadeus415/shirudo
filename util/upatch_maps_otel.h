@@ -10,8 +10,9 @@
 #include "upatch_maps.h"
 
 enum shirudo_otel_signal {
-	SHIRUDO_OTEL_LOG,
-	SHIRUDO_OTEL_METRIC,
+	/* Keep these values aligned with SHIRUDO_UPATCH_DECODER_EXPORT_*. */
+	SHIRUDO_OTEL_LOG = 1,
+	SHIRUDO_OTEL_METRIC = 2,
 };
 
 enum shirudo_otel_mode {
