@@ -108,6 +108,20 @@ log "importing host-built Shirudo payload"
 log "host bundle dependency mode: $(<"$BUNDLE/dependency-mode")"
 install -d /usr/local/bin
 install -m 0755 "$BUNDLE/root/usr/local/bin/shirudo" /usr/local/bin/shirudo
+TARGET_UNITS=(
+	shirudo.service
+	shirudo-map-export.service
+	shirudo-map-export.timer
+	shirudo-keepalive.service
+	shirudo-keepalive.timer
+)
+install -d /usr/lib/systemd/system
+for unit in "${TARGET_UNITS[@]}"; do
+	install -m 0644 \
+		"$BUNDLE/root/usr/lib/systemd/system/$unit" \
+		"/usr/lib/systemd/system/$unit"
+done
+systemctl daemon-reload
 cp -a "$BUNDLE/test-helpers/." "$WORKSPACE/"
 
 log "checking custom-kernel and vTPM prerequisites"
@@ -140,6 +154,13 @@ if tpm.get("chain_matches_eventlog") is not True:
 PY
 
 if [[ "$VM_MODE" == interactive ]]; then
+	# init above was deliberately run directly so the current boot gets one
+	# TPM measurement; enable the service only for future boots and start the
+	# periodic timers after initialization has completed.
+	systemctl enable shirudo.service
+	systemctl enable --now shirudo-map-export.timer
+	systemctl enable --now shirudo-keepalive.timer
+
 	log "guest prepared; interactive mode skipping integration tests"
 	exit 0
 fi

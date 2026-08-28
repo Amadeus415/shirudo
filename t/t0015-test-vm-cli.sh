@@ -136,10 +136,71 @@ test_expect_success 'make vm and test-vm share named mode support' '
 	grep -q "while :; do sleep 3600; done" ../contrib/test-vm.sh
 '
 
-test_expect_success 'test-vm-clean uses the VM runner cleanup path' '
+test_expect_success 'VM bundle installs target units and interactive mode activates timers' '
+	grep -q "DESTDIR=\"\$TMP_DIR/root\" install-target" \
+		../contrib/build-test-vm-bundle.sh &&
+	grep -q "systemd/\\*.timer" ../Makefile &&
+	grep -q "shirudo-map-export.timer" ../contrib/test-vm-guest.sh &&
+	grep -q "shirudo-keepalive.timer" ../contrib/test-vm-guest.sh &&
+	grep -q "systemctl enable shirudo.service" ../contrib/test-vm-guest.sh &&
+	grep -q "systemctl enable --now shirudo-map-export.timer" \
+		../contrib/test-vm-guest.sh &&
+	grep -q "systemctl enable --now shirudo-keepalive.timer" \
+		../contrib/test-vm-guest.sh &&
+	grep -Fq "if [[ \"\$VM_MODE\" == interactive ]]" \
+		../contrib/test-vm-guest.sh
+'
+
+test_expect_success 'VM stop and cleanup use the VM runner paths' '
+	grep -q "^vm-stop:" ../Makefile &&
+	grep -q "contrib/test-vm.sh --stop" ../Makefile &&
+	grep -q "^vm-clean:" ../Makefile &&
 	grep -q "contrib/test-vm.sh --clean" ../Makefile &&
+	grep -q "^test-vm-clean: vm-clean" ../Makefile &&
+	grep -q "VM_NAME=\"\$(VM_NAME)\"" ../Makefile &&
 	grep -q "stop_pid_file" ../contrib/test-vm.sh &&
 	grep -q "removed VM state and logs" ../contrib/test-vm.sh
+'
+
+test_expect_success 'named vm-stop preserves the selected VM state' '
+	root="$WORK/named-stop" &&
+	mkdir -p "$root/vms/one" "$root/logs/one" &&
+	printf state >"$root/vms/one/sentinel" &&
+	printf log >"$root/logs/one/sentinel" &&
+	VM_NAME=one TEST_VM_WORK_DIR="$root" "$RUNNER" --stop &&
+	test -e "$root/vms/one/sentinel" &&
+	test -e "$root/logs/one/sentinel"
+'
+
+test_expect_success 'unnamed vm-stop stops all VMs and preserves state' '
+	root="$WORK/all-stop" &&
+	mkdir -p "$root/vms/one" "$root/vms/two" "$root/logs/one" \
+		"$root/logs/two" &&
+	printf state >"$root/vms/one/sentinel" &&
+	printf state >"$root/vms/two/sentinel" &&
+	printf log >"$root/logs/one/sentinel" &&
+	printf log >"$root/logs/two/sentinel" &&
+	TEST_VM_WORK_DIR="$root" "$RUNNER" --stop &&
+	test -e "$root/vms/one/sentinel" &&
+	test -e "$root/vms/two/sentinel" &&
+	test -e "$root/logs/one/sentinel" &&
+	test -e "$root/logs/two/sentinel"
+'
+
+test_expect_success 'named test-vm-clean removes only the selected VM' '
+	root="$WORK/named-clean" &&
+	mkdir -p "$root/vms/one" "$root/vms/two" "$root/logs/one" \
+		"$root/logs/two" "$root/cache" &&
+	printf state >"$root/vms/one/sentinel" &&
+	printf state >"$root/vms/two/sentinel" &&
+	printf log >"$root/logs/one/sentinel" &&
+	printf log >"$root/logs/two/sentinel" &&
+	VM_NAME=one TEST_VM_WORK_DIR="$root" "$RUNNER" --clean &&
+	! test -e "$root/vms/one" &&
+	! test -e "$root/logs/one" &&
+	test -e "$root/vms/two/sentinel" &&
+	test -e "$root/logs/two/sentinel" &&
+	test -d "$root/cache"
 '
 
 test_expect_success 'test-vm has an opt-in map-export bridge contract' '

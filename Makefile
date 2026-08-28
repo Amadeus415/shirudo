@@ -38,7 +38,7 @@ systemdunitdir ?= /usr/lib/systemd/system
 export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdir \
        systemdunitdir
 
-.PHONY: all help shirudo-build test-helpers bundle test-vm-bundle bpf-next vm test-op test-tgt test-vm test-vm-clean install \
+.PHONY: all help shirudo-build test-helpers bundle test-vm-bundle bpf-next vm vm-stop vm-clean test-op test-tgt test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
         distclean check test examples config
 
@@ -116,13 +116,17 @@ shirudo make targets (run from the repo root):
                            invalidated by source, Makefile, config, script,
                            fixture, and artifact changes
     make bundle             alias for make test-vm-bundle
-    make test-vm-clean     stop tracked VMs and remove cached rootfs, VM
-                           state, and logs
+    make vm-stop [VM_NAME=name]
+                           stop one VM, or all VMs without a name; preserve state
+    make vm-clean [VM_NAME=name]
+                           remove one VM, or all VM state without a name
+    make test-vm-clean      compatibility alias for make vm-clean
 
   Install   (honors DESTDIR and prefix=/bindir=/libexecdir=/systemdunitdir=)
     make install           shirudo binary + bash completion (common)
     make install-target    install + target systemd units for reboot
-                           persistence and periodic map export
+                           persistence, periodic map export, and status
+                           keepalive
     make install-operator  install + shirudo-build + BPF headers
                            (operator host)
 
@@ -169,7 +173,7 @@ TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
 	*.c *.h include/*.h util/*.c util/*.h \
 	bpf/*.c bpf/lib/*.h \
 	tools/shirudo-build/*.c tools/shirudo-build/*.h \
-	t/helper/*.c completion/* systemd/*.in \
+	t/helper/*.c completion/* systemd/*.in systemd/*.timer \
 	test-vm/fixtures/*.c test-vm/fixtures/*.lua \
 	test-vm/fixtures/decoders/*))
 TEST_VM_BUNDLE_ARTIFACTS := $(sort $(wildcard \
@@ -205,8 +209,15 @@ test-tgt: test-vm-bundle
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
 
-test-vm-clean:
-	$(Q)TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" contrib/test-vm.sh --clean
+vm-stop:
+	$(Q)VM_NAME="$(VM_NAME)" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" contrib/test-vm.sh --stop
+
+vm-clean:
+	$(Q)VM_NAME="$(VM_NAME)" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" contrib/test-vm.sh --clean
+
+test-vm-clean: vm-clean
 
 # Build two target-installer tarballs (kernel-style `bin*-pkg`):
 #   shirudo.tar.gz         -- expects system libssh/libtss2/libcrypto on
@@ -256,7 +267,8 @@ bintar-pkg: config packaging/tar/install.sh packaging/tar/bundle-libs.sh
 
 # Build two .deb packages (kernel-style `make bindeb-pkg`):
 #   shirudo-target_<version>_<arch>.deb
-#       shirudo + the systemd reboot and map-export units (target node)
+#       shirudo + the systemd reboot, map-export, and keepalive units
+#       (target node)
 #   shirudo-operator_<version>_<arch>.deb
 #       shirudo + shirudo-build + BPF headers, no unit
 # Rebuilds from clean with prefix=$(DEB_PREFIX) because the libexec path is

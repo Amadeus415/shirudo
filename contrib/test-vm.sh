@@ -273,17 +273,60 @@ stop_pid_file()
 	rm -f -- "$pidfile"
 }
 
-clean_state()
+stop_named_state()
+{
+	local pidfile vm_dir
+
+	[[ -n "$VM_NAME_REQUEST" ]] ||
+		die "VM_NAME is required for named VM stop/cleanup"
+	valid_vm_name "$VM_NAME_REQUEST" ||
+		die "VM_NAME must start with an alphanumeric and contain only A-Z, a-z, 0-9, '.', '_', or '-' (max 63 characters)"
+	vm_dir="${VMS_DIR}/${VM_NAME_REQUEST}"
+	[[ -d "$vm_dir" ]] ||
+		die "VM_NAME '$VM_NAME_REQUEST' has no state directory under $VMS_DIR"
+	while IFS= read -r -d '' pidfile; do
+		stop_pid_file "$pidfile"
+	done < <(find "$vm_dir" -type f \( -name qemu.pid -o -name swtpm.pid \) -print0)
+}
+
+stop_all_state()
 {
 	local pidfile
 
-	[[ -n "$VM_ROOT" && "$VM_ROOT" != "/" ]] ||
-		die "refusing to clean unsafe VM root '$VM_ROOT'"
 	if [[ -d "$VMS_DIR" ]]; then
 		while IFS= read -r -d '' pidfile; do
 			stop_pid_file "$pidfile"
 		done < <(find "$VMS_DIR" -type f \( -name qemu.pid -o -name swtpm.pid \) -print0)
 	fi
+}
+
+stop_state()
+{
+	[[ -n "$VM_ROOT" && "$VM_ROOT" != "/" ]] ||
+		die "refusing to stop unsafe VM root '$VM_ROOT'"
+	if [[ -n "$VM_NAME_REQUEST" ]]; then
+		stop_named_state
+		log "stopped VM: $VM_NAME_REQUEST (state preserved)"
+	else
+		stop_all_state
+		log "stopped all tracked VMs (state preserved)"
+	fi
+}
+
+clean_state()
+{
+	local pidfile vm_dir
+
+	[[ -n "$VM_ROOT" && "$VM_ROOT" != "/" ]] ||
+		die "refusing to clean unsafe VM root '$VM_ROOT'"
+	if [[ -n "$VM_NAME_REQUEST" ]]; then
+		stop_named_state
+		vm_dir="${VMS_DIR}/${VM_NAME_REQUEST}"
+		rm -rf -- "$vm_dir" "${LOGS_DIR}/${VM_NAME_REQUEST}"
+		log "removed VM state and logs: $VM_NAME_REQUEST"
+		return 0
+	fi
+	stop_all_state
 	rm -rf -- "$VM_ROOT"
 	log "removed VM state and logs: $VM_ROOT"
 }
@@ -591,6 +634,11 @@ allocate_run_dir()
 
 while [[ "$#" -gt 0 ]]; do
 	case "$1" in
+	--stop)
+		[[ "$#" -eq 1 ]] || die "--stop does not accept additional arguments"
+		stop_state
+		exit 0
+		;;
 	--clean)
 		[[ "$#" -eq 1 ]] || die "--clean does not accept additional arguments"
 		clean_state

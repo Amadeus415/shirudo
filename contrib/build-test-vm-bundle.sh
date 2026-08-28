@@ -72,7 +72,7 @@ cleanup()
 trap cleanup EXIT
 
 make -C "$REPO_ROOT" "${BPF_MAKE_ARGS[@]}" \
-	DESTDIR="$TMP_DIR/root" install
+	DESTDIR="$TMP_DIR/root" install-target
 
 install -d "$TMP_DIR/test-helpers/t/helper"
 while IFS= read -r helper; do
