@@ -50,6 +50,8 @@ VM_MODE="${VM_MODE:-test}"
 VM_VERBOSE="${VM_VERBOSE:-0}"
 VM_NAME_REQUEST="${VM_NAME:-}"
 VM_TENANT="${VM_TENANT:-}"
+VM_SSH_COMMAND="${VM_SSH_COMMAND:-}"
+SSH_PORT_REQUEST="${TEST_VM_SSH_PORT:-}"
 KERNEL_URL="${TEST_VM_KERNEL_URL:-}"
 KERNEL_SHA256="${TEST_VM_KERNEL_SHA256:-}"
 KERNEL_OVERRIDE="${TEST_VM_KERNEL:-}"
@@ -62,6 +64,10 @@ MAP_EXPORT_CA="${TEST_VM_MAP_EXPORT_CA:-}"
 MAP_EXPORT_TENANT_ID=""
 MAP_EXPORT_ENABLED=0
 RUN_DIR=""
+SSH_DIR=""
+SSH_PORT=""
+SSH_PUBLIC_KEY=""
+SSH_PORT_LOCK_FD=""
 SWTPM_PIDFILE=""
 QEMU_PID=""
 QEMU_STATUS=1
@@ -80,7 +86,12 @@ HOST_DEPENDENCIES=(
 	"cloud-localds:cloud-image-utils"
 	"timeout:coreutils"
 	"flock:util-linux"
+	"ssh-keygen:openssh-client"
+	"ss:iproute2"
 )
+
+SSH_PORT_MIN=22000
+SSH_PORT_MAX=22999
 
 log()
 {
@@ -294,6 +305,100 @@ stop_pid_file()
 		fi
 	fi
 	rm -f -- "$pidfile"
+}
+
+check_access_dependency()
+{
+	local command_name="$1"
+
+	command -v "$command_name" >/dev/null 2>&1 ||
+		die "missing host command: $command_name"
+}
+
+select_named_run_dir()
+{
+	[[ -n "$VM_NAME_REQUEST" ]] ||
+		die "VM_NAME is required for VM console/SSH access"
+	valid_vm_name "$VM_NAME_REQUEST" ||
+		die "VM_NAME must start with an alphanumeric and contain only A-Z, a-z, 0-9, '.', '_', or '-' (max 63 characters)"
+	RUN_DIR="${VMS_DIR}/${VM_NAME_REQUEST}"
+	[[ -d "$RUN_DIR" ]] ||
+		die "VM_NAME '$VM_NAME_REQUEST' has no state directory under $VMS_DIR"
+	VM_NAME="$VM_NAME_REQUEST"
+}
+
+require_running_vm()
+{
+	local pid cmdline
+
+	select_named_run_dir
+	[[ -s "$RUN_DIR/qemu.pid" ]] ||
+		die "VM '$VM_NAME' is not running; start it with 'make vm VM_NAME=$VM_NAME'"
+	pid="$(<"$RUN_DIR/qemu.pid")"
+	[[ "$pid" =~ ^[0-9]+$ ]] ||
+		die "VM '$VM_NAME' has an invalid QEMU PID file"
+	if ! kill -0 "$pid" 2>/dev/null; then
+		die "VM '$VM_NAME' is not running; start it with 'make vm VM_NAME=$VM_NAME'"
+	fi
+	cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+	[[ "$cmdline" == *qemu-system-x86_64* &&
+	   "$cmdline" == *"$RUN_DIR"* ]] ||
+		die "VM '$VM_NAME' has a stale or unrelated QEMU PID file"
+}
+
+run_console()
+{
+	check_access_dependency socat
+	require_running_vm
+	[[ -S "$RUN_DIR/console.sock" ]] ||
+		die "VM '$VM_NAME' has no serial console socket"
+	log "attaching to VM console: $VM_NAME (Ctrl-] detaches)"
+	exec socat 'STDIO,raw,echo=0,escape=0x1d' \
+		"UNIX-CONNECT:${RUN_DIR}/console.sock"
+}
+
+ssh_options()
+{
+	SSH_ARGS=(
+		-F /dev/null
+		-o ConnectTimeout=2
+		-o ConnectionAttempts=1
+		-o IdentitiesOnly=yes
+		-o StrictHostKeyChecking=accept-new
+		-o GlobalKnownHostsFile=/dev/null
+		-o UserKnownHostsFile="${SSH_DIR}/known_hosts"
+		-o IdentityFile="${SSH_DIR}/id_ed25519"
+		-p "$SSH_PORT"
+	)
+}
+
+run_ssh()
+{
+	local ready=0
+
+	check_access_dependency ssh
+	require_running_vm
+	SSH_DIR="${RUN_DIR}/ssh"
+	[[ -s "$RUN_DIR/ssh.port" && -r "$SSH_DIR/id_ed25519" ]] ||
+		die "VM '$VM_NAME' has no SSH access metadata"
+	SSH_PORT="$(<"$RUN_DIR/ssh.port")"
+	[[ "$SSH_PORT" =~ ^[0-9]+$ ]] ||
+		die "VM '$VM_NAME' has an invalid SSH port"
+	ssh_options
+	for _ in {1..60}; do
+		if ssh "${SSH_ARGS[@]}" -o BatchMode=yes \
+			root@127.0.0.1 true >/dev/null 2>&1; then
+			ready=1
+			break
+		fi
+		sleep 1
+	done
+	[[ "$ready" -eq 1 ]] ||
+		die "SSH did not become ready for VM '$VM_NAME'"
+	if [[ -n "$VM_SSH_COMMAND" ]]; then
+		exec ssh "${SSH_ARGS[@]}" root@127.0.0.1 "$VM_SSH_COMMAND"
+	fi
+	exec ssh "${SSH_ARGS[@]}" root@127.0.0.1
 }
 
 stop_named_state()
@@ -524,6 +629,11 @@ stream_verbose_console()
 
 cleanup()
 {
+	if [[ -n "$SSH_PORT_LOCK_FD" ]]; then
+		flock -u "$SSH_PORT_LOCK_FD" 2>/dev/null || true
+		eval "exec ${SSH_PORT_LOCK_FD}>&-"
+		SSH_PORT_LOCK_FD=""
+	fi
 	if [[ "$LEAVE_RUNNING" -eq 0 ]]; then
 		stop_qemu
 		stop_swtpm
@@ -636,6 +746,62 @@ fetch_rootfs()
 	printf '%s\n' "$rootfs"
 }
 
+allocate_ssh_access()
+{
+	local port
+
+	SSH_DIR="${RUN_DIR}/ssh"
+	mkdir -p "$SSH_DIR"
+	(
+		umask 077
+		ssh-keygen -q -t ed25519 -N '' -f "$SSH_DIR/id_ed25519"
+	)
+	SSH_PUBLIC_KEY="$(<"$SSH_DIR/id_ed25519.pub")"
+
+	exec {SSH_PORT_LOCK_FD}>"${VM_ROOT}/ssh-port.lock"
+	flock "$SSH_PORT_LOCK_FD"
+	if [[ -n "$SSH_PORT_REQUEST" ]]; then
+		[[ "$SSH_PORT_REQUEST" =~ ^[0-9]+$ &&
+		   "$SSH_PORT_REQUEST" -ge 1024 &&
+		   "$SSH_PORT_REQUEST" -le 65535 ]] ||
+			die "TEST_VM_SSH_PORT must be an unused port from 1024 through 65535"
+		if ss -Hln "sport = :$SSH_PORT_REQUEST" | grep -q .; then
+			die "TEST_VM_SSH_PORT is already in use: $SSH_PORT_REQUEST"
+		fi
+		SSH_PORT="$SSH_PORT_REQUEST"
+	else
+		port="$SSH_PORT_MIN"
+		while (( port <= SSH_PORT_MAX )); do
+			if ! ss -Hln "sport = :$port" | grep -q .; then
+				SSH_PORT="$port"
+				break
+			fi
+			port=$((port + 1))
+		done
+		[[ -n "$SSH_PORT" ]] ||
+			die "no free localhost SSH port in ${SSH_PORT_MIN}-${SSH_PORT_MAX}"
+	fi
+	printf '%s\n' "$SSH_PORT" >"$RUN_DIR/ssh.port"
+}
+
+wait_for_ssh_listener()
+{
+	local _
+
+	for _ in {1..50}; do
+		if ss -Hln "sport = :$SSH_PORT" | grep -q .; then
+			if [[ -n "$SSH_PORT_LOCK_FD" ]]; then
+				flock -u "$SSH_PORT_LOCK_FD"
+				eval "exec ${SSH_PORT_LOCK_FD}>&-"
+				SSH_PORT_LOCK_FD=""
+			fi
+			return 0
+		fi
+		sleep 0.1
+	done
+	die "QEMU did not open localhost SSH port $SSH_PORT"
+}
+
 allocate_run_dir()
 {
 	mkdir -p "$VMS_DIR" "$LOGS_DIR"
@@ -667,6 +833,16 @@ while [[ "$#" -gt 0 ]]; do
 		clean_state
 		exit 0
 		;;
+	--console)
+		[[ "$#" -eq 1 ]] || die "--console does not accept additional arguments"
+		run_console
+		exit 0
+		;;
+	--ssh)
+		[[ "$#" -eq 1 ]] || die "--ssh does not accept additional arguments"
+		run_ssh
+		exit 0
+		;;
 	--verbose)
 		VM_VERBOSE=1
 		shift
@@ -687,6 +863,7 @@ validate_host_bundle
 
 mkdir -p "$CACHE_DIR"
 allocate_run_dir
+allocate_ssh_access
 KERNEL="$(resolve_kernel)"
 
 [[ "$(uname -m)" == "x86_64" ]] || die "test-vm currently supports x86_64 hosts only"
@@ -752,6 +929,7 @@ write_files:
       rc=0
 EOF
 printf '      export VM_MODE=%q\n' "$VM_MODE" >>"$USER_DATA"
+printf '      export TEST_VM_SSH_PUBLIC_KEY=%q\n' "$SSH_PUBLIC_KEY" >>"$USER_DATA"
 if [[ "$MAP_EXPORT_ENABLED" -eq 1 ]]; then
 	{
 		printf '      export TEST_VM_MAP_EXPORT_ENDPOINT=%q\n' \
@@ -813,7 +991,7 @@ QEMU_ARGS=(
 	-drive "file=${SEED},if=virtio,format=raw,readonly=on" \
 	-kernel "$KERNEL" \
 	-append "root=/dev/vda1 rootwait rw console=ttyS0,115200n8 loglevel=7 net.ifnames=0 lsm=landlock,lockdown,yama,integrity,apparmor,bpf" \
-	-netdev user,id=net0 \
+	-netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22" \
 	-device virtio-net-pci,netdev=net0 \
 	-virtfs "local,id=shirudo-src,path=${REPO_ROOT},mount_tag=shirudo-src,security_model=none,readonly=on" \
 	-virtfs "local,id=shirudo-bundle,path=${TEST_VM_HOST_BUNDLE},mount_tag=shirudo-bundle,security_model=none,readonly=on" \
@@ -821,6 +999,8 @@ QEMU_ARGS=(
 	-chardev "socket,id=chrtpm,path=${SWTPM_SOCKET}" \
 	-tpmdev emulator,id=tpm0,chardev=chrtpm \
 	-device tpm-tis,tpmdev=tpm0 \
+	-chardev "socket,id=console,path=${RUN_DIR}/console.sock,server=on,wait=off,logfile=${RUN_DIR}/console.log,logappend=on" \
+	-serial chardev:console \
 	-display none \
 	-monitor none \
 	-no-reboot
@@ -859,23 +1039,25 @@ read_guest_status()
 }
 
 if [[ "$VM_MODE" == interactive ]]; then
-	QEMU_ARGS+=( -serial "file:${RUN_DIR}/console.log" )
 	nohup qemu-system-x86_64 "${QEMU_ARGS[@]}" \
 		>"$RUN_DIR/qemu.log" 2>&1 < /dev/null &
 	QEMU_PID=$!
 	printf '%s\n' "$QEMU_PID" >"$RUN_DIR/qemu.pid"
+	wait_for_ssh_listener
 	wait_for_guest_status
 	LEAVE_RUNNING=1
 	FINAL_STATUS=0
 	log "VM ready: name=$VM_NAME state=$RUN_DIR qemu_pid=$QEMU_PID swtpm_pid=$(<"$SWTPM_PIDFILE")"
 	log "console log: $RUN_DIR/console.log"
+	log "console: make vm-console VM_NAME=$VM_NAME"
+	log "ssh: make vm-ssh VM_NAME=$VM_NAME"
 else
-	QEMU_ARGS+=( -serial "file:${RUN_DIR}/console.log" )
 	set +e
 	timeout --signal=TERM --kill-after=30 "$VM_TIMEOUT" \
 		qemu-system-x86_64 "${QEMU_ARGS[@]}" \
 		>"$RUN_DIR/qemu.log" 2>&1 &
 	QEMU_PID=$!
+	wait_for_ssh_listener
 	while :; do
 		if [[ "$VM_VERBOSE" == 1 ]]; then
 			stream_verbose_console

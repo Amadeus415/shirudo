@@ -136,6 +136,32 @@ test_expect_success 'make vm and test-vm share named mode support' '
 	grep -q "while :; do sleep 3600; done" ../contrib/test-vm.sh
 '
 
+test_expect_success 'named VM console and SSH access helpers are wired up' '
+	grep -q "^vm-console:" ../Makefile &&
+	grep -q "^vm-ssh:" ../Makefile &&
+	grep -q "contrib/test-vm.sh --console" ../Makefile &&
+	grep -q "contrib/test-vm.sh --ssh" ../Makefile &&
+	grep -q "VM_SSH_COMMAND" ../Makefile &&
+	grep -q "TEST_VM_SSH_PORT" ../Makefile &&
+	grep -q "hostfwd=tcp:127.0.0.1" ../contrib/test-vm.sh &&
+	grep -q "socket,id=console" ../contrib/test-vm.sh &&
+	grep -q "logfile=.*console.log" ../contrib/test-vm.sh &&
+	grep -q "TEST_VM_SSH_PUBLIC_KEY" ../contrib/test-vm.sh &&
+	grep -q "serial-getty@ttyS0.service" ../contrib/test-vm-guest.sh &&
+	grep -q "TEST_VM_SSH_PUBLIC_KEY" ../contrib/test-vm-guest.sh
+'
+
+test_expect_success 'VM console and SSH access require a named VM' '
+	! TEST_VM_WORK_DIR="$WORK/access-console" "$RUNNER" --console \
+		>"$WORK/access-console.out" 2>&1 &&
+	grep -q "VM_NAME is required for VM console/SSH access" \
+		"$WORK/access-console.out" &&
+	! TEST_VM_WORK_DIR="$WORK/access-ssh" "$RUNNER" --ssh \
+		>"$WORK/access-ssh.out" 2>&1 &&
+	grep -q "VM_NAME is required for VM console/SSH access" \
+		"$WORK/access-ssh.out"
+'
+
 test_expect_success 'VM bundle installs target units and interactive mode activates timers' '
 	grep -q "DESTDIR=\"\$TMP_DIR/root\" install-target" \
 		../contrib/build-test-vm-bundle.sh &&

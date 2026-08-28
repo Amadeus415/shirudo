@@ -224,6 +224,18 @@ also run in parallel from separate shell processes, for example::
 
     make test-tgt & make test-tgt & wait
 
+For a named running VM, ``make vm-console VM_NAME=policy-session`` attaches to
+the bidirectional serial console; press ``Ctrl-]`` to detach without stopping
+the VM.  ``make vm-ssh VM_NAME=policy-session`` opens a root shell over a
+loopback-only SSH forward.  A one-off exploratory command can be run with
+``VM_SSH_COMMAND``::
+
+    make vm-ssh VM_NAME=policy-session \
+        VM_SSH_COMMAND='shirudo status --json --include-tpm'
+
+The SSH key and localhost port are generated per VM and retained with its
+state.  Set ``TEST_VM_SSH_PORT`` to request a fixed host port.
+
 Use ``make test-vm-clean`` to stop tracked VMs and remove all retained VM
 state and logs under ``build/test-vm``.
 

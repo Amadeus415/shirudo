@@ -12,7 +12,8 @@ the Shirudo repository root and preserve the caller's working-tree changes.
 
 The target VM workflow needs an x86_64 host with accessible `/dev/kvm`,
 `qemu-system-x86_64`, `qemu-img`, `swtpm`, and `cloud-localds`. The runner also
-uses `curl`, `sha256sum`, `awk`, `timeout`, and `flock`. It reports a package
+uses `curl`, `sha256sum`, `awk`, `timeout`, `flock`, `ss`, and `ssh-keygen`.
+The access helpers use `socat` and the OpenSSH client. It reports a package
 install suggestion when a dependency is missing; do not install host packages
 without the user's authorization.
 
@@ -50,6 +51,31 @@ for a VM that will be inspected or reused:
 ```sh
 make vm VM_NAME=policy-session VM_TENANT=tenant-test
 ```
+
+The command prints the retained state directory and the access commands when
+the guest is ready. Attach to the interactive serial console with:
+
+```sh
+make vm-console VM_NAME=policy-session
+```
+
+Detach from the console with `Ctrl-]`; the VM continues running. Open a root
+shell over the loopback-only SSH forward with:
+
+```sh
+make vm-ssh VM_NAME=policy-session
+```
+
+Run one exploratory command instead of opening a shell with:
+
+```sh
+make vm-ssh VM_NAME=policy-session \
+  VM_SSH_COMMAND='shirudo status --json --include-tpm'
+```
+
+Console and SSH access require a named VM. SSH uses a per-VM ephemeral key
+and a dynamically allocated localhost port; set `TEST_VM_SSH_PORT` when a
+fixed port is needed.
 
 Run the target-side integration suite in a test-mode VM:
 

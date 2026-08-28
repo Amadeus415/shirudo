@@ -104,6 +104,9 @@ log "configuring loopback root SSH for the libssh integration test"
 install -d -m 0700 /root/.ssh
 ssh-keygen -q -t ed25519 -N '' -f /root/.ssh/id_ed25519
 cat /root/.ssh/id_ed25519.pub >>/root/.ssh/authorized_keys
+if [[ -n "${TEST_VM_SSH_PUBLIC_KEY:-}" ]]; then
+	printf '%s\n' "$TEST_VM_SSH_PUBLIC_KEY" >>/root/.ssh/authorized_keys
+fi
 chmod 0600 /root/.ssh/authorized_keys
 install -d -m 0755 /etc/ssh/sshd_config.d
 cat >/etc/ssh/sshd_config.d/99-shirudo-test-vm.conf <<'EOF'
@@ -112,6 +115,7 @@ PasswordAuthentication no
 EOF
 passwd -d root >/dev/null
 systemctl enable --now ssh
+systemctl enable --now serial-getty@ttyS0.service
 
 mkdir -p "$UPPER" "$OVERLAY_WORK" "$WORKSPACE"
 if mount -t overlay overlay \

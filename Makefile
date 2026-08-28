@@ -37,8 +37,9 @@ systemdunitdir ?= /usr/lib/systemd/system
 
 export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdir \
        systemdunitdir
+export VM_SSH_COMMAND
 
-.PHONY: all help shirudo-build test-helpers bundle test-vm-bundle bpf-next vm vm-stop vm-clean test-op test-tgt test-vm test-vm-clean install \
+.PHONY: all help shirudo-build test-helpers bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
         distclean test examples config
 
@@ -105,6 +106,8 @@ shirudo make targets (run from the repo root):
                            has attached the LSM)
     make vm                boot a uniquely named persistent vTPM VM, prepare
                            Shirudo, and return without running the test suite
+    make vm-console        attach to the serial console of a named running VM
+    make vm-ssh             open an SSH shell to a named running VM
     make test-tgt          boot a uniquely named vTPM VM with QEMU + swtpm,
                            import the host payload and prebuilt fixtures, run
                            the target integration suite, and retain the
@@ -149,6 +152,8 @@ shirudo make targets (run from the repo root):
 
   Variables: prefix (=/usr/local), bindir, libexecdir, systemdunitdir,
              VM_NAME (optional unique VM name), VM_TENANT (OTEL tenant),
+             VM_SSH_COMMAND (optional one-off command for make vm-ssh),
+             TEST_VM_SSH_PORT (optional fixed localhost SSH port),
              TEST_VM_MAP_EXPORT_ENDPOINT (OTLP base URL),
              TEST_VM_MAP_EXPORT_CA (optional PEM CA file),
              TEST_VM_MAP_EXPORT_INSECURE=true (explicit HTTP only),
@@ -203,12 +208,21 @@ bpf-next:
 
 vm: test-vm-bundle
 	$(Q)VM_MODE=interactive VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_SSH_PORT="$(TEST_VM_SSH_PORT)" \
 		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
 		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
 		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
 		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
+
+vm-console:
+	$(Q)VM_NAME="$(VM_NAME)" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" contrib/test-vm.sh --console
+
+vm-ssh:
+	$(Q)VM_NAME="$(VM_NAME)" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" contrib/test-vm.sh --ssh
 
 test-tgt: test-vm-bundle
 	$(Q)VM_MODE=test VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
