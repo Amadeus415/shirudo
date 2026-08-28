@@ -332,6 +332,12 @@ systemd/shirudo-map-export.service: systemd/shirudo-map-export.service.in
 	@printf '  GEN     $@\n'
 	$(Q)sed 's|@bindir@|$(bindir)|g' $< > $@
 
+# The periodic status keepalive is target-only and uses the same installed
+# binary and OTLP environment as the map exporter.
+systemd/shirudo-keepalive.service: systemd/shirudo-keepalive.service.in
+	@printf '  GEN     $@\n'
+	$(Q)sed 's|@bindir@|$(bindir)|g' $< > $@
+
 # Common to both roles: the one shirudo binary + its completion.
 install: shirudo
 	@printf '  INSTALL $(DESTDIR)$(bindir)/shirudo\n'
@@ -342,16 +348,21 @@ install: shirudo
 	$(Q)install -m 0644 completion/shirudo.bash \
 	    $(DESTDIR)$(completionsdir)/shirudo
 
-# Target machines additionally get the reboot-persistence and periodic map
-# export units. They are deliberately NOT in install-operator.
+# Target machines additionally get the reboot-persistence, periodic map
+# export, and status keepalive units. They are deliberately NOT in
+# install-operator.
 install-target: install systemd/shirudo.service \
 		systemd/shirudo-map-export.service \
-		systemd/shirudo-map-export.timer
+		systemd/shirudo-map-export.timer \
+		systemd/shirudo-keepalive.service \
+		systemd/shirudo-keepalive.timer
 	@printf '  INSTALL $(DESTDIR)$(systemdunitdir)/shirudo*.service,timer\n'
 	$(Q)install -d $(DESTDIR)$(systemdunitdir)
 	$(Q)install -m 0644 systemd/shirudo.service \
 	    systemd/shirudo-map-export.service \
 	    systemd/shirudo-map-export.timer \
+	    systemd/shirudo-keepalive.service \
+	    systemd/shirudo-keepalive.timer \
 	    $(DESTDIR)$(systemdunitdir)/
 
 install-operator: install shirudo-build bpf/vmlinux.h $(BPF_HEADERS_OUT) $(BPF_LIB_HEADERS)
@@ -468,7 +479,8 @@ clean:
 	          $(BUILD_OBJS) $(VERSION_OBJ) util/version_id.c
 	$(Q)rm -f $(DEPS) t/helper/*.d
 	$(Q)rm -f $(BPF_OBJS) bpf/vmlinux.h systemd/shirudo.service \
-	          systemd/shirudo-map-export.service
+	          systemd/shirudo-map-export.service \
+	          systemd/shirudo-keepalive.service
 	$(Q)rm -rf bpf/include
 
 distclean:

@@ -510,6 +510,25 @@ static int status_otel_severity(const char *status, const char **text)
 	return 17;
 }
 
+/*
+ * Unlike the general OTLP exporter, the periodic status keepalive must not
+ * silently turn an absent configuration into a request to localhost. Keep
+ * the exporter fallback unchanged for map commands, but make status export
+ * conditional on an explicitly configured endpoint.
+ */
+static bool status_otel_endpoint_configured(const struct shirudo_config *cfg)
+{
+	const char *endpoint;
+
+	if (cfg->map_export_otel_endpoint[0])
+		return true;
+	endpoint = getenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT");
+	if (endpoint && endpoint[0])
+		return true;
+	endpoint = getenv("OTEL_EXPORTER_OTLP_ENDPOINT");
+	return endpoint && endpoint[0];
+}
+
 int cmd_status(int argc, const char **argv)
 {
 	bool json = false, include_tpm = false;
@@ -535,6 +554,7 @@ int cmd_status(int argc, const char **argv)
 	int match = -1;		/* -1 unknown, 0 mismatch, 1 match */
 	int n_ups, i, fd, ret = 0;
 	const char *otel_status = NULL;
+	bool otel_endpoint_configured = false;
 
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--json") == 0)
@@ -596,6 +616,8 @@ int cmd_status(int argc, const char **argv)
 		otel_opts.allow_insecure = otel_cfg.map_export_otel_insecure;
 		otel_opts.retries = otel_cfg.map_export_otel_retries;
 		otel_opts.otlp_max_bytes = otel_cfg.map_export_otlp_max_bytes;
+		otel_endpoint_configured =
+			status_otel_endpoint_configured(&otel_cfg);
 	}
 
 	/*
@@ -879,7 +901,7 @@ int cmd_status(int argc, const char **argv)
 			fprintf(stderr, "status: json encode failed: %s\n",
 				strerror(-e.err));
 		else {
-			if (otel) {
+			if (otel && otel_endpoint_configured) {
 				const char *severity_text;
 				int severity_number;
 				int rc;

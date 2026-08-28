@@ -88,7 +88,7 @@ mkdir -p "$stage/DEBIAN"
 " agentless target-node components: the shirudo binary and systemd units" \
 " that re-mount the private bpffs, re-attach the LSM and re-apply the" \
 " signed upatch set early on every boot, then periodically export upatch" \
-" maps. It carries no private signing key."
+" maps and status keepalives. It carries no private signing key."
 	else
 		printf '%s\n' \
 " shirudo locks down the bpf() syscall via a BPF LSM so that only signed," \
@@ -100,10 +100,10 @@ mkdir -p "$stage/DEBIAN"
 	fi
 } > "$stage/DEBIAN/control"
 
-# Target-only: enable the reboot-persistence service and map-export timer on
-# install, then disable them on removal. They activate on the next boot but
-# are never auto-started by dpkg, since attaching the LSM is an operator
-# decision rather than an installation side effect.
+# Target-only: enable the reboot-persistence service, map-export timer, and
+# keepalive timer on install, then disable them on removal. They activate on
+# the next boot but are never auto-started by dpkg, since attaching the LSM
+# is an operator decision rather than an installation side effect.
 if [ "$role" = target ]; then
 	cat > "$stage/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
@@ -112,9 +112,11 @@ if [ "$1" = configure ] && command -v systemctl >/dev/null 2>&1; then
 	systemctl daemon-reload || true
 	systemctl enable shirudo.service >/dev/null 2>&1 || true
 	systemctl enable shirudo-map-export.timer >/dev/null 2>&1 || true
+	systemctl enable shirudo-keepalive.timer >/dev/null 2>&1 || true
 	echo "shirudo: shirudo.service enabled; it runs 'shirudo init' early on the"
 	echo "shirudo: next boot. To enforce now: systemctl start shirudo.service"
 	echo "shirudo: shirudo-map-export.timer enabled for the next boot"
+	echo "shirudo: shirudo-keepalive.timer enabled for the next boot"
 fi
 exit 0
 EOF
@@ -123,6 +125,8 @@ EOF
 set -e
 if [ "$1" = remove ] && command -v systemctl >/dev/null 2>&1; then
 	systemctl --no-reload disable --now shirudo-map-export.timer \
+		>/dev/null 2>&1 || true
+	systemctl --no-reload disable --now shirudo-keepalive.timer \
 		>/dev/null 2>&1 || true
 	systemctl --no-reload disable shirudo.service >/dev/null 2>&1 || true
 fi

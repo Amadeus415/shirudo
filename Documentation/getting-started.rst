@@ -564,6 +564,11 @@ to the collector's ``v1/logs`` endpoint. Add ``--json`` when the local
 status JSON should also be written to stdout. The OTEL body is encoded
 as native OTLP AnyValue data, not as a JSON string.
 
+When neither ``map_export.otel_endpoint`` nor an OTEL endpoint environment
+variable is configured, ``status --otel`` exits successfully without sending
+a record. This keeps the target keepalive timer idle until an OTLP sink is
+configured; map export commands retain their existing exporter defaults.
+
 For the operational log, the journal has the events:
 
 .. code-block:: sh
@@ -726,6 +731,12 @@ Configure JSON, OTEL, or both in ``/etc/shirudo/shirudo.conf``. For example::
     map_export.otel_retries = 3
     map_export.log_record_max_bytes = 1048576
     map_export.otlp_max_bytes = 4194304
+
+The target package also installs and enables ``shirudo-keepalive.timer``.
+It runs ``shirudo status --otel --include-tpm`` five seconds after boot and
+again five seconds after each completed run. It uses the same OTLP endpoint
+and environment file as map export, and is a successful no-op until an OTLP
+endpoint is configured.
 
 Shirudo appends the JSON file but does not create its parent directory. An
 administrator can prepare it with ``install -d -m 0750 /var/log/shirudo``.

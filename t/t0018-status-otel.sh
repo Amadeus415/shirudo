@@ -79,4 +79,20 @@ assert "tpm" in doc
 PY
 '
 
+test_expect_success 'status --otel without an endpoint does not send' '
+	work=$(mktemp -d)
+	env -u OTEL_EXPORTER_OTLP_LOGS_ENDPOINT \
+		-u OTEL_EXPORTER_OTLP_ENDPOINT \
+		"$S" status --json --otel >"$work/stdout" 2>"$work/stderr" &&
+	python3 - "$work/stdout" <<'PY'
+import json
+import sys
+
+doc = json.load(open(sys.argv[1]))
+assert doc["schema"] == 1
+assert "status" in doc
+PY
+	rm -rf "$work"
+'
+
 test_done

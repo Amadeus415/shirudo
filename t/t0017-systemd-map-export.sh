@@ -7,6 +7,7 @@ cd "$(dirname "$0")"
 
 WORK=$(mktemp -d)
 GENERATED=$WORK/shirudo-map-export.service
+GENERATED_KEEPALIVE=$WORK/shirudo-keepalive.service
 trap 'rm -rf "$WORK"' EXIT
 
 test_expect_success 'map export service runs the configured batch exporter' '
@@ -30,9 +31,30 @@ test_expect_success 'map export timer waits five seconds between runs' '
 		../systemd/shirudo-map-export.timer
 '
 
+test_expect_success 'keepalive service exports status with TPM data' '
+	grep -q "^After=shirudo.service$" \
+		../systemd/shirudo-keepalive.service.in &&
+	grep -q "^EnvironmentFile=-/etc/shirudo/map-export.env$" \
+		../systemd/shirudo-keepalive.service.in &&
+	grep -q "^ExecStart=@bindir@/shirudo status --otel --include-tpm$" \
+		../systemd/shirudo-keepalive.service.in
+'
+
+test_expect_success 'keepalive timer waits five seconds between runs' '
+	grep -q "^OnBootSec=5s$" ../systemd/shirudo-keepalive.timer &&
+	grep -q "^OnUnitInactiveSec=5s$" \
+		../systemd/shirudo-keepalive.timer &&
+	grep -q "^Unit=shirudo-keepalive.service$" \
+		../systemd/shirudo-keepalive.timer &&
+	grep -q "^WantedBy=timers.target$" \
+		../systemd/shirudo-keepalive.timer
+'
+
 test_expect_success 'target install resolves and stages both exporter units' '
 	sed "s|@bindir@|/opt/shirudo/bin|g" \
 		../systemd/shirudo-map-export.service.in >"$GENERATED" &&
+	sed "s|@bindir@|/opt/shirudo/bin|g" \
+		../systemd/shirudo-keepalive.service.in >"$GENERATED_KEEPALIVE" &&
 	(
 		cd .. &&
 		make -n -f Makefile.shirudo bindir=/opt/shirudo/bin \
@@ -42,9 +64,13 @@ test_expect_success 'target install resolves and stages both exporter units' '
 	) &&
 	grep -q "^ExecStart=/opt/shirudo/bin/shirudo upatch map --all$" \
 		"$GENERATED" &&
+	grep -q "^ExecStart=/opt/shirudo/bin/shirudo status --otel --include-tpm$" \
+		"$GENERATED_KEEPALIVE" &&
 	grep -q "systemd/shirudo.service" "$WORK/target.plan" &&
 	grep -q "systemd/shirudo-map-export.service" "$WORK/target.plan" &&
-	grep -q "systemd/shirudo-map-export.timer" "$WORK/target.plan"
+	grep -q "systemd/shirudo-map-export.timer" "$WORK/target.plan" &&
+	grep -q "systemd/shirudo-keepalive.service" "$WORK/target.plan" &&
+	grep -q "systemd/shirudo-keepalive.timer" "$WORK/target.plan"
 '
 
 test_expect_success 'operator install excludes target exporter units' '
@@ -53,13 +79,18 @@ test_expect_success 'operator install excludes target exporter units' '
 		make -n -f Makefile.shirudo DESTDIR="$WORK/operator" \
 			install-operator >"$WORK/operator.plan"
 	) &&
-	! grep -q "shirudo-map-export" "$WORK/operator.plan"
+	! grep -q "shirudo-map-export" "$WORK/operator.plan" &&
+	! grep -q "shirudo-keepalive" "$WORK/operator.plan"
 '
 
 test_expect_success 'target package enables and removes the timer safely' '
 	grep -q "systemctl enable shirudo-map-export.timer" \
 		../packaging/deb/builddeb.sh &&
 	grep -q "systemctl --no-reload disable --now shirudo-map-export.timer" \
+		../packaging/deb/builddeb.sh &&
+	grep -q "systemctl enable shirudo-keepalive.timer" \
+		../packaging/deb/builddeb.sh &&
+	grep -q "systemctl --no-reload disable --now shirudo-keepalive.timer" \
 		../packaging/deb/builddeb.sh
 '
 
