@@ -82,23 +82,11 @@ configure_map_export()
 
 configure_map_export
 
-log "installing Ubuntu runtime and integration-test dependencies"
-apt-get update
-apt-get install -y --no-install-recommends \
-	ca-certificates \
-	keyutils \
-	libcurl4t64 \
-	libelf1t64 \
-	libjson-c5 \
-	libluajit-5.1-2 \
-	libssh-4 \
-	libssl3t64 \
-	libtss2-esys-3.0.2-0t64 \
-	libtss2-tctildr0t64 \
-	openssh-server \
-	python3 \
-	rsync \
-	tpm2-tools
+[[ -s /etc/shirudo-test-vm-runtime ]] || {
+	log "prepared runtime image is missing; run make bundle"
+	exit 1
+}
+log "using prepared Ubuntu runtime image"
 
 log "configuring loopback root SSH for the libssh integration test"
 install -d -m 0700 /root/.ssh
@@ -199,14 +187,12 @@ if [[ "$VM_MODE" == interactive ]]; then
 	exit 0
 fi
 
-log "running SHIRUDO_INTEGRATION=1 test suite"
+log "running target test suite"
 : >/mnt/shirudo-out/failed-tests
 : >/mnt/shirudo-out/failed-suites
 (
 	cd t
-	SHIRUDO_INTEGRATION=1 \
-		SHIRUDO_BIN=/usr/local/bin/shirudo \
-		SHIRUDO_BUILD_BIN= \
+	SHIRUDO_BIN=/usr/local/bin/shirudo \
 		SHIRUDO_TEST_FIXTURES_DIR="$BUNDLE/fixtures" \
 		SHIRUDO_TEST_FAILURES_FILE=/mnt/shirudo-out/failed-tests \
 		SHIRUDO_TEST_SUITE_FAILURES_FILE=/mnt/shirudo-out/failed-suites \

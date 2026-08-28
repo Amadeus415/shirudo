@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Authors of shirudo
 #
-# t/integration-lib.sh -- shared setup for the t11xx integration tests.
+# t/integration-lib.sh -- shared setup for target-side tests.
 #
 # These exercise the LIVE kernel (BPF LSM, kernel keyring, bpffs) and
-# the installed binary, so they run ONLY when explicitly opted in via
-# SHIRUDO_INTEGRATION=1, and as root, against a host where `shirudo
+# the installed binary, so they run as root against a target where `shirudo
 # init` has already attached the LSM. shirudo is single-tenant with
 # hardcoded paths, so there is no isolation: intended for a dedicated
 # throwaway host (the CI vTPM runner) or a developer who has read what
@@ -22,11 +21,9 @@
 : "${SHIRUDO_BUILD_BIN:=../tools/shirudo-build/shirudo-build}"
 
 # Skip the whole script unless every precondition holds.
-integration_guard() {
-	[ "${SHIRUDO_INTEGRATION:-}" = "1" ] ||
-		test_skip_all "set SHIRUDO_INTEGRATION=1 to run (destructive-capable, live host)"
+target_guard() {
 	[ "$(id -u)" = "0" ] ||
-		test_skip_all "must run as root"
+		test_skip_all "target tests must run as root"
 	[ -x "$SHIRUDO_BIN" ] ||
 		test_skip_all "shirudo binary not executable: $SHIRUDO_BIN"
 	[ -e /var/lib/shirudo/bpffs/lsm_link ] ||

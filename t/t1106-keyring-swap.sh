@@ -19,7 +19,7 @@
 
 cd "$(dirname "$0")"
 . ./integration-lib.sh
-integration_guard
+target_guard
 
 command -v keyctl >/dev/null 2>&1 || test_skip_all "no keyctl"
 ARCH=$(ls /var/lib/shirudo/upatches/*.upatch 2>/dev/null | head -1)

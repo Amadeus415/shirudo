@@ -36,6 +36,12 @@ make test-vm-bundle
 payload and prebuilt target-test fixtures and is cached under
 `build/test-vm/host-bundle`.
 
+The bundle build also prepares or reuses a content-keyed runtime QCOW2 under
+`build/test-vm/cache/runtime`. The image contains the guest runtime packages,
+so normal VM boots do not run `apt update` or install packages. Runtime image
+preparation requires `virt-customize` from `libguestfs-tools` and uses the
+selected rootfs digest and package manifest as its cache key.
+
 ## Run VMs
 
 Create a prepared interactive VM without running the target test suite:
@@ -164,12 +170,8 @@ Host/operator-side tests:
 make test-op
 ```
 
-This builds Shirudo and runs the host TAP suite; unit tests always run, while
-the live `t11xx` integration tests remain skipped unless explicitly enabled:
-
-```sh
-SHIRUDO_INTEGRATION=1 make test-op
-```
+This builds the operator tools and runs only the `t0xxx` operator/build suite.
+It is safe without root, a BPF LSM, or a target kernel.
 
 Target-side integration tests:
 
@@ -178,7 +180,11 @@ make test-tgt
 ```
 
 This prepares the host bundle, boots the vTPM VM, imports the signed fixtures,
-and runs the target suite. Use `VM_NAME` and `TEST_VM_VERBOSE=1` as needed.
+and runs all target tests (`t1101` through `t1117`, plus
+`t1200-target-fixtures.sh`). These tests require root and the attached Shirudo
+BPF LSM, which the VM setup provides. All BPF/upatch test fixtures are built
+by the host bundle builder; the guest needs only runtime dependencies. Use
+`VM_NAME` and `TEST_VM_VERBOSE=1` as needed.
 
 Run the complete pipeline in order—bundle, host tests, then target VM tests—with:
 

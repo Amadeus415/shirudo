@@ -1,0 +1,14 @@
+ca-certificates
+keyutils
+libcurl4t64
+libelf1t64
+libjson-c5
+libluajit-5.1-2
+libssh-4
+libssl3t64
+libtss2-esys-3.0.2-0t64
+libtss2-tctildr0t64
+openssh-server
+python3
+rsync
+tpm2-tools

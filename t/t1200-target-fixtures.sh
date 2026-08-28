@@ -8,7 +8,7 @@
 
 cd "$(dirname "$0")"
 . ./integration-lib.sh
-integration_guard
+target_guard
 
 FIXTURES=${SHIRUDO_TEST_FIXTURES_DIR:?target fixture directory is not set}
 BASIC="$FIXTURES/shirudo-test-basic.upatch"

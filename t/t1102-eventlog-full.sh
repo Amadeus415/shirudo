@@ -9,7 +9,7 @@
 
 cd "$(dirname "$0")"
 . ./integration-lib.sh
-integration_guard
+target_guard
 
 BOGUS="/tmp/shirudo-nonexistent-$$.upatch"
 

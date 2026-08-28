@@ -95,15 +95,14 @@ shirudo make targets (run from the repo root):
     make distclean         clean and drop the cached config.mk
 
   Test
-    make test-op           build, then run the host/operator-side TAP suite
-                           under t/ (unit tests always; t11xx integration skip
-                           unless opted in)
+    make test-op           build the operator tools, then run only the
+                           host/operator-side TAP suite under t/; safe without
+                           root, LSM, or a target kernel
     make test              run the full pipeline: bundle, host checks, and
                            target-side VM tests
-    SHIRUDO_INTEGRATION=1 make test-op
-                           additionally run the live integration suite
-                           (needs root and a host where `shirudo init`
-                           has attached the LSM)
+    make test-tgt          boot a prepared target VM and run the complete
+                           target-side suite, including LSM, load/unload,
+                           uprobe, and OTEL map-export coverage
     make vm                boot a uniquely named persistent vTPM VM, prepare
                            Shirudo, and return without running the test suite
     make vm-console        attach to the serial console of a named running VM
@@ -115,6 +114,7 @@ shirudo make targets (run from the repo root):
     make test-vm            compatibility alias for make test-tgt
     make test-vm-bundle    build/reuse the host-side Shirudo payload used by
                            make vm and make test-tgt, plus target-test fixtures;
+                           prepare/reuse the content-keyed guest runtime image;
                            invalidated by source, Makefile, config, script,
                            fixture, and artifact changes
     make bundle             alias for make test-vm-bundle
@@ -157,7 +157,10 @@ shirudo make targets (run from the repo root):
              TEST_VM_MAP_EXPORT_ENDPOINT (OTLP base URL),
              TEST_VM_MAP_EXPORT_CA (optional PEM CA file),
              TEST_VM_MAP_EXPORT_INSECURE=true (explicit HTTP only),
+             TEST_VM_ROOTFS_URL/SHA256 (custom base image selection),
+             TEST_VM_UBUNTU_CODENAME (kernel archive codename; default resolute),
              TEST_VM_BUNDLE_DIR (host VM payload cache),
+             TEST_VM_RUNTIME_CACHE_DIR (prepared runtime image cache),
              TEST_VM_VERBOSE=1 (stream test VM QEMU output; otherwise show TAP progress),
              DESTDIR (staged install), V=1 (echo full command lines).
 
@@ -173,7 +176,10 @@ shirudo-build: config
 test-helpers: config
 	+$(Q)$(MAKE) -f Makefile.shirudo test-helpers
 
-TEST_VM_BUNDLE_DIR ?= build/test-vm/host-bundle
+TEST_VM_WORK_DIR ?= build/test-vm
+TEST_VM_BUNDLE_DIR ?= $(TEST_VM_WORK_DIR)/host-bundle
+TEST_VM_RUNTIME_CACHE_DIR ?= $(TEST_VM_WORK_DIR)/cache/runtime
+TEST_VM_UBUNTU_CODENAME ?= resolute
 TEST_VM_VERBOSE ?= 0
 TEST_VM_BUNDLE_STAMP := $(TEST_VM_BUNDLE_DIR)/.stamp
 TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
@@ -192,6 +198,7 @@ TEST_VM_BUNDLE_ARTIFACTS := $(sort $(wildcard \
 TEST_VM_BUNDLE_INPUTS := $(sort \
 	Makefile Makefile.config Makefile.shirudo Makefile.version config.mk \
 	contrib/build-test-vm-bundle.sh contrib/test-vm-guest.sh \
+	contrib/prepare-test-vm-runtime.sh contrib/test-vm-runtime-packages \
 	$(TEST_VM_BUNDLE_SOURCES) $(TEST_VM_BUNDLE_ARTIFACTS))
 
 
@@ -199,6 +206,11 @@ test-vm-bundle: $(TEST_VM_BUNDLE_STAMP)
 
 $(TEST_VM_BUNDLE_STAMP): $(TEST_VM_BUNDLE_INPUTS)
 	$(Q)TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
+		TEST_VM_WORK_DIR="$(abspath $(TEST_VM_WORK_DIR))" \
+		TEST_VM_RUNTIME_CACHE_DIR="$(abspath $(TEST_VM_RUNTIME_CACHE_DIR))" \
+		TEST_VM_UBUNTU_CODENAME="$(TEST_VM_UBUNTU_CODENAME)" \
+		TEST_VM_ROOTFS_URL="$(TEST_VM_ROOTFS_URL)" \
+		TEST_VM_ROOTFS_SHA256="$(TEST_VM_ROOTFS_SHA256)" \
 		TEST_VM_BUNDLE_STAMP="$(abspath $(TEST_VM_BUNDLE_STAMP))" \
 		TEST_VM_BUNDLE_INPUTS="$(abspath $(TEST_VM_BUNDLE_INPUTS))" \
 		contrib/build-test-vm-bundle.sh
@@ -208,6 +220,8 @@ bpf-next:
 
 vm: test-vm-bundle
 	$(Q)VM_MODE=interactive VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
+		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
 		TEST_VM_SSH_PORT="$(TEST_VM_SSH_PORT)" \
 		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
 		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
@@ -226,6 +240,8 @@ vm-ssh:
 
 test-tgt: test-vm-bundle
 	$(Q)VM_MODE=test VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
+		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
 		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
 		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
 		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
@@ -338,7 +354,7 @@ install-operator: all
 examples:
 	+$(Q)$(MAKE) -C examples
 
-test-op: all
+test-op: all shirudo-build test-helpers
 	+$(Q)$(MAKE) -f Makefile.shirudo check
 
 bundle: test-vm-bundle

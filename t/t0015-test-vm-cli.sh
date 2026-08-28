@@ -61,8 +61,10 @@ test_expect_success 'test-vm selects the root partition without an initramfs' '
 
 test_expect_success 'test-vm guest uses prebuilt target fixtures' '
 	grep -q "SHIRUDO_TEST_FIXTURES_DIR" ../contrib/test-vm-guest.sh &&
-	grep -q "SHIRUDO_BUILD_BIN=" ../contrib/test-vm-guest.sh &&
 	grep -q "run-target-tests.sh" ../contrib/test-vm-guest.sh &&
+	! grep -q "SHIRUDO_BUILD_BIN=" ../contrib/test-vm-guest.sh &&
+	grep -q "prepared Ubuntu runtime image" ../contrib/test-vm-guest.sh &&
+	! grep -q "apt-get install" ../contrib/test-vm-guest.sh &&
 	test -x run-target-tests.sh &&
 	test -x t1200-target-fixtures.sh &&
 	! grep -q "libluajit-5.1-dev" ../contrib/test-vm-guest.sh
@@ -72,6 +74,8 @@ test_expect_success 'test-vm imports the host-built payload' '
 	grep -q "TEST_VM_BUNDLE_DIR" ../Makefile &&
 	grep -q "test-vm-bundle" ../Makefile &&
 	grep -q "build-test-vm-bundle.sh" ../Makefile &&
+	grep -q "prepare-test-vm-runtime.sh" ../Makefile &&
+	grep -q "virt-customize" ../contrib/build-test-vm-bundle.sh &&
 	grep -q "mount_tag=shirudo-bundle" ../contrib/test-vm.sh &&
 	grep -q "importing host-built Shirudo payload" \
 		../contrib/test-vm-guest.sh &&
@@ -288,13 +292,32 @@ test_expect_success 'test-vm validates a custom OTEL CA file before boot' '
 '
 
 test_expect_success 'make test runs the complete pipeline in order' '
-	grep -q "^test-op: all" ../Makefile &&
+	grep -q "^test-op: all shirudo-build test-helpers" ../Makefile &&
 	! grep -Eq "^(check:|.*\bcheck\b.*\.PHONY)" ../Makefile &&
 	grep -q "^bundle: test-vm-bundle" ../Makefile &&
 	grep -A5 "^test:$" ../Makefile | grep -q "\$(MAKE) bundle" &&
 	grep -A5 "^test:$" ../Makefile | grep -q "\$(MAKE) test-op" &&
 	grep -A5 "^test:$" ../Makefile | grep -q "\$(MAKE) test-tgt" &&
 	! grep -A5 "^test:$" ../Makefile | grep -q "\$(MAKE) bpf-next"
+'
+
+test_expect_success 'operator and target runners have disjoint explicit scopes' '
+	grep -q "for t in t0\[0-9\]\[0-9\]\[0-9\]-\*.sh" ../t/run-tests.sh &&
+	! grep -q "t1101" ../t/run-tests.sh &&
+	for test_name in \
+		t1101-seal.sh t1102-eventlog-full.sh t1103-version-gate.sh \
+		t1104-payload-mismatch.sh t1105-siggate.sh t1106-keyring-swap.sh \
+		t1107-load-unload.sh t1108-tpm-chain.sh t1109-rollout-libssh.sh \
+		t1110-lsm-deny.sh t1111-upatch-get.sh \
+		t1112-prog-load-keyring-gate.sh t1113-mount-lockdown.sh \
+		t1114-uprobe-multi.sh t1115-map-export-all.sh \
+		t1116-otel-backend.sh t1117-otel-serialized-metric.sh \
+		t1200-target-fixtures.sh
+	do
+		grep -q "$test_name" ../t/run-target-tests.sh || return 1
+	done &&
+	forbidden=$(printf '%s%s' SHIRUDO_ INTEGRATION) &&
+	! grep -R -q "$forbidden" ../Makefile ../contrib ../t
 '
 
 test_done

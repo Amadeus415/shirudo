@@ -10,7 +10,7 @@
 
 cd "$(dirname "$0")"
 . ./integration-lib.sh
-integration_guard
+target_guard
 
 tpm_chain() {
 	"$SHIRUDO_BIN" status --json --include-tpm 2>/dev/null | python3 -c '

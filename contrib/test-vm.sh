@@ -33,9 +33,20 @@ else
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VM_ROOT="${TEST_VM_WORK_DIR:-${REPO_ROOT}/build/test-vm}"
+VM_ROOT_INPUT="${TEST_VM_WORK_DIR:-${REPO_ROOT}/build/test-vm}"
+if [[ "$VM_ROOT_INPUT" == /* ]]; then
+	VM_ROOT="$VM_ROOT_INPUT"
+else
+	VM_ROOT="$REPO_ROOT/$VM_ROOT_INPUT"
+fi
 TEST_VM_HOST_BUNDLE="${TEST_VM_HOST_BUNDLE:-${VM_ROOT}/host-bundle}"
 CACHE_DIR="${VM_ROOT}/cache"
+RUNTIME_CACHE_INPUT="${TEST_VM_RUNTIME_CACHE_DIR:-${CACHE_DIR}/runtime}"
+if [[ "$RUNTIME_CACHE_INPUT" == /* ]]; then
+	RUNTIME_CACHE_DIR="$RUNTIME_CACHE_INPUT"
+else
+	RUNTIME_CACHE_DIR="$REPO_ROOT/$RUNTIME_CACHE_INPUT"
+fi
 VMS_DIR="${VM_ROOT}/vms"
 LOGS_DIR="${VM_ROOT}/logs"
 DEFAULT_KERNEL="${REPO_ROOT}/artifacts/bpf-next-kernel-debs/bzImage"
@@ -237,12 +248,21 @@ validate_kernel_selection()
 
 validate_host_bundle()
 {
+	local runtime_key runtime_image
 	[[ -x "$TEST_VM_HOST_BUNDLE/root/usr/local/bin/shirudo" ]] ||
 		die "host VM bundle is missing; run 'make test-vm-bundle' first: $TEST_VM_HOST_BUNDLE"
 	[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/cert.der" ]] ||
 		die "host VM bundle has no target-test certificate: $TEST_VM_HOST_BUNDLE"
 	[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/shirudo-test-basic.upatch" ]] ||
 		die "host VM bundle has no target-test fixtures: $TEST_VM_HOST_BUNDLE"
+	[[ -s "$TEST_VM_HOST_BUNDLE/runtime-image-key" ]] ||
+		die "host VM bundle has no prepared runtime image; run 'make bundle'"
+	runtime_key="$(<"$TEST_VM_HOST_BUNDLE/runtime-image-key")"
+	[[ "$runtime_key" =~ ^rootfs-[0-9a-f]{64}-packages-[0-9a-f]{64}-v[0-9]+$ ]] ||
+		die "host VM bundle has an invalid prepared runtime image key"
+	runtime_image="$RUNTIME_CACHE_DIR/$runtime_key.qcow2"
+	[[ -s "$runtime_image" ]] ||
+		die "prepared runtime image is missing: $runtime_image; run 'make bundle'"
 }
 
 stop_swtpm()
@@ -765,14 +785,14 @@ allocate_ssh_access()
 		   "$SSH_PORT_REQUEST" -ge 1024 &&
 		   "$SSH_PORT_REQUEST" -le 65535 ]] ||
 			die "TEST_VM_SSH_PORT must be an unused port from 1024 through 65535"
-		if ss -Hln "sport = :$SSH_PORT_REQUEST" | grep -q .; then
+		if ss -Hln "sport = :$SSH_PORT_REQUEST" 2>/dev/null | grep -q .; then
 			die "TEST_VM_SSH_PORT is already in use: $SSH_PORT_REQUEST"
 		fi
 		SSH_PORT="$SSH_PORT_REQUEST"
 	else
 		port="$SSH_PORT_MIN"
 		while (( port <= SSH_PORT_MAX )); do
-			if ! ss -Hln "sport = :$port" | grep -q .; then
+			if ! ss -Hln "sport = :$port" 2>/dev/null | grep -q .; then
 				SSH_PORT="$port"
 				break
 			fi
@@ -789,7 +809,7 @@ wait_for_ssh_listener()
 	local _
 
 	for _ in {1..50}; do
-		if ss -Hln "sport = :$SSH_PORT" | grep -q .; then
+		if ss -Hln "sport = :$SSH_PORT" 2>/dev/null | grep -q .; then
 			if [[ -n "$SSH_PORT_LOCK_FD" ]]; then
 				flock -u "$SSH_PORT_LOCK_FD"
 				eval "exec ${SSH_PORT_LOCK_FD}>&-"
@@ -869,7 +889,8 @@ KERNEL="$(resolve_kernel)"
 [[ "$(uname -m)" == "x86_64" ]] || die "test-vm currently supports x86_64 hosts only"
 [[ -r /dev/kvm && -w /dev/kvm ]] || die "/dev/kvm is required and must be accessible"
 
-ROOTFS="$(fetch_rootfs)"
+RUNTIME_KEY="$(<"$TEST_VM_HOST_BUNDLE/runtime-image-key")"
+ROOTFS="$RUNTIME_CACHE_DIR/$RUNTIME_KEY.qcow2"
 OVERLAY="${RUN_DIR}/rootfs.qcow2"
 SEED="${RUN_DIR}/seed.img"
 USER_DATA="${RUN_DIR}/user-data"

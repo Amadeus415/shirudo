@@ -10,28 +10,20 @@
 
 cd "$(dirname "$0")"
 . ./integration-lib.sh
-integration_guard
+target_guard
 
-UP=$(first_loaded_upatch)
-[ -n "$UP" ] || test_skip_all "no upatch currently loaded to target"
-[ -x "$SHIRUDO_BUILD_BIN" ] || test_skip_all "shirudo-build not found: $SHIRUDO_BUILD_BIN"
-
-WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
-
-# A deliberately wrong expected payload (all 0xaa, definitely not the
-# real digest). build --unload embeds the prebuilt unload template, so
-# this needs no clang.
-WRONG=$(python3 -c 'print("aa"*32)')
-"$SHIRUDO_BUILD_BIN" --unload "$UP" --payload-sha256 "$WRONG" \
-	-o "$WORK/unload.upatch" >/dev/null 2>&1 ||
-	test_skip_all "build --unload failed"
+FIXTURES=${SHIRUDO_TEST_FIXTURES_DIR:?target fixture directory is not set}
+UP=shirudo-test-basic
+UNLOAD="$FIXTURES/shirudo-test-basic-mismatch.unload.upatch"
+PIN="/var/lib/shirudo/bpffs/upatches/$UP/link"
+[ -e "$PIN" ] || test_skip_all "basic fixture is not loaded"
+[ -s "$UNLOAD" ] || test_skip_all "missing prebuilt mismatch unload fixture"
 
 test_expect_success 'wrong expected payload -> payload_mismatch, pin intact' '
-	cat=$($SHIRUDO_BIN upatch unload "$WORK/unload.upatch" --no-precheck \
+	cat=$($SHIRUDO_BIN upatch unload "$UNLOAD" --no-precheck \
 	      --report=- 2>/dev/null | report_field category) &&
 	[ "$cat" = "payload_mismatch" ] &&
-	[ -e "/var/lib/shirudo/bpffs/upatches/$UP/link" ]
+	[ -e "$PIN" ]
 '
 
 test_done

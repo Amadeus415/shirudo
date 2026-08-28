@@ -8,7 +8,7 @@
 
 cd "$(dirname "$0")"
 . ./integration-lib.sh
-integration_guard
+target_guard
 
 CERT=/var/lib/shirudo/keys/cert.der
 [ -e "$CERT" ] || test_skip_all "no cert at $CERT"

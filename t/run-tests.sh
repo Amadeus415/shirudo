@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Authors of shirudo
 #
-# t/run-tests.sh -- discover and run every tNNNN-*.sh test in this
-# directory, prap-style. CI-friendly; sets non-zero exit if any test
+# t/run-tests.sh -- discover and run every t0xxx operator test in this
+# directory, prap-style. Target tests are listed by run-target-tests.sh.
+# CI-friendly; sets non-zero exit if any test
 # fails.
 
 set -eu
@@ -13,7 +14,7 @@ cd "$(dirname "$0")"
 fail=0
 found=0
 : "${SHIRUDO_TEST_SUITE_FAILURES_FILE:=}"
-for t in t[0-9][0-9][0-9][0-9]-*.sh; do
+for t in t0[0-9][0-9][0-9]-*.sh; do
 	[ -e "$t" ] || continue
 	found=1
 	if sh "$t"; then

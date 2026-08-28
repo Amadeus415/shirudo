@@ -40,15 +40,14 @@ Tests (t/ TAP suite):
   Unit (always run): t0001 json (now incl. array dispatch + the
     discarded-object/schema-collision regression), t0002 selector,
     t0003 chain crypto, t0004 upatch-parse, t0005 upatch-source.
-  Integration (opt-in, skip unless SHIRUDO_INTEGRATION=1 + root + LSM
-    attached): t1101 seal, t1102 eventlog_full, t1103 version gate,
+  Target (VM-only; root + attached LSM): t1101 seal, t1102 eventlog_full,
+  t1103 version gate,
     t1104 payload_mismatch, t1105 sig gate, t1106 keyring-swap, t1107
     load/unload round-trip, t1108 TPM chain, t1109 rollout/nodes libssh
     (now also covers `nodes show` human + --json), t1110 LSM deny,
     t1111 upatch-get.
-  Tallies: `make check` = 39 ok + 10 skip; SHIRUDO_INTEGRATION=1 (root,
-  on a shirudo-init'd host) adds the nodes-show cases (t1108 skips
-  without a TPM).
+  `make test-op` runs the operator/build suite; `make test-tgt` runs the
+  target suite in the prepared VM (t1108 still skips without a TPM).
 
 util/json.c parser now supports SHIRUDO_JSON_T_ARRAY (per-element
 sink callback via struct shirudo_json_array in the field's dst; arrays
@@ -66,7 +65,7 @@ Deferred-by-design (PLAN "Open questions / future work"):
   - CI runner infra: REMOVED + deferred (was .github/ + ci/). Restore on
     a privileged shirudo-capable (bpffs-xattr) + vTPM runner that builds,
     `make install-target install-operator`, `shirudo init`, then runs
-    `make check` and the opt-in suite (SHIRUDO_INTEGRATION=1). Old
+    `make test-op` and the target suite in the prepared VM. Old
     scripts recoverable from git history.
   - initramfs-stage init (closes early-boot window T5); init --update /
     upgrade workflow; TPM2_NV_Certify attestation (T8); HSM signing;

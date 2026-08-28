@@ -9,10 +9,21 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUNDLE_DIR="${TEST_VM_HOST_BUNDLE:-${REPO_ROOT}/build/test-vm/host-bundle}"
+WORK_DIR="${TEST_VM_WORK_DIR:-${REPO_ROOT}/build/test-vm}"
+RUNTIME_CACHE_DIR="${TEST_VM_RUNTIME_CACHE_DIR:-${WORK_DIR}/cache/runtime}"
 BPF_DEPS_DIR="${REPO_ROOT}/artifacts/bpf-next-kernel-debs/shirudo-bpf-deps"
+LIBGUESTFS_KERNEL_CACHE="${WORK_DIR}/cache/libguestfs/ubuntu"
+UBUNTU_CODENAME="${TEST_VM_UBUNTU_CODENAME:-resolute}"
+PACKAGE_FILE="$REPO_ROOT/contrib/test-vm-runtime-packages"
+DEFAULT_ROOTFS_URL="https://cloud-images.ubuntu.com/releases/server/26.04/release/ubuntu-26.04-server-cloudimg-amd64.img"
+ROOTFS_URL="${TEST_VM_ROOTFS_URL:-$DEFAULT_ROOTFS_URL}"
+ROOTFS_SHA256="${TEST_VM_ROOTFS_SHA256:-}"
+ROOTFS_NAME="ubuntu-26.04-server-cloudimg-amd64.img"
+ROOTFS_CACHE="${WORK_DIR}/cache/rootfs/${ROOTFS_NAME}"
 LOCK_FILE="${BUNDLE_DIR}.lock"
 STAMP_FILE="${TEST_VM_BUNDLE_STAMP:-${BUNDLE_DIR}/.stamp}"
 STAMP_INPUTS="${TEST_VM_BUNDLE_INPUTS:-}"
+RUNTIME_PREP_VERSION=1
 
 log()
 {
@@ -25,12 +36,215 @@ die()
 	exit 1
 }
 
+require_command()
+{
+	local command_name="$1" package_name="$2"
+	command -v "$command_name" >/dev/null 2>&1 ||
+		die "missing host command: $command_name (install with: sudo apt-get install -y $package_name)"
+}
+
+check_libguestfs_host()
+{
+	local kernel="" candidate
+	if [[ -n "${SUPERMIN_KERNEL:-}" ]]; then
+		[[ -r "$SUPERMIN_KERNEL" ]] ||
+			die "SUPERMIN_KERNEL is not readable: $SUPERMIN_KERNEL"
+	else
+		for candidate in /boot/vmlinuz* /lib/modules/*/vmlinuz; do
+			if [[ -r "$candidate" ]]; then
+				kernel="$candidate"
+				break
+			fi
+		done
+		if [[ -z "$kernel" ]]; then
+			prepare_ubuntu_libguestfs_kernel
+			log "libguestfs host check: using cached Ubuntu $UBUNTU_CODENAME kernel"
+		fi
+	fi
+	if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+		log "libguestfs host check: /dev/kvm unavailable; appliance will use slower TCG"
+	else
+		log "libguestfs host check: KVM available"
+	fi
+}
+
+prepare_ubuntu_libguestfs_kernel()
+{
+	local cache_dir index metadata package version kernel_version filename deb tmp
+	local module_package module_filename kernel_info module_info module_root
+	cache_dir="$LIBGUESTFS_KERNEL_CACHE/$UBUNTU_CODENAME"
+	index="$cache_dir/Packages.gz"
+	metadata="$cache_dir/kernel.info"
+	mkdir -p "$cache_dir"
+	if [[ ! -s "$metadata" || "$(awk -F '\t' '{print NF; exit}' "$metadata")" != 5 ]]; then
+		curl -fsSL --retry 3 \
+			--output "${index}.tmp" \
+			"https://archive.ubuntu.com/ubuntu/dists/${UBUNTU_CODENAME}-updates/main/binary-amd64/Packages.gz" \
+			|| die "could not download Ubuntu $UBUNTU_CODENAME kernel package index"
+		mv -- "${index}.tmp" "$index"
+		kernel_info="$(awk -v RS='' -v FS='\n' '
+			{
+				package=arch=version=filename=""
+				for (i = 1; i <= NF; i++) {
+					if ($i ~ /^Package: /) package=substr($i, 10)
+					if ($i ~ /^Architecture: /) arch=substr($i, 15)
+					if ($i ~ /^Version: /) version=substr($i, 10)
+					if ($i ~ /^Filename: /) filename=substr($i, 11)
+				}
+				if (package ~ /^linux-image-[0-9].*-generic$/ &&
+				    arch == "amd64" && version != "" && filename != "")
+					print version "\t" package "\t" filename
+			}
+		' <(gzip -dc "$index") | sort -V | tail -1)"
+		[[ -n "$kernel_info" ]] ||
+			die "Ubuntu $UBUNTU_CODENAME has no amd64 generic kernel package"
+		IFS=$'\t' read -r version package filename <<<"$kernel_info"
+		kernel_version="${package#linux-image-}"
+		module_info="$(awk -v want="linux-modules-$kernel_version" -v RS='' -v FS='\n' '
+			{
+				package=arch=version=filename=""
+				for (i = 1; i <= NF; i++) {
+					if ($i ~ /^Package: /) package=substr($i, 10)
+					if ($i ~ /^Architecture: /) arch=substr($i, 15)
+					if ($i ~ /^Version: /) version=substr($i, 10)
+					if ($i ~ /^Filename: /) filename=substr($i, 11)
+				}
+				if (package == want && arch == "amd64" && version != "" && filename != "")
+					print package "\t" filename
+			}
+		' <(gzip -dc "$index") | sort -V | tail -1)"
+		[[ -n "$module_info" ]] ||
+			die "Ubuntu $UBUNTU_CODENAME has no matching $kernel_version modules package"
+		IFS=$'\t' read -r module_package module_filename <<<"$module_info"
+		printf '%s\t%s\t%s\t%s\t%s\n' "$version" "$package" "$filename" \
+			"$module_package" "$module_filename" >"${metadata}.tmp"
+		mv -- "${metadata}.tmp" "$metadata"
+	fi
+	IFS=$'\t' read -r version package filename module_package module_filename <"$metadata"
+	[[ -n "$version" && -n "$package" && -n "$filename" &&
+	   -n "$module_package" && -n "$module_filename" ]] ||
+		die "invalid cached Ubuntu kernel metadata: $metadata"
+	kernel_version="${package#linux-image-}"
+	deb="$cache_dir/$package.deb"
+	if [[ ! -s "$deb" ]]; then
+		curl -fsSL --retry 3 --output "${deb}.tmp" \
+			"https://archive.ubuntu.com/ubuntu/$filename" ||
+			die "could not download Ubuntu kernel package $package"
+		mv -- "${deb}.tmp" "$deb"
+	fi
+	local module_deb="$cache_dir/$module_package.deb"
+	if [[ ! -s "$module_deb" ]]; then
+		curl -fsSL --retry 3 --output "${module_deb}.tmp" \
+			"https://archive.ubuntu.com/ubuntu/$module_filename" ||
+			die "could not download Ubuntu kernel modules package $module_package"
+		mv -- "${module_deb}.tmp" "$module_deb"
+	fi
+	version="${version%% *}"
+	tmp="$cache_dir/.root.tmp.$$"
+	rm -rf -- "$tmp"
+	mkdir -p "$tmp"
+	dpkg-deb -x "$deb" "$tmp"
+	dpkg-deb -x "$module_deb" "$tmp"
+	module_root="$tmp/lib/modules"
+	[[ -d "$module_root/$kernel_version" ]] || module_root="$tmp/usr/lib/modules"
+	if [[ ! -r "$module_root/$kernel_version/modules.dep" ]]; then
+		if [[ "$module_root" == "$tmp/usr/lib/modules" ]]; then
+			mkdir -p "$tmp/lib"
+			ln -s ../usr/lib/modules "$tmp/lib/modules"
+			module_root="$tmp/lib/modules"
+		fi
+		depmod -b "$tmp" "$kernel_version"
+	fi
+	[[ -r "$tmp/boot/vmlinuz-$kernel_version" &&
+	   -r "$module_root/$kernel_version/modules.dep" ]] ||
+		die "Ubuntu kernel package $package lacks a usable kernel/module tree"
+	if [[ ! -r "$cache_dir/boot/vmlinuz-$kernel_version" ||
+	      ! -r "$cache_dir/lib/modules/$kernel_version/modules.dep" ]]; then
+		mkdir -p "$cache_dir/boot" "$cache_dir/lib"
+		[[ -L "$cache_dir/lib/modules" ]] && rm -f -- "$cache_dir/lib/modules"
+		mkdir -p "$cache_dir/lib/modules"
+		cp -a "$tmp/boot/." "$cache_dir/boot/"
+		cp -a "$module_root/." "$cache_dir/lib/modules/"
+	fi
+	[[ -r "$cache_dir/boot/vmlinuz-$kernel_version" &&
+	   -r "$cache_dir/lib/modules/$kernel_version/modules.dep" ]] ||
+		die "Ubuntu kernel package lacks a usable kernel/module tree"
+	rm -rf -- "$tmp"
+	export SUPERMIN_KERNEL="$cache_dir/boot/vmlinuz-$kernel_version"
+	export SUPERMIN_MODULES="$cache_dir/lib/modules/$kernel_version"
+	export SUPERMIN_KERNEL_VERSION="$kernel_version"
+	return 0
+}
+
+for dependency in \
+	"flock:util-linux" "curl:curl" "sha256sum:coreutils" "awk:gawk" \
+	"qemu-img:qemu-utils" "virt-customize:libguestfs-tools" "dpkg-deb:dpkg" \
+	"gzip:gzip" "depmod:kmod"; do
+	IFS=: read -r command_name package_name <<<"$dependency"
+	require_command "$command_name" "$package_name"
+done
+check_libguestfs_host
+
+resolve_rootfs()
+{
+	local sums expected actual tmp
+	mkdir -p "$(dirname "$ROOTFS_CACHE")"
+	if [[ -n "$ROOTFS_SHA256" ]]; then
+		expected="${ROOTFS_SHA256,,}"
+	elif [[ "$ROOTFS_URL" != "$DEFAULT_ROOTFS_URL" ]]; then
+		die "a custom TEST_VM_ROOTFS_URL requires TEST_VM_ROOTFS_SHA256"
+	else
+		sums="${ROOTFS_CACHE}.SHA256SUMS"
+		curl -fsSL --retry 3 --output "$sums" \
+			https://cloud-images.ubuntu.com/releases/server/26.04/release/SHA256SUMS
+		expected="$(awk -v name="*$ROOTFS_NAME" '$2 == name {print $1; exit}' "$sums")"
+		rm -f -- "$sums"
+	fi
+	[[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] ||
+		die "could not determine a valid SHA-256 for $ROOTFS_NAME"
+	if [[ -s "$ROOTFS_CACHE" ]]; then
+		actual="$(sha256sum "$ROOTFS_CACHE" | awk '{print $1}')"
+		[[ "$actual" == "$expected" ]] || rm -f -- "$ROOTFS_CACHE"
+	fi
+	if [[ ! -s "$ROOTFS_CACHE" ]]; then
+		tmp="${ROOTFS_CACHE}.tmp.$$"
+		log "downloading Ubuntu runtime rootfs: $ROOTFS_URL"
+		curl -fL --retry 3 --output "$tmp" "$ROOTFS_URL"
+		actual="$(sha256sum "$tmp" | awk '{print $1}')"
+		[[ "$actual" == "$expected" ]] || {
+			rm -f -- "$tmp"
+			die "downloaded rootfs SHA-256 mismatch"
+		}
+		mv -- "$tmp" "$ROOTFS_CACHE"
+	fi
+	ROOTFS_DIGEST="$expected"
+}
+
+prepare_runtime_image()
+{
+	local package_digest
+	package_digest="$(sha256sum "$PACKAGE_FILE" | awk '{print $1}')"
+	RUNTIME_KEY="rootfs-${ROOTFS_DIGEST}-packages-${package_digest}-v${RUNTIME_PREP_VERSION}"
+	RUNTIME_IMAGE="$RUNTIME_CACHE_DIR/$RUNTIME_KEY.qcow2"
+	if [[ ! -s "$RUNTIME_IMAGE" ]]; then
+		"$REPO_ROOT/contrib/prepare-test-vm-runtime.sh" \
+			--rootfs "$ROOTFS_CACHE" \
+			--cache-dir "$RUNTIME_CACHE_DIR" \
+			--package-file "$PACKAGE_FILE" \
+			--runtime-key "$RUNTIME_KEY" \
+			--key-output "$RUNTIME_CACHE_DIR/.${RUNTIME_KEY}.key"
+	fi
+}
+
 bundle_is_current()
 {
 	local input
 
 	[[ -f "$STAMP_FILE" && -n "$STAMP_INPUTS" ]] || return 1
 	[[ -x "$BUNDLE_DIR/root/usr/local/bin/shirudo" ]] || return 1
+	[[ -s "$BUNDLE_DIR/runtime-image-key" ]] || return 1
+	[[ "$(<"$BUNDLE_DIR/runtime-image-key")" == "$RUNTIME_KEY" ]] || return 1
+	[[ -s "$RUNTIME_IMAGE" ]] || return 1
 	for input in $STAMP_INPUTS; do
 		[[ -e "$input" ]] || return 1
 		[[ "$input" -nt "$STAMP_FILE" ]] && return 1
@@ -44,6 +258,9 @@ command -v flock >/dev/null 2>&1 ||
 mkdir -p "$(dirname "$BUNDLE_DIR")"
 exec 9>"$LOCK_FILE"
 flock 9
+
+resolve_rootfs
+prepare_runtime_image
 
 if bundle_is_current; then
 	log "reusing current host bundle: $BUNDLE_DIR"
@@ -116,10 +333,17 @@ mkdir -p "$TMP_DIR/fixtures/decoders" "$FIXTURE_WORK/trusted" \
 "$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/foreign" >/dev/null
 "$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/own" >/dev/null
 
+"${CC:-cc}" -O0 -g -Wl,--build-id=sha1 \
+	-o /tmp/shirudo-test-uprobe-target \
+	"$REPO_ROOT/test-vm/fixtures/uprobe-target.c"
+
 build_fixture basic.bpf.c shirudo-test-basic "$FIXTURE_WORK/trusted"
 build_fixture basic.bpf.c shirudo-test-lifecycle "$FIXTURE_WORK/trusted"
 build_fixture marker.bpf.c shirudo-test-marker "$FIXTURE_WORK/trusted"
 build_fixture map-export.bpf.c shirudo-test-map-export "$FIXTURE_WORK/trusted"
+build_fixture otel-backend.bpf.c shirudo-test-otel-backend "$FIXTURE_WORK/trusted"
+build_fixture serialized-metric.bpf.c shirudo-test-serialized-metric "$FIXTURE_WORK/trusted"
+build_fixture uprobe-multi.bpf.c shirudo-test-uprobe-multi "$FIXTURE_WORK/trusted"
 build_fixture basic.bpf.c shirudo-test-foreign "$FIXTURE_WORK/foreign"
 build_fixture basic.bpf.c shirudo-test-own-keyring "$FIXTURE_WORK/own"
 
@@ -134,6 +358,15 @@ map_export_payload="$($REPO_ROOT/shirudo upatch info \
 	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
 lifecycle_payload="$($REPO_ROOT/shirudo upatch info \
 	"$TMP_DIR/fixtures/shirudo-test-lifecycle.upatch" --json |
+	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
+uprobe_payload="$($REPO_ROOT/shirudo upatch info \
+	"$TMP_DIR/fixtures/shirudo-test-uprobe-multi.upatch" --json |
+	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
+otel_backend_payload="$($REPO_ROOT/shirudo upatch info \
+	"$TMP_DIR/fixtures/shirudo-test-otel-backend.upatch" --json |
+	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
+serialized_metric_payload="$($REPO_ROOT/shirudo upatch info \
+	"$TMP_DIR/fixtures/shirudo-test-serialized-metric.upatch" --json |
 	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
 "$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
 	shirudo-test-basic --payload-sha256 "$basic_payload" \
@@ -160,6 +393,24 @@ lifecycle_payload="$($REPO_ROOT/shirudo upatch info \
 	-o "$TMP_DIR/fixtures/shirudo-test-map-export.unload.upatch" \
 	--key "$FIXTURE_WORK/trusted/signing_key.pem" \
 	--cert "$FIXTURE_WORK/trusted/cert.der"
+"$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
+	shirudo-test-otel-backend --payload-sha256 "$otel_backend_payload" \
+	-o "$TMP_DIR/fixtures/shirudo-test-otel-backend.unload.upatch" \
+	--key "$FIXTURE_WORK/trusted/signing_key.pem" \
+	--cert "$FIXTURE_WORK/trusted/cert.der"
+"$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
+	shirudo-test-serialized-metric --payload-sha256 "$serialized_metric_payload" \
+	-o "$TMP_DIR/fixtures/shirudo-test-serialized-metric.unload.upatch" \
+	--key "$FIXTURE_WORK/trusted/signing_key.pem" \
+	--cert "$FIXTURE_WORK/trusted/cert.der"
+"$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
+	shirudo-test-uprobe-multi --payload-sha256 "$uprobe_payload" \
+	-o "$TMP_DIR/fixtures/shirudo-test-uprobe-multi.unload.upatch" \
+	--key "$FIXTURE_WORK/trusted/signing_key.pem" \
+	--cert "$FIXTURE_WORK/trusted/cert.der"
+
+mv /tmp/shirudo-test-uprobe-target \
+	"$TMP_DIR/fixtures/shirudo-test-uprobe-target"
 
 cp "$FIXTURE_WORK/trusted/cert.der" "$TMP_DIR/fixtures/cert.der"
 cp "$FIXTURE_WORK/own/cert.der" "$TMP_DIR/fixtures/own.der"
@@ -175,6 +426,7 @@ else
 	printf 'vendored-tools\n' >"$TMP_DIR/dependency-mode"
 fi
 printf 'shirudo-test-vm-bundle-stamp-v1\n' >"$TMP_DIR/.stamp"
+printf '%s\n' "$RUNTIME_KEY" >"$TMP_DIR/runtime-image-key"
 
 rm -rf -- "$BUNDLE_DIR"
 mv -- "$TMP_DIR" "$BUNDLE_DIR"
