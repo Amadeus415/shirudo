@@ -15,14 +15,19 @@
 *.upatch
 *.upatch.json
 
+# Local bpf-next kernel and userspace dependency artifacts
+/artifacts/
+
 # Generated headers
 /vmlinux.h
 /bpf/vmlinux.h
 /packaging/bpf/vmlinux.h
 *.skel.h
 
-# Generated systemd unit (from systemd/shirudo.service.in)
+# Generated systemd units (from systemd/*.service.in)
 /systemd/shirudo.service
+/systemd/shirudo-map-export.service
+/systemd/shirudo-keepalive.service
 
 # BPF-side headers copied from third_party/bpf-next at build time
 /bpf/include/
