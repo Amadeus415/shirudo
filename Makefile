@@ -38,7 +38,7 @@ systemdunitdir ?= /usr/lib/systemd/system
 export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdir \
        systemdunitdir
 
-.PHONY: all help shirudo-build test-helpers test-vm-bundle bpf-next vm test-vm test-vm-clean install \
+.PHONY: all help shirudo-build test-helpers bundle test-vm-bundle bpf-next vm test-op test-tgt test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
         distclean check test examples config
 
@@ -94,21 +94,28 @@ shirudo make targets (run from the repo root):
     make distclean         clean and drop the cached config.mk
 
   Test
-    make check             build, then run the TAP suite under t/
-                           (unit tests always; t11xx integration skip
-                           unless opted in). `make test` is an alias.
-    SHIRUDO_INTEGRATION=1 make check
+    make test-op           build, then run the host/operator-side TAP suite
+                           under t/ (unit tests always; t11xx integration skip
+                           unless opted in)
+    make check             compatibility alias for make test-op
+    make test              run the full pipeline: bundle, host checks, and
+                           target-side VM tests
+    SHIRUDO_INTEGRATION=1 make test-op
                            additionally run the live integration suite
                            (needs root and a host where `shirudo init`
                            has attached the LSM)
     make vm                boot a uniquely named persistent vTPM VM, prepare
                            Shirudo, and return without running the test suite
-    make test-vm           boot a uniquely named vTPM VM with QEMU + swtpm,
-                           import the host payload, run the integration suite,
-                           and retain the stopped state for inspection
+    make test-tgt          boot a uniquely named vTPM VM with QEMU + swtpm,
+                           import the host payload and prebuilt fixtures, run
+                           the target integration suite, and retain the
+                           stopped state for inspection
+    make test-vm            compatibility alias for make test-tgt
     make test-vm-bundle    build/reuse the host-side Shirudo payload used by
-                           make vm and make test-vm; invalidated by source,
-                           Makefile, config, script, and artifact changes
+                           make vm and make test-tgt, plus target-test fixtures;
+                           invalidated by source, Makefile, config, script,
+                           fixture, and artifact changes
+    make bundle             alias for make test-vm-bundle
     make test-vm-clean     stop tracked VMs and remove cached rootfs, VM
                            state, and logs
 
@@ -162,7 +169,9 @@ TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
 	*.c *.h include/*.h util/*.c util/*.h \
 	bpf/*.c bpf/lib/*.h \
 	tools/shirudo-build/*.c tools/shirudo-build/*.h \
-	t/helper/*.c completion/* systemd/*.in))
+	t/helper/*.c completion/* systemd/*.in \
+	test-vm/fixtures/*.c test-vm/fixtures/*.lua \
+	test-vm/fixtures/decoders/*))
 TEST_VM_BUNDLE_ARTIFACTS := $(sort $(wildcard \
 	artifacts/bpf-next-kernel-debs \
 	artifacts/bpf-next-kernel-debs/* \
@@ -191,7 +200,7 @@ vm: test-vm-bundle
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
 
-test-vm: test-vm-bundle
+test-tgt: test-vm-bundle
 	$(Q)VM_MODE=test VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
@@ -293,8 +302,19 @@ install-operator: all
 examples:
 	+$(Q)$(MAKE) -C examples
 
-check test: all
-	+$(Q)$(MAKE) -f Makefile.shirudo $@
+test-op: all
+	+$(Q)$(MAKE) -f Makefile.shirudo check
+
+check: test-op
+
+bundle: test-vm-bundle
+
+test-vm: test-tgt
+
+test:
+	+$(Q)$(MAKE) bundle
+	+$(Q)$(MAKE) test-op
+	+$(Q)$(MAKE) test-tgt
 
 clean:
 	+$(Q)set -eu; \

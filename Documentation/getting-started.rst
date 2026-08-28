@@ -156,7 +156,16 @@ and a TPM.  Build the repository's pinned bpf-next kernel first, then
 run the suite in a disposable QEMU/KVM guest backed by swtpm::
 
     make bpf-next
-    make test-vm
+    make test-tgt
+
+The individual test entry points are split by role: ``make test-op`` runs the
+host/operator-side suite, while ``make test-tgt`` runs the target-side suite
+in the TPM-enabled VM.  ``make check`` and ``make test-vm`` remain compatibility
+aliases.  ``make test`` is the full end-to-end one-liner; it runs ``make
+bundle`` (an alias for ``make test-vm-bundle``), ``make test-op``, and ``make
+test-tgt`` in that order.  It consumes existing bpf-next artifacts when they
+are available; run ``make bpf-next`` separately when those artifacts need to
+be built.
 
 ``make bpf-next`` writes both kernel DEBs and a directly bootable
 ``artifacts/bpf-next-kernel-debs/bzImage`` and the matching detached
@@ -172,20 +181,24 @@ those tools are not rebuilt in every guest. To select another target BTF
 explicitly, set ``BPF_VMLINUX_BTF``::
 
     make BPF_VMLINUX_BTF=artifacts/bpf-next-kernel-debs/vmlinux.btf
-``make test-vm`` verifies that image, boots an Ubuntu 26.04 cloud-image
-overlay with a fresh vTPM, runs measured ``shirudo init``, and then runs
-``SHIRUDO_INTEGRATION=1 make check``.  Each invocation receives a unique
-VM name and retains its stopped overlay, TPM state, and logs for inspection.
-The host checkout is mounted read-only and all guest build writes stay in
-the VM state.
+``make test-tgt`` verifies that image, boots an Ubuntu 26.04 cloud-image
+overlay with a fresh vTPM, runs measured ``shirudo init``, and then runs the
+target-side integration suite.  The operator host builds and signs the target
+fixtures first; the guest imports the public certificate and those prebuilt
+``.upatch`` files, then exercises loading, trust, unload, and map behavior.
+Each invocation receives a unique VM name and retains its stopped overlay, TPM
+state, and logs for inspection.  The host checkout is mounted read-only and
+all guest build writes stay in the VM state.
 
-The host-side payload is cached in ``build/test-vm/host-bundle``.  Repeated
-``make test-vm`` runs reuse it until a relevant source, Makefile, configuration,
-build-script, or bpf-next artifact changes.  If compiler flags or other
+The host-side payload and target-test fixtures are cached in
+``build/test-vm/host-bundle``.  Repeated ``make test-tgt`` runs reuse them until
+a relevant source, Makefile, configuration, build-script, fixture, or
+bpf-next artifact changes.  The VM no longer needs Clang, LLVM, or the Shirudo
+development headers to run the target suite.  If compiler flags or other
 command-line build-environment variables change, run ``make clean`` first;
 those values are intentionally not tracked by the stamp.
 
-On completion, ``make test-vm`` prints a summary with the result, VM name,
+On completion, ``make test-tgt`` prints a summary with the result, VM name,
 elapsed time, dependency-artifact mode, and retained log paths. If the suite
 fails, the summary also lists the failed test script and title when the TAP
 failure record is available; failures before the suite starts are reported
@@ -195,7 +208,7 @@ In normal test mode, the guest serial console is kept in the reported
 ``console.log`` and QEMU's host-side diagnostics are kept in ``qemu.log``.
 TAP ``ok`` and ``not ok`` lines are shown as quiet progress, followed by the
 final PASS/FAIL summary on standard output. To stream the full console while
-the VM runs, use ``make test-vm TEST_VM_VERBOSE=1``. The underlying runner also accepts
+the VM runs, use ``make test-tgt TEST_VM_VERBOSE=1``. The underlying runner also accepts
 ``contrib/test-vm.sh --verbose``; GNU make does not support a target-specific
 ``--verbose`` option.
 
@@ -209,7 +222,7 @@ running in the background, and returns once the guest is ready.  For example::
 Multiple ``make vm`` invocations can run in parallel.  Multiple test runs can
 also run in parallel from separate shell processes, for example::
 
-    make test-vm & make test-vm & wait
+    make test-tgt & make test-tgt & wait
 
 Use ``make test-vm-clean`` to stop tracked VMs and remove all retained VM
 state and logs under ``build/test-vm``.
@@ -219,7 +232,7 @@ The VM target requires an x86_64 host with accessible ``/dev/kvm``,
 ``cloud-localds``.  It does not install host packages.  To use a kernel
 published elsewhere instead of the local artifact::
 
-    make test-vm \
+    make test-tgt \
         TEST_VM_KERNEL_URL=https://example.invalid/bzImage \
         TEST_VM_KERNEL_SHA256=<64-hex-digit-sha256>
 
@@ -235,7 +248,7 @@ contains an ephemeral signing key and is ignored by git; use
 To export map records to an OTEL collector running on the host, set all
 three map-export settings together::
 
-    make test-vm \
+    make test-tgt \
         TEST_VM_MAP_EXPORT_ENDPOINT=http://otel.test:4318 \
         VM_TENANT=tenant-test \
         TEST_VM_MAP_EXPORT_INSECURE=true

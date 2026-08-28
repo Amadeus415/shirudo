@@ -16,7 +16,6 @@ BUNDLE=/mnt/shirudo-bundle
 UPPER=/var/tmp/shirudo-upper
 OVERLAY_WORK=/var/tmp/shirudo-overlay-work
 WORKSPACE=/workspace/shirudo
-JOBS="${TEST_VM_CPUS:-$(nproc)}"
 VM_MODE="${VM_MODE:-test}"
 
 log()
@@ -53,29 +52,23 @@ configure_map_export()
 
 configure_map_export
 
-log "installing Ubuntu build and integration-test dependencies"
+log "installing Ubuntu runtime and integration-test dependencies"
 apt-get update
 apt-get install -y --no-install-recommends \
-	build-essential \
 	ca-certificates \
-	clang \
-	git \
 	keyutils \
-	libcurl4-openssl-dev \
-	libelf-dev \
-	libjson-c-dev \
-	libluajit-5.1-dev \
-	libssh-dev \
-	libssl-dev \
-	libtss2-dev \
-	llvm \
+	libcurl4t64 \
+	libelf1t64 \
+	libjson-c5 \
+	libluajit-5.1-2 \
+	libssh-4 \
+	libssl3t64 \
+	libtss2-esys-3.0.2-0t64 \
+	libtss2-tctildr0t64 \
 	openssh-server \
-	pkg-config \
 	python3 \
 	rsync \
-	tpm2-tools \
-	uuid-dev \
-	zlib1g-dev
+	tpm2-tools
 
 log "configuring loopback root SSH for the libssh integration test"
 install -d -m 0700 /root/.ssh
@@ -94,9 +87,9 @@ mkdir -p "$UPPER" "$OVERLAY_WORK" "$WORKSPACE"
 if mount -t overlay overlay \
 	-o "lowerdir=${LOWER},upperdir=${UPPER},workdir=${OVERLAY_WORK}" \
 	"$WORKSPACE"; then
-	log "building in a guest overlay over the read-only checkout"
+	log "preparing a guest overlay over the read-only checkout"
 else
-	log "overlay-on-9p unavailable; copying the checkout into the guest"
+	log "overlay-on-9p unavailable; copying the test checkout into the guest"
 	rm -rf -- "$WORKSPACE"
 	mkdir -p "$WORKSPACE"
 	rsync -a --exclude=/.git/ --exclude=/artifacts/ --exclude=/build/ \
@@ -110,21 +103,11 @@ else
 fi
 
 cd "$WORKSPACE"
-git config --global --add safe.directory "$WORKSPACE"
-git config --global --add safe.directory "$WORKSPACE/third_party/bpf-next"
 
 log "importing host-built Shirudo payload"
 log "host bundle dependency mode: $(<"$BUNDLE/dependency-mode")"
-install -d /usr/local/bin /usr/local/libexec/shirudo
+install -d /usr/local/bin
 install -m 0755 "$BUNDLE/root/usr/local/bin/shirudo" /usr/local/bin/shirudo
-install -m 0755 "$BUNDLE/root/usr/local/libexec/shirudo/shirudo-build" \
-	/usr/local/libexec/shirudo/shirudo-build
-install -d "$WORKSPACE/bpf"
-install -m 0644 "$BUNDLE/root/usr/local/share/shirudo/vmlinux.h" \
-	"$WORKSPACE/bpf/vmlinux.h"
-mkdir -p "$WORKSPACE/bpf/include"
-cp -a "$BUNDLE/root/usr/local/share/shirudo/bpf/include/." \
-	"$WORKSPACE/bpf/include/"
 cp -a "$BUNDLE/test-helpers/." "$WORKSPACE/"
 
 log "checking custom-kernel and vTPM prerequisites"
@@ -135,8 +118,11 @@ test -c /dev/tpm0
 test -c /dev/tpmrm0
 tpm2_getrandom 8 >/dev/null
 
-log "generating an ephemeral key and attaching the measured Shirudo LSM"
-/usr/local/bin/shirudo genkey
+log "importing operator certificate and attaching the measured Shirudo LSM"
+install -d -m 0700 /var/lib/shirudo/keys
+install -m 0644 "$BUNDLE/fixtures/cert.der" \
+	/var/lib/shirudo/keys/cert.der
+rm -f /var/lib/shirudo/keys/signing_key.pem
 /usr/local/bin/shirudo init
 test -e /var/lib/shirudo/bpffs/lsm_link
 /usr/local/bin/shirudo status --json --include-tpm >/tmp/shirudo-status.json
@@ -165,9 +151,10 @@ log "running SHIRUDO_INTEGRATION=1 test suite"
 	cd t
 	SHIRUDO_INTEGRATION=1 \
 		SHIRUDO_BIN=/usr/local/bin/shirudo \
-		SHIRUDO_BUILD_BIN=/usr/local/libexec/shirudo/shirudo-build \
+		SHIRUDO_BUILD_BIN= \
+		SHIRUDO_TEST_FIXTURES_DIR="$BUNDLE/fixtures" \
 		SHIRUDO_TEST_FAILURES_FILE=/mnt/shirudo-out/failed-tests \
 		SHIRUDO_TEST_SUITE_FAILURES_FILE=/mnt/shirudo-out/failed-suites \
-		./run-tests.sh
+		./run-target-tests.sh
 )
 log "integration suite passed"

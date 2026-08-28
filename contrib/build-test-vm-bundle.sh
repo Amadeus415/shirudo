@@ -31,8 +31,6 @@ bundle_is_current()
 
 	[[ -f "$STAMP_FILE" && -n "$STAMP_INPUTS" ]] || return 1
 	[[ -x "$BUNDLE_DIR/root/usr/local/bin/shirudo" ]] || return 1
-	[[ -x "$BUNDLE_DIR/root/usr/local/libexec/shirudo/shirudo-build" ]] || return 1
-	[[ -s "$BUNDLE_DIR/root/usr/local/share/shirudo/vmlinux.h" ]] || return 1
 	for input in $STAMP_INPUTS; do
 		[[ -e "$input" ]] || return 1
 		[[ "$input" -nt "$STAMP_FILE" ]] && return 1
@@ -66,14 +64,15 @@ log "building host Shirudo payload and test helpers"
 make -C "$REPO_ROOT" "${BPF_MAKE_ARGS[@]}" all shirudo-build test-helpers
 
 TMP_DIR="$(mktemp -d "${BUNDLE_DIR}.tmp.XXXXXX")"
+FIXTURE_WORK="$(mktemp -d "${BUNDLE_DIR}.fixtures.XXXXXX")"
 cleanup()
 {
-	rm -rf -- "$TMP_DIR"
+	rm -rf -- "$TMP_DIR" "$FIXTURE_WORK"
 }
 trap cleanup EXIT
 
 make -C "$REPO_ROOT" "${BPF_MAKE_ARGS[@]}" \
-	DESTDIR="$TMP_DIR/root" install-operator
+	DESTDIR="$TMP_DIR/root" install
 
 install -d "$TMP_DIR/test-helpers/t/helper"
 while IFS= read -r helper; do
@@ -92,6 +91,82 @@ t/helper/test-upatch-decode
 t/helper/test-upatch-serializer-pages
 t/helper/test-signed-load
 EOF
+
+build_fixture()
+{
+	local source="$1"
+	local name="$2"
+	local keys_dir="$3"
+
+	(
+		cd "$REPO_ROOT"
+		"$REPO_ROOT/tools/shirudo-build/shirudo-build" \
+			"$REPO_ROOT/test-vm/fixtures/$source" \
+			-o "$TMP_DIR/fixtures/$name.upatch" \
+			--name "$name" --vmlinux "$REPO_ROOT/bpf/vmlinux.h" \
+			--key "$keys_dir/signing_key.pem" \
+			--cert "$keys_dir/cert.der"
+	)
+}
+
+log "building target-test fixtures on the operator host"
+mkdir -p "$TMP_DIR/fixtures/decoders" "$FIXTURE_WORK/trusted" \
+	"$FIXTURE_WORK/foreign" "$FIXTURE_WORK/own"
+"$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/trusted" >/dev/null
+"$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/foreign" >/dev/null
+"$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/own" >/dev/null
+
+build_fixture basic.bpf.c shirudo-test-basic "$FIXTURE_WORK/trusted"
+build_fixture basic.bpf.c shirudo-test-lifecycle "$FIXTURE_WORK/trusted"
+build_fixture marker.bpf.c shirudo-test-marker "$FIXTURE_WORK/trusted"
+build_fixture map-export.bpf.c shirudo-test-map-export "$FIXTURE_WORK/trusted"
+build_fixture basic.bpf.c shirudo-test-foreign "$FIXTURE_WORK/foreign"
+build_fixture basic.bpf.c shirudo-test-own-keyring "$FIXTURE_WORK/own"
+
+basic_payload="$($REPO_ROOT/shirudo upatch info \
+	"$TMP_DIR/fixtures/shirudo-test-basic.upatch" --json |
+	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
+marker_payload="$($REPO_ROOT/shirudo upatch info \
+	"$TMP_DIR/fixtures/shirudo-test-marker.upatch" --json |
+	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
+map_export_payload="$($REPO_ROOT/shirudo upatch info \
+	"$TMP_DIR/fixtures/shirudo-test-map-export.upatch" --json |
+	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
+lifecycle_payload="$($REPO_ROOT/shirudo upatch info \
+	"$TMP_DIR/fixtures/shirudo-test-lifecycle.upatch" --json |
+	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
+"$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
+	shirudo-test-basic --payload-sha256 "$basic_payload" \
+	-o "$TMP_DIR/fixtures/shirudo-test-basic.unload.upatch" \
+	--key "$FIXTURE_WORK/trusted/signing_key.pem" \
+	--cert "$FIXTURE_WORK/trusted/cert.der"
+"$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
+	shirudo-test-basic --payload-sha256 "$(printf 'aa%.0s' {1..32})" \
+	-o "$TMP_DIR/fixtures/shirudo-test-basic-mismatch.unload.upatch" \
+	--key "$FIXTURE_WORK/trusted/signing_key.pem" \
+	--cert "$FIXTURE_WORK/trusted/cert.der"
+"$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
+	shirudo-test-marker --payload-sha256 "$marker_payload" \
+	-o "$TMP_DIR/fixtures/shirudo-test-marker.unload.upatch" \
+	--key "$FIXTURE_WORK/trusted/signing_key.pem" \
+	--cert "$FIXTURE_WORK/trusted/cert.der"
+"$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
+	shirudo-test-lifecycle --payload-sha256 "$lifecycle_payload" \
+	-o "$TMP_DIR/fixtures/shirudo-test-lifecycle.unload.upatch" \
+	--key "$FIXTURE_WORK/trusted/signing_key.pem" \
+	--cert "$FIXTURE_WORK/trusted/cert.der"
+"$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
+	shirudo-test-map-export --payload-sha256 "$map_export_payload" \
+	-o "$TMP_DIR/fixtures/shirudo-test-map-export.unload.upatch" \
+	--key "$FIXTURE_WORK/trusted/signing_key.pem" \
+	--cert "$FIXTURE_WORK/trusted/cert.der"
+
+cp "$FIXTURE_WORK/trusted/cert.der" "$TMP_DIR/fixtures/cert.der"
+cp "$FIXTURE_WORK/own/cert.der" "$TMP_DIR/fixtures/own.der"
+(
+	cd "$TMP_DIR/fixtures"
+	sha256sum -- *.upatch cert.der own.der > manifest
+)
 
 printf 'shirudo-test-vm-bundle-v1\n' >"$TMP_DIR/format"
 if [[ ${#BPF_MAKE_ARGS[@]} -eq 1 ]]; then

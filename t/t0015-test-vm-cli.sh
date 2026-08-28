@@ -59,9 +59,13 @@ test_expect_success 'test-vm selects the root partition without an initramfs' '
 	! grep -q "root=LABEL=cloudimg-rootfs" "$RUNNER"
 '
 
-test_expect_success 'test-vm guest installs optional decoder dependencies' '
-	grep -q "^[[:space:]]*libluajit-5.1-dev" \
-		../contrib/test-vm-guest.sh
+test_expect_success 'test-vm guest uses prebuilt target fixtures' '
+	grep -q "SHIRUDO_TEST_FIXTURES_DIR" ../contrib/test-vm-guest.sh &&
+	grep -q "SHIRUDO_BUILD_BIN=" ../contrib/test-vm-guest.sh &&
+	grep -q "run-target-tests.sh" ../contrib/test-vm-guest.sh &&
+	test -x run-target-tests.sh &&
+	test -x t1200-target-fixtures.sh &&
+	! grep -q "libluajit-5.1-dev" ../contrib/test-vm-guest.sh
 '
 
 test_expect_success 'test-vm imports the host-built payload' '
@@ -71,8 +75,10 @@ test_expect_success 'test-vm imports the host-built payload' '
 	grep -q "mount_tag=shirudo-bundle" ../contrib/test-vm.sh &&
 	grep -q "importing host-built Shirudo payload" \
 		../contrib/test-vm-guest.sh &&
-	grep -q "SHIRUDO_BUILD_BIN=/usr/local/libexec/shirudo/shirudo-build" \
+	grep -q "install -m 0644 \"\$BUNDLE/fixtures/cert.der\"" \
 		../contrib/test-vm-guest.sh &&
+	! grep -q "vmlinux.h" ../contrib/test-vm-guest.sh &&
+	! grep -q "shirudo-build" ../contrib/test-vm-guest.sh &&
 	! grep -Fq "make \"\${BPF_MAKE_ARGS[@]}\" check" \
 		../contrib/test-vm-guest.sh &&
 	grep -Fq "BPFTOOL ?= \$(BPFTOOL_SOURCE_DIR)/bpftool" \
@@ -165,6 +171,16 @@ test_expect_success 'test-vm requires an insecure map-export bridge' '
 		TEST_VM_MAP_EXPORT_INSECURE=false "$RUNNER" \
 		>"$WORK/non-insecure-map-export.out" 2>&1 &&
 	grep -q "must be exactly true" "$WORK/non-insecure-map-export.out"
+'
+
+test_expect_success 'make test runs the complete pipeline in order' '
+	grep -q "^test-op: all" ../Makefile &&
+	grep -q "^check: test-op" ../Makefile &&
+	grep -q "^bundle: test-vm-bundle" ../Makefile &&
+	grep -A5 "^test:$" ../Makefile | grep -q "\$(MAKE) bundle" &&
+	grep -A5 "^test:$" ../Makefile | grep -q "\$(MAKE) test-op" &&
+	grep -A5 "^test:$" ../Makefile | grep -q "\$(MAKE) test-tgt" &&
+	! grep -A5 "^test:$" ../Makefile | grep -q "\$(MAKE) bpf-next"
 '
 
 test_done

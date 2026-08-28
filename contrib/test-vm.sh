@@ -205,10 +205,10 @@ validate_host_bundle()
 {
 	[[ -x "$TEST_VM_HOST_BUNDLE/root/usr/local/bin/shirudo" ]] ||
 		die "host VM bundle is missing; run 'make test-vm-bundle' first: $TEST_VM_HOST_BUNDLE"
-	[[ -x "$TEST_VM_HOST_BUNDLE/root/usr/local/libexec/shirudo/shirudo-build" ]] ||
-		die "host VM bundle has no shirudo-build: $TEST_VM_HOST_BUNDLE"
-	[[ -s "$TEST_VM_HOST_BUNDLE/root/usr/local/share/shirudo/vmlinux.h" ]] ||
-		die "host VM bundle has no vmlinux.h: $TEST_VM_HOST_BUNDLE"
+	[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/cert.der" ]] ||
+		die "host VM bundle has no target-test certificate: $TEST_VM_HOST_BUNDLE"
+	[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/shirudo-test-basic.upatch" ]] ||
+		die "host VM bundle has no target-test fixtures: $TEST_VM_HOST_BUNDLE"
 }
 
 stop_swtpm()

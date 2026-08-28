@@ -26,7 +26,8 @@ trap 'rm -rf "$XDG"' EXIT
 	test_skip_all "remote add failed"
 
 test_expect_success 'nodes reaches the loopback target over libssh' '
-	"$SHIRUDO_BIN" nodes lo 2>/dev/null | grep -E "^lo[[:space:]]" | grep -q yes
+	"$SHIRUDO_BIN" nodes --filter=lo 2>/dev/null |
+		grep -E "^lo[[:space:]]" | grep -q yes
 '
 
 test_expect_success 'nodes show renders a describe for the loopback target' '
