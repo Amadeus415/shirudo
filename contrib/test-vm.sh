@@ -58,6 +58,7 @@ ROOTFS_SHA256="${TEST_VM_ROOTFS_SHA256:-}"
 MAP_EXPORT_ENDPOINT="${TEST_VM_MAP_EXPORT_ENDPOINT:-}"
 LEGACY_MAP_EXPORT_TENANT_ID="${TEST_VM_MAP_EXPORT_TENANT_ID:-}"
 MAP_EXPORT_INSECURE="${TEST_VM_MAP_EXPORT_INSECURE:-}"
+MAP_EXPORT_CA="${TEST_VM_MAP_EXPORT_CA:-}"
 MAP_EXPORT_TENANT_ID=""
 MAP_EXPORT_ENABLED=0
 RUN_DIR=""
@@ -125,15 +126,37 @@ validate_map_export()
 
 	[[ -n "$MAP_EXPORT_ENDPOINT" ]] && configured=$((configured + 1))
 	[[ -n "$MAP_EXPORT_INSECURE" ]] && configured=$((configured + 1))
+	[[ -n "$MAP_EXPORT_CA" ]] && configured=$((configured + 1))
 	if (( configured == 0 )); then
 		return
 	fi
 	[[ -n "$MAP_EXPORT_TENANT_ID" ]] ||
-		die "TEST_VM_MAP_EXPORT_ENDPOINT, TEST_VM_MAP_EXPORT_TENANT_ID, and TEST_VM_MAP_EXPORT_INSECURE must be set together"
-	(( configured == 2 )) ||
-		die "TEST_VM_MAP_EXPORT_ENDPOINT and TEST_VM_MAP_EXPORT_INSECURE must be set together"
-	[[ "$MAP_EXPORT_INSECURE" == "true" ]] ||
-		die "TEST_VM_MAP_EXPORT_INSECURE must be exactly true"
+		die "TEST_VM_MAP_EXPORT_ENDPOINT and VM_TENANT must be set together"
+	[[ -n "$MAP_EXPORT_ENDPOINT" ]] ||
+		die "TEST_VM_MAP_EXPORT_CA and TEST_VM_MAP_EXPORT_INSECURE require TEST_VM_MAP_EXPORT_ENDPOINT"
+	if [[ -z "$MAP_EXPORT_INSECURE" ]]; then
+		MAP_EXPORT_INSECURE=false
+	fi
+	[[ "$MAP_EXPORT_INSECURE" == "true" ||
+	   "$MAP_EXPORT_INSECURE" == "false" ]] ||
+		die "TEST_VM_MAP_EXPORT_INSECURE must be true or false"
+	case "$MAP_EXPORT_ENDPOINT" in
+	https://*)
+		[[ "$MAP_EXPORT_INSECURE" == "false" ]] ||
+			die "HTTPS map-export endpoints require TEST_VM_MAP_EXPORT_INSECURE=false"
+		;;
+	http://*)
+		[[ "$MAP_EXPORT_INSECURE" == "true" ]] ||
+			die "HTTP map-export endpoints require TEST_VM_MAP_EXPORT_INSECURE=true"
+		;;
+	*)
+		die "TEST_VM_MAP_EXPORT_ENDPOINT must use http:// or https://"
+		;;
+	esac
+	if [[ -n "$MAP_EXPORT_CA" ]]; then
+		[[ -f "$MAP_EXPORT_CA" && -r "$MAP_EXPORT_CA" ]] ||
+			die "TEST_VM_MAP_EXPORT_CA is not a readable regular file: $MAP_EXPORT_CA"
+	fi
 	[[ ${#MAP_EXPORT_ENDPOINT} -lt 2048 ]] ||
 		die "TEST_VM_MAP_EXPORT_ENDPOINT is too long"
 	[[ "$MAP_EXPORT_ENDPOINT" != *[[:space:]]* ]] ||
@@ -677,6 +700,13 @@ META_DATA="${RUN_DIR}/meta-data"
 NETWORK_CONFIG="${RUN_DIR}/network-config"
 SWTPM_SOCKET="${RUN_DIR}/tpm/swtpm-sock"
 SWTPM_PIDFILE="${RUN_DIR}/tpm/swtpm.pid"
+OTEL_CA_DIR=""
+
+if [[ "$MAP_EXPORT_ENABLED" -eq 1 && -n "$MAP_EXPORT_CA" ]]; then
+	OTEL_CA_DIR="${RUN_DIR}/otel-ca"
+	mkdir -p "$OTEL_CA_DIR"
+	install -m 0644 "$MAP_EXPORT_CA" "$OTEL_CA_DIR/ca.pem"
+fi
 
 qemu-img create -q -f qcow2 -F qcow2 -b "$ROOTFS" "$OVERLAY"
 qemu-img resize -q "$OVERLAY" "$DISK_SIZE"
@@ -730,8 +760,17 @@ if [[ "$MAP_EXPORT_ENABLED" -eq 1 ]]; then
 			"$MAP_EXPORT_TENANT_ID"
 		printf '      export TEST_VM_MAP_EXPORT_INSECURE=%q\n' \
 			"$MAP_EXPORT_INSECURE"
+		if [[ -n "$OTEL_CA_DIR" ]]; then
+			printf '      export TEST_VM_MAP_EXPORT_CA=/mnt/shirudo-otel/ca.pem\n'
+		fi
 	} >>"$USER_DATA"
 fi
+cat >>"$USER_DATA" <<'EOF'
+      if [ -n "${TEST_VM_MAP_EXPORT_CA:-}" ]; then
+        mkdir -p /mnt/shirudo-otel
+        mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,ro shirudo-otel /mnt/shirudo-otel || rc=$?
+      fi
+EOF
 cat >>"$USER_DATA" <<'EOF'
       mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,ro shirudo-src /mnt/shirudo-src || rc=$?
       if [ "$rc" -eq 0 ]; then
@@ -786,6 +825,12 @@ QEMU_ARGS=(
 	-monitor none \
 	-no-reboot
 )
+
+if [[ -n "$OTEL_CA_DIR" ]]; then
+	QEMU_ARGS+=(
+		-virtfs "local,id=shirudo-otel,path=${OTEL_CA_DIR},mount_tag=shirudo-otel,security_model=none,readonly=on"
+	)
+fi
 
 wait_for_guest_status()
 {

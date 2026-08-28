@@ -203,14 +203,20 @@ test_expect_success 'named test-vm-clean removes only the selected VM' '
 	test -d "$root/cache"
 '
 
-test_expect_success 'test-vm has an opt-in map-export bridge contract' '
-	grep -q "TEST_VM_MAP_EXPORT_ENDPOINT, TEST_VM_MAP_EXPORT_TENANT_ID, and TEST_VM_MAP_EXPORT_INSECURE must be set together" \
-		"$RUNNER" &&
-	grep -q "TEST_VM_MAP_EXPORT_INSECURE must be exactly true" "$RUNNER" &&
+test_expect_success 'test-vm supports secure and explicit insecure map-export modes' '
+	grep -q "MAP_EXPORT_CA=\"\${TEST_VM_MAP_EXPORT_CA:-}\"" "$RUNNER" &&
+	grep -q "MAP_EXPORT_INSECURE=false" "$RUNNER" &&
+	grep -q "HTTPS map-export endpoints require TEST_VM_MAP_EXPORT_INSECURE=false" "$RUNNER" &&
+	grep -q "HTTP map-export endpoints require TEST_VM_MAP_EXPORT_INSECURE=true" "$RUNNER" &&
+	grep -q "TEST_VM_MAP_EXPORT_CA=\"\$(TEST_VM_MAP_EXPORT_CA)\"" ../Makefile &&
 	grep -q "export TEST_VM_MAP_EXPORT_ENDPOINT" "$RUNNER" &&
+	grep -q "export TEST_VM_MAP_EXPORT_CA=/mnt/shirudo-otel/ca.pem" "$RUNNER" &&
+	grep -q "mount_tag=shirudo-otel" "$RUNNER" &&
 	grep -q "10.0.2.2 otel.test" ../contrib/test-vm-guest.sh &&
 	grep -q "map_export.otel_endpoint = \$endpoint" ../contrib/test-vm-guest.sh &&
-	grep -q "map_export.otel_insecure = true" ../contrib/test-vm-guest.sh &&
+	grep -q "map_export.otel_insecure = \$insecure" ../contrib/test-vm-guest.sh &&
+	grep -q "OTEL_EXPORTER_OTLP_CERTIFICATE=/etc/shirudo/otel/ca.pem" \
+		../contrib/test-vm-guest.sh &&
 	grep -q "map_export.tenant_id = \$tenant_id" ../contrib/test-vm-guest.sh
 '
 
@@ -224,14 +230,35 @@ test_expect_success 'test-vm rejects incomplete map-export bridge settings' '
 	grep -q "must be set together" "$WORK/incomplete-map-export.out"
 '
 
-test_expect_success 'test-vm requires an insecure map-export bridge' '
-	! TEST_VM_WORK_DIR="$WORK/non-insecure-map-export" \
+test_expect_success 'test-vm accepts secure HTTPS export without insecure setting' '
+	! TEST_VM_WORK_DIR="$WORK/secure-map-export" \
+		TEST_VM_KERNEL="$WORK/map-export-kernel" \
+		TEST_VM_MAP_EXPORT_ENDPOINT=https://otel.test:4318 \
+		TEST_VM_MAP_EXPORT_TENANT_ID=tenant-test "$RUNNER" \
+		>"$WORK/secure-map-export.out" 2>&1 &&
+	! grep -q "must be exactly true" "$WORK/secure-map-export.out" &&
+	! grep -q "must be true or false" "$WORK/secure-map-export.out"
+'
+
+test_expect_success 'test-vm rejects cleartext export without explicit insecure setting' '
+	! TEST_VM_WORK_DIR="$WORK/cleartext-map-export" \
 		TEST_VM_KERNEL="$WORK/map-export-kernel" \
 		TEST_VM_MAP_EXPORT_ENDPOINT=http://otel.test:4318 \
+		TEST_VM_MAP_EXPORT_TENANT_ID=tenant-test "$RUNNER" \
+		>"$WORK/cleartext-map-export.out" 2>&1 &&
+	grep -q "HTTP map-export endpoints require TEST_VM_MAP_EXPORT_INSECURE=true" \
+		"$WORK/cleartext-map-export.out"
+'
+
+test_expect_success 'test-vm validates a custom OTEL CA file before boot' '
+	! TEST_VM_WORK_DIR="$WORK/missing-map-export-ca" \
+		TEST_VM_KERNEL="$WORK/map-export-kernel" \
+		TEST_VM_MAP_EXPORT_ENDPOINT=https://otel.test:4318 \
 		TEST_VM_MAP_EXPORT_TENANT_ID=tenant-test \
-		TEST_VM_MAP_EXPORT_INSECURE=false "$RUNNER" \
-		>"$WORK/non-insecure-map-export.out" 2>&1 &&
-	grep -q "must be exactly true" "$WORK/non-insecure-map-export.out"
+		TEST_VM_MAP_EXPORT_CA="$WORK/no-ca.pem" "$RUNNER" \
+		>"$WORK/missing-map-export-ca.out" 2>&1 &&
+	grep -q "TEST_VM_MAP_EXPORT_CA is not a readable regular file" \
+		"$WORK/missing-map-export-ca.out"
 '
 
 test_expect_success 'make test runs the complete pipeline in order' '

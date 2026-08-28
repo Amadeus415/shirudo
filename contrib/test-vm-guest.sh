@@ -28,14 +28,44 @@ configure_map_export()
 	local endpoint="${TEST_VM_MAP_EXPORT_ENDPOINT:-}"
 	local tenant_id="${TEST_VM_MAP_EXPORT_TENANT_ID:-}"
 	local insecure="${TEST_VM_MAP_EXPORT_INSECURE:-}"
+	local ca_file="${TEST_VM_MAP_EXPORT_CA:-}"
 
-	if [[ -z "$endpoint" && -z "$tenant_id" && -z "$insecure" ]]; then
+	if [[ -z "$endpoint" && -z "$tenant_id" && -z "$insecure" &&
+	      -z "$ca_file" ]]; then
 		return 0
 	fi
-	[[ -n "$endpoint" && -n "$tenant_id" && "$insecure" == "true" ]] || {
+	[[ -n "$endpoint" && -n "$tenant_id" &&
+	   ("$insecure" == "true" || "$insecure" == "false") ]] || {
 		log "invalid map-export bridge settings"
 		return 1
 	}
+	if [[ "$endpoint" == https://* ]]; then
+		[[ "$insecure" == "false" ]] || {
+			log "secure HTTPS map-export requires insecure=false"
+			return 1
+		}
+	elif [[ "$endpoint" == http://* ]]; then
+		[[ "$insecure" == "true" ]] || {
+			log "cleartext HTTP map-export requires insecure=true"
+			return 1
+		}
+	else
+		log "map-export endpoint must use http:// or https://"
+		return 1
+	fi
+	if [[ -n "$ca_file" ]]; then
+		[[ "$ca_file" == /mnt/shirudo-otel/ca.pem && -s "$ca_file" ]] || {
+			log "OTEL CA file is missing from the host share"
+			return 1
+		}
+		install -d -m 0750 /etc/shirudo/otel
+		install -m 0644 "$ca_file" /etc/shirudo/otel/ca.pem
+		install -d -m 0750 /etc/shirudo
+		printf '%s\n' \
+			'OTEL_EXPORTER_OTLP_CERTIFICATE=/etc/shirudo/otel/ca.pem' \
+			>/etc/shirudo/map-export.env
+		chmod 0640 /etc/shirudo/map-export.env
+	fi
 
 	log "configuring OTEL map-export bridge"
 	# QEMU user networking exposes the host as 10.0.2.2. Remove any
@@ -45,7 +75,7 @@ configure_map_export()
 	install -d -m 0755 /etc/shirudo
 	printf '%s\n' \
 		"map_export.otel_endpoint = $endpoint" \
-		'map_export.otel_insecure = true' \
+		"map_export.otel_insecure = $insecure" \
 		"map_export.tenant_id = $tenant_id" \
 		>/etc/shirudo/shirudo.conf
 }

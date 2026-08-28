@@ -150,6 +150,9 @@ shirudo make targets (run from the repo root):
 
   Variables: prefix (=/usr/local), bindir, libexecdir, systemdunitdir,
              VM_NAME (optional unique VM name), VM_TENANT (OTEL tenant),
+             TEST_VM_MAP_EXPORT_ENDPOINT (OTLP base URL),
+             TEST_VM_MAP_EXPORT_CA (optional PEM CA file),
+             TEST_VM_MAP_EXPORT_INSECURE=true (explicit HTTP only),
              TEST_VM_BUNDLE_DIR (host VM payload cache),
              TEST_VM_VERBOSE=1 (stream test VM QEMU output; otherwise show TAP progress),
              DESTDIR (staged install), V=1 (echo full command lines).
@@ -201,11 +204,19 @@ bpf-next:
 
 vm: test-vm-bundle
 	$(Q)VM_MODE=interactive VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
+		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
+		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
+		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
 
 test-tgt: test-vm-bundle
 	$(Q)VM_MODE=test VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
+		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
+		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
+		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
 

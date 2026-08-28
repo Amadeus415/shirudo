@@ -245,8 +245,8 @@ used as the OTEL tenant when map export is configured.  Retained VM state
 contains an ephemeral signing key and is ignored by git; use
 ``make test-vm-clean`` when it is no longer needed.
 
-To export map records to an OTEL collector running on the host, set all
-three map-export settings together::
+To export map records to an OTEL collector running on the host over the
+explicitly insecure QEMU bridge, set all three map-export settings together::
 
     make test-tgt \
         TEST_VM_MAP_EXPORT_ENDPOINT=http://otel.test:4318 \
@@ -255,8 +255,23 @@ three map-export settings together::
 
 The guest maps ``otel.test`` to the QEMU host gateway ``10.0.2.2`` and
 writes the corresponding ``map_export`` settings to
-``/etc/shirudo/shirudo.conf``.  Leaving these variables unset keeps the
-normal test-VM bootstrap unchanged.
+``/etc/shirudo/shirudo.conf``.  ``TEST_VM_MAP_EXPORT_INSECURE=true`` is
+required for this cleartext mode.
+
+For a secure HTTPS collector, omit the insecure setting (it defaults to
+``false``) and optionally provide a PEM CA file when the collector is not
+trusted by the guest's normal CA store::
+
+    make vm \
+        TEST_VM_MAP_EXPORT_ENDPOINT=https://otel.test:4318 \
+        TEST_VM_MAP_EXPORT_CA=/path/to/otel-ca.pem \
+        VM_TENANT=tenant-test
+
+The CA file is copied into the guest and supplied to both systemd exporters
+through ``/etc/shirudo/map-export.env``.  The collector certificate must
+include ``otel.test`` in its subject alternative names.  ``make vm``
+configures the VM exporter but does not start the collector.  Leaving all
+map-export variables unset keeps the normal test-VM bootstrap unchanged.
 
 4. Generate the signing key (operator machine, one time)
 =========================================================
