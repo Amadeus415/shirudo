@@ -40,7 +40,7 @@ export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdi
 
 .PHONY: all help shirudo-build test-helpers bundle test-vm-bundle bpf-next vm vm-stop vm-clean test-op test-tgt test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
-        distclean check test examples config
+        distclean test examples config
 
 KERNEL_PATCHES ?= $(if $(wildcard kernel/*.patch),kernel/,)
 
@@ -97,7 +97,6 @@ shirudo make targets (run from the repo root):
     make test-op           build, then run the host/operator-side TAP suite
                            under t/ (unit tests always; t11xx integration skip
                            unless opted in)
-    make check             compatibility alias for make test-op
     make test              run the full pipeline: bundle, host checks, and
                            target-side VM tests
     SHIRUDO_INTEGRATION=1 make test-op
@@ -327,8 +326,6 @@ examples:
 
 test-op: all
 	+$(Q)$(MAKE) -f Makefile.shirudo check
-
-check: test-op
 
 bundle: test-vm-bundle
 

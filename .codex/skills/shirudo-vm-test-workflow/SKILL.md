@@ -145,8 +145,6 @@ the live `t11xx` integration tests remain skipped unless explicitly enabled:
 SHIRUDO_INTEGRATION=1 make test-op
 ```
 
-`make check` is a compatibility alias for `make test-op`.
-
 Target-side integration tests:
 
 ```sh

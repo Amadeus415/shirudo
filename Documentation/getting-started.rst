@@ -160,8 +160,8 @@ run the suite in a disposable QEMU/KVM guest backed by swtpm::
 
 The individual test entry points are split by role: ``make test-op`` runs the
 host/operator-side suite, while ``make test-tgt`` runs the target-side suite
-in the TPM-enabled VM.  ``make check`` and ``make test-vm`` remain compatibility
-aliases.  ``make test`` is the full end-to-end one-liner; it runs ``make
+in the TPM-enabled VM.  ``make test-vm`` remains a compatibility alias.  ``make
+test`` is the full end-to-end one-liner; it runs ``make
 bundle`` (an alias for ``make test-vm-bundle``), ``make test-op``, and ``make
 test-tgt`` in that order.  It consumes existing bpf-next artifacts when they
 are available; run ``make bpf-next`` separately when those artifacts need to

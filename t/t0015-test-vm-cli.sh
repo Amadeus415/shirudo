@@ -263,7 +263,7 @@ test_expect_success 'test-vm validates a custom OTEL CA file before boot' '
 
 test_expect_success 'make test runs the complete pipeline in order' '
 	grep -q "^test-op: all" ../Makefile &&
-	grep -q "^check: test-op" ../Makefile &&
+	! grep -Eq "^(check:|.*\bcheck\b.*\.PHONY)" ../Makefile &&
 	grep -q "^bundle: test-vm-bundle" ../Makefile &&
 	grep -A5 "^test:$" ../Makefile | grep -q "\$(MAKE) bundle" &&
 	grep -A5 "^test:$" ../Makefile | grep -q "\$(MAKE) test-op" &&
