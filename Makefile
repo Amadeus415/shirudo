@@ -39,7 +39,7 @@ export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdi
        systemdunitdir
 export VM_SSH_COMMAND
 
-.PHONY: all help shirudo-build test-helpers bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-vm test-vm-clean install \
+.PHONY: all help shirudo-build test-helpers bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
         distclean test examples config
 
@@ -111,6 +111,8 @@ shirudo make targets (run from the repo root):
                            import the host payload and prebuilt fixtures, run
                            the target integration suite, and retain the
                            stopped state for inspection
+    make test-tgt-obs      boot the target VM and run only Linux observability
+                           integration coverage
     make test-vm            compatibility alias for make test-tgt
     make test-vm-bundle    build/reuse the host-side Shirudo payload used by
                            make vm and make test-tgt, plus target-test fixtures;
@@ -188,7 +190,9 @@ TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
 	tools/shirudo-build/*.c tools/shirudo-build/*.h \
 	t/helper/*.c completion/* systemd/*.in systemd/*.timer \
 	test-vm/fixtures/*.c test-vm/fixtures/*.lua \
-	test-vm/fixtures/decoders/*))
+	test-vm/fixtures/decoders/* \
+	shields/linux_obs/*.c shields/linux_obs/*.h shields/linux_obs/Beefile \
+	shields/linux_obs/decoders/*))
 TEST_VM_BUNDLE_ARTIFACTS := $(sort $(wildcard \
 	artifacts/bpf-next-kernel-debs \
 	artifacts/bpf-next-kernel-debs/* \
@@ -240,6 +244,17 @@ vm-ssh:
 
 test-tgt: test-vm-bundle
 	$(Q)VM_MODE=test VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
+		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
+		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
+		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
+		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
+		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
+		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
+		contrib/test-vm.sh
+
+test-tgt-obs: test-vm-bundle
+	$(Q)VM_MODE=test TEST_VM_SUITE=obs VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
 		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
 		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \

@@ -1673,6 +1673,9 @@ static int pin_upatch_maps(const struct shirudo_loader_ctx *cx,
 			continue;
 		if (strchr(info.name, '.'))
 			continue;
+		/* Upatch-private maps are intentionally not operator-visible. */
+		if (strncmp(info.name, "obs_i_", 6) == 0)
+			continue;
 		if (snprintf(pin, sizeof(pin), "%s/%s", maps_dir,
 			     info.name) >= (int)sizeof(pin))
 			continue;

@@ -773,8 +773,12 @@ static void lua_split_page_slots(lua_State *L, int slots_idx,
 			if (local_slots > slots_per_chunk)
 				local_slots = slots_per_chunk;
 			for (i = 0; i < local_slots; i++) {
-				lua_store_slot(L, slots_idx,
-					       cursor + chunk * slots_per_chunk + i,
+				uint64_t page_slot = chunk * slots_per_chunk + i;
+
+				/* Every serialized page starts with its header slot. */
+				if (page_slot == 0)
+					continue;
+				lua_store_slot(L, slots_idx, cursor + page_slot,
 					       data + off + i * slot_size,
 					       slot_size);
 			}
@@ -783,7 +787,7 @@ static void lua_split_page_slots(lua_State *L, int slots_idx,
 		return;
 	}
 
-	for (size_t i = 0; i + slot_size <= len; i += slot_size)
+	for (size_t i = slot_size; i + slot_size <= len; i += slot_size)
 		lua_store_slot(L, slots_idx, cursor + i / slot_size,
 			       data + i, slot_size);
 }

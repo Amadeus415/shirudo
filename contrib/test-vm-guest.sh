@@ -187,15 +187,23 @@ if [[ "$VM_MODE" == interactive ]]; then
 	exit 0
 fi
 
-log "running target test suite"
+log "running target test suite: ${TEST_VM_SUITE:-all}"
 : >/mnt/shirudo-out/failed-tests
 : >/mnt/shirudo-out/failed-suites
 (
 	cd t
-	SHIRUDO_BIN=/usr/local/bin/shirudo \
-		SHIRUDO_TEST_FIXTURES_DIR="$BUNDLE/fixtures" \
-		SHIRUDO_TEST_FAILURES_FILE=/mnt/shirudo-out/failed-tests \
-		SHIRUDO_TEST_SUITE_FAILURES_FILE=/mnt/shirudo-out/failed-suites \
-		./run-target-tests.sh
+		if [[ "${TEST_VM_SUITE:-all}" == obs ]]; then
+			SHIRUDO_BIN=/usr/local/bin/shirudo \
+				SHIRUDO_TEST_FIXTURES_DIR="$BUNDLE/fixtures" \
+				SHIRUDO_TEST_FAILURES_FILE=/mnt/shirudo-out/failed-tests \
+				SHIRUDO_TEST_SUITE_FAILURES_FILE=/mnt/shirudo-out/failed-suites \
+				./run-target-obs-tests.sh
+		else
+			SHIRUDO_BIN=/usr/local/bin/shirudo \
+				SHIRUDO_TEST_FIXTURES_DIR="$BUNDLE/fixtures" \
+				SHIRUDO_TEST_FAILURES_FILE=/mnt/shirudo-out/failed-tests \
+				SHIRUDO_TEST_SUITE_FAILURES_FILE=/mnt/shirudo-out/failed-suites \
+				./run-target-tests.sh
+		fi
 )
 log "integration suite passed"

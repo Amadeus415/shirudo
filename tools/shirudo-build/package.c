@@ -1011,6 +1011,65 @@ err_free:
 }
 
 /*
+ * The generated loader is executed on the target kernel, while libbpf's
+ * feature probing happens on the build host.  Preserve the attach type for
+ * cgroup_skb programs explicitly so a host that lacks expected_attach_type
+ * support cannot silently produce a loader that the target rejects.
+ */
+static int set_target_attach_types(struct bpf_object *obj)
+{
+	struct bpf_program *p;
+
+	bpf_object__for_each_program(p, obj) {
+		const char *sec = bpf_program__section_name(p);
+		enum bpf_attach_type type;
+
+		if (strcmp(sec, "cgroup_skb/ingress") == 0)
+			type = BPF_CGROUP_INET_INGRESS;
+		else if (strcmp(sec, "cgroup_skb/egress") == 0)
+			type = BPF_CGROUP_INET_EGRESS;
+		else
+			continue;
+
+		if (bpf_program__set_expected_attach_type(p, type) != 0) {
+			pr_err("set expected attach type for program '%s'",
+			       bpf_program__name(p));
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
+static int register_target_attach_types(int handler_ids[2])
+{
+	handler_ids[0] = libbpf_register_prog_handler(
+		"cgroup_skb/ingress", BPF_PROG_TYPE_CGROUP_SKB,
+		BPF_CGROUP_INET_INGRESS, NULL);
+	if (handler_ids[0] < 0)
+		return handler_ids[0];
+
+	handler_ids[1] = libbpf_register_prog_handler(
+		"cgroup_skb/egress", BPF_PROG_TYPE_CGROUP_SKB,
+		BPF_CGROUP_INET_EGRESS, NULL);
+	if (handler_ids[1] < 0) {
+		libbpf_unregister_prog_handler(handler_ids[0]);
+		handler_ids[0] = -1;
+		return handler_ids[1];
+	}
+	return 0;
+}
+
+static void unregister_target_attach_types(int handler_ids[2])
+{
+	if (handler_ids[1] >= 0)
+		libbpf_unregister_prog_handler(handler_ids[1]);
+	if (handler_ids[0] >= 0)
+		libbpf_unregister_prog_handler(handler_ids[0]);
+	handler_ids[0] = -1;
+	handler_ids[1] = -1;
+}
+
+/*
  * Run gen_loader on an already-opened object, CMS-sign the produced
  * loader bytes, and write the .upatch container. Takes ownership of
  * obj (closes it on every exit path). src_path, if non-NULL, is the C
@@ -1061,6 +1120,10 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 		nr_progs++;
 
 	if (!(flags & SHIRUDO_DIRECTIVE_UNLOAD)) {
+		err = set_target_attach_types(obj);
+		if (err)
+			goto out;
+
 		err = build_prog_metadata(obj, nr_progs,
 					  &attach_meta, &attach_meta_len);
 		if (err)
@@ -1214,15 +1277,28 @@ int shirudo_build_package_load(const char *bpf_o, const char *src_path,
 			       const char *out_path, const char *upatch_name,
 			       const char *pkey_path, const char *cert_path)
 {
-	struct bpf_object *obj = bpf_object__open_file(bpf_o, NULL);
-	int err = libbpf_get_error(obj);
+	struct bpf_object *obj;
+	int handler_ids[2] = {-1, -1};
+	int err;
+
+	err = register_target_attach_types(handler_ids);
+	if (err) {
+		pr_err("register cgroup_skb section handlers: %d", err);
+		return err;
+	}
+
+	obj = bpf_object__open_file(bpf_o, NULL);
+	err = libbpf_get_error(obj);
 
 	if (err) {
 		pr_err("open %s: %d", bpf_o, err);
+		unregister_target_attach_types(handler_ids);
 		return err;
 	}
-	return finalize_object(obj, out_path, upatch_name, 0,
-			       NULL, 0, src_path, pkey_path, cert_path);
+	err = finalize_object(obj, out_path, upatch_name, 0,
+			      NULL, 0, src_path, pkey_path, cert_path);
+	unregister_target_attach_types(handler_ids);
+	return err;
 }
 
 /* Locate the BPF .rodata map. libbpf names it "<objname>.rodata". */

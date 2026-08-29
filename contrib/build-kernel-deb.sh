@@ -182,6 +182,7 @@ scripts/config --enable BPF
 scripts/config --enable BPF_SYSCALL
 scripts/config --enable BPF_JIT
 scripts/config --enable BPF_LSM
+scripts/config --enable CGROUP_BPF
 scripts/config --enable FUNCTION_TRACER
 scripts/config --disable DEBUG_INFO_NONE
 scripts/config --enable DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT
@@ -242,6 +243,7 @@ require_config() {
 }
 
 require_config CONFIG_BPF_LSM y
+require_config CONFIG_CGROUP_BPF y
 require_config CONFIG_FUNCTION_TRACER y
 require_config CONFIG_DYNAMIC_FTRACE y
 require_config CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS y

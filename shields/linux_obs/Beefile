@@ -1,0 +1,48 @@
+[package]
+name = "bpf-observability"
+description = "Shirudo observability BPF upatches"
+license = "GPL-2.0 OR BSD-2-Clause"
+authors = ["Isovalent"]
+
+[[files]]
+source = "linux-observability.bpf.c"
+target = "linux-observability.bpf.c"
+
+[[files]]
+source = "exec_uid_arena.bpf.c"
+target = "exec_uid_arena.bpf.c"
+
+[[files]]
+source = "exec_uid_common.h"
+target = "exec_uid_common.h"
+
+[[files]]
+source = "tcp_connect_arena.bpf.c"
+target = "tcp_connect_arena.bpf.c"
+
+[[files]]
+source = "udp_arena.bpf.c"
+target = "udp_arena.bpf.c"
+
+[[files]]
+source = "dns_arena.bpf.c"
+target = "dns_arena.bpf.c"
+
+[[files]]
+source = "decoders/exec.lua"
+target = "decoders/exec.lua"
+
+[[files]]
+source = "decoders/tcp.lua"
+target = "decoders/tcp.lua"
+
+[[files]]
+source = "decoders/udp.lua"
+target = "decoders/udp.lua"
+
+[[files]]
+source = "decoders/dns.lua"
+target = "decoders/dns.lua"
+
+[[upatches]]
+source = "linux-observability.bpf.c"

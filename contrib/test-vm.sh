@@ -58,6 +58,7 @@ MEMORY="${TEST_VM_MEMORY:-4G}"
 DISK_SIZE="${TEST_VM_DISK_SIZE:-30G}"
 VM_TIMEOUT="${TEST_VM_TIMEOUT:-3600}"
 VM_MODE="${VM_MODE:-test}"
+VM_SUITE="${TEST_VM_SUITE:-all}"
 VM_VERBOSE="${VM_VERBOSE:-0}"
 VM_NAME_REQUEST="${VM_NAME:-}"
 VM_TENANT="${VM_TENANT:-}"
@@ -130,6 +131,10 @@ validate_mode()
 	case "$VM_MODE" in
 	interactive|test) ;;
 	*) die "VM_MODE must be 'interactive' or 'test'" ;;
+	esac
+	case "$VM_SUITE" in
+	all|obs) ;;
+	*) die "TEST_VM_SUITE must be 'all' or 'obs'" ;;
 	esac
 }
 
@@ -255,6 +260,10 @@ validate_host_bundle()
 		die "host VM bundle has no target-test certificate: $TEST_VM_HOST_BUNDLE"
 	[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/shirudo-test-basic.upatch" ]] ||
 		die "host VM bundle has no target-test fixtures: $TEST_VM_HOST_BUNDLE"
+	if [[ "$VM_SUITE" == obs ]]; then
+		[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/linux-observability.upatch" ]] ||
+			die "host VM bundle has no Linux observability fixture: $TEST_VM_HOST_BUNDLE"
+	fi
 	[[ -s "$TEST_VM_HOST_BUNDLE/runtime-image-key" ]] ||
 		die "host VM bundle has no prepared runtime image; run 'make bundle'"
 	runtime_key="$(<"$TEST_VM_HOST_BUNDLE/runtime-image-key")"
@@ -950,6 +959,7 @@ write_files:
       rc=0
 EOF
 printf '      export VM_MODE=%q\n' "$VM_MODE" >>"$USER_DATA"
+printf '      export TEST_VM_SUITE=%q\n' "$VM_SUITE" >>"$USER_DATA"
 printf '      export TEST_VM_SSH_PUBLIC_KEY=%q\n' "$SSH_PUBLIC_KEY" >>"$USER_DATA"
 if [[ "$MAP_EXPORT_ENABLED" -eq 1 ]]; then
 	{

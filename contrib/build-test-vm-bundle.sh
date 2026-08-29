@@ -326,6 +326,21 @@ build_fixture()
 	)
 }
 
+build_obs_fixture()
+{
+	local keys_dir="$1"
+
+	(
+		cd "$REPO_ROOT"
+		"$REPO_ROOT/tools/shirudo-build/shirudo-build" \
+			"$REPO_ROOT/shields/linux_obs/linux-observability.bpf.c" \
+			-o "$TMP_DIR/fixtures/linux-observability.upatch" \
+			--name linux-observability --vmlinux "$REPO_ROOT/bpf/vmlinux.h" \
+			--key "$keys_dir/signing_key.pem" \
+			--cert "$keys_dir/cert.der"
+	)
+}
+
 log "building target-test fixtures on the operator host"
 mkdir -p "$TMP_DIR/fixtures/decoders" "$FIXTURE_WORK/trusted" \
 	"$FIXTURE_WORK/foreign" "$FIXTURE_WORK/own"
@@ -346,6 +361,7 @@ build_fixture serialized-metric.bpf.c shirudo-test-serialized-metric "$FIXTURE_W
 build_fixture uprobe-multi.bpf.c shirudo-test-uprobe-multi "$FIXTURE_WORK/trusted"
 build_fixture basic.bpf.c shirudo-test-foreign "$FIXTURE_WORK/foreign"
 build_fixture basic.bpf.c shirudo-test-own-keyring "$FIXTURE_WORK/own"
+build_obs_fixture "$FIXTURE_WORK/trusted"
 
 basic_payload="$($REPO_ROOT/shirudo upatch info \
 	"$TMP_DIR/fixtures/shirudo-test-basic.upatch" --json |
@@ -367,6 +383,9 @@ otel_backend_payload="$($REPO_ROOT/shirudo upatch info \
 	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
 serialized_metric_payload="$($REPO_ROOT/shirudo upatch info \
 	"$TMP_DIR/fixtures/shirudo-test-serialized-metric.upatch" --json |
+	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
+observability_payload="$($REPO_ROOT/shirudo upatch info \
+	"$TMP_DIR/fixtures/linux-observability.upatch" --json |
 	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
 "$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
 	shirudo-test-basic --payload-sha256 "$basic_payload" \
@@ -401,6 +420,11 @@ serialized_metric_payload="$($REPO_ROOT/shirudo upatch info \
 "$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
 	shirudo-test-serialized-metric --payload-sha256 "$serialized_metric_payload" \
 	-o "$TMP_DIR/fixtures/shirudo-test-serialized-metric.unload.upatch" \
+	--key "$FIXTURE_WORK/trusted/signing_key.pem" \
+	--cert "$FIXTURE_WORK/trusted/cert.der"
+"$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
+	linux-observability --payload-sha256 "$observability_payload" \
+	-o "$TMP_DIR/fixtures/linux-observability.unload.upatch" \
 	--key "$FIXTURE_WORK/trusted/signing_key.pem" \
 	--cert "$FIXTURE_WORK/trusted/cert.der"
 "$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
