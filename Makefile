@@ -39,7 +39,7 @@ export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdi
        systemdunitdir
 export VM_SSH_COMMAND
 
-.PHONY: all help shirudo-build test-helpers bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-vm test-vm-clean install \
+.PHONY: all help shirudo-build test-helpers bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
         distclean test examples config
 
@@ -113,6 +113,9 @@ shirudo make targets (run from the repo root):
                            stopped state for inspection
     make test-tgt-obs      boot the target VM and run only Linux observability
                            integration coverage
+    make test-tgt-obs-fuzz boot the observability VM and additionally run the
+                           seeded DNS mutation corpus (defaults: 5000 cases,
+                           seed 0x53484952)
     make test-vm            compatibility alias for make test-tgt
     make test-vm-bundle    build/reuse the host-side Shirudo payload used by
                            make vm and make test-tgt, plus target-test fixtures;
@@ -164,6 +167,8 @@ shirudo make targets (run from the repo root):
              TEST_VM_BUNDLE_DIR (host VM payload cache),
              TEST_VM_RUNTIME_CACHE_DIR (prepared runtime image cache),
              TEST_VM_VERBOSE=1 (stream test VM QEMU output; otherwise show TAP progress),
+             DNS_OBS_FUZZ_SEED / DNS_OBS_FUZZ_CASES (override the optional DNS
+             mutation run),
              DESTDIR (staged install), V=1 (echo full command lines).
 
 endef
@@ -183,6 +188,8 @@ TEST_VM_BUNDLE_DIR ?= $(TEST_VM_WORK_DIR)/host-bundle
 TEST_VM_RUNTIME_CACHE_DIR ?= $(TEST_VM_WORK_DIR)/cache/runtime
 TEST_VM_UBUNTU_CODENAME ?= resolute
 TEST_VM_VERBOSE ?= 0
+DNS_OBS_FUZZ_SEED ?= 0x53484952
+DNS_OBS_FUZZ_CASES ?= 5000
 TEST_VM_BUNDLE_STAMP := $(TEST_VM_BUNDLE_DIR)/.stamp
 TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
 	*.c *.h include/*.h util/*.c util/*.h \
@@ -254,7 +261,21 @@ test-tgt: test-vm-bundle
 		contrib/test-vm.sh
 
 test-tgt-obs: test-vm-bundle
-	$(Q)VM_MODE=test TEST_VM_SUITE=obs VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+	$(Q)VM_MODE=test TEST_VM_SUITE=obs TEST_VM_DNS_FUZZ=0 VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
+		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
+		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
+		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
+		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
+		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
+		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
+		contrib/test-vm.sh
+
+test-tgt-obs-fuzz: test-vm-bundle
+	$(Q)VM_MODE=test TEST_VM_SUITE=obs TEST_VM_DNS_FUZZ=1 \
+		TEST_VM_DNS_FUZZ_SEED="$(DNS_OBS_FUZZ_SEED)" \
+		TEST_VM_DNS_FUZZ_CASES="$(DNS_OBS_FUZZ_CASES)" \
+		VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
 		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
 		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \

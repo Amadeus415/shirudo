@@ -37,6 +37,19 @@ export_maps()
 	done
 }
 
+load_observability()
+{
+	if "$SHIRUDO_BIN" upatch load "$LOAD" --no-precheck --report=- \
+		>"$WORK/load.log" 2>&1; then
+		return 0
+	fi
+	cat "$WORK/load.log" >&2
+	if [ -d /mnt/shirudo-out ]; then
+		cp "$WORK/load.log" /mnt/shirudo-out/observability-load.log
+	fi
+	return 1
+}
+
 cat >"$WORK/check.py" <<'PY'
 import json
 import sys
@@ -66,6 +79,12 @@ assert any(r["address"] == "127.0.0.1" for r in records["tcp_arena"]["records"])
 assert any(r["address"] == "127.0.0.1" for r in records["udp_arena"]["records"])
 assert any(n["name"] == "example.com"
            for r in records["dns_arena"]["records"] for n in r["names"])
+long_name = ".".join(["a"] * 127)
+assert any(n["name"] == long_name
+           for r in records["dns_arena"]["records"] for n in r["names"])
+assert any(r["address"] == "203.0.113.75" and
+           any(n["name"] == "many.example" for n in r["names"])
+           for r in records["dns_arena"]["records"])
 PY
 
 cat >"$WORK/check_empty.py" <<'PY'
@@ -90,8 +109,7 @@ for name in ("tcp_arena", "udp_arena", "dns_arena"):
 PY
 
 test_expect_success 'combined observability upatch loads with four serializers' '
-	"$SHIRUDO_BIN" upatch load "$LOAD" --no-precheck \
-		>/dev/null 2>&1 &&
+	load_observability &&
 	[ -e "/var/lib/shirudo/bpffs/upatches/$NAME/serializers/exec_arena" ] &&
 	[ -e "/var/lib/shirudo/bpffs/upatches/$NAME/serializers/tcp_arena" ] &&
 	[ -e "/var/lib/shirudo/bpffs/upatches/$NAME/serializers/udp_arena" ] &&
@@ -100,6 +118,8 @@ test_expect_success 'combined observability upatch loads with four serializers' 
 
 test_expect_success 'exec, TCP, UDP, and DNS produce structured batches' '
 	python3 linux_obs_events.py all &&
+	python3 linux_obs_events.py dns-long &&
+	python3 linux_obs_events.py dns-many &&
 	export_maps "$WORK/initial.ndjson" &&
 	python3 "$WORK/check.py" "$WORK/initial.ndjson" &&
 	python3 "$WORK/check_initial.py" "$WORK/initial.ndjson"

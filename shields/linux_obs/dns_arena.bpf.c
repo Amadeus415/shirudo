@@ -16,7 +16,8 @@
 #error "BPF arena access requires clang address-space cast support"
 #endif
 
-#define __arena		__attribute__((address_space(1)))
+#define __arena		__attribute__((address_space(1))) \
+			__attribute__((btf_type_tag("arena")))
 #define NUMA_NO_NODE	(-1)
 
 #include "exec_uid_common.h"
@@ -37,15 +38,20 @@
 #define DNS_MAX_LOOKUP_STEPS	2
 #define DNS_MAX_IPS		4096
 #define DNS_MAX_NAMES_PER_IP	4
-#define DNS_NAME_BYTES		128
-#define DNS_TRACKED_NAME_BYTES	64
+#define DNS_MAX_NAME_CHARS	255
+#define DNS_NAME_BYTES		(DNS_MAX_NAME_CHARS + 1)
+#define DNS_MAX_WIRE_NAME_BYTES	255
 #define DNS_MAX_LABEL_BYTES	63
-#define DNS_MAX_LABELS		8
-#define DNS_MAX_ANSWERS		4
-#define DNS_MAX_PACKET_BYTES	4096
+#define DNS_MAX_LABELS		127
+#define DNS_MAX_NAME_STEPS	(DNS_MAX_LABELS + 1)
+/* A 1232-byte UDP response can hold at most 75 minimal 16-byte A answers. */
+#define DNS_MAX_ANSWERS		75
+#define DNS_MAX_UDP_BYTES	1232
+#define DNS_MAX_IP_HEADER_BYTES	60
+#define DNS_MAX_PACKET_BYTES	(DNS_MAX_UDP_BYTES + DNS_MAX_IP_HEADER_BYTES)
 #define DNS_REQ_MAP_ENTRIES	1024
 #define DNS_SERIAL_MAGIC	0x41534e44u /* "DNSA" little-endian */
-#define DNS_SERIAL_VERSION	2
+#define DNS_SERIAL_VERSION	3
 #define DNS_SERIAL_RECORD_PRESENT	(1u << 0)
 #define DNS_COMPRESSED_MASK	0xc0
 
@@ -165,6 +171,8 @@ struct dns_request {
 
 struct dns_scratch {
 	struct dns_request req;
+	/* Tailroom lets the verifier bound a full final-label direct copy. */
+	char verifier_bounds[DNS_MAX_LABEL_BYTES];
 };
 
 struct dns_init_ctx {
@@ -198,7 +206,7 @@ struct dns_serial_header {
 	__u32 key_size;
 	__u32 name_slots;
 	__u32 name_bytes;
-	__u64 reserved[76];
+	__u64 reserved[140];
 };
 
 struct dns_serial_record {
@@ -222,31 +230,37 @@ enum {
 	DNS_SERIAL_RECORDS = DNS_MAX_IPS,
 	DNS_SERIAL_RECORD_SLOTS = DNS_SERIAL_RECORDS,
 	DNS_SERIAL_SLOT_SIZE = sizeof(struct dns_serial_record),
-		DNS_SERIAL_NAME_SIZE = sizeof(struct dns_serial_name),
-		DNS_SERIAL_HEADER_SIZE = sizeof(struct dns_serial_header),
-		DNS_SERIAL_SLOTS = DNS_SERIAL_RECORD_SLOTS + 1,
-		DNS_SERIAL_SLOTS_PER_CHUNK =
-			SHIRUDO_SERIAL_CHUNK_PAYLOAD / DNS_SERIAL_SLOT_SIZE,
-		DNS_SERIAL_PAGE_CHUNKS = 4,
-		DNS_SERIAL_SLOTS_PER_PAGE =
-			DNS_SERIAL_SLOTS_PER_CHUNK * DNS_SERIAL_PAGE_CHUNKS,
-		DNS_SERIAL_PAGE_BYTES =
-			DNS_SERIAL_SLOTS_PER_PAGE * DNS_SERIAL_SLOT_SIZE,
-	};
+	DNS_SERIAL_NAME_SIZE = sizeof(struct dns_serial_name),
+	DNS_SERIAL_NAMES_OFFSET = 48,
+	DNS_SERIAL_UID_OFFSET = DNS_SERIAL_NAMES_OFFSET +
+		DNS_MAX_NAMES_PER_IP * DNS_SERIAL_NAME_SIZE,
+	DNS_SERIAL_HEADER_SIZE = sizeof(struct dns_serial_header),
+	DNS_SERIAL_SLOTS = DNS_SERIAL_RECORD_SLOTS + 1,
+	DNS_SERIAL_SLOTS_PER_CHUNK =
+		SHIRUDO_SERIAL_CHUNK_PAYLOAD / DNS_SERIAL_SLOT_SIZE,
+	DNS_SERIAL_PAGE_CHUNKS = 4,
+	DNS_SERIAL_SLOTS_PER_PAGE =
+		DNS_SERIAL_SLOTS_PER_CHUNK * DNS_SERIAL_PAGE_CHUNKS,
+	DNS_SERIAL_PAGE_BYTES =
+		DNS_SERIAL_SLOTS_PER_PAGE * DNS_SERIAL_SLOT_SIZE,
+};
 
 _Static_assert((DNS_BUCKETS & (DNS_BUCKETS - 1)) == 0,
 	       "dns buckets must be a power of two");
 _Static_assert(sizeof(struct dns_serial_header) == DNS_SERIAL_SLOT_SIZE,
 	       "dns serializer header must occupy one slot");
-	_Static_assert(DNS_SERIAL_RECORDS <= 0xffff,
-		       "dns serializer record count must fit header");
-	_Static_assert(DNS_SERIAL_SLOTS_PER_CHUNK > 0,
-		       "dns serializer record must fit chunk payload");
-	_Static_assert(DNS_SERIAL_PAGE_CHUNKS <= SHIRUDO_SERIAL_MAX_CHUNKS,
-		       "dns serializer page chunk count must fit ABI");
-	_Static_assert(DNS_SERIAL_SLOTS_PER_CHUNK * DNS_SERIAL_SLOT_SIZE <=
-			       SHIRUDO_SERIAL_CHUNK_PAYLOAD,
-		       "dns serializer chunk payload must fit records");
+_Static_assert(DNS_SERIAL_UID_OFFSET + sizeof(struct exec_uid) ==
+	       DNS_SERIAL_SLOT_SIZE,
+	       "dns serializer UID must occupy the record tail");
+_Static_assert(DNS_SERIAL_RECORDS <= 0xffff,
+	       "dns serializer record count must fit header");
+_Static_assert(DNS_SERIAL_SLOTS_PER_CHUNK > 0,
+	       "dns serializer record must fit chunk payload");
+_Static_assert(DNS_SERIAL_PAGE_CHUNKS <= SHIRUDO_SERIAL_MAX_CHUNKS,
+	       "dns serializer page chunk count must fit ABI");
+_Static_assert(DNS_SERIAL_SLOTS_PER_CHUNK * DNS_SERIAL_SLOT_SIZE <=
+	       SHIRUDO_SERIAL_CHUNK_PAYLOAD,
+	       "dns serializer chunk payload must fit records");
 
 #ifndef LINUX_OBS_COMBINED
 struct {
@@ -432,15 +446,19 @@ dns_table_lookup(struct dns_arena_state __arena *state,
 	return 0;
 }
 
-static __always_inline bool dns_name_equal_arena(const char __arena *a,
-						 const char *b)
+__attribute__((noinline)) bool
+obs_dns_name_equal_arena(const char __arena *a,
+			 const struct dns_request *req)
 {
 	int i;
 
+	if (!a || !req)
+		return false;
+
 #pragma clang loop unroll(disable)
-	for (i = 0; i < DNS_TRACKED_NAME_BYTES; i++) {
+	for (i = 0; i < DNS_NAME_BYTES; i++) {
 		char ca = a[i];
-		char cb = b[i];
+		char cb = req->name[i];
 
 		if (ca != cb)
 			return false;
@@ -450,15 +468,19 @@ static __always_inline bool dns_name_equal_arena(const char __arena *a,
 	return true;
 }
 
-static __always_inline void dns_name_copy_to_arena(char __arena *dst,
-						   const char *src)
+__attribute__((noinline)) void
+obs_dns_name_copy_to_arena(char __arena *dst,
+			   const struct dns_request *req)
 {
 	int i;
 
+	if (!dst || !req)
+		return;
+
 #pragma clang loop unroll(disable)
-	for (i = 0; i < DNS_TRACKED_NAME_BYTES; i++)
-		dst[i] = src[i];
-	dst[DNS_TRACKED_NAME_BYTES] = 0;
+	for (i = 0; i < DNS_MAX_NAME_CHARS; i++)
+		dst[i] = req->name[i];
+	dst[DNS_MAX_NAME_CHARS] = 0;
 }
 
 static __always_inline void dns_name_clear(char *name)
@@ -467,29 +489,31 @@ static __always_inline void dns_name_clear(char *name)
 }
 
 static __always_inline void dns_entry_set_name(
-	struct dns_name_stat __arena *stat, const char *name, __u64 now)
+	struct dns_name_stat __arena *stat, const struct dns_request *req,
+	__u64 now)
 {
 	stat->seen_count = 1;
 	stat->last_seen_ns = now;
-	dns_name_copy_to_arena(stat->name, name);
+	obs_dns_name_copy_to_arena(stat->name, req);
 }
 
 static __always_inline void dns_entry_touch(struct dns_entry __arena *entry,
-					    const char *name, __u64 now)
+					    const struct dns_request *req,
+					    __u64 now)
 {
 	struct dns_name_stat __arena *stat, *oldest_stat = 0;
 	struct dns_name_stat __arena *empty_stat = 0;
 	__u64 oldest = ~0ULL;
 	int i;
 
-	if (!entry || !name || !name[0])
+	if (!entry || !req || !req->name[0])
 		return;
 
 #pragma clang loop unroll(disable)
 	for (i = 0; i < DNS_MAX_NAMES_PER_IP; i++) {
 		stat = &entry->names[i];
 		if (stat->seen_count &&
-		    dns_name_equal_arena(stat->name, name)) {
+		    obs_dns_name_equal_arena(stat->name, req)) {
 			__sync_fetch_and_add(&stat->seen_count, 1);
 			stat->last_seen_ns = now;
 			return;
@@ -505,12 +529,13 @@ static __always_inline void dns_entry_touch(struct dns_entry __arena *entry,
 	stat = empty_stat ? empty_stat : oldest_stat;
 	if (!stat)
 		return;
-	dns_entry_set_name(stat, name, now);
+	dns_entry_set_name(stat, req, now);
 }
 
 static __always_inline __u32
 dns_entry_alloc(struct dns_arena_state __arena *state, __u16 bucket_idx,
-		const struct dns_key *key, const char *name, __u64 now)
+		const struct dns_key *key, const struct dns_request *req,
+		__u64 now)
 {
 	struct dns_entry __arena *entry;
 	__u32 idx;
@@ -539,15 +564,15 @@ dns_entry_alloc(struct dns_arena_state __arena *state, __u16 bucket_idx,
 	entry->key.ip.addr6[1] = key->ip.addr6[1];
 	entry->key.ip.addr6[2] = key->ip.addr6[2];
 	entry->key.ip.addr6[3] = key->ip.addr6[3];
-	dns_entry_set_name(&entry->names[0], name, now);
+	dns_entry_set_name(&entry->names[0], req, now);
 	dns_debug_inc(DNS_DBG_ALLOC_OK);
 
 	return idx;
 }
 
-static __always_inline void dns_table_touch(const struct exec_uid *uid,
+static __always_inline void dns_table_touch(const struct dns_request *req,
 					    const struct dns_ip_key *ip,
-					    const char *name, __u64 now)
+					    __u64 now)
 {
 	struct dns_arena_state __arena *state;
 	struct dns_bucket __arena *bucket;
@@ -555,7 +580,7 @@ static __always_inline void dns_table_touch(const struct exec_uid *uid,
 	struct dns_key key = {};
 	__u32 hash, idx, new_idx, old_head, prev;
 
-	if (!uid || !ip || !name || !name[0])
+	if (!req || !ip || !req->name[0])
 		return;
 
 	dns_debug_inc(DNS_DBG_TOUCH_CALLED);
@@ -565,7 +590,7 @@ static __always_inline void dns_table_touch(const struct exec_uid *uid,
 		return;
 	}
 
-	key.uid = *uid;
+	key.uid = req->uid;
 	key.ip = *ip;
 	hash = dns_hash(&key);
 	idx = hash & (DNS_BUCKETS - 1);
@@ -574,12 +599,12 @@ static __always_inline void dns_table_touch(const struct exec_uid *uid,
 	entry = dns_table_lookup(state, bucket, &key);
 	if (entry) {
 		dns_debug_inc(DNS_DBG_TOUCH_HIT);
-		dns_entry_touch(entry, name, now);
+		dns_entry_touch(entry, req, now);
 		dns_pending_set(&entry->pending);
 		return;
 	}
 
-	new_idx = dns_entry_alloc(state, idx, &key, name, now);
+	new_idx = dns_entry_alloc(state, idx, &key, req, now);
 	if (!new_idx)
 		return;
 
@@ -767,17 +792,22 @@ serial_entry_at(struct dns_arena_state __arena *state, __u32 record_idx)
 	return entry;
 }
 
-static __always_inline void
-serial_emit_name(struct shirudo_serial_chunk *chunk, __u32 base,
-		 const struct dns_name_stat __arena *stat)
+__attribute__((noinline)) void
+obs_dns_serial_emit_name(struct shirudo_serial_chunk *chunk, __u32 base,
+			 const struct dns_name_stat __arena *stat)
 {
 	int i;
+
+	if (!chunk || !stat ||
+	    base > SHIRUDO_SERIAL_CHUNK_PAYLOAD - DNS_SERIAL_NAME_SIZE)
+		return;
+	barrier_var(base);
 
 	*(__u64 *)&chunk->data[base] = stat->seen_count;
 	*(__u64 *)&chunk->data[base + 8] = stat->last_seen_ns;
 #pragma clang loop unroll(disable)
-	/* The tracker stores at most DNS_TRACKED_NAME_BYTES plus its NUL. */
-	for (i = 0; i < DNS_TRACKED_NAME_BYTES; i++)
+	/* Copy all 255 characters and the terminating NUL. */
+	for (i = 0; i < DNS_NAME_BYTES; i++)
 		chunk->data[base + 16 + i] = stat->name[i];
 }
 
@@ -832,18 +862,21 @@ serial_emit_record(__u32 page_slot, __u32 record_idx,
 #pragma clang loop unroll(disable)
 	for (i = 0; i < DNS_MAX_NAMES_PER_IP; i++) {
 		stat = &entry->names[i];
-		name_base = off + 48 + (i * DNS_SERIAL_NAME_SIZE);
+		name_base = off + DNS_SERIAL_NAMES_OFFSET +
+			(i * DNS_SERIAL_NAME_SIZE);
 		if (stat->seen_count) {
-			serial_emit_name(chunk, name_base, stat);
+			obs_dns_serial_emit_name(chunk, name_base, stat);
 		} else {
 			*(__u64 *)&chunk->data[name_base] = 0;
 			*(__u64 *)&chunk->data[name_base + 8] = 0;
 			chunk->data[name_base + 16] = 0;
 		}
 	}
-	*(__u32 *)&chunk->data[off + 624] = entry->key.uid.dev;
-	*(__u32 *)&chunk->data[off + 628] = 0;
-	*(__u64 *)&chunk->data[off + 632] = entry->key.uid.ino;
+	*(__u32 *)&chunk->data[off + DNS_SERIAL_UID_OFFSET] =
+		entry->key.uid.dev;
+	*(__u32 *)&chunk->data[off + DNS_SERIAL_UID_OFFSET + 4] = 0;
+	*(__u64 *)&chunk->data[off + DNS_SERIAL_UID_OFFSET + 8] =
+		entry->key.uid.ino;
 	return 0;
 }
 
@@ -1010,105 +1043,128 @@ int shirudo_serialize__dns_arena(struct shirudo_serialize_ctx *ctx)
 	return 0;
 }
 
-static __always_inline bool dns_load_bytes(struct __sk_buff *skb, __u32 off,
-					   void *dst, __u32 len)
-{
-	if (off > DNS_MAX_PACKET_BYTES || len > DNS_MAX_PACKET_BYTES)
-		return false;
-	if (off + len < off || off + len > DNS_MAX_PACKET_BYTES)
-		return false;
-	return bpf_skb_load_bytes(skb, off, dst, len) == 0;
-}
-
 static __always_inline bool dns_read_u16(struct __sk_buff *skb, __u32 off,
 					 __u16 *value)
 {
-	__u8 bytes[2];
+	const __u8 *data = (const __u8 *)(long)skb->data;
+	const __u8 *data_end = (const __u8 *)(long)skb->data_end;
+	const __u8 *src;
 
-	if (!dns_load_bytes(skb, off, bytes, sizeof(bytes)))
+	if (!value || off > DNS_MAX_PACKET_BYTES - sizeof(*value))
 		return false;
-	*value = ((__u16)bytes[0] << 8) | (__u16)bytes[1];
+	src = data + off;
+	if (src + sizeof(*value) > data_end)
+		return false;
+	*value = ((__u16)src[0] << 8) | (__u16)src[1];
 	return true;
 }
 
 static __always_inline bool dns_read_u32_raw(struct __sk_buff *skb,
 					     __u32 off, __u32 *value)
 {
-	__u8 bytes[4];
+	const __u8 *data = (const __u8 *)(long)skb->data;
+	const __u8 *data_end = (const __u8 *)(long)skb->data_end;
+	const __u8 *src;
 	__u8 *dst = (__u8 *)value;
 
-	if (!dns_load_bytes(skb, off, bytes, sizeof(bytes)))
+	if (!value || off > DNS_MAX_PACKET_BYTES - sizeof(*value))
 		return false;
-	dst[0] = bytes[0];
-	dst[1] = bytes[1];
-	dst[2] = bytes[2];
-	dst[3] = bytes[3];
+	src = data + off;
+	if (src + sizeof(*value) > data_end)
+		return false;
+	dst[0] = src[0];
+	dst[1] = src[1];
+	dst[2] = src[2];
+	dst[3] = src[3];
 	return true;
 }
 
-static __always_inline bool dns_name_append_label(struct __sk_buff *skb,
-						  __u32 off, __u32 len,
-						  char *out, __u32 *out_len)
+__attribute__((noinline)) int
+obs_dns_parse_name_label(struct __sk_buff *skb, __u32 off, __u32 start)
 {
-	__u32 dst = *out_len;
+	__u8 *data = (__u8 *)(long)skb->data;
+	__u8 *data_end = (__u8 *)(long)skb->data_end;
+	__u8 *src;
+	struct dns_scratch *scratch;
+	char *out;
+	__u32 zero = 0;
+	__u32 wire_offset, dst, i;
+	__u8 len;
 
-	if (dst) {
-		if (dst >= DNS_TRACKED_NAME_BYTES - 1)
-			return false;
-		out[dst++] = '.';
+	if (off < start || off >= DNS_MAX_PACKET_BYTES)
+		return -EINVAL;
+	wire_offset = off - start;
+	if (wire_offset >= DNS_MAX_WIRE_NAME_BYTES)
+		return -EINVAL;
+
+	src = data + off;
+	if (src + 1 > data_end)
+		return -EINVAL;
+	len = *src;
+	if (len & DNS_COMPRESSED_MASK)
+		return -EINVAL;
+	src++;
+
+	scratch = bpf_map_lookup_elem(&obs_i_dns_tmp, &zero);
+	if (!scratch)
+		return -EINVAL;
+	out = scratch->req.name;
+
+	if (len == 0) {
+		dst = wire_offset ? wire_offset - 1 : 0;
+		if (dst >= DNS_MAX_NAME_CHARS)
+			return -EINVAL;
+		out[dst] = 0;
+		return 0;
 	}
-	if (len > DNS_TRACKED_NAME_BYTES - 1 - dst)
-		return false;
-	if (!dns_load_bytes(skb, off, out + dst, len))
-		return false;
-	*out_len = dst + len;
-	return true;
+	if (len > DNS_MAX_LABEL_BYTES)
+		return -EINVAL;
+
+	dst = wire_offset;
+	if (dst >= DNS_MAX_NAME_CHARS)
+		return -EINVAL;
+	if (dst) {
+		out[dst - 1] = '.';
+	}
+	if (len > DNS_MAX_NAME_CHARS - dst)
+		return -EINVAL;
+
+	/* The verifier needs the packet bound checked for each direct byte read. */
+#pragma clang loop unroll(disable)
+	for (i = 0; i < len; i++) {
+		if (src + i + 1 > data_end)
+			return -EINVAL;
+		out[dst + i] = src[i];
+	}
+
+	return (int)len + 1;
 }
 
 static __always_inline int dns_parse_name(struct __sk_buff *skb, __u32 off,
-					  char *out, bool write, __u32 *next_off)
+					  char *out, __u32 *next_off)
 {
+	__u32 start = off;
 	__u32 pos = off;
-	__u32 label_len;
-	__u32 name_len = 0;
-	__u8 len;
+	int consumed;
 	int i;
 
-	if (!next_off)
+	if (!out || !next_off)
 		return -EINVAL;
-	if (write) {
-		if (!out)
-			return -EINVAL;
-		dns_name_clear(out);
-	}
+	dns_name_clear(out);
 
 #pragma clang loop unroll(disable)
-	for (i = 0; i < DNS_MAX_LABELS; i++) {
-		if (!dns_load_bytes(skb, pos, &len, sizeof(len)))
-			return -EINVAL;
-		if ((len & DNS_COMPRESSED_MASK) == DNS_COMPRESSED_MASK ||
-		    (len & DNS_COMPRESSED_MASK))
-			return -EINVAL;
-
-		pos++;
-		if (len == 0) {
-			if (write)
-				out[name_len] = 0;
-			*next_off = pos;
+	for (i = 0; i < DNS_MAX_NAME_STEPS; i++) {
+		consumed = obs_dns_parse_name_label(skb, pos, start);
+		if (consumed < 0)
+			return consumed;
+		if (consumed == 0) {
+			*next_off = pos + 1;
 			return 0;
 		}
-		if (len > DNS_MAX_LABEL_BYTES)
+		if ((__u32)consumed > DNS_MAX_PACKET_BYTES - pos)
 			return -EINVAL;
-		label_len = (__u32)len;
-		if (write && !dns_name_append_label(skb, pos, label_len,
-						     out, &name_len))
-			return -EINVAL;
-		if (!write &&
-		    (pos > DNS_MAX_PACKET_BYTES ||
-		     label_len > DNS_MAX_PACKET_BYTES - pos))
-			return -EINVAL;
-		pos += label_len;
-		if (pos - off >= DNS_NAME_BYTES)
+		pos += (__u32)consumed;
+		if (pos - start >= DNS_MAX_WIRE_NAME_BYTES)
 			return -EINVAL;
 	}
 
@@ -1118,27 +1174,36 @@ static __always_inline int dns_parse_name(struct __sk_buff *skb, __u32 off,
 static __always_inline int dns_skip_name(struct __sk_buff *skb, __u32 off,
 					 __u32 *next_off)
 {
+	const __u8 *data = (const __u8 *)(long)skb->data;
+	const __u8 *data_end = (const __u8 *)(long)skb->data_end;
+	const __u8 *src;
 	__u32 consumed = 0;
-	__u32 label_len;
+	__u32 label_len, pos;
 	__u8 len;
 	int i;
 
-	if (!next_off)
+	if (!next_off || off >= DNS_MAX_PACKET_BYTES)
 		return -EINVAL;
 
 #pragma clang loop unroll(disable)
-	for (i = 0; i < DNS_MAX_LABELS; i++) {
-		if (consumed >= DNS_NAME_BYTES)
+	for (i = 0; i < DNS_MAX_NAME_STEPS; i++) {
+		if (consumed >= DNS_MAX_WIRE_NAME_BYTES)
 			return -EINVAL;
-		if (off + consumed < off ||
-		    off + consumed > DNS_MAX_PACKET_BYTES)
+		if (consumed >= DNS_MAX_PACKET_BYTES - off)
 			return -EINVAL;
-		if (!dns_load_bytes(skb, off + consumed, &len, sizeof(len)))
+		pos = off + consumed;
+		src = data + pos;
+		if (src + 1 > data_end)
 			return -EINVAL;
+		len = *src;
 
 		if ((len & DNS_COMPRESSED_MASK) == DNS_COMPRESSED_MASK) {
 			if (consumed + 2 < consumed ||
-			    consumed + 2 > DNS_NAME_BYTES)
+			    consumed + 2 > DNS_MAX_WIRE_NAME_BYTES)
+				return -EINVAL;
+			if (pos > DNS_MAX_PACKET_BYTES - 2)
+				return -EINVAL;
+			if (src + 2 > data_end)
 				return -EINVAL;
 			*next_off = off + consumed + 2;
 			return 0;
@@ -1156,7 +1221,11 @@ static __always_inline int dns_skip_name(struct __sk_buff *skb, __u32 off,
 
 		label_len = (__u32)len;
 		if (consumed + label_len < consumed ||
-		    consumed + label_len >= DNS_NAME_BYTES)
+		    consumed + label_len >= DNS_MAX_WIRE_NAME_BYTES)
+			return -EINVAL;
+		if (label_len > DNS_MAX_PACKET_BYTES - pos - 1)
+			return -EINVAL;
+		if (src + 1 + label_len > data_end)
 			return -EINVAL;
 		consumed += label_len;
 	}
@@ -1202,7 +1271,7 @@ static __always_inline void dns_parse_query_payload(struct __sk_buff *skb,
 	}
 
 	if (dns_parse_name(skb, dns_off + sizeof(struct dns_hdr),
-			   scratch->req.name, true, &next)) {
+			   scratch->req.name, &next)) {
 		dns_debug_inc(DNS_DBG_QUERY_NAME_FAIL);
 		return;
 	}
@@ -1263,15 +1332,52 @@ static __always_inline bool dns_answer_ip_key(struct __sk_buff *skb,
 	return false;
 }
 
+__attribute__((noinline)) int
+obs_dns_parse_answer(struct __sk_buff *skb, const struct dns_request *req,
+		     __u32 off, __u64 now)
+{
+	struct dns_ip_key key = {};
+	__u32 next = 0, rdata_off;
+	__u16 rtype, rdlen;
+
+	dns_debug_inc(DNS_DBG_RESP_ANSWER_SEEN);
+	if (dns_skip_name(skb, off, &next)) {
+		dns_debug_inc(DNS_DBG_RESP_ANSWER_SKIP_FAIL);
+		return -EINVAL;
+	}
+	if (!dns_read_u16(skb, next, &rtype) ||
+	    !dns_read_u16(skb, next + 8, &rdlen)) {
+		dns_debug_inc(DNS_DBG_RESP_RR_READ_FAIL);
+		return -EINVAL;
+	}
+	rdata_off = next + 10;
+	barrier_var(rtype);
+	barrier_var(rdlen);
+	barrier_var(rdata_off);
+	if (rdata_off > DNS_MAX_PACKET_BYTES ||
+	    rdlen > DNS_MAX_PACKET_BYTES ||
+	    rdata_off + rdlen < rdata_off ||
+	    rdata_off + rdlen > DNS_MAX_PACKET_BYTES) {
+		dns_debug_inc(DNS_DBG_RESP_RDATA_BOUNDS_FAIL);
+		return -EINVAL;
+	}
+
+	if (dns_answer_ip_key(skb, rdata_off, rtype, rdlen, &key)) {
+		dns_debug_inc(DNS_DBG_RESP_TOUCH);
+		dns_table_touch(req, &key, now);
+	}
+
+	return (int)(rdata_off + rdlen);
+}
+
 static __always_inline void dns_parse_response_payload(struct __sk_buff *skb,
 						       __u32 dns_off)
 {
 	struct dns_request *req;
-	struct dns_ip_key key = {};
-	__u32 req_key, off, next = 0, rdata_off;
+	__u32 req_key, off, next = 0;
 	__u64 now = bpf_ktime_get_ns();
-	__u16 id, flags, qdcount, ancount, qtype, qclass, rtype, rdlen;
-	int i;
+	__u16 id, flags, qdcount, ancount, qtype, qclass;
+	int answer_off, i;
 
 	dns_debug_inc(DNS_DBG_RESP_PACKET);
 	if (!dns_read_u16(skb, dns_off, &id) ||
@@ -1324,36 +1430,10 @@ static __always_inline void dns_parse_response_payload(struct __sk_buff *skb,
 		if (i >= ancount)
 			break;
 
-		dns_debug_inc(DNS_DBG_RESP_ANSWER_SEEN);
-		if (dns_skip_name(skb, off, &next)) {
-			dns_debug_inc(DNS_DBG_RESP_ANSWER_SKIP_FAIL);
+		answer_off = obs_dns_parse_answer(skb, req, off, now);
+		if (answer_off < 0)
 			break;
-		}
-		if (!dns_read_u16(skb, next, &rtype) ||
-		    !dns_read_u16(skb, next + 8, &rdlen)) {
-			dns_debug_inc(DNS_DBG_RESP_RR_READ_FAIL);
-			break;
-		}
-		rdata_off = next + 10;
-		barrier_var(rtype);
-		barrier_var(rdlen);
-		barrier_var(rdata_off);
-		if (rdata_off > DNS_MAX_PACKET_BYTES ||
-		    rdlen > DNS_MAX_PACKET_BYTES ||
-		    rdata_off + rdlen < rdata_off ||
-		    rdata_off + rdlen > DNS_MAX_PACKET_BYTES) {
-			dns_debug_inc(DNS_DBG_RESP_RDATA_BOUNDS_FAIL);
-			break;
-		}
-
-		if (dns_answer_ip_key(skb, rdata_off, rtype, rdlen, &key)) {
-			dns_debug_inc(DNS_DBG_RESP_TOUCH);
-			dns_table_touch(&req->uid, &key, req->name, now);
-		}
-
-		off = rdata_off + rdlen;
-		if (off > DNS_MAX_PACKET_BYTES)
-			break;
+		off = (__u32)answer_off;
 	}
 
 	bpf_map_delete_elem(&obs_i_dns_req, &req_key);

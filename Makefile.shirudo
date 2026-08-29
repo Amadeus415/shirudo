@@ -390,6 +390,7 @@ TEST_HELPERS := t/helper/test-json-parser \
 		t/helper/test-config \
                 t/helper/test-selector \
                 t/helper/test-bpf-load \
+		t/helper/test-dns-prog-run \
                 t/helper/test-kernel-abi \
                 t/helper/test-otel-map \
                 t/helper/test-upatch-map-types \
@@ -421,6 +422,10 @@ t/helper/test-selector: t/helper/test-selector.c util/selector.o \
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 t/helper/test-bpf-load: t/helper/test-bpf-load.c
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+t/helper/test-dns-prog-run: t/helper/test-dns-prog-run.c
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 

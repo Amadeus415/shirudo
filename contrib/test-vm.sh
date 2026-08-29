@@ -60,6 +60,9 @@ VM_TIMEOUT="${TEST_VM_TIMEOUT:-3600}"
 VM_MODE="${VM_MODE:-test}"
 VM_SUITE="${TEST_VM_SUITE:-all}"
 VM_VERBOSE="${VM_VERBOSE:-0}"
+DNS_FUZZ="${TEST_VM_DNS_FUZZ:-0}"
+DNS_FUZZ_SEED="${TEST_VM_DNS_FUZZ_SEED:-0x53484952}"
+DNS_FUZZ_CASES="${TEST_VM_DNS_FUZZ_CASES:-5000}"
 VM_NAME_REQUEST="${VM_NAME:-}"
 VM_TENANT="${VM_TENANT:-}"
 VM_SSH_COMMAND="${VM_SSH_COMMAND:-}"
@@ -136,6 +139,16 @@ validate_mode()
 	all|obs) ;;
 	*) die "TEST_VM_SUITE must be 'all' or 'obs'" ;;
 	esac
+	case "$DNS_FUZZ" in
+	0|1) ;;
+	*) die "TEST_VM_DNS_FUZZ must be '0' or '1'" ;;
+	esac
+	[[ "$DNS_FUZZ_SEED" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]] ||
+		die "TEST_VM_DNS_FUZZ_SEED must be a decimal or hexadecimal integer"
+	[[ "$DNS_FUZZ_CASES" =~ ^[1-9][0-9]*$ ]] ||
+		die "TEST_VM_DNS_FUZZ_CASES must be a positive integer"
+	(( DNS_FUZZ_CASES <= 100000 )) ||
+		die "TEST_VM_DNS_FUZZ_CASES must be between 1 and 100000"
 }
 
 validate_map_export()
@@ -960,6 +973,9 @@ write_files:
 EOF
 printf '      export VM_MODE=%q\n' "$VM_MODE" >>"$USER_DATA"
 printf '      export TEST_VM_SUITE=%q\n' "$VM_SUITE" >>"$USER_DATA"
+printf '      export TEST_VM_DNS_FUZZ=%q\n' "$DNS_FUZZ" >>"$USER_DATA"
+printf '      export TEST_VM_DNS_FUZZ_SEED=%q\n' "$DNS_FUZZ_SEED" >>"$USER_DATA"
+printf '      export TEST_VM_DNS_FUZZ_CASES=%q\n' "$DNS_FUZZ_CASES" >>"$USER_DATA"
 printf '      export TEST_VM_SSH_PUBLIC_KEY=%q\n' "$SSH_PUBLIC_KEY" >>"$USER_DATA"
 if [[ "$MAP_EXPORT_ENABLED" -eq 1 ]]; then
 	{

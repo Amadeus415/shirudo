@@ -26,6 +26,13 @@ local function address(record)
 		record:u32(24))
 end
 
+local name_bytes = 256
+local name_size = 16 + name_bytes
+local name_slots = 4
+local names_offset = 48
+local uid_offset = names_offset + name_slots * name_size
+local record_size = uid_offset + 16
+
 local function dirty_records(input, slot_size)
 	local slots = shirudo.fixed_records(input.data.pages, slot_size)
 	local records = {}
@@ -35,11 +42,11 @@ local function dirty_records(input, slot_size)
 			local record = slots[page.cursor + i + 1]
 			if record and record:u8(6) ~= 0 then
 				local names = {}
-				for name_index = 0, 3 do
-					local base = 48 + name_index * 144
+				for name_index = 0, name_slots - 1 do
+					local base = names_offset + name_index * name_size
 					if tonumber(record:u64(base)) > 0 then
 						names[#names + 1] = {
-							name = record:cstring(base + 16, 128),
+							name = record:cstring(base + 16, name_bytes),
 							seen_count = record:u64(base),
 							last_seen_ns = record:u64(base + 8),
 						}
@@ -47,7 +54,10 @@ local function dirty_records(input, slot_size)
 				end
 				records[#records + 1] = {
 					entry_index = record:u32(0),
-					executable = { dev = record:u32(624), ino = record:u64(632) },
+					executable = {
+						dev = record:u32(uid_offset),
+						ino = record:u64(uid_offset + 8),
+					},
 					family = record:u8(7),
 					address = address(record),
 					names = names,
@@ -65,6 +75,6 @@ function decode(input)
 		schema = 1,
 		upatch = input.upatch,
 		map = input.map,
-		records = dirty_records(input, 640),
+		records = dirty_records(input, record_size),
 	}
 end

@@ -300,6 +300,7 @@ t/helper/test-chain
 t/helper/test-config
 t/helper/test-selector
 t/helper/test-bpf-load
+t/helper/test-dns-prog-run
 t/helper/test-kernel-abi
 t/helper/test-otel-map
 t/helper/test-upatch-map-types

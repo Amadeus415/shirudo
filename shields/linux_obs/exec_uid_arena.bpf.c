@@ -17,7 +17,8 @@
 #error "BPF arena access requires clang address-space cast support"
 #endif
 
-#define __arena		__attribute__((address_space(1)))
+#define __arena		__attribute__((address_space(1))) \
+			__attribute__((btf_type_tag("arena")))
 #define NUMA_NO_NODE	(-1)
 
 #include "exec_uid_common.h"
