@@ -792,6 +792,19 @@ again five seconds after each completed run. It uses the same OTLP endpoint
 and environment file as map export, and is a successful no-op until an OTLP
 endpoint is configured.
 
+The target package also installs and enables ``shirudo-bpm-repo-update.timer``.
+It runs immediately after the network and ``shirudo.service`` are available,
+then runs again 60 seconds after each completed attempt. Each run executes
+``shirudo bpm repo update`` followed by ``shirudo bpm upgrade``. Repository
+refresh failures are logged and retried on the next timer run; the upgrade is
+not attempted after a failed refresh. The service is a no-op when no BPM
+repositories or installed BPM packages are configured.
+
+The service optionally reads ``/etc/shirudo/bpm/environment`` for settings
+needed by private OCI registries, such as ``BPM_OCI_CA_FILE``,
+``BPM_OCI_USERNAME``, ``BPM_OCI_PASSWORD``, or ``REGISTRY_AUTH_FILE``. Keep
+this file root-readable when it contains credentials.
+
 Shirudo appends the JSON file but does not create its parent directory. An
 administrator can prepare it with ``install -d -m 0750 /var/log/shirudo``.
 When set, ``map_export.tenant_id`` adds ``X-Tenant-ID`` to every OTLP request.

@@ -201,6 +201,8 @@ TARGET_UNITS=(
 	shirudo-map-export.timer
 	shirudo-keepalive.service
 	shirudo-keepalive.timer
+	shirudo-bpm-repo-update.service
+	shirudo-bpm-repo-update.timer
 )
 install -d /usr/lib/systemd/system
 for unit in "${TARGET_UNITS[@]}"; do
@@ -247,6 +249,7 @@ if [[ "$VM_MODE" == interactive ]]; then
 	systemctl enable shirudo.service
 	systemctl enable --now shirudo-map-export.timer
 	systemctl enable --now shirudo-keepalive.timer
+	systemctl enable --now shirudo-bpm-repo-update.timer
 
 	log "guest prepared; interactive mode skipping integration tests"
 	exit 0

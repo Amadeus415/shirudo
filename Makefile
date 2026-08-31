@@ -132,8 +132,8 @@ shirudo make targets (run from the repo root):
   Install   (honors DESTDIR and prefix=/bindir=/libexecdir=/systemdunitdir=)
     make install           shirudo binary + bash completion (common)
     make install-target    install + target systemd units for reboot
-                           persistence, periodic map export, and status
-                           keepalive
+                           persistence, BPM refresh, periodic map export,
+                           and status keepalive
     make install-operator  install + shirudo-build + BPF headers
                            (operator host)
 

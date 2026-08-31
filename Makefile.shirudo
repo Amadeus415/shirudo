@@ -339,6 +339,12 @@ systemd/shirudo-keepalive.service: systemd/shirudo-keepalive.service.in
 	@printf '  GEN     $@\n'
 	$(Q)sed 's|@bindir@|$(bindir)|g' $< > $@
 
+# The BPM repository refresh is target-only and uses the same installed
+# binary plus the optional BPM OCI environment file.
+systemd/shirudo-bpm-repo-update.service: systemd/shirudo-bpm-repo-update.service.in
+	@printf '  GEN     $@\n'
+	$(Q)sed 's|@bindir@|$(bindir)|g' $< > $@
+
 # Common to both roles: the one shirudo binary + its completion.
 install: shirudo
 	@printf '  INSTALL $(DESTDIR)$(bindir)/shirudo\n'
@@ -356,7 +362,9 @@ install-target: install systemd/shirudo.service \
 		systemd/shirudo-map-export.service \
 		systemd/shirudo-map-export.timer \
 		systemd/shirudo-keepalive.service \
-		systemd/shirudo-keepalive.timer
+		systemd/shirudo-keepalive.timer \
+		systemd/shirudo-bpm-repo-update.service \
+		systemd/shirudo-bpm-repo-update.timer
 	@printf '  INSTALL $(DESTDIR)$(systemdunitdir)/shirudo*.service,timer\n'
 	$(Q)install -d $(DESTDIR)$(systemdunitdir)
 	$(Q)install -m 0644 systemd/shirudo.service \
@@ -364,6 +372,8 @@ install-target: install systemd/shirudo.service \
 	    systemd/shirudo-map-export.timer \
 	    systemd/shirudo-keepalive.service \
 	    systemd/shirudo-keepalive.timer \
+	    systemd/shirudo-bpm-repo-update.service \
+	    systemd/shirudo-bpm-repo-update.timer \
 	    $(DESTDIR)$(systemdunitdir)/
 
 install-operator: install shirudo-build bpf/vmlinux.h $(BPF_HEADERS_OUT) $(BPF_LIB_HEADERS)
@@ -486,7 +496,8 @@ clean:
 	$(Q)rm -f $(DEPS) t/helper/*.d
 	$(Q)rm -f $(BPF_OBJS) bpf/vmlinux.h systemd/shirudo.service \
 	          systemd/shirudo-map-export.service \
-	          systemd/shirudo-keepalive.service
+	          systemd/shirudo-keepalive.service \
+	          systemd/shirudo-bpm-repo-update.service
 	$(Q)rm -rf bpf/include
 
 distclean:

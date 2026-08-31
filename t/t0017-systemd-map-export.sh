@@ -8,6 +8,7 @@ cd "$(dirname "$0")"
 WORK=$(mktemp -d)
 GENERATED=$WORK/shirudo-map-export.service
 GENERATED_KEEPALIVE=$WORK/shirudo-keepalive.service
+GENERATED_BPM=$WORK/shirudo-bpm-repo-update.service
 trap 'rm -rf "$WORK"' EXIT
 
 test_expect_success 'map export service runs the configured batch exporter' '
@@ -50,11 +51,43 @@ test_expect_success 'keepalive timer waits five seconds between runs' '
 		../systemd/shirudo-keepalive.timer
 '
 
+test_expect_success 'BPM repository refresh service runs update before upgrade' '
+	grep -q "^Wants=network-online.target$" \
+		../systemd/shirudo-bpm-repo-update.service.in &&
+	grep -q "^After=network-online.target shirudo.service$" \
+		../systemd/shirudo-bpm-repo-update.service.in &&
+	grep -q "^RequiresMountsFor=/etc/shirudo/bpm /var/lib/shirudo$" \
+		../systemd/shirudo-bpm-repo-update.service.in &&
+	grep -q "^EnvironmentFile=-/etc/shirudo/bpm/environment$" \
+		../systemd/shirudo-bpm-repo-update.service.in &&
+	grep -n "bpm repo update" ../systemd/shirudo-bpm-repo-update.service.in |
+		cut -d: -f1 >"$WORK/bpm-update-line" &&
+	grep -n "bpm upgrade" ../systemd/shirudo-bpm-repo-update.service.in |
+		cut -d: -f1 >"$WORK/bpm-upgrade-line" &&
+	test "$(cat "$WORK/bpm-update-line")" -lt \
+		"$(cat "$WORK/bpm-upgrade-line")"
+'
+
+test_expect_success 'BPM repository refresh timer runs at boot and every minute' '
+	grep -q "^OnBootSec=0s$" \
+		../systemd/shirudo-bpm-repo-update.timer &&
+	grep -q "^OnUnitInactiveSec=60s$" \
+		../systemd/shirudo-bpm-repo-update.timer &&
+	grep -q "^AccuracySec=1s$" \
+		../systemd/shirudo-bpm-repo-update.timer &&
+	grep -q "^Unit=shirudo-bpm-repo-update.service$" \
+		../systemd/shirudo-bpm-repo-update.timer &&
+	grep -q "^WantedBy=timers.target$" \
+		../systemd/shirudo-bpm-repo-update.timer
+'
+
 test_expect_success 'target install resolves and stages both exporter units' '
 	sed "s|@bindir@|/opt/shirudo/bin|g" \
 		../systemd/shirudo-map-export.service.in >"$GENERATED" &&
 	sed "s|@bindir@|/opt/shirudo/bin|g" \
 		../systemd/shirudo-keepalive.service.in >"$GENERATED_KEEPALIVE" &&
+	sed "s|@bindir@|/opt/shirudo/bin|g" \
+		../systemd/shirudo-bpm-repo-update.service.in >"$GENERATED_BPM" &&
 	(
 		cd .. &&
 		make -n -f Makefile.shirudo bindir=/opt/shirudo/bin \
@@ -66,11 +99,17 @@ test_expect_success 'target install resolves and stages both exporter units' '
 		"$GENERATED" &&
 	grep -q "^ExecStart=/opt/shirudo/bin/shirudo status --otel --include-tpm$" \
 		"$GENERATED_KEEPALIVE" &&
+	grep -q "^ExecStart=/opt/shirudo/bin/shirudo bpm repo update$" \
+		"$GENERATED_BPM" &&
+	grep -q "^ExecStart=/opt/shirudo/bin/shirudo bpm upgrade$" \
+		"$GENERATED_BPM" &&
 	grep -q "systemd/shirudo.service" "$WORK/target.plan" &&
 	grep -q "systemd/shirudo-map-export.service" "$WORK/target.plan" &&
 	grep -q "systemd/shirudo-map-export.timer" "$WORK/target.plan" &&
 	grep -q "systemd/shirudo-keepalive.service" "$WORK/target.plan" &&
-	grep -q "systemd/shirudo-keepalive.timer" "$WORK/target.plan"
+	grep -q "systemd/shirudo-keepalive.timer" "$WORK/target.plan" &&
+	grep -q "systemd/shirudo-bpm-repo-update.service" "$WORK/target.plan" &&
+	grep -q "systemd/shirudo-bpm-repo-update.timer" "$WORK/target.plan"
 '
 
 test_expect_success 'operator install excludes target exporter units' '
@@ -80,7 +119,8 @@ test_expect_success 'operator install excludes target exporter units' '
 			install-operator >"$WORK/operator.plan"
 	) &&
 	! grep -q "shirudo-map-export" "$WORK/operator.plan" &&
-	! grep -q "shirudo-keepalive" "$WORK/operator.plan"
+	! grep -q "shirudo-keepalive" "$WORK/operator.plan" &&
+	! grep -q "shirudo-bpm-repo-update" "$WORK/operator.plan"
 '
 
 test_expect_success 'target package enables and removes the timer safely' '
@@ -91,6 +131,10 @@ test_expect_success 'target package enables and removes the timer safely' '
 	grep -q "systemctl enable shirudo-keepalive.timer" \
 		../packaging/deb/builddeb.sh &&
 	grep -q "systemctl --no-reload disable --now shirudo-keepalive.timer" \
+		../packaging/deb/builddeb.sh &&
+	grep -q "systemctl enable shirudo-bpm-repo-update.timer" \
+		../packaging/deb/builddeb.sh &&
+	grep -q "systemctl --no-reload disable --now shirudo-bpm-repo-update.timer" \
 		../packaging/deb/builddeb.sh
 '
 
