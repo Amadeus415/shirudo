@@ -148,7 +148,9 @@ def ethernet(payload: bytes, ethertype: int = 0x0800) -> bytes:
 
 def ipv4(payload: bytes, protocol: int = 17, ihl: int = 5,
          version: int = 4, fragment: int = 0,
-         total_length: int | None = None, options: bytes | None = None) -> bytes:
+         total_length: int | None = None, options: bytes | None = None,
+         source_address: str = "192.0.2.1",
+         dest_address: str = "198.51.100.53") -> bytes:
     if options is None:
         options = b"\x00" * max(0, ihl * 4 - 20)
     actual_header_len = 20 + len(options)
@@ -158,40 +160,56 @@ def ipv4(payload: bytes, protocol: int = 17, ihl: int = 5,
         "!BBHHHBBH4s4s",
         (version << 4) | (ihl & 0x0F), 0, total_length & 0xFFFF,
         0x1234, fragment, 64, protocol, 0,
-        ipaddress.IPv4Address("192.0.2.1").packed,
-        ipaddress.IPv4Address("198.51.100.53").packed,
+        ipaddress.IPv4Address(source_address).packed,
+        ipaddress.IPv4Address(dest_address).packed,
     )
     return header + options + payload
 
 
 def ipv6(payload: bytes, next_header: int = 17, version: int = 6,
-         payload_length: int | None = None) -> bytes:
+         payload_length: int | None = None,
+         source_address: str = "2001:db8::1",
+         dest_address: str = "2001:db8::53") -> bytes:
     if payload_length is None:
         payload_length = len(payload)
     return struct.pack(
         "!IHBB16s16s", version << 28, payload_length & 0xFFFF,
         next_header, 64,
-        ipaddress.IPv6Address("2001:db8::1").packed,
-        ipaddress.IPv6Address("2001:db8::53").packed,
+        ipaddress.IPv6Address(source_address).packed,
+        ipaddress.IPv6Address(dest_address).packed,
     ) + payload
 
 
 def frame4(payload: bytes, direction: int, source: int | None = None,
-           dest: int | None = None, **ip_kwargs: object) -> bytes:
+           dest: int | None = None, source_address: str | None = None,
+           dest_address: str | None = None, **ip_kwargs: object) -> bytes:
     if source is None:
         source = 40000 if direction == QUERY else 53
     if dest is None:
         dest = 53 if direction == QUERY else 40000
-    return ethernet(ipv4(udp(payload, source, dest), **ip_kwargs))
+    if source_address is None:
+        source_address = "192.0.2.1" if direction == QUERY else "198.51.100.53"
+    if dest_address is None:
+        dest_address = "198.51.100.53" if direction == QUERY else "192.0.2.1"
+    return ethernet(ipv4(udp(payload, source, dest),
+                         source_address=source_address,
+                         dest_address=dest_address, **ip_kwargs))
 
 
 def frame6(payload: bytes, direction: int, source: int | None = None,
-           dest: int | None = None, **ip_kwargs: object) -> bytes:
+           dest: int | None = None, source_address: str | None = None,
+           dest_address: str | None = None, **ip_kwargs: object) -> bytes:
     if source is None:
         source = 40000 if direction == QUERY else 53
     if dest is None:
         dest = 53 if direction == QUERY else 40000
-    return ethernet(ipv6(udp(payload, source, dest), **ip_kwargs), 0x86DD)
+    if source_address is None:
+        source_address = "2001:db8::1" if direction == QUERY else "2001:db8::53"
+    if dest_address is None:
+        dest_address = "2001:db8::53" if direction == QUERY else "2001:db8::1"
+    return ethernet(ipv6(udp(payload, source, dest),
+                         source_address=source_address,
+                         dest_address=dest_address, **ip_kwargs), 0x86DD)
 
 
 def count(**values: int) -> dict[str, int]:
@@ -545,12 +563,121 @@ def add_rr_cases(matrix: Matrix) -> None:
                           RESP_DELETE=1, TOUCH_CALLED=1), False))
 
 
+def add_flow_collision_cases(matrix: Matrix) -> None:
+    def query_case(label: str, txid: int, name: str, frame: bytes,
+                   family_counter: str = "PACKET_IPV4") -> None:
+        matrix.add(Case(label, QUERY, txid, frame,
+                        count(**{family_counter: 1, "QUERY_PACKET": 1,
+                                 "QUERY_STORED": 1}),
+                        True, name, A))
+
+    def response_case(label: str, txid: int, frame: bytes,
+                      family_counter: str = "PACKET_IPV4") -> None:
+        matrix.add(Case(label, RESPONSE, txid, frame,
+                        count(**{family_counter: 1, "RESP_PACKET": 1,
+                                 "RESP_ANSWER_SEEN": 1,
+                                 "RESP_ADDR_PARSED": 1,
+                                 "RESP_TOUCH": 1, "RESP_DELETE": 1,
+                                 "TOUCH_CALLED": 1}), False))
+
+    # Same transaction ID, resolver, and client address; only the client UDP
+    # port differs. Both requests must survive and may complete out of order.
+    txid = matrix.txid()
+    first_name = "flow-port-first.example"
+    second_name = "flow-port-second.example"
+    first_qname = wire_name(first_name)
+    second_qname = wire_name(second_name)
+    query_case("flow key client port: first query", txid, first_name,
+               frame4(query_payload(txid, first_qname), QUERY, source=41001))
+    query_case("flow key client port: second query", txid, second_name,
+               frame4(query_payload(txid, second_qname), QUERY, source=41002))
+    response_case("flow key client port: second response first", txid,
+                  frame4(response_payload(
+                      txid, second_qname,
+                      answers=[rr(rdata=b"\xc6\x33\x64\xc9")]),
+                      RESPONSE, dest=41002))
+    response_case("flow key client port: first response second", txid,
+                  frame4(response_payload(
+                      txid, first_qname,
+                      answers=[rr(rdata=b"\xc6\x33\x64\xc8")]),
+                      RESPONSE, dest=41001))
+
+    # Reusing an ID and port across different client/resolver address pairs
+    # must likewise retain both pending requests.
+    txid = matrix.txid()
+    first_name = "flow-address-first.example"
+    second_name = "flow-address-second.example"
+    first_qname = wire_name(first_name)
+    second_qname = wire_name(second_name)
+    query_case("flow key addresses: first query", txid, first_name,
+               frame4(query_payload(txid, first_qname), QUERY, source=42000))
+    query_case("flow key addresses: second query", txid, second_name,
+               frame4(query_payload(txid, second_qname), QUERY, source=42000,
+                      source_address="192.0.2.2",
+                      dest_address="198.51.100.54"))
+    response_case("flow key addresses: second response first", txid,
+                  frame4(response_payload(
+                      txid, second_qname,
+                      answers=[rr(rdata=b"\xc6\x33\x64\xcb")]),
+                      RESPONSE, dest=42000,
+                      source_address="198.51.100.54",
+                      dest_address="192.0.2.2"))
+    response_case("flow key addresses: first response second", txid,
+                  frame4(response_payload(
+                      txid, first_qname,
+                      answers=[rr(rdata=b"\xc6\x33\x64\xca")]),
+                      RESPONSE, dest=42000))
+
+    # Address family is part of the key, so identical IDs and numeric ports
+    # coexist across IPv4 and IPv6.
+    txid = matrix.txid()
+    ipv4_name = "flow-family-v4.example"
+    ipv6_name = "flow-family-v6.example"
+    ipv4_qname = wire_name(ipv4_name)
+    ipv6_qname = wire_name(ipv6_name)
+    query_case("flow key family: IPv4 query", txid, ipv4_name,
+               frame4(query_payload(txid, ipv4_qname), QUERY, source=43000))
+    query_case("flow key family: IPv6 query", txid, ipv6_name,
+               frame6(query_payload(txid, ipv6_qname), QUERY, source=43000),
+               "PACKET_IPV6")
+    response_case("flow key family: IPv6 response first", txid,
+                  frame6(response_payload(
+                      txid, ipv6_qname,
+                      answers=[rr(rdata=b"\xc6\x33\x64\xcd")]),
+                      RESPONSE, dest=43000), "PACKET_IPV6")
+    response_case("flow key family: IPv4 response second", txid,
+                  frame4(response_payload(
+                      txid, ipv4_qname,
+                      answers=[rr(rdata=b"\xc6\x33\x64\xcc")]),
+                      RESPONSE, dest=43000))
+
+    # A same-ID response from a different client port must miss without
+    # deleting the correct request, which is then consumed normally.
+    txid = matrix.txid()
+    name = "flow-wrong-tuple.example"
+    qname = wire_name(name)
+    query_case("flow key wrong tuple: query", txid, name,
+               frame4(query_payload(txid, qname), QUERY, source=44000))
+    matrix.add(Case(
+        "flow key wrong tuple: response misses", RESPONSE, txid,
+        frame4(response_payload(
+            txid, qname, answers=[rr(rdata=b"\xc6\x33\x64\xfe")]),
+            RESPONSE, dest=44001),
+        count(PACKET_IPV4=1, RESP_PACKET=1, RESP_REQ_MISS=1), False))
+    response_case("flow key wrong tuple: correct response retained", txid,
+                  frame4(response_payload(
+                      txid, qname,
+                      answers=[rr(rdata=b"\xc6\x33\x64\xcf")]),
+                      RESPONSE, dest=44000))
+
+
 def build_deterministic_matrix() -> Matrix:
     matrix = Matrix()
     add_transport_cases(matrix)
     add_query_cases(matrix)
     add_response_state_cases(matrix)
     add_rr_cases(matrix)
+    add_flow_collision_cases(matrix)
 
     matrix.pair("valid IPv4 A", "basic.example", A,
                 [rr(rdata=b"\xc0\x00\x02\x0a")],
@@ -686,6 +813,13 @@ def assert_export(export: dict) -> None:
         "192.0.2.30": {"multi-address.example": 1},
         "192.0.2.31": {"multi-address.example": 1},
         "203.0.113.75": {"slot75.example": 1},
+        "198.51.100.200": {"flow-port-first.example": 1},
+        "198.51.100.201": {"flow-port-second.example": 1},
+        "198.51.100.202": {"flow-address-first.example": 1},
+        "198.51.100.203": {"flow-address-second.example": 1},
+        "198.51.100.204": {"flow-family-v4.example": 1},
+        "198.51.100.205": {"flow-family-v6.example": 1},
+        "198.51.100.207": {"flow-wrong-tuple.example": 1},
     }
     failures: list[str] = []
     for address, expected_names in required.items():
@@ -702,6 +836,8 @@ def assert_export(export: dict) -> None:
         failures.append("oldest fifth-name slot was not evicted")
     if "203.0.113.76" in addresses:
         failures.append("answer 76 was parsed despite the 75-answer cap")
+    if "198.51.100.254" in addresses:
+        failures.append("wrong-tuple response unexpectedly produced an event")
     if failures:
         raise AssertionError("\n".join(failures))
 
@@ -766,21 +902,6 @@ def build_known_gap_matrix() -> tuple[list[Case], list[tuple[str, Callable[[dict
                    lambda result: result["counter_delta"][COUNTER["RESP_TOUCH"]] == 1))
 
     txid = matrix.txid()
-    first = wire_name("collision-first.example")
-    second = wire_name("collision-second.example")
-    matrix.add(Case("transaction collision first query", QUERY, txid,
-                    frame4(query_payload(txid, first), QUERY), request=None))
-    collision_index = len(matrix.cases)
-    matrix.add(Case("transaction collision overwrites query", QUERY, txid,
-                    frame4(query_payload(txid, second), QUERY), request=None))
-    probes.append(("request key is transaction ID only",
-                   lambda result: bytes.fromhex(result["request_name_hex"]) ==
-                   b"collision-second.example"))
-    matrix.add(Case("transaction collision: cleanup", RESPONSE, txid,
-                    frame4(response_payload(txid, second, answers=[rr()]), RESPONSE),
-                    request=None))
-
-    txid = matrix.txid()
     raw_name = wire_name("length.example")
     dns = query_payload(txid, raw_name)
     malformed_udp = udp(dns, 40000, 53, length=8)
@@ -807,7 +928,7 @@ def build_known_gap_matrix() -> tuple[list[Case], list[tuple[str, Callable[[dict
 
     # Keep the probe/result association explicit despite cleanup actions.
     probe_indices = [0, 2, response_index, pointer_index, flags_index,
-                     collision_index, length_index, oversize_index]
+                     length_index, oversize_index]
     return matrix.cases, [(label, (lambda pred, index: lambda results: pred(results[index]))(predicate, index))
                           for (label, predicate), index in zip(probes, probe_indices)]
 

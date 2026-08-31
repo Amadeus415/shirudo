@@ -2,8 +2,9 @@
 /*
  * dns_arena.bpf.c -- map DNS answers from IP endpoints to DNS names.
  *
- * Egress DNS queries are tracked by transaction id. Ingress DNS responses
- * consume the pending query and add A/AAAA answers into dns_arena keyed by IP.
+ * Egress DNS queries are tracked by network namespace, UDP flow, and
+ * transaction id. Ingress DNS responses consume the pending query and add
+ * A/AAAA answers into dns_arena keyed by IP.
  */
 
 #define BPF_NO_KFUNC_PROTOTYPES
@@ -169,6 +170,20 @@ struct dns_request {
 	__u16 _pad;
 };
 
+/* Canonical client-to-resolver tuple. Packet address/port bytes stay in
+ * network order, so reversing an ingress response produces the query key.
+ */
+struct dns_request_key {
+	__u64 netns_cookie;
+	__u32 client_addr[4];
+	__u32 resolver_addr[4];
+	__u16 id;
+	__u16 client_port;
+	__u16 resolver_port;
+	__u8 family;
+	__u8 _pad;
+};
+
 struct dns_scratch {
 	struct dns_request req;
 	/* Tailroom lets the verifier bound a full final-label direct copy. */
@@ -247,6 +262,8 @@ enum {
 
 _Static_assert((DNS_BUCKETS & (DNS_BUCKETS - 1)) == 0,
 	       "dns buckets must be a power of two");
+_Static_assert(sizeof(struct dns_request_key) == 48,
+	       "dns request key ABI must remain verifier-friendly");
 _Static_assert(sizeof(struct dns_serial_header) == DNS_SERIAL_SLOT_SIZE,
 	       "dns serializer header must occupy one slot");
 _Static_assert(DNS_SERIAL_UID_OFFSET + sizeof(struct exec_uid) ==
@@ -287,7 +304,7 @@ struct {
 struct {
 	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__uint(max_entries, DNS_REQ_MAP_ENTRIES);
-	__type(key, __u32);
+	__type(key, struct dns_request_key);
 	__type(value, struct dns_request);
 } obs_i_dns_req SEC(".maps");
 
@@ -1234,12 +1251,13 @@ static __always_inline int dns_skip_name(struct __sk_buff *skb, __u32 off,
 }
 
 static __always_inline void dns_parse_query_payload(struct __sk_buff *skb,
-						    __u32 dns_off)
+						    __u32 dns_off,
+						    struct dns_request_key *req_key)
 {
 	struct dns_scratch *scratch;
 	struct task_struct *task = bpf_get_current_task_btf();
 	struct exec_uid uid = {};
-	__u32 zero = 0, req_key;
+	__u32 zero = 0;
 	__u32 next = 0;
 	__u16 id, flags, qdcount, qtype, qclass;
 
@@ -1292,8 +1310,8 @@ static __always_inline void dns_parse_query_payload(struct __sk_buff *skb,
 	scratch->req.uid = uid;
 	scratch->req.qtype = qtype;
 	scratch->req._pad = 0;
-	req_key = (1u << 16) | id;
-	bpf_map_update_elem(&obs_i_dns_req, &req_key, &scratch->req, BPF_ANY);
+	req_key->id = id;
+	bpf_map_update_elem(&obs_i_dns_req, req_key, &scratch->req, BPF_ANY);
 	dns_debug_inc(DNS_DBG_QUERY_STORED);
 }
 
@@ -1371,10 +1389,11 @@ obs_dns_parse_answer(struct __sk_buff *skb, const struct dns_request *req,
 }
 
 static __always_inline void dns_parse_response_payload(struct __sk_buff *skb,
-						       __u32 dns_off)
+						       __u32 dns_off,
+						       struct dns_request_key *req_key)
 {
 	struct dns_request *req;
-	__u32 req_key, off, next = 0;
+	__u32 off, next = 0;
 	__u64 now = bpf_ktime_get_ns();
 	__u16 id, flags, qdcount, ancount, qtype, qclass;
 	int answer_off, i;
@@ -1400,8 +1419,8 @@ static __always_inline void dns_parse_response_payload(struct __sk_buff *skb,
 		return;
 	}
 
-	req_key = (1u << 16) | id;
-	req = bpf_map_lookup_elem(&obs_i_dns_req, &req_key);
+	req_key->id = id;
+	req = bpf_map_lookup_elem(&obs_i_dns_req, req_key);
 	if (!req) {
 		dns_debug_inc(DNS_DBG_RESP_REQ_MISS);
 		return;
@@ -1409,18 +1428,18 @@ static __always_inline void dns_parse_response_payload(struct __sk_buff *skb,
 
 	if (dns_skip_name(skb, dns_off + sizeof(struct dns_hdr), &next)) {
 		dns_debug_inc(DNS_DBG_RESP_QNAME_SKIP_FAIL);
-		bpf_map_delete_elem(&obs_i_dns_req, &req_key);
+		bpf_map_delete_elem(&obs_i_dns_req, req_key);
 		return;
 	}
 	if (!dns_read_u16(skb, next, &qtype) ||
 	    !dns_read_u16(skb, next + 2, &qclass)) {
 		dns_debug_inc(DNS_DBG_RESP_QTYPE_READ_FAIL);
-		bpf_map_delete_elem(&obs_i_dns_req, &req_key);
+		bpf_map_delete_elem(&obs_i_dns_req, req_key);
 		return;
 	}
 	if (qtype != req->qtype) {
 		dns_debug_inc(DNS_DBG_RESP_QTYPE_MISMATCH);
-		bpf_map_delete_elem(&obs_i_dns_req, &req_key);
+		bpf_map_delete_elem(&obs_i_dns_req, req_key);
 		return;
 	}
 
@@ -1436,7 +1455,7 @@ static __always_inline void dns_parse_response_payload(struct __sk_buff *skb,
 		off = (__u32)answer_off;
 	}
 
-	bpf_map_delete_elem(&obs_i_dns_req, &req_key);
+	bpf_map_delete_elem(&obs_i_dns_req, req_key);
 	dns_debug_inc(DNS_DBG_RESP_DELETE);
 }
 
@@ -1444,6 +1463,7 @@ static __always_inline void dns_parse_packet(struct __sk_buff *skb, bool send)
 {
 	void *data = (void *)(long)skb->data;
 	void *data_end = (void *)(long)skb->data_end;
+	struct dns_request_key req_key = {};
 	struct iphdr *ip4;
 	struct ipv6hdr *ip6;
 	struct udphdr *udp;
@@ -1465,6 +1485,14 @@ static __always_inline void dns_parse_packet(struct __sk_buff *skb, bool send)
 		udp = data + ip_hlen;
 		if ((void *)(udp + 1) > data_end)
 			return;
+		req_key.family = AF_INET;
+		if (send) {
+			req_key.client_addr[0] = ip4->saddr;
+			req_key.resolver_addr[0] = ip4->daddr;
+		} else {
+			req_key.client_addr[0] = ip4->daddr;
+			req_key.resolver_addr[0] = ip4->saddr;
+		}
 		break;
 	case ETH_P_IPV6:
 		dns_debug_inc(DNS_DBG_PACKET_IPV6);
@@ -1478,6 +1506,26 @@ static __always_inline void dns_parse_packet(struct __sk_buff *skb, bool send)
 		udp = data + sizeof(struct ipv6hdr);
 		if ((void *)(udp + 1) > data_end)
 			return;
+		req_key.family = AF_INET6;
+		if (send) {
+			req_key.client_addr[0] = ip6->saddr.in6_u.u6_addr32[0];
+			req_key.client_addr[1] = ip6->saddr.in6_u.u6_addr32[1];
+			req_key.client_addr[2] = ip6->saddr.in6_u.u6_addr32[2];
+			req_key.client_addr[3] = ip6->saddr.in6_u.u6_addr32[3];
+			req_key.resolver_addr[0] = ip6->daddr.in6_u.u6_addr32[0];
+			req_key.resolver_addr[1] = ip6->daddr.in6_u.u6_addr32[1];
+			req_key.resolver_addr[2] = ip6->daddr.in6_u.u6_addr32[2];
+			req_key.resolver_addr[3] = ip6->daddr.in6_u.u6_addr32[3];
+		} else {
+			req_key.client_addr[0] = ip6->daddr.in6_u.u6_addr32[0];
+			req_key.client_addr[1] = ip6->daddr.in6_u.u6_addr32[1];
+			req_key.client_addr[2] = ip6->daddr.in6_u.u6_addr32[2];
+			req_key.client_addr[3] = ip6->daddr.in6_u.u6_addr32[3];
+			req_key.resolver_addr[0] = ip6->saddr.in6_u.u6_addr32[0];
+			req_key.resolver_addr[1] = ip6->saddr.in6_u.u6_addr32[1];
+			req_key.resolver_addr[2] = ip6->saddr.in6_u.u6_addr32[2];
+			req_key.resolver_addr[3] = ip6->saddr.in6_u.u6_addr32[3];
+		}
 		break;
 	default:
 		return;
@@ -1488,18 +1536,23 @@ static __always_inline void dns_parse_packet(struct __sk_buff *skb, bool send)
 			dns_debug_inc(DNS_DBG_PACKET_PORT_SKIP);
 			return;
 		}
+		req_key.client_port = udp->source;
+		req_key.resolver_port = udp->dest;
 	} else {
 		if (udp->source != bpf_htons(DNS_PORT)) {
 			dns_debug_inc(DNS_DBG_PACKET_PORT_SKIP);
 			return;
 		}
+		req_key.client_port = udp->dest;
+		req_key.resolver_port = udp->source;
 	}
 
+	req_key.netns_cookie = bpf_get_netns_cookie(skb);
 	dns_off = (__u32)((void *)udp + sizeof(struct udphdr) - data);
 	if (send)
-		dns_parse_query_payload(skb, dns_off);
+		dns_parse_query_payload(skb, dns_off, &req_key);
 	else
-		dns_parse_response_payload(skb, dns_off);
+		dns_parse_response_payload(skb, dns_off, &req_key);
 }
 
 SEC("cgroup_skb/egress")

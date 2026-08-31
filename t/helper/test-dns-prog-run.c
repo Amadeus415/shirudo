@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -32,7 +33,14 @@
 #define DNS_BATCH_MAX_FRAME 65535u
 #define DNS_DEBUG_COUNTERS 41u
 #define DNS_NAME_BYTES 256u
-#define DNS_REQUEST_KEY_PREFIX (1u << 16)
+#define DNS_ETH_HEADER_BYTES 14u
+#define DNS_ETH_P_IP 0x0800u
+#define DNS_ETH_P_IPV6 0x86ddu
+#define DNS_IPPROTO_UDP 17u
+
+#ifndef SO_NETNS_COOKIE
+#define SO_NETNS_COOKIE 71
+#endif
 
 enum dns_direction {
 	DNS_DIRECTION_QUERY = 0,
@@ -66,6 +74,20 @@ struct dns_request {
 	uint16_t qtype;
 	uint16_t pad;
 };
+
+struct dns_request_key {
+	uint64_t netns_cookie;
+	uint32_t client_addr[4];
+	uint32_t resolver_addr[4];
+	uint16_t id;
+	uint16_t client_port;
+	uint16_t resolver_port;
+	uint8_t family;
+	uint8_t pad;
+};
+
+_Static_assert(sizeof(struct dns_request_key) == 48,
+	       "DNS request key layout must match the BPF program");
 
 static int sys_bpf(enum bpf_cmd cmd, union bpf_attr *attr)
 {
@@ -195,6 +217,108 @@ static int map_lookup(int fd, const void *key, void *value)
 	return 0;
 }
 
+static int validate_request_map(int fd)
+{
+	union bpf_attr attr = {};
+	struct bpf_map_info info = {};
+	uint32_t info_len = sizeof(info);
+
+	attr.info.bpf_fd = fd;
+	attr.info.info_len = info_len;
+	attr.info.info = (uint64_t)(uintptr_t)&info;
+	if (sys_bpf(BPF_OBJ_GET_INFO_BY_FD, &attr) < 0)
+		return -errno;
+	if (info.key_size != sizeof(struct dns_request_key) ||
+	    info.value_size != sizeof(struct dns_request))
+		return -EINVAL;
+	return 0;
+}
+
+static uint16_t read_be16(const unsigned char *p)
+{
+	return ((uint16_t)p[0] << 8) | (uint16_t)p[1];
+}
+
+static int current_netns_cookie(uint64_t *cookie)
+{
+	socklen_t size = sizeof(*cookie);
+	int fd, rc = 0;
+
+	fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	if (fd < 0)
+		return -errno;
+	if (getsockopt(fd, SOL_SOCKET, SO_NETNS_COOKIE, cookie, &size) < 0)
+		rc = -errno;
+	else if (size != sizeof(*cookie))
+		rc = -EINVAL;
+	close(fd);
+	return rc;
+}
+
+static bool request_key_from_frame(const unsigned char *frame, size_t frame_len,
+				   uint8_t direction, uint16_t id,
+				   uint64_t netns_cookie,
+				   struct dns_request_key *key)
+{
+	const unsigned char *ip, *udp;
+	size_t ip_len;
+	uint16_t ethertype;
+
+	memset(key, 0, sizeof(*key));
+	if (frame_len < DNS_ETH_HEADER_BYTES)
+		return false;
+	ethertype = read_be16(frame + 12);
+	ip = frame + DNS_ETH_HEADER_BYTES;
+	ip_len = frame_len - DNS_ETH_HEADER_BYTES;
+
+	if (ethertype == DNS_ETH_P_IP) {
+		size_t ihl;
+
+		if (ip_len < 20 || ip[9] != DNS_IPPROTO_UDP)
+			return false;
+		ihl = (size_t)(ip[0] & 0x0f) * 4;
+		if (ihl < 20 || ihl > 60 || ip_len < ihl + 8)
+			return false;
+		key->family = AF_INET;
+		if (direction == DNS_DIRECTION_QUERY) {
+			memcpy(&key->client_addr[0], ip + 12, 4);
+			memcpy(&key->resolver_addr[0], ip + 16, 4);
+		} else {
+			memcpy(&key->client_addr[0], ip + 16, 4);
+			memcpy(&key->resolver_addr[0], ip + 12, 4);
+		}
+		udp = ip + ihl;
+	} else if (ethertype == DNS_ETH_P_IPV6) {
+		if (ip_len < 48 || ip[6] != DNS_IPPROTO_UDP)
+			return false;
+		key->family = AF_INET6;
+		if (direction == DNS_DIRECTION_QUERY) {
+			memcpy(key->client_addr, ip + 8, 16);
+			memcpy(key->resolver_addr, ip + 24, 16);
+		} else {
+			memcpy(key->client_addr, ip + 24, 16);
+			memcpy(key->resolver_addr, ip + 8, 16);
+		}
+		udp = ip + 40;
+	} else {
+		return false;
+	}
+
+	if (direction == DNS_DIRECTION_QUERY) {
+		memcpy(&key->client_port, udp, sizeof(key->client_port));
+		memcpy(&key->resolver_port, udp + 2,
+		       sizeof(key->resolver_port));
+	} else {
+		memcpy(&key->client_port, udp + 2,
+		       sizeof(key->client_port));
+		memcpy(&key->resolver_port, udp,
+		       sizeof(key->resolver_port));
+	}
+	key->netns_cookie = netns_cookie;
+	key->id = id;
+	return true;
+}
+
 static int read_counters(int map_fd, uint64_t values[DNS_DEBUG_COUNTERS])
 {
 	uint32_t i;
@@ -266,6 +390,7 @@ int main(void)
 	uint64_t before[DNS_DEBUG_COUNTERS], after[DNS_DEBUG_COUNTERS];
 	int query_fd = -1, response_fd = -1, debug_fd = -1, request_fd = -1;
 	unsigned char *frame = NULL;
+	uint64_t netns_cookie;
 	uint32_t i;
 	int rc = 1;
 
@@ -290,6 +415,14 @@ int main(void)
 			query_fd, response_fd, debug_fd, request_fd);
 		goto out;
 	}
+	if (validate_request_map(request_fd)) {
+		fprintf(stderr, "dns batch: request map layout does not match helper\n");
+		goto out;
+	}
+	if (current_netns_cookie(&netns_cookie)) {
+		fprintf(stderr, "dns batch: cannot read network namespace cookie\n");
+		goto out;
+	}
 
 	frame = malloc(DNS_BATCH_MAX_FRAME);
 	if (!frame) {
@@ -299,8 +432,9 @@ int main(void)
 
 	for (i = 0; i < header.records; i++) {
 		struct dns_batch_record record;
+		struct dns_request_key key;
 		struct dns_request request = {};
-		uint32_t key, retval = 0;
+		uint32_t retval = 0;
 		int run_rc, request_rc;
 
 		if (read_full(&record, sizeof(record)) ||
@@ -321,8 +455,13 @@ int main(void)
 			fprintf(stderr, "dns batch: cannot read counters after record %u\n", i);
 			goto out;
 		}
-		key = DNS_REQUEST_KEY_PREFIX | record.transaction_id;
-		request_rc = map_lookup(request_fd, &key, &request);
+		if (request_key_from_frame(frame, record.frame_len,
+					   record.direction,
+					   record.transaction_id,
+					   netns_cookie, &key))
+			request_rc = map_lookup(request_fd, &key, &request);
+		else
+			request_rc = -ENOENT;
 		if (request_rc != 0 && request_rc != -ENOENT) {
 			fprintf(stderr, "dns batch: request lookup failed for record %u: %d\n",
 				i, request_rc);

@@ -1,0 +1,66 @@
+# DNS observability follow-up
+
+The UDP DNS parser currently correlates requests with a canonical key made
+from the network-namespace cookie, address family, client/resolver addresses
+and ports, and transaction ID. The items below are the remaining parser and
+correlation gaps. Each behavior change should promote its corresponding case
+in `t/dns_obs_matrix.py` from a known-gap probe to a gating test.
+
+## Matching and response integrity
+
+- [ ] Decode and compare the response question name with the stored request.
+      DNS comparison must be ASCII case-insensitive and must safely handle
+      compression, pointer loops, and invalid pointer targets.
+- [ ] Require query class IN and compare response qclass with the request.
+- [ ] Validate response opcode, RCODE, and TC before accepting answers. Define
+      whether truncated responses produce no event or an explicitly partial
+      event.
+- [ ] Constrain emitted addresses to the requested family: A queries may emit
+      A records and AAAA queries may emit AAAA records, while still skipping
+      CNAME and other intermediate records.
+- [ ] Add request age to the pending value and reject stale responses. This
+      prevents a delayed response from matching a later reuse of the exact
+      same flow and transaction ID.
+- [ ] Decide whether exact-flow, same-ID concurrent requests need multi-value
+      storage. Standards-compliant clients should avoid this reuse, but the
+      current map still replaces the older request.
+
+## Packet validation
+
+- [ ] Reject IPv4 and IPv6 fragments unless complete reassembly is guaranteed
+      before the cgroup hook.
+- [ ] Enforce IPv4 total length, IPv6 payload length, and UDP length against
+      `data_end`; reject inconsistent or truncated packets.
+- [ ] Enforce the intended 1232-byte UDP parsing budget on the actual packet,
+      not only on individual logical offsets.
+- [ ] Walk supported IPv6 extension headers or reject packets containing any
+      extension header with a dedicated debug counter.
+- [ ] Validate the IP version against the Ethernet protocol.
+- [ ] Decide whether checksum validation belongs in this program. The packet
+      matrix currently demonstrates that invalid IP/UDP checksums are accepted.
+
+## Name and answer parsing
+
+- [ ] Reject embedded NUL bytes in labels so stored names cannot be truncated
+      by C-string serialization.
+- [ ] Validate every compression pointer target even when the owner name is
+      only skipped, including bounds, loops, and maximum traversal depth.
+- [ ] Make the 75-answer cap observable with a counter or explicit truncation
+      status instead of silently ignoring later answers.
+- [ ] Define atomic response behavior. At present, valid early answers remain
+      recorded when a later answer is malformed.
+
+## Capacity and observability
+
+- [ ] Add counters for request-map update failure, LRU displacement, stale
+      response rejection, tuple mismatch, and answer-cap truncation.
+- [ ] Stress the 1024-entry pending-request LRU and document expected loss
+      behavior under sustained concurrent DNS traffic.
+- [ ] Add namespace-isolation coverage proving identical tuples and IDs in two
+      network namespaces remain independent.
+
+## Out of scope unless requirements change
+
+- DNS over TCP, TLS, or HTTPS.
+- DNS traffic on ports other than 53, including mDNS and LLMNR.
+- Full recursive DNS interpretation beyond correlating A/AAAA responses.
