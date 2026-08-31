@@ -163,6 +163,8 @@ shirudo make targets (run from the repo root):
              TEST_VM_MAP_EXPORT_CA (optional PEM CA file),
              TEST_VM_MAP_EXPORT_INSECURE=true (explicit HTTP only),
              TEST_VM_OCI_CA (optional PEM CA file for guest OCI trust),
+             TEST_VM_BPM_OCI_REPOSITORY (optional name=oci://endpoint),
+             TEST_VM_BPM_OCI_INDEX_CERT (repository index certificate),
              TEST_VM_ROOTFS_URL/SHA256 (custom base image selection),
              TEST_VM_UBUNTU_CODENAME (kernel archive codename; default resolute),
              TEST_VM_BUNDLE_DIR (host VM payload cache),
@@ -240,6 +242,8 @@ vm: test-vm-bundle
 		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
 		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
 		TEST_VM_OCI_CA="$(TEST_VM_OCI_CA)" \
+		TEST_VM_BPM_OCI_REPOSITORY="$(TEST_VM_BPM_OCI_REPOSITORY)" \
+		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
 
@@ -260,6 +264,8 @@ test-tgt: test-vm-bundle
 		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
 		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
 		TEST_VM_OCI_CA="$(TEST_VM_OCI_CA)" \
+		TEST_VM_BPM_OCI_REPOSITORY="$(TEST_VM_BPM_OCI_REPOSITORY)" \
+		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
 
@@ -272,6 +278,8 @@ test-tgt-obs: test-vm-bundle
 		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
 		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
 		TEST_VM_OCI_CA="$(TEST_VM_OCI_CA)" \
+		TEST_VM_BPM_OCI_REPOSITORY="$(TEST_VM_BPM_OCI_REPOSITORY)" \
+		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
 
@@ -287,6 +295,8 @@ test-tgt-obs-fuzz: test-vm-bundle
 		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
 		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
 		TEST_VM_OCI_CA="$(TEST_VM_OCI_CA)" \
+		TEST_VM_BPM_OCI_REPOSITORY="$(TEST_VM_BPM_OCI_REPOSITORY)" \
+		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
 

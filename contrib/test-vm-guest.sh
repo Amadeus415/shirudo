@@ -38,6 +38,54 @@ configure_oci_ca()
 	update-ca-certificates
 }
 
+configure_bpm_oci_repository()
+{
+	local input_dir="${TEST_VM_BPM_OCI_INPUT:-}"
+	local source="${TEST_VM_BPM_OCI_SOURCE:-}"
+	local endpoint cert_file staged_conf staged_env
+	local key_file conf_file repository_env
+
+	[[ -z "$input_dir" && -z "$source" ]] && return 0
+	[[ -n "$input_dir" && -n "$source" ]] || {
+		log "BPM OCI staged input directory and source must be supplied together"
+		return 1
+	}
+	[[ "$source" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
+		log "BPM OCI repository source name is invalid"
+		return 1
+	}
+	cert_file="${input_dir}/keys/${source}.pem"
+	staged_conf="${input_dir}/registries.d/${source}.conf"
+	staged_env="${input_dir}/repository.env"
+	[[ -s "$cert_file" && -s "$staged_conf" && -s "$staged_env" ]] || {
+		log "BPM OCI staged input is incomplete"
+		return 1
+	}
+	endpoint="$(sed -n 's/^endpoint = //p' "$staged_conf")"
+	[[ "$endpoint" =~ ^oci://[^/!?#@=[:space:]]+$ ]] || {
+		log "BPM OCI staged configuration has an invalid endpoint"
+		return 1
+	}
+
+	if [[ "${endpoint#oci://}" == registry.test ||
+		"${endpoint#oci://}" == registry.test:* ]]; then
+		sed -E -i '/^[^#]*[[:space:]]registry\.test([[:space:]]|$)/d' /etc/hosts
+		printf '%s\n' '10.0.2.2 registry.test' >>/etc/hosts
+	fi
+
+	key_file="/etc/shirudo/bpm/keys/${source}.pem"
+	conf_file="/etc/shirudo/bpm/registries.d/${source}.conf"
+	repository_env="/etc/shirudo/bpm/repository.env"
+	install -d -m 0755 /etc/shirudo/bpm/keys /etc/shirudo/bpm/registries.d
+	install -m 0644 "$cert_file" "${key_file}.tmp"
+	mv -f "${key_file}.tmp" "$key_file"
+	install -m 0644 "$staged_conf" "${conf_file}.tmp"
+	mv -f "${conf_file}.tmp" "$conf_file"
+	install -d -m 0755 /etc/shirudo/bpm
+	install -m 0644 "$staged_env" "${repository_env}.tmp"
+	mv -f "${repository_env}.tmp" "$repository_env"
+}
+
 configure_map_export()
 {
 	local endpoint="${TEST_VM_MAP_EXPORT_ENDPOINT:-}"
@@ -96,6 +144,7 @@ configure_map_export()
 }
 
 configure_oci_ca
+configure_bpm_oci_repository
 configure_map_export
 
 [[ -s /etc/shirudo-test-vm-runtime ]] || {

@@ -294,6 +294,24 @@ The CA is copied into the per-VM state directory through a read-only QEMU
 share and installed into the guest system trust store during bootstrap.  The
 VM continues to verify both the registry certificate chain and its hostname.
 
+To also register a BPM OCI repository during VM bootstrap, provide the
+repository endpoint and its signed-index certificate.  The optional source
+name before ``=`` is the name used by ``bpm install``; without it, ``default``
+is used::
+
+    make vm \
+        TEST_VM_OCI_CA=/path/to/registry-ca.pem \
+        TEST_VM_BPM_OCI_REPOSITORY=example=oci://registry.example.com \
+        TEST_VM_BPM_OCI_INDEX_CERT=/path/to/repository-index-cert.pem
+
+The certificate and generated repository configuration are staged in the
+per-VM state directory, copied through a read-only QEMU share, and installed
+as the same ``/etc/shirudo/bpm/registries.d/example.conf`` configuration
+produced by ``bpm config register add``.  For a registry hosted on the QEMU host,
+``registry.test`` (including a port such as ``registry.test:5001``) is mapped
+to ``10.0.2.2`` inside the guest.  External repositories receive only the
+repository configuration and use normal guest hostname and CA trust.
+
 4. Generate the signing key (operator machine, one time)
 =========================================================
 

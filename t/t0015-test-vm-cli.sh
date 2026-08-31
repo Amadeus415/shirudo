@@ -309,6 +309,40 @@ test_expect_success 'test-vm validates a custom OCI CA file before boot' '
 		"$WORK/missing-oci-ca.out"
 '
 
+test_expect_success 'test-vm bootstraps a BPM OCI repository from the host' '
+	grep -q "TEST_VM_BPM_OCI_REPOSITORY" ../Makefile &&
+	grep -q "TEST_VM_BPM_OCI_INDEX_CERT" ../Makefile &&
+	grep -q "BPM_OCI_REPOSITORY_RAW=\"\${TEST_VM_BPM_OCI_REPOSITORY:-}\"" \
+		"$RUNNER" &&
+	grep -q "export TEST_VM_BPM_OCI_SOURCE" "$RUNNER" &&
+	grep -q "export TEST_VM_BPM_OCI_INPUT=/mnt/shirudo-bpm-oci" "$RUNNER" &&
+	grep -q "registries.d/\${BPM_OCI_SOURCE}.conf" "$RUNNER" &&
+	grep -q "keys/\${BPM_OCI_SOURCE}.pem" "$RUNNER" &&
+	grep -q "repository.env" "$RUNNER" &&
+	grep -q "mount_tag=shirudo-bpm-oci" "$RUNNER" &&
+	grep -q "registry\.test" ../contrib/test-vm-guest.sh &&
+	grep -q "install -m 0644.*staged_conf.*conf_file" \
+		../contrib/test-vm-guest.sh &&
+	grep -q "install -m 0644.*staged_env.*repository_env" \
+		../contrib/test-vm-guest.sh
+'
+
+test_expect_success 'test-vm validates BPM OCI repository handoff as a pair' '
+	printf kernel >"$WORK/bpm-oci-kernel" &&
+	! TEST_VM_WORK_DIR="$WORK/missing-bpm-oci-cert" \
+		TEST_VM_KERNEL="$WORK/bpm-oci-kernel" \
+		TEST_VM_BPM_OCI_REPOSITORY=example=oci://registry.example.com \
+		"$RUNNER" >"$WORK/missing-bpm-oci-cert.out" 2>&1 &&
+	grep -q "TEST_VM_BPM_OCI_REPOSITORY and TEST_VM_BPM_OCI_INDEX_CERT must be set together" \
+		"$WORK/missing-bpm-oci-cert.out" &&
+	! TEST_VM_WORK_DIR="$WORK/missing-bpm-oci-repository" \
+		TEST_VM_KERNEL="$WORK/bpm-oci-kernel" \
+		TEST_VM_BPM_OCI_INDEX_CERT="$WORK/missing-index-cert.pem" \
+		"$RUNNER" >"$WORK/missing-bpm-oci-repository.out" 2>&1 &&
+	grep -q "TEST_VM_BPM_OCI_REPOSITORY and TEST_VM_BPM_OCI_INDEX_CERT must be set together" \
+		"$WORK/missing-bpm-oci-repository.out"
+'
+
 test_expect_success 'make test runs the complete pipeline in order' '
 	grep -q "^test-op: all shirudo-build test-helpers" ../Makefile &&
 	! grep -Eq "^(check:|.*\bcheck\b.*\.PHONY)" ../Makefile &&

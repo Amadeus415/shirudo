@@ -77,6 +77,10 @@ LEGACY_MAP_EXPORT_TENANT_ID="${TEST_VM_MAP_EXPORT_TENANT_ID:-}"
 MAP_EXPORT_INSECURE="${TEST_VM_MAP_EXPORT_INSECURE:-}"
 MAP_EXPORT_CA="${TEST_VM_MAP_EXPORT_CA:-}"
 OCI_CA="${TEST_VM_OCI_CA:-}"
+BPM_OCI_REPOSITORY_RAW="${TEST_VM_BPM_OCI_REPOSITORY:-}"
+BPM_OCI_INDEX_CERT="${TEST_VM_BPM_OCI_INDEX_CERT:-}"
+BPM_OCI_SOURCE="default"
+BPM_OCI_ENDPOINT=""
 MAP_EXPORT_TENANT_ID=""
 MAP_EXPORT_ENABLED=0
 RUN_DIR=""
@@ -213,6 +217,35 @@ validate_oci_ca()
 		[[ -f "$OCI_CA" && -r "$OCI_CA" && -s "$OCI_CA" ]] ||
 			die "TEST_VM_OCI_CA is not a readable, non-empty regular file: $OCI_CA"
 	fi
+}
+
+validate_bpm_oci()
+{
+	if [[ -z "$BPM_OCI_REPOSITORY_RAW" && -z "$BPM_OCI_INDEX_CERT" ]]; then
+		return 0
+	fi
+	[[ -n "$BPM_OCI_REPOSITORY_RAW" && -n "$BPM_OCI_INDEX_CERT" ]] ||
+		die "TEST_VM_BPM_OCI_REPOSITORY and TEST_VM_BPM_OCI_INDEX_CERT must be set together"
+	case "$BPM_OCI_REPOSITORY_RAW" in
+	*=oci://*)
+		BPM_OCI_SOURCE="${BPM_OCI_REPOSITORY_RAW%%=*}"
+		BPM_OCI_ENDPOINT="${BPM_OCI_REPOSITORY_RAW#*=}"
+		;;
+	oci://*)
+		BPM_OCI_ENDPOINT="$BPM_OCI_REPOSITORY_RAW"
+		;;
+	*)
+		die "TEST_VM_BPM_OCI_REPOSITORY must be oci://host or name=oci://host"
+		;;
+	esac
+	[[ "$BPM_OCI_SOURCE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] ||
+		die "TEST_VM_BPM_OCI_REPOSITORY source name is invalid"
+	[[ "$BPM_OCI_ENDPOINT" =~ ^oci://[^/!?#@=[:space:]]+$ ]] ||
+		die "TEST_VM_BPM_OCI_REPOSITORY must use an oci://host endpoint"
+	[[ ${#BPM_OCI_ENDPOINT} -lt 512 ]] ||
+		die "TEST_VM_BPM_OCI_REPOSITORY is too long"
+	[[ -f "$BPM_OCI_INDEX_CERT" && -r "$BPM_OCI_INDEX_CERT" && -s "$BPM_OCI_INDEX_CERT" ]] ||
+		die "TEST_VM_BPM_OCI_INDEX_CERT is not a readable, non-empty regular file: $BPM_OCI_INDEX_CERT"
 }
 
 print_dependency_install_command()
@@ -908,6 +941,7 @@ validate_mode
 validate_kernel_selection
 validate_map_export
 validate_oci_ca
+validate_bpm_oci
 check_host_dependencies
 validate_host_bundle
 [[ "$CPUS" =~ ^[1-9][0-9]*$ ]] || die "TEST_VM_CPUS must be a positive integer"
@@ -932,6 +966,7 @@ SWTPM_SOCKET="${RUN_DIR}/tpm/swtpm-sock"
 SWTPM_PIDFILE="${RUN_DIR}/tpm/swtpm.pid"
 OTEL_CA_DIR=""
 OCI_CA_DIR=""
+BPM_OCI_DIR=""
 
 if [[ "$MAP_EXPORT_ENABLED" -eq 1 && -n "$MAP_EXPORT_CA" ]]; then
 	OTEL_CA_DIR="${RUN_DIR}/otel-ca"
@@ -943,6 +978,21 @@ if [[ -n "$OCI_CA" ]]; then
 	OCI_CA_DIR="${RUN_DIR}/oci-ca"
 	mkdir -p "$OCI_CA_DIR"
 	install -m 0644 "$OCI_CA" "$OCI_CA_DIR/ca.crt"
+fi
+
+if [[ -n "$BPM_OCI_ENDPOINT" ]]; then
+	BPM_OCI_DIR="${RUN_DIR}/bpm-oci"
+	mkdir -p "$BPM_OCI_DIR/keys" "$BPM_OCI_DIR/registries.d"
+	install -m 0644 "$BPM_OCI_INDEX_CERT" \
+		"$BPM_OCI_DIR/keys/${BPM_OCI_SOURCE}.pem"
+	{
+		printf '%s\n' "endpoint = $BPM_OCI_ENDPOINT" \
+			"key_file = /etc/shirudo/bpm/keys/${BPM_OCI_SOURCE}.pem"
+	} >"$BPM_OCI_DIR/registries.d/${BPM_OCI_SOURCE}.conf"
+	chmod 0644 "$BPM_OCI_DIR/registries.d/${BPM_OCI_SOURCE}.conf"
+	printf 'BPM_OCI_REPOSITORY=%q\n' "$BPM_OCI_ENDPOINT" \
+		>"$BPM_OCI_DIR/repository.env"
+	chmod 0644 "$BPM_OCI_DIR/repository.env"
 fi
 
 qemu-img create -q -f qcow2 -F qcow2 -b "$ROOTFS" "$OVERLAY"
@@ -997,6 +1047,12 @@ printf '      export TEST_VM_SSH_PUBLIC_KEY=%q\n' "$SSH_PUBLIC_KEY" >>"$USER_DAT
 if [[ -n "$OCI_CA_DIR" ]]; then
 	printf '      export TEST_VM_OCI_CA=/mnt/shirudo-oci/ca.crt\n' >>"$USER_DATA"
 fi
+if [[ -n "$BPM_OCI_ENDPOINT" ]]; then
+	printf '      export TEST_VM_BPM_OCI_SOURCE=%q\n' \
+		"$BPM_OCI_SOURCE" >>"$USER_DATA"
+	printf '      export TEST_VM_BPM_OCI_INPUT=/mnt/shirudo-bpm-oci\n' \
+		>>"$USER_DATA"
+fi
 if [[ "$MAP_EXPORT_ENABLED" -eq 1 ]]; then
 	{
 		printf '      export TEST_VM_MAP_EXPORT_ENDPOINT=%q\n' \
@@ -1014,6 +1070,12 @@ cat >>"$USER_DATA" <<'EOF'
       if [ -n "${TEST_VM_OCI_CA:-}" ]; then
         mkdir -p /mnt/shirudo-oci
         mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,ro shirudo-oci /mnt/shirudo-oci || rc=$?
+      fi
+EOF
+cat >>"$USER_DATA" <<'EOF'
+      if [ -n "${TEST_VM_BPM_OCI_INPUT:-}" ]; then
+        mkdir -p /mnt/shirudo-bpm-oci
+        mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,ro shirudo-bpm-oci /mnt/shirudo-bpm-oci || rc=$?
       fi
 EOF
 cat >>"$USER_DATA" <<'EOF'
@@ -1088,6 +1150,12 @@ fi
 if [[ -n "$OCI_CA_DIR" ]]; then
 	QEMU_ARGS+=(
 		-virtfs "local,id=shirudo-oci,path=${OCI_CA_DIR},mount_tag=shirudo-oci,security_model=none,readonly=on"
+	)
+fi
+
+if [[ -n "$BPM_OCI_DIR" ]]; then
+	QEMU_ARGS+=(
+		-virtfs "local,id=shirudo-bpm-oci,path=${BPM_OCI_DIR},mount_tag=shirudo-bpm-oci,security_model=none,readonly=on"
 	)
 fi
 
