@@ -23,6 +23,21 @@ log()
 	printf '[test-vm guest] %s\n' "$*"
 }
 
+configure_oci_ca()
+{
+	local ca_file="${TEST_VM_OCI_CA:-}"
+
+	[[ -z "$ca_file" ]] && return 0
+	[[ "$ca_file" == /mnt/shirudo-oci/ca.crt && -s "$ca_file" ]] || {
+		log "OCI CA file is missing from the host share"
+		return 1
+	}
+	install -d -m 0755 /usr/local/share/ca-certificates
+	install -m 0644 "$ca_file" \
+		/usr/local/share/ca-certificates/shirudo-oci-ca.crt
+	update-ca-certificates
+}
+
 configure_map_export()
 {
 	local endpoint="${TEST_VM_MAP_EXPORT_ENDPOINT:-}"
@@ -80,6 +95,7 @@ configure_map_export()
 		>/etc/shirudo/shirudo.conf
 }
 
+configure_oci_ca
 configure_map_export
 
 [[ -s /etc/shirudo-test-vm-runtime ]] || {

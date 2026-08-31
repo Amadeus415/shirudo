@@ -285,6 +285,15 @@ include ``otel.test`` in its subject alternative names.  ``make vm``
 configures the VM exporter but does not start the collector.  Leaving all
 map-export variables unset keeps the normal test-VM bootstrap unchanged.
 
+To trust a private HTTPS OCI registry from inside the VM, provide its PEM CA
+certificate when creating the VM::
+
+    make vm TEST_VM_OCI_CA=/path/to/registry-ca.pem
+
+The CA is copied into the per-VM state directory through a read-only QEMU
+share and installed into the guest system trust store during bootstrap.  The
+VM continues to verify both the registry certificate chain and its hostname.
+
 4. Generate the signing key (operator machine, one time)
 =========================================================
 
@@ -1630,6 +1639,35 @@ Three options, easiest first:
 
     sudo umount /var/lib/shirudo/bpffs     # LSM off, all pins gone
     sudo rm -rf /var/lib/shirudo/*         # keys, cert, upatches, eventlog, pins
+
+Target-local BPM repositories
+-----------------------------
+
+The target binary includes a small OCI-backed package manager.  A private
+registry needs both normal HTTPS trust (the CA must be installed in the
+guest system trust store, or supplied with ``BPM_OCI_CA_FILE``) and a public
+certificate for the signed BPM repository index:
+
+.. code-block:: sh
+
+    sudo shirudo bpm config register add example \
+        oci://registry.example.com \
+        --key-file /path/to/repository-index-cert.pem
+    sudo shirudo bpm repo update
+    sudo shirudo bpm key add ./my-org-0.1.0.bee
+    sudo shirudo bpm install example/my-org
+    sudo shirudo bpm upgrade
+
+``--key-file`` is the repository-index trust certificate; it is not the
+registry CA and does not contain a private key.  ``bpm key add`` explicitly
+bootstraps the Shirudo package/upatch certificate from a package archive.
+The package certificate is never trusted automatically from a download.
+
+Repository definitions live in ``/etc/shirudo/bpm/registries.d/``.  Cached
+indexes and downloaded packages live below ``/var/lib/shirudo/bpm/``.  The
+native client uses HTTPS verification through libcurl, Docker/containers
+registry credentials, OpenSSL CMS signatures, and the existing Shirudo
+upatch load/unload paths.
 
 A reboot also clears the in-kernel state (keyring and bpffs are
 per-boot); the installed systemd unit re-runs ``init`` early on the next

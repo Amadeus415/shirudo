@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -203,6 +205,7 @@ func (repo bpmOCIRepository) reference(tag string) string {
 type bpmOCIRegistryClient struct {
 	baseURL      *url.URL
 	httpClient   *http.Client
+	initErr      error
 	repository   string
 	credentials  bpmRegistryCredentials
 	token        string
@@ -220,26 +223,76 @@ func newBPMOCIRegistryClient(registry string, repository string, httpClient *htt
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
+	configuredClient, err := configureBPMOCIHTTPClient(httpClient)
+	if err == nil {
+		httpClient = configuredClient
+	}
 
 	credentials, _ := findBPMRegistryCredentials(registry)
 	return &bpmOCIRegistryClient{
 		baseURL:     bpmRegistryBaseURL(registry),
 		httpClient:  httpClient,
+		initErr:     err,
 		repository:  repository,
 		credentials: credentials,
 	}
 }
 
 func bpmRegistryBaseURL(registry string) *url.URL {
-	scheme := "https"
-	if strings.HasPrefix(registry, "localhost:") || strings.HasPrefix(registry, "127.0.0.1:") {
-		scheme = "http"
+	scheme := strings.TrimSpace(os.Getenv("BPM_OCI_SCHEME"))
+	if scheme == "" {
+		scheme = "https"
+		if strings.HasPrefix(registry, "localhost:") || strings.HasPrefix(registry, "127.0.0.1:") {
+			scheme = "http"
+		}
 	}
 
 	return &url.URL{
 		Scheme: scheme,
 		Host:   registry,
 	}
+}
+
+func configureBPMOCIHTTPClient(client *http.Client) (*http.Client, error) {
+	scheme := strings.TrimSpace(os.Getenv("BPM_OCI_SCHEME"))
+	if scheme != "" && scheme != "https" && scheme != "http" {
+		return client, fmt.Errorf("BPM_OCI_SCHEME must be https or http, got %q", scheme)
+	}
+	caPath := strings.TrimSpace(os.Getenv("BPM_OCI_CA_FILE"))
+	if caPath == "" {
+		return client, nil
+	}
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		return client, fmt.Errorf("read BPM_OCI_CA_FILE %s: %w", caPath, err)
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		pool = x509.NewCertPool()
+	}
+	if pool == nil || !pool.AppendCertsFromPEM(caPEM) {
+		return client, fmt.Errorf("BPM_OCI_CA_FILE %s does not contain a valid PEM CA certificate", caPath)
+	}
+
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		if client.Transport == nil {
+			transport, ok = http.DefaultTransport.(*http.Transport)
+		}
+	}
+	if !ok {
+		return client, fmt.Errorf("BPM_OCI_CA_FILE requires an HTTP TLS transport")
+	}
+	transport = transport.Clone()
+	if transport.TLSClientConfig != nil {
+		transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+	} else {
+		transport.TLSClientConfig = &tls.Config{}
+	}
+	transport.TLSClientConfig.RootCAs = pool
+	configured := *client
+	configured.Transport = transport
+	return &configured, nil
 }
 
 func (client *bpmOCIRegistryClient) pushPackage(ctx context.Context, archive bpmPackageArchive, filename string) (bpmOCIDescriptor, error) {
@@ -369,6 +422,10 @@ func (client *bpmOCIRegistryClient) pushBlob(ctx context.Context, body []byte, m
 	if err != nil {
 		return bpmOCIDescriptor{}, fmt.Errorf("parse package blob upload location: %w", err)
 	}
+	if uploadURL.Scheme != client.baseURL.Scheme ||
+		uploadURL.Host != client.baseURL.Host {
+		return bpmOCIDescriptor{}, fmt.Errorf("reject package blob upload location on different origin %s", uploadURL.Redacted())
+	}
 	query := uploadURL.Query()
 	query.Set("digest", descriptor.Digest)
 	uploadURL.RawQuery = query.Encode()
@@ -474,6 +531,9 @@ func (client *bpmOCIRegistryClient) url(requestPath string) *url.URL {
 }
 
 func (client *bpmOCIRegistryClient) do(ctx context.Context, method string, requestURL *url.URL, body []byte, contentType string, accept string, scope string) (*http.Response, error) {
+	if client.initErr != nil {
+		return nil, client.initErr
+	}
 	resp, err := client.doOnce(ctx, method, requestURL, body, contentType, accept)
 	if err != nil {
 		return nil, err

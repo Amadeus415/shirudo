@@ -291,6 +291,24 @@ test_expect_success 'test-vm validates a custom OTEL CA file before boot' '
 		"$WORK/missing-map-export-ca.out"
 '
 
+test_expect_success 'test-vm passes an OCI CA into the guest trust store' '
+	grep -q "TEST_VM_OCI_CA" ../Makefile &&
+	grep -q "OCI_CA=\"\${TEST_VM_OCI_CA:-}\"" "$RUNNER" &&
+	grep -q "shirudo-oci" "$RUNNER" &&
+	grep -q "export TEST_VM_OCI_CA=/mnt/shirudo-oci/ca.crt" "$RUNNER" &&
+	grep -q "shirudo-oci-ca.crt" ../contrib/test-vm-guest.sh &&
+	grep -q "update-ca-certificates" ../contrib/test-vm-guest.sh
+'
+
+test_expect_success 'test-vm validates a custom OCI CA file before boot' '
+	! TEST_VM_WORK_DIR="$WORK/missing-oci-ca" \
+		TEST_VM_KERNEL="$WORK/map-export-kernel" \
+		TEST_VM_OCI_CA="$WORK/no-oci-ca.pem" "$RUNNER" \
+		>"$WORK/missing-oci-ca.out" 2>&1 &&
+	grep -q "TEST_VM_OCI_CA is not a readable, non-empty regular file" \
+		"$WORK/missing-oci-ca.out"
+'
+
 test_expect_success 'make test runs the complete pipeline in order' '
 	grep -q "^test-op: all shirudo-build test-helpers" ../Makefile &&
 	! grep -Eq "^(check:|.*\bcheck\b.*\.PHONY)" ../Makefile &&

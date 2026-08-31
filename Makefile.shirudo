@@ -80,7 +80,7 @@ STATIC_LIBS = \
     $(LIBBPF_A)
 
 DYNAMIC_LIBS := \
-    $(LIBCRYPTO_LIBS) $(LIBSSH_LIBS) $(TSS2_LIBS) \
+    $(LIBCRYPTO_LIBS) -lssl $(LIBSSH_LIBS) $(TSS2_LIBS) \
     $(LIBELF_LIBS) $(ZLIB_LIBS) $(LIBCURL_LIBS)
 
 CFLAGS += $(LUAJIT_CFLAGS) -DSHIRUDO_HAVE_LUAJIT
@@ -146,6 +146,7 @@ BUILTIN_SRCS := \
     builtin-keys.c \
     builtin-config.c \
     builtin-upatch.c \
+    builtin-bpm.c \
     builtin-rollout.c \
     builtin-nodes.c \
     builtin-remote.c \

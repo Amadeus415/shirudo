@@ -65,7 +65,8 @@ func newStandaloneBPMPullCommand() *cobra.Command {
 }
 
 func newStandaloneBPMPushCommand() *cobra.Command {
-	return &cobra.Command{
+	var indexCert, indexKey string
+	cmd := &cobra.Command{
 		Use:   "push <package-file> <repository>",
 		Short: "Push an eBPF package",
 		Args:  cobra.ExactArgs(2),
@@ -76,7 +77,7 @@ func newStandaloneBPMPushCommand() *cobra.Command {
 			}
 			defer cancel()
 
-			ref, err := putBPMPackage(ctx, args[0], args[1], nil)
+			ref, err := putBPMPackageWithIndex(ctx, args[0], args[1], indexCert, indexKey, nil)
 			if err != nil {
 				return err
 			}
@@ -84,6 +85,9 @@ func newStandaloneBPMPushCommand() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&indexCert, "index-cert", "", "repository index signing certificate")
+	cmd.Flags().StringVar(&indexKey, "index-key", "", "repository index signing private key")
+	return cmd
 }
 
 func newStandaloneBPMInfoCommand() *cobra.Command {

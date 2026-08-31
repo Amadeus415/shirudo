@@ -18,6 +18,7 @@ int cmd_build(int argc, const char **argv);
 /* Target-side. */
 int cmd_init(int argc, const char **argv);
 int cmd_upatch(int argc, const char **argv);
+int cmd_bpm(int argc, const char **argv);
 
 /*
  * Target-side shared op: load + attach + pin one signed LOAD upatch.
@@ -25,6 +26,8 @@ int cmd_upatch(int argc, const char **argv);
  * both share the identical signature-verified path. 0 on success.
  */
 int shirudo_upatch_apply(const char *path);
+int shirudo_upatch_install(const char *path);
+int shirudo_upatch_remove(const char *path);
 
 /* Either-side. */
 int cmd_status(int argc, const char **argv);

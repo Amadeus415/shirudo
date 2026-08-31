@@ -73,6 +73,30 @@ func TestParseBPMOCIReferenceRejectsMissingTag(t *testing.T) {
 	}
 }
 
+func TestBPMOCIRejectsInvalidScheme(t *testing.T) {
+	t.Setenv("BPM_OCI_SCHEME", "ftp")
+	client := newBPMOCIRegistryClient("registry.test", "example/package", nil)
+	_, err := client.do(context.Background(), http.MethodGet,
+		client.url("/v2/example/package/manifests/stable"), nil, "", "", "")
+	if err == nil || !strings.Contains(err.Error(), "BPM_OCI_SCHEME") {
+		t.Fatalf("error = %v, want BPM_OCI_SCHEME diagnostic", err)
+	}
+}
+
+func TestBPMOCIRejectsInvalidCAFile(t *testing.T) {
+	caPath := filepath.Join(t.TempDir(), "not-a-ca.pem")
+	if err := os.WriteFile(caPath, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatalf("write CA file: %v", err)
+	}
+	t.Setenv("BPM_OCI_CA_FILE", caPath)
+	client := newBPMOCIRegistryClient("registry.test", "example/package", nil)
+	_, err := client.do(context.Background(), http.MethodGet,
+		client.url("/v2/example/package/manifests/stable"), nil, "", "", "")
+	if err == nil || !strings.Contains(err.Error(), "valid PEM CA certificate") {
+		t.Fatalf("error = %v, want CA diagnostic", err)
+	}
+}
+
 func TestPutBPMPackage(t *testing.T) {
 	packagePath, wantCertificate := buildTestBPMPackageWithCert(t)
 	uploads := map[string][]byte{}
@@ -188,6 +212,32 @@ func TestPutBPMPackage(t *testing.T) {
 	}
 	if publicKeyManifest.Layers[0].Annotations != nil {
 		t.Fatalf("public key layer annotations = %#v", publicKeyManifest.Layers[0].Annotations)
+	}
+}
+
+func TestPutBPMPackageRejectsCrossOriginUploadLocation(t *testing.T) {
+	packagePath, _ := buildTestBPMPackageWithCert(t)
+	httpClient := &http.Client{Transport: bpmRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch {
+		case request.Method == http.MethodHead:
+			return bpmTestResponse(request, http.StatusNotFound, "", nil), nil
+		case request.Method == http.MethodPost:
+			return bpmTestResponse(request, http.StatusAccepted, "", map[string]string{
+				"Location": "https://uploads.example.invalid/v2/upload-id",
+			}), nil
+		default:
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.String())
+			return nil, nil
+		}
+	})}
+
+	_, err := putBPMPackage(context.Background(), packagePath,
+		"oci://registry.test/isovalent-dev/hello-bee-world", httpClient)
+	if err == nil {
+		t.Fatalf("putBPMPackage() error = nil, want cross-origin rejection")
+	}
+	if !strings.Contains(err.Error(), "different origin") {
+		t.Fatalf("error = %v, want different-origin diagnostic", err)
 	}
 }
 

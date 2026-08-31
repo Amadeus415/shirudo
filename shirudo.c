@@ -55,6 +55,7 @@ static const struct cmd commands[] = {
 
 	{ "init",	cmd_init,	GROUP_TARGET,	"bootstrap the BPF LSM on this target" },
 	{ "upatch",	cmd_upatch,	GROUP_TARGET,	"load / unload (target); list / info (read-only, anywhere)" },
+	{ "bpm",	cmd_bpm,	GROUP_TARGET,	"manage signed OCI packages on this target" },
 
 	{ "status",	cmd_status,	GROUP_LOCAL,	"local readiness + state report" },
 	{ "keys",	cmd_keys,	GROUP_LOCAL,	"inspect cert / keyring contents" },

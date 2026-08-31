@@ -60,6 +60,27 @@ _shirudo()
 				    $(compgen -d -- "$cur") )
 		fi
 		;;
+	bpm)
+		if (( cword == 2 )); then
+			local subs
+			subs=$("$bin" bpm --list-cmds 2>/dev/null)
+			COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
+		elif [[ $sub == config && cword -eq 3 ]]; then
+			COMPREPLY=( $(compgen -W "register" -- "$cur") )
+		elif [[ $sub == config && ${COMP_WORDS[3]} == register && cword -eq 4 ]]; then
+			COMPREPLY=( $(compgen -W "add list remove" -- "$cur") )
+		elif [[ $sub == config && ${COMP_WORDS[3]} == register && ${COMP_WORDS[4]} == add && $cur == -* ]]; then
+			COMPREPLY=( $(compgen -W "--key-file=" -- "$cur") )
+		elif [[ $sub == repo && cword -eq 3 ]]; then
+			COMPREPLY=( $(compgen -W "update" -- "$cur") )
+		elif [[ $sub == key && cword -eq 3 ]]; then
+			COMPREPLY=( $(compgen -W "add" -- "$cur") )
+		elif [[ $sub == key && ${COMP_WORDS[3]} == add ]]; then
+			COMPREPLY=( $(compgen -f -X '!*.bee' -- "$cur") $(compgen -f -- "$cur") )
+		elif [[ $sub == install && $cword -eq 3 ]]; then
+			COMPREPLY=( $(compgen -W "example/package" -- "$cur") )
+		fi
+		;;
 	remote)
 		if (( cword == 2 )); then
 			local subs

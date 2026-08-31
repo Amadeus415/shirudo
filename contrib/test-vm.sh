@@ -76,6 +76,7 @@ MAP_EXPORT_ENDPOINT="${TEST_VM_MAP_EXPORT_ENDPOINT:-}"
 LEGACY_MAP_EXPORT_TENANT_ID="${TEST_VM_MAP_EXPORT_TENANT_ID:-}"
 MAP_EXPORT_INSECURE="${TEST_VM_MAP_EXPORT_INSECURE:-}"
 MAP_EXPORT_CA="${TEST_VM_MAP_EXPORT_CA:-}"
+OCI_CA="${TEST_VM_OCI_CA:-}"
 MAP_EXPORT_TENANT_ID=""
 MAP_EXPORT_ENABLED=0
 RUN_DIR=""
@@ -204,6 +205,14 @@ validate_map_export()
 	[[ "$MAP_EXPORT_TENANT_ID" =~ ^[A-Za-z0-9._-]{1,128}$ ]] ||
 		die "VM_TENANT must contain 1..128 characters from A-Z, a-z, 0-9, '.', '_', '-'"
 	MAP_EXPORT_ENABLED=1
+}
+
+validate_oci_ca()
+{
+	if [[ -n "$OCI_CA" ]]; then
+		[[ -f "$OCI_CA" && -r "$OCI_CA" && -s "$OCI_CA" ]] ||
+			die "TEST_VM_OCI_CA is not a readable, non-empty regular file: $OCI_CA"
+	fi
 }
 
 print_dependency_install_command()
@@ -898,6 +907,7 @@ done
 validate_mode
 validate_kernel_selection
 validate_map_export
+validate_oci_ca
 check_host_dependencies
 validate_host_bundle
 [[ "$CPUS" =~ ^[1-9][0-9]*$ ]] || die "TEST_VM_CPUS must be a positive integer"
@@ -921,11 +931,18 @@ NETWORK_CONFIG="${RUN_DIR}/network-config"
 SWTPM_SOCKET="${RUN_DIR}/tpm/swtpm-sock"
 SWTPM_PIDFILE="${RUN_DIR}/tpm/swtpm.pid"
 OTEL_CA_DIR=""
+OCI_CA_DIR=""
 
 if [[ "$MAP_EXPORT_ENABLED" -eq 1 && -n "$MAP_EXPORT_CA" ]]; then
 	OTEL_CA_DIR="${RUN_DIR}/otel-ca"
 	mkdir -p "$OTEL_CA_DIR"
 	install -m 0644 "$MAP_EXPORT_CA" "$OTEL_CA_DIR/ca.pem"
+fi
+
+if [[ -n "$OCI_CA" ]]; then
+	OCI_CA_DIR="${RUN_DIR}/oci-ca"
+	mkdir -p "$OCI_CA_DIR"
+	install -m 0644 "$OCI_CA" "$OCI_CA_DIR/ca.crt"
 fi
 
 qemu-img create -q -f qcow2 -F qcow2 -b "$ROOTFS" "$OVERLAY"
@@ -977,6 +994,9 @@ printf '      export TEST_VM_DNS_FUZZ=%q\n' "$DNS_FUZZ" >>"$USER_DATA"
 printf '      export TEST_VM_DNS_FUZZ_SEED=%q\n' "$DNS_FUZZ_SEED" >>"$USER_DATA"
 printf '      export TEST_VM_DNS_FUZZ_CASES=%q\n' "$DNS_FUZZ_CASES" >>"$USER_DATA"
 printf '      export TEST_VM_SSH_PUBLIC_KEY=%q\n' "$SSH_PUBLIC_KEY" >>"$USER_DATA"
+if [[ -n "$OCI_CA_DIR" ]]; then
+	printf '      export TEST_VM_OCI_CA=/mnt/shirudo-oci/ca.crt\n' >>"$USER_DATA"
+fi
 if [[ "$MAP_EXPORT_ENABLED" -eq 1 ]]; then
 	{
 		printf '      export TEST_VM_MAP_EXPORT_ENDPOINT=%q\n' \
@@ -990,6 +1010,12 @@ if [[ "$MAP_EXPORT_ENABLED" -eq 1 ]]; then
 		fi
 	} >>"$USER_DATA"
 fi
+cat >>"$USER_DATA" <<'EOF'
+      if [ -n "${TEST_VM_OCI_CA:-}" ]; then
+        mkdir -p /mnt/shirudo-oci
+        mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,ro shirudo-oci /mnt/shirudo-oci || rc=$?
+      fi
+EOF
 cat >>"$USER_DATA" <<'EOF'
       if [ -n "${TEST_VM_MAP_EXPORT_CA:-}" ]; then
         mkdir -p /mnt/shirudo-otel
@@ -1056,6 +1082,12 @@ QEMU_ARGS=(
 if [[ -n "$OTEL_CA_DIR" ]]; then
 	QEMU_ARGS+=(
 		-virtfs "local,id=shirudo-otel,path=${OTEL_CA_DIR},mount_tag=shirudo-otel,security_model=none,readonly=on"
+	)
+fi
+
+if [[ -n "$OCI_CA_DIR" ]]; then
+	QEMU_ARGS+=(
+		-virtfs "local,id=shirudo-oci,path=${OCI_CA_DIR},mount_tag=shirudo-oci,security_model=none,readonly=on"
 	)
 fi
 

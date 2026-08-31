@@ -2979,6 +2979,22 @@ done:
 	return ret;
 }
 
+/* Native BPM lifecycle hooks.  Keep package installation on the exact
+ * same signed/persisted path as the public upatch commands. */
+int shirudo_upatch_install(const char *path)
+{
+	const char *argv[] = { "load", "--no-precheck", path };
+
+	return cmd_upatch_load(3, argv);
+}
+
+int shirudo_upatch_remove(const char *path)
+{
+	const char *argv[] = { "unload", "--no-precheck", path };
+
+	return cmd_upatch_unload(3, argv);
+}
+
 /*
  * Render the source lines clang -g embedded in a program's BTF
  * (resolved via line_info records: line_off -> the source text, in the
