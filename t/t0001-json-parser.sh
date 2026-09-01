@@ -24,6 +24,10 @@ test_expect_success 'unknown keys and nested objects are skipped' '
 	printf "%s" "{\"a\":{\"b\":[1,2,3]},\"digest\":\"ff\",\"c\":true}" | ./$H | grep -q "digest=ff"
 '
 
+test_expect_success 'unconfigured schema entries skip unknown keys without crashing' '
+	printf "%s" "{\"unknown\":true,\"digest\":\"ff\"}" | ./$H | grep -q "digest=ff"
+'
+
 test_expect_success 'discarded object key colliding with schema does not mis-dispatch' '
 	out=$(printf "%s" "{\"a\":{\"digest\":123,\"type\":true},\"digest\":\"ff\",\"type\":\"init\"}" | ./$H) &&
 	echo "$out" | grep -qx "rc=0" &&

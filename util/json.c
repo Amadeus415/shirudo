@@ -457,7 +457,7 @@ static int parse_object(struct pctx *c)
 			return -EINVAL;
 		c->p++;
 		for (i = 0; i < c->n_fields; i++) {
-			if (strcmp(c->fields[i].key, key) == 0) {
+			if (c->fields[i].key && strcmp(c->fields[i].key, key) == 0) {
 				f = &c->fields[i];
 				break;
 			}

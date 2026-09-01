@@ -64,6 +64,8 @@ int main(void)
 		{ "digest", SHIRUDO_JSON_T_STRING, digest, sizeof(digest), 0, NULL, 0 },
 		{ "names",  SHIRUDO_JSON_T_ARRAY,  &name_sink, 0, 0, name_sub, 1 },
 		{ "events", SHIRUDO_JSON_T_ARRAY,  &event_sink, 0, 0, event_sub, 2 },
+		/* An empty schema slot must be ignored, not dereferenced. */
+		{ NULL, 0, NULL, 0, 0, NULL, 0 },
 	};
 	size_t n = fread(buf, 1, sizeof(buf), stdin);
 	int rc = shirudo_json_parse(buf, n, f, ARRAY_SIZE(f));
