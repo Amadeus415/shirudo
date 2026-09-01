@@ -214,16 +214,16 @@ load-bearing — consult them directly rather than reasoning from memory:
   blocked by systemd's private-keyring isolation.
 - **`shirudo build` is the sole subprocess exception, and it's
   operator-only by physical packaging.** The core `shirudo`
-  binary's `builtin-build.c` is a five-line `execv` dispatch to
-  `$(libexecdir)/shirudo/shirudo-build`; that path is hardcoded,
-  not `$PATH`-resolved. The `shirudo-build` binary itself
+  binary's `builtin-build.c` resolves the helper in this order:
+  `SHIRUDO_BUILD`, the compiled-in `$(libexecdir)/shirudo/shirudo-build`,
+  then `shirudo-build` on `$PATH`. The `shirudo-build` binary itself
   `execv`s `clang -target bpf …`. Both `shirudo-build` and
   `clang` ship only in the `shirudo-build` package (operator
-  install), not the `shirudo` package (target install). When
-  implementing or reviewing `builtin-build.c`, the rule is
-  **one `execv`, one hardcoded path, no `$PATH` lookup, no
-  environment dependency**. See PLAN.md §"Operator-only binaries
-  and dual install targets".
+  install), not the `shirudo` package (target install). When using
+  a checkout, put the checkout root and helper directory first on
+  `$PATH`; `SHIRUDO_BUILD` is available when an explicit helper path
+  is needed. See PLAN.md §"Operator-only binaries and dual install
+  targets".
 - The `lsm/bpf` hook's `bool kernel` arg is the security-critical
   discriminator. `kernel == true` means the call came from inside a (signed,
   kernel-verified) loader — those calls are always allowed. `kernel == false`

@@ -148,6 +148,16 @@ Cross-compile for an embedded target by setting ``CROSS_COMPILE`` and
 ``ARCH`` as you would for any kernel-style build. See PLAN.md
 "Build system" for details.
 
+For checkout/developer use, ``shirudo build`` can find the locally built
+operator helper without installing it. Put both the checkout's core binary
+and helper directory first on ``PATH``::
+
+    PATH=$PWD/tools/shirudo-build:$PWD:$PATH \
+        bpm build --keys-dir $HOME/.config/bpm
+
+The core command resolves ``shirudo-build`` in this order: ``SHIRUDO_BUILD``
+when set, its compiled-in installed path, then ``shirudo-build`` on ``PATH``.
+
 Live integration tests in a vTPM VM
 -----------------------------------
 

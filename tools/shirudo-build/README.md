@@ -15,9 +15,11 @@ exception in a separate binary that ships only with the operator
 package, the no-subprocess invariant remains absolute on every
 target-side code path.
 
-The core `shirudo` binary's `builtin-build.c` is a five-line `execv`
-wrapper to `$(libexecdir)/shirudo/shirudo-build`; the libexec path is
-hardcoded at build time, not `$PATH`-resolved.
+The core `shirudo` binary's `builtin-build.c` dispatches to the helper using
+this resolution order: the `SHIRUDO_BUILD` environment override, the
+compiled-in `$(libexecdir)/shirudo/shirudo-build` path, then
+`shirudo-build` found on `$PATH`. The last case supports using a checkout's
+locally built binaries without installing them.
 
 See `PLAN.md` § "Operator-only binaries and dual install targets" for
 the full rationale.
@@ -37,6 +39,14 @@ the full rationale.
 
 Distribution packagers should put this in a separate `shirudo-build`
 package that depends on `shirudo`, `clang`, and `llvm`.
+
+For checkout/developer use, build both binaries and put their directories
+first on `PATH`:
+
+```sh
+PATH="$PWD/tools/shirudo-build:$PWD:$PATH" \
+  bpm build --keys-dir "$HOME/.config/bpm"
+```
 
 ## Uprobe multi attach points
 
