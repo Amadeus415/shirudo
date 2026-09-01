@@ -666,39 +666,55 @@ static int boot_restore(struct restore_entry **out_set, size_t *out_n)
 	pr_info("boot-restore: re-applying %d upatch%s from %s",
 		n, n == 1 ? "" : "es", SHIRUDO_UPATCHES_DIR);
 
-	for (i = 0; i < n; i++) {
-		char path[PATH_MAX];
-		struct shirudo_upatch u;
+	/* Companion telemetry upatches must create their arena before the Java
+	 * selector is restored. Persisted names are not a dependency order. */
+	for (int pass = 0; pass < 2; pass++) {
+		for (i = 0; i < n; i++) {
+			char path[PATH_MAX];
+			struct shirudo_upatch u;
+			bool is_bpf;
 
-		if (rc)
-			goto next;
-		if (snprintf(path, sizeof(path), "%s/%s", SHIRUDO_UPATCHES_DIR,
-			     names[i]->d_name) >= (int)sizeof(path)) {
-			pr_err("boot-restore: path too long: %s",
-			       names[i]->d_name);
-			rc = -ENAMETOOLONG;
-			goto next;
-		}
-		/* Canonical name + payload hash for set_digest / eventlog. */
-		if (shirudo_upatch_open(path, &u) == 0) {
-			memcpy(set[cnt].name, u.hdr.name,
-			       SHIRUDO_UPATCH_NAME_MAX);
-			set[cnt].name[SHIRUDO_UPATCH_NAME_MAX] = '\0';
-			shirudo_hex_encode(u.hdr.payload_sha256,
-				   SHIRUDO_UPATCH_PAYLOAD_HASH_LEN,
-				   set[cnt].payload_hex);
+			if (rc)
+				continue;
+			if (snprintf(path, sizeof(path), "%s/%s", SHIRUDO_UPATCHES_DIR,
+				     names[i]->d_name) >= (int)sizeof(path)) {
+				pr_err("boot-restore: path too long: %s",
+				       names[i]->d_name);
+				rc = -ENAMETOOLONG;
+				continue;
+			}
+			if (shirudo_upatch_open(path, &u) != 0) {
+				/* The normal apply path emits the detailed parse failure. */
+				if (pass == 0)
+					continue;
+				rc = -EINVAL;
+				continue;
+			}
+			is_bpf = u.hdr.type == SHIRUDO_UPATCH_TYPE_BPF;
 			shirudo_upatch_close(&u);
+			if ((pass == 0) != is_bpf)
+				continue;
+			/* Canonical name + payload hash for set_digest / eventlog. */
+			if (shirudo_upatch_open(path, &u) == 0) {
+				memcpy(set[cnt].name, u.hdr.name,
+				       SHIRUDO_UPATCH_NAME_MAX);
+				set[cnt].name[SHIRUDO_UPATCH_NAME_MAX] = '\0';
+				shirudo_hex_encode(u.hdr.payload_sha256,
+					   SHIRUDO_UPATCH_PAYLOAD_HASH_LEN,
+					   set[cnt].payload_hex);
+				shirudo_upatch_close(&u);
+			}
+			if (shirudo_upatch_apply(path) != 0) {
+				pr_err("boot-restore: failed to apply %s",
+				       names[i]->d_name);
+				rc = -EINVAL;
+				continue;
+			}
+			cnt++;
 		}
-		if (shirudo_upatch_apply(path) != 0) {
-			pr_err("boot-restore: failed to apply %s",
-			       names[i]->d_name);
-			rc = -EINVAL;
-			goto next;
-		}
-		cnt++;
-next:
-		shirudo_libc_free(names[i]);	/* scandir-owned */
 	}
+	for (i = 0; i < n; i++)
+		shirudo_libc_free(names[i]);
 	shirudo_libc_free(names);		/* scandir-owned */
 
 	if (rc) {

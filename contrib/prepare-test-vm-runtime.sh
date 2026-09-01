@@ -11,6 +11,7 @@ CACHE_DIR=
 PACKAGE_FILE=
 RUNTIME_KEY=
 KEY_OUTPUT=
+RUNTIME_DISK_SIZE=${TEST_VM_RUNTIME_DISK_SIZE:-8G}
 
 die() { printf '[test-vm-runtime] error: %s\n' "$*" >&2; exit 1; }
 
@@ -54,7 +55,10 @@ MARKER="${TMP_IMAGE}.marker"
 cleanup() { rm -f -- "$TMP_IMAGE" "$MARKER"; }
 trap cleanup EXIT
 
+# The cloud image is intentionally small.  Enlarge the backing overlay and
+# grow its existing root partition before installing the runtime packages.
 qemu-img create -q -f qcow2 -F qcow2 -b "$ROOTFS" "$TMP_IMAGE"
+qemu-img resize -q "$TMP_IMAGE" "$RUNTIME_DISK_SIZE"
 paste -sd, "$PACKAGE_FILE" >"${TMP_IMAGE}.packages"
 PACKAGES="$(<"${TMP_IMAGE}.packages")"
 rm -f -- "${TMP_IMAGE}.packages"
@@ -66,6 +70,7 @@ if ! TMPDIR="$GUESTFS_TMP_DIR" XDG_RUNTIME_DIR="$GUESTFS_RUNTIME_DIR" \
 	LIBGUESTFS_TMPDIR="$GUESTFS_TMP_DIR" \
 	LIBGUESTFS_CACHEDIR="$GUESTFS_CACHE_DIR" virt-customize \
 	-a "$TMP_IMAGE" --network --no-selinux-relabel \
+	--run-command 'growpart /dev/sda 1 && resize2fs /dev/sda1' \
 	--install "$PACKAGES" \
 	--upload "$MARKER:/etc/shirudo-test-vm-runtime" \
 	--run-command 'apt-get clean' \

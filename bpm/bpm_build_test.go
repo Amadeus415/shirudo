@@ -128,6 +128,24 @@ func TestRunBPMShirudoBuildUpatchCommand(t *testing.T) {
 	if !strings.Contains(got, dir+"|build --unload hello-upatch --payload-sha256 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f -o "+logPath+" --keys-dir /tmp/keys") {
 		t.Fatalf("argv = %q", got)
 	}
+
+	if err := runBPMShirudoBuildUpatch(context.Background(), bpmShirudoBuildUpatchOptions{
+		WorkDir:         dir,
+		Source:          "agent.jar",
+		Output:          logPath,
+		Type:            "java",
+		TelemetryUpatch: "javaagent_metrics",
+		KeysDir:         "/tmp/keys",
+	}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("runBPMShirudoBuildUpatch(java) error = %v", err)
+	}
+	body, err = os.ReadFile(filepath.Join(dir, "build.argv"))
+	if err != nil {
+		t.Fatalf("read Java argv: %v", err)
+	}
+	if !strings.Contains(string(body), "--type java --telemetry-upatch javaagent_metrics") {
+		t.Fatalf("Java argv = %q", body)
+	}
 }
 
 func TestBuildBPMUpatchesRejectsDuplicateOutputsBeforeShirudo(t *testing.T) {

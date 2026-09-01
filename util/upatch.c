@@ -34,11 +34,15 @@ static uint64_t rd_le64(const void *p)
 }
 
 static int parse_header(const unsigned char *m, size_t n,
-			struct shirudo_upatch_header *out)
+			struct shirudo_upatch_header *out, size_t *header_size)
 {
 	const unsigned char *p = m;
+	uint32_t type = SHIRUDO_UPATCH_TYPE_BPF;
+	uint32_t reserved = 0;
+	uint32_t loader_off, signature_off, metadata_off, data_off;
+	bool new_header = false;
 
-	if (n < sizeof(*out))
+	if (n < SHIRUDO_UPATCH_LEGACY_HEADER_SIZE)
 		return -EINVAL;
 
 	out->magic = rd_le64(p); p += 8;
@@ -57,46 +61,101 @@ static int parse_header(const unsigned char *m, size_t n,
 	memcpy(out->payload_sha256, p, sizeof(out->payload_sha256));
 	p += sizeof(out->payload_sha256);
 
-	out->loader_insns_off	= rd_le32(p); p += 4;
-	out->loader_insns_len	= rd_le32(p); p += 4;
-	out->signature_off	= rd_le32(p); p += 4;
-	out->signature_len	= rd_le32(p); p += 4;
-	out->metadata_off	= rd_le32(p); p += 4;
-	out->metadata_len	= rd_le32(p); p += 4;
-	out->data_off		= rd_le32(p); p += 4;
-	out->data_len		= rd_le32(p); p += 4;
+	loader_off = rd_le32(p); p += 4;
+	out->loader_insns_off = loader_off;
+	out->loader_insns_len = rd_le32(p); p += 4;
+	signature_off = rd_le32(p); p += 4;
+	out->signature_off = signature_off;
+	out->signature_len = rd_le32(p); p += 4;
+	metadata_off = rd_le32(p); p += 4;
+	out->metadata_off = metadata_off;
+	out->metadata_len = rd_le32(p); p += 4;
+	data_off = rd_le32(p); p += 4;
+	out->data_off = data_off;
+	out->data_len = rd_le32(p); p += 4;
 	out->log_buf_sz		= rd_le32(p); p += 4;
 	out->nr_maps		= rd_le32(p); p += 4;
 	out->nr_progs		= rd_le32(p); p += 4;
 	out->extra_off		= rd_le32(p); p += 4;
 
+	/* New v1 files append type + an explicit alignment word.  A legacy
+	 * file is distinguishable by sections that begin at the old 352-byte
+	 * boundary; default those files to BPF. */
+	if (n >= SHIRUDO_UPATCH_HEADER_SIZE) {
+		uint32_t tail_type = rd_le32(m + SHIRUDO_UPATCH_LEGACY_HEADER_SIZE);
+		uint32_t tail_reserved = rd_le32(m + SHIRUDO_UPATCH_LEGACY_HEADER_SIZE + 4);
+
+		/* A legacy BPF loader starts at byte 352.  Do not infer the
+		 * header size from later sections, since those naturally lie
+		 * beyond 360 too.  New BPF files move the loader to 360; Java
+		 * files have no loader and are identified by the appended type. */
+		if (tail_reserved == 0 &&
+		    (tail_type == SHIRUDO_UPATCH_TYPE_JAVA ||
+		     loader_off >= SHIRUDO_UPATCH_HEADER_SIZE)) {
+			new_header = true;
+			type = tail_type;
+			reserved = tail_reserved;
+		}
+	}
+	if (new_header && type != SHIRUDO_UPATCH_TYPE_BPF &&
+	    type != SHIRUDO_UPATCH_TYPE_JAVA)
+		return -EINVAL;
+	out->type = type;
+	out->reserved = reserved;
+	*header_size = new_header ? SHIRUDO_UPATCH_HEADER_SIZE :
+		SHIRUDO_UPATCH_LEGACY_HEADER_SIZE;
+
 	return 0;
 }
 
-static int section_inside(uint32_t off, uint32_t len, size_t n)
+static int section_inside(uint32_t off, uint32_t len, size_t n,
+			  size_t header_size)
 {
 	if (off > n || len > n)
 		return 0;
 	if ((uint64_t)off + (uint64_t)len > (uint64_t)n)
 		return 0;
-	if (len != 0 && off < sizeof(struct shirudo_upatch_header))
+	if (len != 0 && off < header_size)
 		return 0;
 	return 1;
 }
 
-static int validate_bounds(const struct shirudo_upatch_header *h, size_t n)
+static int validate_bounds(const struct shirudo_upatch_header *h, size_t n,
+			   size_t header_size)
 {
-	if (!section_inside(h->loader_insns_off, h->loader_insns_len, n))
+	if (h->type != SHIRUDO_UPATCH_TYPE_BPF &&
+	    h->type != SHIRUDO_UPATCH_TYPE_JAVA)
 		return -EINVAL;
-	if (!section_inside(h->signature_off, h->signature_len, n))
+	if (!section_inside(h->loader_insns_off, h->loader_insns_len, n,
+			    header_size))
 		return -EINVAL;
-	if (!section_inside(h->metadata_off, h->metadata_len, n))
+	if (!section_inside(h->signature_off, h->signature_len, n,
+			    header_size))
 		return -EINVAL;
-	if (!section_inside(h->data_off, h->data_len, n))
+	if (!section_inside(h->metadata_off, h->metadata_len, n,
+			    header_size))
 		return -EINVAL;
-	/* loader insns and signature are mandatory; data may be empty */
-	if (h->loader_insns_len == 0 || h->signature_len == 0)
+	if (!section_inside(h->data_off, h->data_len, n, header_size))
 		return -EINVAL;
+	if (h->type == SHIRUDO_UPATCH_TYPE_BPF) {
+		/* loader insns and signature are mandatory; data may be empty */
+		if (h->loader_insns_len == 0 || h->signature_len == 0)
+			return -EINVAL;
+	} else {
+		/* Java payloads are userspace-only and carry raw JAR bytes. */
+		if (h->loader_insns_len != 0 || h->signature_len != 0)
+			return -EINVAL;
+		if (h->flags & SHIRUDO_DIRECTIVE_UNLOAD) {
+			if (h->data_len != 0 || h->metadata_len != 32)
+				return -EINVAL;
+		} else {
+			if (h->data_len == 0)
+				return -EINVAL;
+			if (h->metadata_len != 0 &&
+			    h->metadata_len != sizeof(struct shirudo_java_upatch_metadata))
+				return -EINVAL;
+		}
+	}
 	return 0;
 }
 
@@ -115,7 +174,7 @@ static void parse_extras(struct shirudo_upatch *u)
 
 	if (off == 0)
 		return;
-	if (off < sizeof(struct shirudo_upatch_header) ||
+	if (off < u->header_size ||
 	    (uint64_t)off + sizeof(struct shirudo_upatch_extras) >
 	    (uint64_t)u->map_size)
 		return;
@@ -268,12 +327,13 @@ int shirudo_upatch_open(const char *path, struct shirudo_upatch *out)
 	out->map = m;
 	out->map_size = (size_t)st.st_size;
 
-	rc = parse_header(out->map, out->map_size, &out->hdr);
+	rc = parse_header(out->map, out->map_size, &out->hdr,
+			  &out->header_size);
 	if (rc != 0) {
 		shirudo_upatch_close(out);
 		return rc;
 	}
-	rc = validate_bounds(&out->hdr, out->map_size);
+	rc = validate_bounds(&out->hdr, out->map_size, out->header_size);
 	if (rc != 0) {
 		shirudo_upatch_close(out);
 		return rc;
@@ -289,6 +349,7 @@ void shirudo_upatch_close(struct shirudo_upatch *u)
 		munmap((void *)u->map, u->map_size);
 		u->map = NULL;
 		u->map_size = 0;
+		u->header_size = 0;
 		u->source = NULL;
 		u->source_len = 0;
 		u->source_name = NULL;
@@ -327,9 +388,43 @@ const void *shirudo_upatch_data(const struct shirudo_upatch *u)
 	return u->map + u->hdr.data_off;
 }
 
+int shirudo_java_upatch_metadata(const struct shirudo_upatch *u,
+				struct shirudo_java_upatch_metadata *out)
+{
+	const struct shirudo_java_upatch_metadata *wire;
+
+	if (!u || !out || u->hdr.type != SHIRUDO_UPATCH_TYPE_JAVA ||
+	    (u->hdr.flags & SHIRUDO_DIRECTIVE_UNLOAD) ||
+	    u->hdr.metadata_len == 0)
+		return -ENOENT;
+	if (u->hdr.metadata_len != sizeof(*wire))
+		return -EINVAL;
+	wire = shirudo_upatch_metadata(u);
+	if (!wire)
+		return -EINVAL;
+	memset(out, 0, sizeof(*out));
+	out->magic = rd_le32(&wire->magic);
+	out->version = rd_le32(&wire->version);
+	memcpy(out->telemetry_upatch, wire->telemetry_upatch,
+	       sizeof(out->telemetry_upatch));
+	if (out->magic != SHIRUDO_JAVA_UPATCH_METADATA_MAGIC ||
+	    out->version != SHIRUDO_JAVA_UPATCH_METADATA_VERSION ||
+	    !has_nul(out->telemetry_upatch, sizeof(out->telemetry_upatch)))
+		return -EINVAL;
+	if (out->telemetry_upatch[0] &&
+	    !shirudo_upatch_name_valid(out->telemetry_upatch))
+		return -EINVAL;
+	return 0;
+}
+
 bool shirudo_upatch_is_unload(const struct shirudo_upatch *u)
 {
 	return (u->hdr.flags & SHIRUDO_DIRECTIVE_UNLOAD) != 0;
+}
+
+const char *shirudo_upatch_type_str(const struct shirudo_upatch *u)
+{
+	return u->hdr.type == SHIRUDO_UPATCH_TYPE_JAVA ? "java" : "bpf";
 }
 
 bool shirudo_upatch_has_source(const struct shirudo_upatch *u)

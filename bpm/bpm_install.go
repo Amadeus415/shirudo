@@ -148,7 +148,8 @@ func uninstallBPMPackage(ctx context.Context, packageName string, installRoot st
 		return "", err
 	}
 
-	for _, upatch := range manifest.Upatches {
+	for i := len(manifest.Upatches) - 1; i >= 0; i-- {
+		upatch := manifest.Upatches[i]
 		upatchPath, err := bpmInstalledUpatchPath(installDir, upatch.UnloadPath, "upatches.unload_target")
 		if err != nil {
 			return "", err

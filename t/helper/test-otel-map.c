@@ -117,6 +117,7 @@ static int make_decoder(bool metric, bool counter, bool snapshot,
 
 	header.magic = htole64(SHIRUDO_UPATCH_MAGIC);
 	header.version = htole32(SHIRUDO_UPATCH_VERSION);
+	header.type = htole32(SHIRUDO_UPATCH_TYPE_BPF);
 	strncpy(header.name, "test-upatch", sizeof(header.name) - 1);
 	header.loader_insns_off = htole32(loader_off);
 	header.loader_insns_len = htole32(sizeof(struct bpf_insn));

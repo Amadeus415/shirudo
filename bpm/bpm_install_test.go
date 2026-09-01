@@ -223,6 +223,45 @@ func TestUninstallBPMPackageUnloadsAndRemovesInstallDir(t *testing.T) {
 	}
 }
 
+func TestUninstallBPMPackageUnloadsUpatchesInReverseOrder(t *testing.T) {
+	body := buildTestBPMPackageBodyWithTwoUpatches(t)
+	installRoot := t.TempDir()
+
+	oldLoad := bpmShirudoUpatchLoad
+	bpmShirudoUpatchLoad = func(ctx context.Context, upatchPath string, configPaths []string, stdout io.Writer, stderr io.Writer) error {
+		return nil
+	}
+	t.Cleanup(func() {
+		bpmShirudoUpatchLoad = oldLoad
+	})
+
+	installDir, err := installBPMPackageArchive(context.Background(), body, installRoot, nil, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("installBPMPackageArchive() error = %v", err)
+	}
+
+	var unloaded []string
+	oldUnload := bpmShirudoUpatchUnload
+	bpmShirudoUpatchUnload = func(ctx context.Context, upatchPath string, stdout io.Writer, stderr io.Writer) error {
+		unloaded = append(unloaded, upatchPath)
+		return nil
+	}
+	t.Cleanup(func() {
+		bpmShirudoUpatchUnload = oldUnload
+	})
+
+	if _, err := uninstallBPMPackage(context.Background(), "java-bee-world-0.1.0", installRoot, io.Discard, io.Discard); err != nil {
+		t.Fatalf("uninstallBPMPackage() error = %v", err)
+	}
+	want := []string{
+		filepath.Join(installDir, "upatches/java.unload.upatch"),
+		filepath.Join(installDir, "upatches/javaagent.unload.upatch"),
+	}
+	if !reflect.DeepEqual(unloaded, want) {
+		t.Fatalf("unloaded = %#v, want %#v", unloaded, want)
+	}
+}
+
 func TestListBPMInstalledPackages(t *testing.T) {
 	installRoot := t.TempDir()
 	for _, name := range []string{"hello-bee-world-0.1.0", "trace-open-2.0.0"} {
@@ -430,6 +469,52 @@ func buildTestBPMPackageBodyWithUpatchVersion(t *testing.T, version string) []by
 	}, bpmPackageFile{
 		Target: "upatches/hello-userns-counter.unload.upatch",
 		Body:   []byte("unload\n"),
+		Upatch: true,
+	})
+	if err != nil {
+		t.Fatalf("buildBPMPackage() error = %v", err)
+	}
+
+	body, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read package: %v", err)
+	}
+	return body
+}
+
+func buildTestBPMPackageBodyWithTwoUpatches(t *testing.T) []byte {
+	t.Helper()
+
+	outputPath, err := buildBPMPackage(t.TempDir(), []byte(`[package]
+name = "java-bee-world"
+
+[[upatches]]
+source = "javaagent.bpf.c"
+load_target = "upatches/javaagent.upatch"
+unload_target = "upatches/javaagent.unload.upatch"
+
+[[upatches]]
+type = "java"
+source = "agent.jar"
+load_target = "upatches/java.upatch"
+unload_target = "upatches/java.unload.upatch"
+`), bpmPackageMetadata{
+		Name: "java-bee-world",
+	}, "0.1.0", bpmPackageFile{
+		Target: "upatches/javaagent.upatch",
+		Body:   []byte("javaagent load\n"),
+		Upatch: true,
+	}, bpmPackageFile{
+		Target: "upatches/javaagent.unload.upatch",
+		Body:   []byte("javaagent unload\n"),
+		Upatch: true,
+	}, bpmPackageFile{
+		Target: "upatches/java.upatch",
+		Body:   []byte("java load\n"),
+		Upatch: true,
+	}, bpmPackageFile{
+		Target: "upatches/java.unload.upatch",
+		Body:   []byte("java unload\n"),
 		Upatch: true,
 	})
 	if err != nil {

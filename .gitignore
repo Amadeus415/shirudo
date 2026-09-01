@@ -45,6 +45,9 @@
 /t/trash directory.*
 *.tap
 
+# Java shield build output
+/shields/java_sql_inj/**/target/
+
 # Compiled test helpers (sources are tracked)
 /t/helper/*
 !/t/helper/*.c

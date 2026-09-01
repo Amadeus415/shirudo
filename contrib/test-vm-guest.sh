@@ -143,6 +143,29 @@ configure_map_export()
 		>/etc/shirudo/shirudo.conf
 }
 
+install_java_sql_inj_example()
+{
+	local source_dir=/mnt/shirudo-bundle/java_sql_inj
+	local install_dir=/usr/local/share/shirudo/java_sql_inj
+
+	[[ -s "$source_dir/vulnerable-app.jar" &&
+	   -x "$source_dir/sql_inj_vuln" ]] || {
+		log "Java SQL injection demo is missing from the host bundle"
+		return 1
+	}
+	command -v java >/dev/null 2>&1 || {
+		log "prepared runtime has no Java runtime"
+		return 1
+	}
+	install -d -m 0755 "$install_dir"
+	install -m 0644 "$source_dir/vulnerable-app.jar" \
+		"$install_dir/vulnerable-app.jar"
+	install -d -m 0755 /usr/lib/shirudo
+	install -m 0755 "$BUNDLE/root/usr/lib/shirudo/libshirudo_javaagent.so" \
+		/usr/lib/shirudo/libshirudo_javaagent.so
+	install -m 0755 "$source_dir/sql_inj_vuln" /usr/local/bin/sql_inj_vuln
+}
+
 configure_oci_ca
 configure_bpm_oci_repository
 configure_map_export
@@ -210,8 +233,9 @@ for unit in "${TARGET_UNITS[@]}"; do
 		"$BUNDLE/root/usr/lib/systemd/system/$unit" \
 		"/usr/lib/systemd/system/$unit"
 done
-systemctl daemon-reload
+	systemctl daemon-reload
 cp -a "$BUNDLE/test-helpers/." "$WORKSPACE/"
+install_java_sql_inj_example
 
 log "checking custom-kernel and vTPM prerequisites"
 mountpoint -q /sys/kernel/security || mount -t securityfs securityfs /sys/kernel/security

@@ -13,13 +13,17 @@ const (
 	shirudoUpatchVersion    = 1
 	shirudoDirectiveUnload  = 1 << 0
 	shirudoUpatchNameMax    = 256
-	shirudoUpatchHeaderSize = 352
+	shirudoUpatchLegacySize = 352
+	shirudoUpatchHeaderSize = 360
+	shirudoUpatchTypeBPF    = 1
+	shirudoUpatchTypeJava   = 2
 )
 
 type shirudoUpatchHeader struct {
 	Name            string
 	Directive       string
 	Version         uint32
+	PayloadType     string
 	PayloadSHA256   string
 	LoaderInsnsOff  uint32
 	LoaderInsnsLen  uint32
@@ -38,7 +42,7 @@ type shirudoUpatchHeader struct {
 }
 
 func parseShirudoUpatch(body []byte) (shirudoUpatchHeader, error) {
-	if len(body) < shirudoUpatchHeaderSize {
+	if len(body) < shirudoUpatchLegacySize {
 		return shirudoUpatchHeader{}, fmt.Errorf("file is shorter than Shirudo upatch header")
 	}
 
@@ -74,21 +78,54 @@ func parseShirudoUpatch(body []byte) (shirudoUpatchHeader, error) {
 		NrMaps:         binary.LittleEndian.Uint32(body[340:344]),
 		NrProgs:        binary.LittleEndian.Uint32(body[344:348]),
 		ExtraOff:       binary.LittleEndian.Uint32(body[348:352]),
+		PayloadType:    "bpf",
+	}
+	headerSize := shirudoUpatchLegacySize
+	if len(body) >= shirudoUpatchHeaderSize {
+		typeValue := binary.LittleEndian.Uint32(body[352:356])
+		reserved := binary.LittleEndian.Uint32(body[356:360])
+		if reserved == 0 && (typeValue == shirudoUpatchTypeJava ||
+			h.LoaderInsnsOff >= shirudoUpatchHeaderSize) {
+			headerSize = shirudoUpatchHeaderSize
+			switch typeValue {
+			case shirudoUpatchTypeBPF:
+				h.PayloadType = "bpf"
+			case shirudoUpatchTypeJava:
+				h.PayloadType = "java"
+			default:
+				return shirudoUpatchHeader{}, fmt.Errorf("unsupported upatch type %d", typeValue)
+			}
+		}
 	}
 	if flags&uint32(shirudoDirectiveUnload) != 0 {
 		h.Directive = "unload"
 	}
 
-	if err := validateUpatchSection("loader_insns", h.LoaderInsnsOff, h.LoaderInsnsLen, len(body), true); err != nil {
+	if h.PayloadType == "java" {
+		if h.LoaderInsnsLen != 0 || h.SignatureLen != 0 {
+			return shirudoUpatchHeader{}, fmt.Errorf("invalid Java upatch sections")
+		}
+		if h.Directive == "unload" {
+			if h.DataLen != 0 || h.MetadataLen != 32 {
+				return shirudoUpatchHeader{}, fmt.Errorf("invalid Java unload sections")
+			}
+		} else if h.DataLen == 0 {
+			return shirudoUpatchHeader{}, fmt.Errorf("Java payload is empty")
+		}
+	}
+	if h.PayloadType == "bpf" && (h.LoaderInsnsLen == 0 || h.SignatureLen == 0) {
+		return shirudoUpatchHeader{}, fmt.Errorf("BPF loader and signature sections are required")
+	}
+	if err := validateUpatchSection("loader_insns", h.LoaderInsnsOff, h.LoaderInsnsLen, len(body), headerSize, h.PayloadType == "bpf"); err != nil {
 		return shirudoUpatchHeader{}, err
 	}
-	if err := validateUpatchSection("signature", h.SignatureOff, h.SignatureLen, len(body), true); err != nil {
+	if err := validateUpatchSection("signature", h.SignatureOff, h.SignatureLen, len(body), headerSize, h.PayloadType == "bpf"); err != nil {
 		return shirudoUpatchHeader{}, err
 	}
-	if err := validateUpatchSection("metadata", h.MetadataOff, h.MetadataLen, len(body), false); err != nil {
+	if err := validateUpatchSection("metadata", h.MetadataOff, h.MetadataLen, len(body), headerSize, false); err != nil {
 		return shirudoUpatchHeader{}, err
 	}
-	if err := validateUpatchSection("data", h.DataOff, h.DataLen, len(body), false); err != nil {
+	if err := validateUpatchSection("data", h.DataOff, h.DataLen, len(body), headerSize, h.PayloadType == "java" && h.Directive != "unload"); err != nil {
 		return shirudoUpatchHeader{}, err
 	}
 
@@ -96,14 +133,14 @@ func parseShirudoUpatch(body []byte) (shirudoUpatchHeader, error) {
 	return h, nil
 }
 
-func validateUpatchSection(name string, off uint32, length uint32, fileSize int, required bool) error {
+func validateUpatchSection(name string, off uint32, length uint32, fileSize int, headerSize int, required bool) error {
 	if length == 0 {
 		if required {
 			return fmt.Errorf("%s section is empty", name)
 		}
 		return nil
 	}
-	if off < shirudoUpatchHeaderSize {
+	if off < uint32(headerSize) {
 		return fmt.Errorf("%s section starts inside header", name)
 	}
 	if uint64(off)+uint64(length) > uint64(fileSize) {
@@ -113,7 +150,7 @@ func validateUpatchSection(name string, off uint32, length uint32, fileSize int,
 }
 
 func parseUpatchSourceExtras(body []byte, off uint32) (bool, string) {
-	if off == 0 || off < shirudoUpatchHeaderSize || uint64(off)+16 > uint64(len(body)) {
+	if off == 0 || off < shirudoUpatchLegacySize || uint64(off)+16 > uint64(len(body)) {
 		return false, ""
 	}
 

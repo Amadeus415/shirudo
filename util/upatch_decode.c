@@ -74,6 +74,7 @@ int shirudo_upatch_decode_map_file_otel(const char *path,
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include <lua.h>
 #include <lauxlib.h>
@@ -900,8 +901,28 @@ static void lua_install_budget(lua_State *L, struct lua_budget *budget)
 	lua_sethook(L, lua_budget_hook, LUA_MASKCOUNT, SHIRUDO_LUA_HOOK_COUNT);
 }
 
+static uint64_t decoder_realtime_ns(void)
+{
+	struct timespec ts;
+
+	if (clock_gettime(CLOCK_REALTIME, &ts) != 0)
+		return 0;
+	return (uint64_t)ts.tv_sec * 1000000000ULL +
+		(uint64_t)ts.tv_nsec;
+}
+
+static void lua_push_u64_string(lua_State *L, uint64_t value)
+{
+	char buf[32];
+
+	snprintf(buf, sizeof(buf), "%" PRIu64, value);
+	lua_pushstring(L, buf);
+}
+
 static void lua_push_map_input(lua_State *L, const struct shirudo_map_view *v)
 {
+	uint64_t now_ns = decoder_realtime_ns();
+	uint64_t start_ns = v->lifetime_start_ns ?: now_ns;
 	uint32_t p, i;
 
 	lua_newtable(L);
@@ -911,6 +932,12 @@ static void lua_push_map_input(lua_State *L, const struct shirudo_map_view *v)
 	lua_setfield(L, -2, "upatch");
 	lua_pushstring(L, v->name);
 	lua_setfield(L, -2, "map");
+	/* Metric decoders need valid OTLP wall-clock timestamps. Keep these
+	 * as decimal strings because Lua numbers cannot represent uint64_ns. */
+	lua_push_u64_string(L, start_ns);
+	lua_setfield(L, -2, "startTimeUnixNano");
+	lua_push_u64_string(L, now_ns);
+	lua_setfield(L, -2, "timeUnixNano");
 
 	lua_newtable(L);
 	lua_pushstring(L, v->name);

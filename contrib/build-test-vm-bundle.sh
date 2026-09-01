@@ -24,7 +24,7 @@ LOCK_FILE="${BUNDLE_DIR}.lock"
 STAMP_FILE="${TEST_VM_BUNDLE_STAMP:-${BUNDLE_DIR}/.stamp}"
 STAMP_INPUTS="${TEST_VM_BUNDLE_INPUTS:-}"
 PACKAGE_CERT="${TEST_VM_PACKAGE_CERT:-}"
-RUNTIME_PREP_VERSION=1
+RUNTIME_PREP_VERSION=3
 
 log()
 {
@@ -186,7 +186,8 @@ prepare_ubuntu_libguestfs_kernel()
 
 for dependency in \
 	"flock:util-linux" "curl:curl" "sha256sum:coreutils" "awk:gawk" \
-	"qemu-img:qemu-utils" "virt-customize:libguestfs-tools" "dpkg-deb:dpkg" \
+	"qemu-img:qemu-utils" "virt-customize:libguestfs-tools" \
+	"dpkg-deb:dpkg" \
 	"gzip:gzip" "depmod:kmod"; do
 	IFS=: read -r command_name package_name <<<"$dependency"
 	require_command "$command_name" "$package_name"
@@ -318,6 +319,7 @@ t/helper/test-upatch-prog-metadata
 t/helper/test-upatch-decode
 t/helper/test-upatch-serializer-pages
 t/helper/test-signed-load
+t/helper/otel-mock.py
 EOF
 
 build_fixture()
@@ -352,6 +354,18 @@ build_obs_fixture()
 	)
 }
 
+build_java_sql_inj_fixture()
+{
+	local keys_dir="$1"
+	local output_dir="$FIXTURE_WORK/java_sql_inj"
+
+	mkdir -p "$output_dir"
+	JAVA_SQL_INJ_OUTPUT_DIR="$output_dir" \
+	JAVA_SQL_INJ_KEYS_DIR="$keys_dir" \
+	SHIRUDO_BIN="$REPO_ROOT/shirudo" \
+		"$REPO_ROOT/shields/java_sql_inj/build.sh"
+}
+
 log "building target-test fixtures on the operator host"
 mkdir -p "$TMP_DIR/fixtures/decoders" "$FIXTURE_WORK/trusted" \
 	"$FIXTURE_WORK/foreign" "$FIXTURE_WORK/own"
@@ -373,6 +387,7 @@ build_fixture uprobe-multi.bpf.c shirudo-test-uprobe-multi "$FIXTURE_WORK/truste
 build_fixture basic.bpf.c shirudo-test-foreign "$FIXTURE_WORK/foreign"
 build_fixture basic.bpf.c shirudo-test-own-keyring "$FIXTURE_WORK/own"
 build_obs_fixture "$FIXTURE_WORK/trusted"
+build_java_sql_inj_fixture "$FIXTURE_WORK/trusted"
 
 basic_payload="$($REPO_ROOT/shirudo upatch info \
 	"$TMP_DIR/fixtures/shirudo-test-basic.upatch" --json |
@@ -449,6 +464,21 @@ mv /tmp/shirudo-test-uprobe-target \
 
 cp "$FIXTURE_WORK/trusted/cert.der" "$TMP_DIR/fixtures/cert.der"
 cp "$FIXTURE_WORK/own/cert.der" "$TMP_DIR/fixtures/own.der"
+install -d "$TMP_DIR/java_sql_inj"
+install -m 0644 "$FIXTURE_WORK/java_sql_inj/vulnerable-app.jar" \
+	"$TMP_DIR/java_sql_inj/vulnerable-app.jar"
+install -m 0755 "$FIXTURE_WORK/java_sql_inj/sql_inj_vuln" \
+	"$TMP_DIR/java_sql_inj/sql_inj_vuln"
+install -m 0644 "$FIXTURE_WORK/java_sql_inj/java-sql-injection-0.1.0.bee" \
+	"$TMP_DIR/java_sql_inj/java-sql-injection-0.1.0.bee"
+install -m 0644 "$FIXTURE_WORK/java_sql_inj/java-sql-inj.upatch" \
+	"$TMP_DIR/fixtures/java-sql-inj.upatch"
+install -m 0644 "$FIXTURE_WORK/java_sql_inj/java-sql-inj.unload.upatch" \
+	"$TMP_DIR/fixtures/java-sql-inj.unload.upatch"
+install -m 0644 "$FIXTURE_WORK/java_sql_inj/javaagent-metrics.upatch" \
+	"$TMP_DIR/fixtures/javaagent-metrics.upatch"
+install -m 0644 "$FIXTURE_WORK/java_sql_inj/javaagent-metrics.unload.upatch" \
+	"$TMP_DIR/fixtures/javaagent-metrics.unload.upatch"
 if [[ -n "$PACKAGE_CERT" ]]; then
 	install -m 0644 "$PACKAGE_CERT" "$TMP_DIR/fixtures/package-cert.der"
 else

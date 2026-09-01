@@ -73,12 +73,17 @@ unload_target = "upatches/userns.unload.upatch"
 
 [[upatches]]
 source = "nested/hello-sched-counter.bpf.c"
+
+[[upatches]]
+type = "java"
+source = "agent.jar"
+telemetry_upatch = "javaagent_metrics"
 `))
 	if err != nil {
 		t.Fatalf("parseBPMBuildSpec() error = %v", err)
 	}
-	if len(spec.Upatches) != 2 {
-		t.Fatalf("len(Upatches) = %d, want 2", len(spec.Upatches))
+	if len(spec.Upatches) != 3 {
+		t.Fatalf("len(Upatches) = %d, want 3", len(spec.Upatches))
 	}
 	if spec.Upatches[0].Source != "hello-userns-counter.bpf.c" || spec.Upatches[0].LoadTarget != "upatches/userns.upatch" ||
 		spec.Upatches[0].UnloadTarget != "upatches/userns.unload.upatch" {
@@ -87,6 +92,12 @@ source = "nested/hello-sched-counter.bpf.c"
 	if spec.Upatches[1].Source != "nested/hello-sched-counter.bpf.c" || spec.Upatches[1].LoadTarget != "upatches/hello-sched-counter.upatch" ||
 		spec.Upatches[1].UnloadTarget != "upatches/hello-sched-counter.unload.upatch" {
 		t.Fatalf("Upatches[1] = %#v", spec.Upatches[1])
+	}
+	if spec.Upatches[2].Type != "java" || spec.Upatches[2].Source != "agent.jar" ||
+		spec.Upatches[2].TelemetryUpatch != "javaagent_metrics" ||
+		spec.Upatches[2].LoadTarget != "upatches/agent.upatch" ||
+		spec.Upatches[2].UnloadTarget != "upatches/agent.unload.upatch" {
+		t.Fatalf("Upatches[2] = %#v", spec.Upatches[2])
 	}
 }
 

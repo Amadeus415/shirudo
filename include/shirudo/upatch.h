@@ -18,9 +18,16 @@
  * PLAN.md "signed loader scheme".
  */
 #define SHIRUDO_UPATCH_VERSION		1u
+#define SHIRUDO_UPATCH_LEGACY_HEADER_SIZE	352u
+#define SHIRUDO_UPATCH_HEADER_SIZE	360u
 
 /* Flag bits in struct shirudo_upatch_header.flags. */
 #define SHIRUDO_DIRECTIVE_UNLOAD	(1u << 0)
+
+enum shirudo_upatch_type {
+	SHIRUDO_UPATCH_TYPE_BPF = 1,
+	SHIRUDO_UPATCH_TYPE_JAVA = 2,
+};
 
 #define SHIRUDO_UPATCH_NAME_MAX		256
 #define SHIRUDO_UPATCH_PAYLOAD_HASH_LEN	32	/* SHA-256 */
@@ -49,7 +56,28 @@ struct shirudo_upatch_header {
 	uint32_t	nr_maps;		/* loader ctx bpf_map_desc count */
 	uint32_t	nr_progs;		/* loader ctx bpf_prog_desc count */
 	uint32_t	extra_off;		/* offset of the extras blob, 0 = none */
+	uint32_t	type;			/* enum shirudo_upatch_type */
+	uint32_t	reserved;		/* zero; keeps the v1 header 8-byte aligned */
 };
+
+_Static_assert(sizeof(struct shirudo_upatch_header) ==
+		SHIRUDO_UPATCH_HEADER_SIZE, "unexpected upatch header padding");
+
+/* Optional metadata carried by a Java LOAD upatch.  The JAR remains the
+ * userspace payload; this descriptor identifies the companion BPF upatch
+ * which exposes the Java-agent test-run program. */
+#define SHIRUDO_JAVA_UPATCH_METADATA_MAGIC	0x4a41564du /* "JAVM" */
+#define SHIRUDO_JAVA_UPATCH_METADATA_VERSION	1u
+
+struct shirudo_java_upatch_metadata {
+	uint32_t	magic;
+	uint32_t	version;
+	char		telemetry_upatch[SHIRUDO_UPATCH_NAME_MAX];
+};
+
+_Static_assert(sizeof(struct shirudo_java_upatch_metadata) ==
+		8 + SHIRUDO_UPATCH_NAME_MAX,
+		"unexpected Java upatch metadata size");
 
 /*
  * Optional trailing "extras" blob at header.extra_off (0 = absent).
@@ -181,6 +209,7 @@ enum shirudo_upatch_attach_kind {
 enum shirudo_upatch_prog_role {
 	SHIRUDO_UPATCH_PROG_ROLE_ATTACH = 0,
 	SHIRUDO_UPATCH_PROG_ROLE_SERIALIZER = 1,
+	SHIRUDO_UPATCH_PROG_ROLE_TEST_RUN = 2,
 };
 
 struct shirudo_upatch_prog_entry {

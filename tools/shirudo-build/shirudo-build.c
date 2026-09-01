@@ -35,6 +35,8 @@ static void usage(FILE *fp)
 	fprintf(fp,
 		"usage:\n"
 		"  shirudo-build <input> [-o <output.upatch>]\n"
+		"                [--type bpf|java]\n"
+		"                [--telemetry-upatch <name>]\n"
 		"                [--name <upatch-name>]\n"
 		"                [--keys-dir <dir>]\n"
 		"                [--key <signing_key.pem>] [--cert <cert.der>]\n"
@@ -42,11 +44,12 @@ static void usage(FILE *fp)
 		"                [--emit-artifacts]\n"
 		"\n"
 		"  shirudo-build --unload <upatch-name> [-o <output.upatch>]\n"
+		"                [--type bpf|java]\n"
 		"                [--payload-sha256 <64-hex>]\n"
 		"                [--keys-dir <dir>]\n"
 		"                [--key <signing_key.pem>] [--cert <cert.der>]\n"
 		"\n"
-		"<input> is .bpf.c (compiled via clang) or .bpf.o.\n"
+		"<input> is .bpf.c, .bpf.o, or a Java agent .jar.\n"
 		"-o defaults to <input> with a trailing .c/.o replaced by\n"
 		"   .upatch (foo/bar.bpf.c -> foo/bar.bpf.upatch), written\n"
 		"   next to the input; for --unload it defaults to\n"
@@ -63,6 +66,9 @@ static void usage(FILE *fp)
 		"--payload-sha256: 64 hex chars; if omitted, read from the local\n"
 		"                  archive /var/lib/shirudo/upatches/<name>.upatch,\n"
 		"                  else all-zero (target skips the payload check).\n"
+		"--type: payload type, either bpf or java. It defaults from the\n"
+		"        input extension and is required for Java unload directives.\n"
+		"--telemetry-upatch: companion BPF upatch name for a Java agent.\n"
 		"--emit-artifacts: for a .bpf.c input, also keep the compiled\n"
 		"                  .bpf.o next to the .upatch (instead of a temp\n"
 		"                  file that is removed). Reports every emitted\n"
@@ -105,7 +111,22 @@ static const char *derive_name(const char *input, char *buf, size_t buf_sz)
 		buf[n - 6] = '\0';
 	else if (n > 2 && strcmp(buf + n - 2, ".o") == 0)
 		buf[n - 2] = '\0';
+	else if (n > 4 && strcmp(buf + n - 4, ".jar") == 0)
+		buf[n - 4] = '\0';
 	return buf;
+}
+
+static int parse_type(const char *s, uint32_t *type)
+{
+	if (!s || strcmp(s, "bpf") == 0) {
+		*type = SHIRUDO_UPATCH_TYPE_BPF;
+		return 0;
+	}
+	if (strcmp(s, "java") == 0) {
+		*type = SHIRUDO_UPATCH_TYPE_JAVA;
+		return 0;
+	}
+	return -EINVAL;
 }
 
 static int ends_with(const char *s, const char *suf)
@@ -129,6 +150,8 @@ static int derive_output(const char *input, char *buf, size_t buf_sz)
 	if (stem > 2 && (strcmp(input + stem - 2, ".c") == 0 ||
 			 strcmp(input + stem - 2, ".o") == 0))
 		stem -= 2;
+	else if (stem > 4 && strcmp(input + stem - 4, ".jar") == 0)
+		stem -= 4;
 
 	len = snprintf(buf, buf_sz, "%.*s.upatch", (int)stem, input);
 	if (len < 0 || (size_t)len >= buf_sz)
@@ -190,6 +213,8 @@ int main(int argc, char **argv)
 	const char *keys_dir;
 	const char *vmlinux_override = NULL;
 	const char *extra_cflags = NULL;
+	const char *type_arg = NULL;
+	const char *telemetry_upatch = NULL;
 	uint8_t payload_sha256[32] = {};
 	const char *unload_name = NULL;
 	const char *output = NULL;
@@ -204,6 +229,7 @@ int main(int argc, char **argv)
 	char output_buf[PATH_MAX];
 	char name_buf[256];
 	const char *bpf_o;
+	uint32_t payload_type = SHIRUDO_UPATCH_TYPE_BPF;
 	int emit_artifacts = 0;
 	int pkey_explicit = 0;
 	int cert_explicit = 0;
@@ -233,6 +259,14 @@ int main(int argc, char **argv)
 			vmlinux_override = argv[++i];
 		} else if (strcmp(a, "--extra-cflags") == 0 && i + 1 < argc) {
 			extra_cflags = argv[++i];
+		} else if (strcmp(a, "--type") == 0 && i + 1 < argc) {
+			type_arg = argv[++i];
+		} else if (strncmp(a, "--type=", 7) == 0) {
+			type_arg = a + 7;
+		} else if (strcmp(a, "--telemetry-upatch") == 0 && i + 1 < argc) {
+			telemetry_upatch = argv[++i];
+		} else if (strncmp(a, "--telemetry-upatch=", 19) == 0) {
+			telemetry_upatch = a + 19;
 		} else if (strcmp(a, "--unload") == 0 && i + 1 < argc) {
 			unload_name = argv[++i];
 		} else if (strcmp(a, "--payload-sha256") == 0 && i + 1 < argc) {
@@ -280,13 +314,26 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (access(pkey, R_OK) != 0) {
+	if (type_arg) {
+		if (parse_type(type_arg, &payload_type) != 0) {
+			pr_err("--type must be bpf or java");
+			return 2;
+		}
+	} else if (!unload_name && input && ends_with(input, ".jar")) {
+		payload_type = SHIRUDO_UPATCH_TYPE_JAVA;
+	}
+
+	if (payload_type == SHIRUDO_UPATCH_TYPE_BPF && access(pkey, R_OK) != 0) {
 		pr_err("signing key not readable: %s: %s",
 		       pkey, strerror(errno));
 		pr_err("run `shirudo genkey` on the operator (or pass --key).");
 		return 1;
 	}
-	{
+	if (telemetry_upatch && payload_type != SHIRUDO_UPATCH_TYPE_JAVA) {
+		pr_err("--telemetry-upatch is only valid for Java upatches");
+		return 2;
+	}
+	if (payload_type == SHIRUDO_UPATCH_TYPE_BPF) {
 		struct stat st;
 
 		if (stat(pkey, &st) != 0) {
@@ -312,7 +359,7 @@ int main(int argc, char **argv)
 			return 1;
 		}
 	}
-	if (access(cert, R_OK) != 0) {
+	if (payload_type == SHIRUDO_UPATCH_TYPE_BPF && access(cert, R_OK) != 0) {
 		pr_err("cert not readable: %s: %s",
 		       cert, strerror(errno));
 		pr_err("run `shirudo genkey` on the operator (or pass --cert).");
@@ -372,7 +419,11 @@ int main(int argc, char **argv)
 			pr_info("writing %s (no -o given)", output);
 		}
 
-		rc = shirudo_build_package_unload(unload_name, payload_sha256,
+		if (payload_type == SHIRUDO_UPATCH_TYPE_JAVA)
+			rc = shirudo_build_package_java_unload(unload_name,
+							 payload_sha256, output);
+		else
+			rc = shirudo_build_package_unload(unload_name, payload_sha256,
 						  output, pkey, cert);
 		if (rc == 0 && emit_artifacts) {
 			printf("emitted:\n");
@@ -402,6 +453,22 @@ int main(int argc, char **argv)
 		}
 		output = output_buf;
 		pr_info("writing %s (no -o given)", output);
+	}
+
+	if (payload_type == SHIRUDO_UPATCH_TYPE_JAVA) {
+		if (!ends_with(input, ".jar")) {
+			pr_err("Java upatches require a .jar input");
+			return 2;
+		}
+		if (emit_artifacts) {
+			pr_err("--emit-artifacts is only valid for BPF source input");
+			return 2;
+		}
+		if (!name)
+			name = derive_name(input, name_buf, sizeof(name_buf));
+		rc = shirudo_build_package_java_load(input, output, name,
+						      telemetry_upatch);
+		return rc ? 1 : 0;
 	}
 
 	if (ends_with(input, ".bpf.c")) {
@@ -443,7 +510,7 @@ int main(int argc, char **argv)
 	} else if (ends_with(input, ".bpf.o") || ends_with(input, ".o")) {
 		bpf_o = input;		/* no source available -> no extras */
 	} else {
-		pr_err("input must be .bpf.c or .bpf.o");
+		pr_err("input must be .bpf.c, .bpf.o, or .jar");
 		return 2;
 	}
 

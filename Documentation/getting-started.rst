@@ -458,6 +458,28 @@ generated loader program, the signature, the payload hash, and a
 1 MiB log buffer for verifier output (filled in only on rejection,
 empty on success).
 
+Java agents use the same v1 ``.upatch`` transport with an explicit Java
+payload type. Pass a compiled agent JAR; it is copied as raw JAR bytes into
+the data section and does not require operator signing material:
+
+.. code-block:: sh
+
+    shirudo build --type java path/to/agent.jar -o agent.upatch
+    shirudo build --type java --telemetry-upatch javaagent_metrics \
+        path/to/agent.jar -o agent-with-metrics.upatch
+    shirudo build --type java --unload agent-name \
+        --payload-sha256 <sha256> -o agent.unload.upatch
+
+On the target, loading a Java upatch installs the single supported agent at
+``/var/lib/shirudo/javaagent.jar`` and creates
+``/etc/environment.d/shirudo.conf`` with ``JAVA_TOOL_OPTIONS`` pointing at
+that path. With ``--telemetry-upatch``, the environment entry also carries
+the JAR ID and companion BPF upatch name. The agent sends its hook ID and
+JAR ID to the companion's ``BPF_PROG_TEST_RUN`` program, which can publish
+an OTLP metric from an arena-backed map. A later Java load replaces the
+installed agent; Java unload removes both the JAR and the environment file.
+Java upatches intentionally skip the kernel loader signing path in v1.
+
 8. Register the remote (operator machine, required)
 ====================================================
 
@@ -872,6 +894,9 @@ metadata, raw entry bytes, and (when present) serializer-v2 pages.
 slot_size)`` turns fixed-width page data into slots with ``u8``, ``u16``,
 ``u32``, ``u64``, and ``cstring`` accessors. The decoder returns a Lua value
 made from tables, strings, finite numbers, booleans, and nil.
+The input also provides ``startTimeUnixNano`` (the map lifetime/reset time)
+and ``timeUnixNano`` (the current export time) as decimal strings for metric
+points; this avoids losing precision in Lua's numeric type.
 
 For ``--json=<path>``, the returned value is appended as the NDJSON record.
 For a decoder with ``EXPORT_LOG``, ``--otel`` makes it the log body: Lua objects map to
@@ -1717,6 +1742,9 @@ certificate for the signed BPM repository index:
 registry CA and does not contain a private key.  ``bpm key add`` explicitly
 bootstraps the Shirudo package/upatch certificate from a package archive.
 The package certificate is never trusted automatically from a download.
+Installing a package name that is already active is an idempotent success
+and leaves the existing version unchanged; use ``bpm upgrade`` to select a
+newer version.
 
 Repository definitions live in ``/etc/shirudo/bpm/registries.d/``.  Cached
 indexes and downloaded packages live below ``/var/lib/shirudo/bpm/``.  The

@@ -35,9 +35,11 @@ type bpmBuildFileEntry struct {
 }
 
 type bpmBuildUpatchEntry struct {
-	Source       string
-	LoadTarget   string
-	UnloadTarget string
+	Source          string
+	Type            string
+	TelemetryUpatch string
+	LoadTarget      string
+	UnloadTarget    string
 }
 
 func loadBPMBuildMetadata(path string) (bpmPackageMetadata, error) {
@@ -226,10 +228,26 @@ func parseBPMBuildUpatches(body []byte) ([]bpmBuildUpatchEntry, error) {
 			return nil
 		}
 		current.Source = strings.TrimSpace(current.Source)
+		current.Type = strings.ToLower(strings.TrimSpace(current.Type))
+		current.TelemetryUpatch = strings.TrimSpace(current.TelemetryUpatch)
 		current.LoadTarget = strings.TrimSpace(current.LoadTarget)
 		current.UnloadTarget = strings.TrimSpace(current.UnloadTarget)
 		if current.Source == "" {
 			return fmt.Errorf("parse upatches line %d: upatches.source is required", lineNumber)
+		}
+		if current.Type == "" {
+			current.Type = "bpf"
+		}
+		if current.Type != "bpf" && current.Type != "java" {
+			return fmt.Errorf("parse upatches line %d: upatches.type must be bpf or java", lineNumber)
+		}
+		if current.TelemetryUpatch != "" {
+			if current.Type != "java" {
+				return fmt.Errorf("parse upatches line %d: upatches.telemetry_upatch requires type java", lineNumber)
+			}
+			if !bpmPackageNamePattern.MatchString(current.TelemetryUpatch) {
+				return fmt.Errorf("parse upatches line %d: upatches.telemetry_upatch is not a valid upatch name", lineNumber)
+			}
 		}
 		if current.LoadTarget == "" {
 			current.LoadTarget = defaultBPMBuildUpatchLoadTarget(current.Source)
@@ -295,6 +313,10 @@ func parseBPMBuildUpatches(body []byte) ([]bpmBuildUpatchEntry, error) {
 		switch key {
 		case "source":
 			current.Source = parsed
+		case "type":
+			current.Type = parsed
+		case "telemetry_upatch":
+			current.TelemetryUpatch = parsed
 		case "load_target":
 			current.LoadTarget = parsed
 		case "unload_target":
@@ -343,6 +365,17 @@ func bpmBuildUpatchName(source string) string {
 		return strings.TrimSuffix(base, ext)
 	}
 	return base
+}
+
+func bpmBuildUpatchType(upatch bpmBuildUpatchEntry) string {
+	typ := strings.ToLower(strings.TrimSpace(upatch.Type))
+	if typ != "" {
+		return typ
+	}
+	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(upatch.Source)), ".jar") {
+		return "java"
+	}
+	return "bpf"
 }
 
 func parseBPMMetadata(body []byte, allowVersion bool) (bpmPackageManifest, error) {

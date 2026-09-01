@@ -325,6 +325,11 @@ validate_host_bundle()
 		die "host VM bundle has no target-test certificate: $TEST_VM_HOST_BUNDLE"
 	[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/shirudo-test-basic.upatch" ]] ||
 		die "host VM bundle has no target-test fixtures: $TEST_VM_HOST_BUNDLE"
+	[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/java-sql-inj.upatch" ]] ||
+		die "host VM bundle has no Java SQL injection fixture: $TEST_VM_HOST_BUNDLE"
+	[[ -s "$TEST_VM_HOST_BUNDLE/java_sql_inj/vulnerable-app.jar" &&
+	   -x "$TEST_VM_HOST_BUNDLE/java_sql_inj/sql_inj_vuln" ]] ||
+		die "host VM bundle has no Java SQL injection demo: $TEST_VM_HOST_BUNDLE"
 	if [[ "$VM_SUITE" == obs ]]; then
 		[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/linux-observability.upatch" ]] ||
 			die "host VM bundle has no Linux observability fixture: $TEST_VM_HOST_BUNDLE"

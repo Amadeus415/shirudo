@@ -1,0 +1,25 @@
+[package]
+name = "java-sql-injection"
+description = "Shirudo Java RASP SQL injection example"
+license = "BSD-2-Clause"
+authors = ["Shirudo"]
+
+[[files]]
+source = "app/target/shirudo-sqli-app-1.0-SNAPSHOT.jar"
+target = "share/shirudo/java_sql_inj/vulnerable-app.jar"
+
+[[files]]
+source = "sql_inj_vuln"
+target = "bin/sql_inj_vuln"
+
+[[upatches]]
+source = "javaagent_metrics.bpf.c"
+load_target = "upatches/javaagent-metrics.upatch"
+unload_target = "upatches/javaagent-metrics.unload.upatch"
+
+[[upatches]]
+type = "java"
+source = "agent/target/shirudo-sqli-agent-1.0-SNAPSHOT.jar"
+telemetry_upatch = "javaagent_metrics"
+load_target = "upatches/java-sql-inj.upatch"
+unload_target = "upatches/java-sql-inj.unload.upatch"

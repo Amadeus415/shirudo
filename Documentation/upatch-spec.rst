@@ -27,8 +27,9 @@ Conventions
 - **Little-endian** for every multi-byte integer, on every supported
   architecture (operator and target may differ in arch; the wire format
   does not).
-- The file begins with a **fixed 352-byte header** of naturally aligned
-  fields (no padding). All other content is referenced by ``*_off`` /
+- The file begins with a **360-byte v1 header** of naturally aligned
+  fields (no padding). Readers also accept the original 352-byte v1 BPF
+  header and treat it as ``type = bpf``. All other content is referenced by ``*_off`` /
   ``*_len`` pairs in the header, as byte offsets from the start of the
   file. Sections do not overlap the header and must lie within the file.
 - Sizes are bounded: a reader rejects a file larger than 16 MiB
@@ -41,8 +42,8 @@ File layout
 ::
 
     offset 0    +-------------------------------------------+
-                | header (352 bytes, fixed)                 |
-    352         +-------------------------------------------+
+                | header (360 bytes, fixed)                 |
+    360         +-------------------------------------------+
                 | loader_insns   (signature-covered)        |
                 +-------------------------------------------+
                 | signature      (CMS/PKCS#7, detached)     |
@@ -55,8 +56,9 @@ File layout
                 +-------------------------------------------+
 
 The writer emits the sections in the order above, but a reader must rely
-only on the header offsets, not on adjacency. ``loader_insns`` begins at
-offset 352 (immediately after the header). ``data``, ``metadata`` and
+only on the header offsets, not on adjacency. New ``loader_insns`` begins at
+offset 360 (immediately after the header); legacy BPF artifacts begin at
+352. ``data``, ``metadata`` and
 ``extras`` are optional: an absent section has its ``*_off`` (and, for
 extras, ``extra_off``) set to 0.
 
@@ -64,7 +66,7 @@ extras, ``extra_off``) set to 0.
 Header
 ======
 
-``struct shirudo_upatch_header`` -- 352 bytes, little-endian, no padding:
+``struct shirudo_upatch_header`` -- 360 bytes, little-endian, no padding:
 
 ==========  ====  ======  =====================  ===========================================
 offset      size  type    field                  meaning
@@ -87,7 +89,12 @@ offset      size  type    field                  meaning
 340         4     u32     nr_maps                gen_loader bpf_map_desc count
 344         4     u32     nr_progs               gen_loader bpf_prog_desc count
 348         4     u32     extra_off              file offset of the extras blob, or 0
+352         4     u32     type                    ``1`` = BPF, ``2`` = Java
+356         4     u32     reserved                zero
 ==========  ====  ======  =====================  ===========================================
+
+The legacy 352-byte header ended at ``extra_off`` and implied a BPF
+payload. It remains readable for compatibility with existing artifacts.
 
 Magic
 -----
@@ -152,6 +159,25 @@ must travel with the instructions. Absent (``data_off == 0``) only for
 artifacts with no such data. Writers may append a decoder blob and trailer;
 older generated loaders ignore those trailing bytes because all their offsets
 refer to the original prefix.
+
+Java payloads
+-------------
+
+When ``type`` is ``2`` (Java), the container is a userspace Java agent
+artifact. It has no loader instruction or signature sections; ``data`` is
+the raw ``.jar`` and ``payload_sha256`` is its SHA-256. The target installs
+the single supported agent at ``/var/lib/shirudo/javaagent.jar`` and writes
+``JAVA_TOOL_OPTIONS="-javaagent:/var/lib/shirudo/javaagent.jar"`` to
+``/etc/environment.d/shirudo.conf``. ``shirudo-build --telemetry-upatch
+<name>`` adds a v1 metadata descriptor naming a companion BPF upatch. In
+that case the target appends ``jar_id`` (a folded SHA-256 of the raw JAR) and
+the companion name to ``JAVA_TOOL_OPTIONS``. The Java agent passes that ID
+and its hook ID to the companion's pinned ``BPF_PROG_TEST_RUN`` program;
+the companion can account for the current executable's device and inode in
+an arena-backed map and expose an OTLP metric through its Lua decoder.
+Loading a later Java upatch replaces the current agent. Unloading removes
+both files. Java artifacts deliberately do not use the kernel loader/keyring
+signing path in this v1 implementation.
 
 Signed decoder trailer
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -386,9 +412,11 @@ Reader validation rules
 1. File is a regular file, non-empty, and at most 16 MiB.
 2. ``magic`` and ``version`` match.
 3. Each section ``(off, len)`` lies within the file, and any non-empty
-   section starts at or after the 352-byte header (``section_inside``).
-4. ``loader_insns_len`` and ``signature_len`` are non-zero (mandatory);
-   ``data`` may be empty.
+   section starts at or after the active 360-byte header (or 352-byte
+   legacy header).
+4. BPF ``loader_insns_len`` and ``signature_len`` are non-zero (mandatory);
+   Java LOAD has only a non-empty ``data`` section, while Java UNLOAD has
+   only its 32-byte metadata binding.
 5. Extras are parsed only if ``extra_off != 0``, the extras header fits,
    its ``magic`` and ``format`` match, and ``name_len`` + ``source_len``
    stay within the file. **Extras are advisory**: a malformed extras blob

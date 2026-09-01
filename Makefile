@@ -198,12 +198,20 @@ TEST_VM_BUNDLE_STAMP := $(TEST_VM_BUNDLE_DIR)/.stamp
 TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
 	*.c *.h include/*.h util/*.c util/*.h \
 	bpf/*.c bpf/lib/*.h \
+	bpf/vmlinux.h \
 	tools/shirudo-build/*.c tools/shirudo-build/*.h \
-	t/helper/*.c completion/* systemd/*.in systemd/*.timer \
+	t/helper/*.c t/helper/*.py completion/* systemd/*.in systemd/*.timer \
 	test-vm/fixtures/*.c test-vm/fixtures/*.lua \
 	test-vm/fixtures/decoders/* \
 	shields/linux_obs/*.c shields/linux_obs/*.h shields/linux_obs/Beefile \
-	shields/linux_obs/decoders/*))
+	shields/linux_obs/decoders/* \
+	shields/java_sql_inj/Beefile shields/java_sql_inj/README.md \
+	shields/java_sql_inj/javaagent_metrics.bpf.c \
+	shields/java_sql_inj/decoders/* \
+	shields/java_sql_inj/build.sh shields/java_sql_inj/pom.xml \
+	shields/java_sql_inj/agent/pom.xml shields/java_sql_inj/app/pom.xml \
+	shields/java_sql_inj/agent/src/main/java/com/security/rasp/*.java \
+	shields/java_sql_inj/app/src/main/java/com/test/*.java))
 TEST_VM_BUNDLE_ARTIFACTS := $(sort $(wildcard \
 	artifacts/bpf-next-kernel-debs \
 	artifacts/bpf-next-kernel-debs/* \

@@ -51,6 +51,12 @@ else
 endif
 
 SHIRUDO_LIBEXEC_DIR ?= $(libexecdir)/shirudo
+SHIRUDO_JAVAAGENT_LIBDIR ?= /usr/lib/shirudo
+
+# JNI is needed only for the target-side Java-agent bridge. Keep the main
+# binary build independent of a JDK, while install-target builds the bridge.
+JAVA_HOME ?= $(shell javac_path=$$(command -v javac 2>/dev/null); \
+	[ -n "$$javac_path" ] && dirname "$$(dirname "$$(readlink -f "$$javac_path")")")
 
 # Where operator-installed BPF headers live on a packaged host;
 # also baked into shirudo-build as a runtime fallback -I path.
@@ -176,6 +182,8 @@ BPF_SRCS := \
     bpf/seal.c \
     bpf/unload.c
 
+JAVAAGENT_BRIDGE := util/libshirudo_javaagent.so
+
 # shirudo-build is operator-only and links util/sign.c (CMS signer)
 # plus a small subset of util/. The core shirudo binary does NOT
 # link util/sign.c.
@@ -207,6 +215,7 @@ DEPS     := $(DEP_OBJS:.o=.d)
 
 .PHONY: all install install-target install-operator clean distclean check test \
 		test-helpers \
+		javaagent-bridge \
         bpf libbpf bpftool
 
 all: shirudo
@@ -325,6 +334,16 @@ tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o \
 	@printf '  LD      $@\n'
 	$(Q)$(LD) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS)
 
+$(JAVAAGENT_BRIDGE): util/javaagent_bridge.c
+	@printf '  LD      $@\n'
+	$(Q)test -n "$(JAVA_HOME)" && test -f "$(JAVA_HOME)/include/jni.h" || \
+		{ echo "Java bridge requires a JDK (set JAVA_HOME)" >&2; exit 1; }
+	$(Q)$(CC) $(CFLAGS) -fPIC -shared \
+		-I"$(JAVA_HOME)/include" -I"$(JAVA_HOME)/include/linux" \
+		-o $@ $< -pthread
+
+javaagent-bridge: $(JAVAAGENT_BRIDGE)
+
 # ----- install ----------------------------------------------------
 
 # The reboot-persistence unit, with @bindir@ resolved to the install path.
@@ -362,7 +381,7 @@ install: shirudo
 # Target machines additionally get the reboot-persistence, periodic map
 # export, and status keepalive units. They are deliberately NOT in
 # install-operator.
-install-target: install systemd/shirudo.service \
+install-target: install javaagent-bridge systemd/shirudo.service \
 		systemd/shirudo-map-export.service \
 		systemd/shirudo-map-export.timer \
 		systemd/shirudo-keepalive.service \
@@ -379,6 +398,10 @@ install-target: install systemd/shirudo.service \
 	    systemd/shirudo-bpm-repo-update.service \
 	    systemd/shirudo-bpm-repo-update.timer \
 	    $(DESTDIR)$(systemdunitdir)/
+	@printf '  INSTALL $(DESTDIR)$(SHIRUDO_JAVAAGENT_LIBDIR)/libshirudo_javaagent.so\n'
+	$(Q)install -d $(DESTDIR)$(SHIRUDO_JAVAAGENT_LIBDIR)
+	$(Q)install -m 0755 $(JAVAAGENT_BRIDGE) \
+	    $(DESTDIR)$(SHIRUDO_JAVAAGENT_LIBDIR)/libshirudo_javaagent.so
 
 install-operator: install shirudo-build bpf/vmlinux.h $(BPF_HEADERS_OUT) $(BPF_LIB_HEADERS)
 	@printf '  INSTALL $(DESTDIR)$(libexecdir)/shirudo/shirudo-build\n'
@@ -507,6 +530,7 @@ clean:
 	          systemd/shirudo-map-export.service \
 	          systemd/shirudo-keepalive.service \
 	          systemd/shirudo-bpm-repo-update.service
+	$(Q)rm -f $(JAVAAGENT_BRIDGE)
 	$(Q)rm -rf bpf/include
 
 distclean:

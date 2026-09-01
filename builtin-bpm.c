@@ -1828,6 +1828,17 @@ int cmd_bpm(int argc, const char **argv)
 		rc = parse_package_ref(argv[2], source, sizeof(source), name,
 					 sizeof(name), version, sizeof(version));
 		if (!rc)
+			rc = state_read(state, &n_state);
+		if (rc)
+			return bpm_finish(lock, rc, "install");
+		for (i = 0; i < n_state; i++) {
+			if (!strcmp(state[i].name, name))
+				/* Installation is idempotent by package name.  This also
+				 * avoids contacting the repository for a package that is
+				 * already active.  Use `bpm upgrade` to change versions. */
+				return bpm_finish(lock, 0, "install");
+		}
+		if (!rc)
 			rc = load_source(source, &source_cfg);
 		if (!rc)
 			rc = load_cached_index(source, entries, &n_entries);
@@ -1836,13 +1847,6 @@ int cmd_bpm(int argc, const char **argv)
 					version[0] ? version : NULL, &selected);
 		if (rc)
 			return bpm_finish(lock, rc, "install");
-		rc = state_read(state, &n_state);
-		if (rc)
-			return bpm_finish(lock, rc, "read state");
-		for (i = 0; i < n_state; i++) {
-			if (!strcmp(state[i].name, name))
-				return bpm_finish(lock, -EEXIST, "install");
-		}
 		if (n_state >= BPM_MAX_STATE)
 			return bpm_finish(lock, -E2BIG, "install");
 		rc = package_install(&source_cfg, &selected, NULL, NULL);

@@ -17,6 +17,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <openssl/evp.h>
+
 #include <bpf/libbpf.h>
 
 #include <shirudo/upatch.h>
@@ -28,9 +30,11 @@
 #include "malloc.h"
 #include "package.h"
 #include "sign.h"
+#include "upatch.h"
 
 #define SHIRUDO_MAX_SIG_SIZE	4096
 #define SHIRUDO_SERIALIZER_PREFIX	"shirudo_serialize__"
+#define SHIRUDO_TEST_RUN_PREFIX	"shirudo_test__"
 
 static struct bpf_map *find_rodata(struct bpf_object *obj);
 
@@ -81,7 +85,7 @@ static int write_all(int fd, const void *buf, size_t n)
 }
 
 static void pack_header(struct shirudo_upatch_header *h,
-			const char *name, uint32_t flags,
+			const char *name, uint32_t type, uint32_t flags,
 			const uint8_t *payload_sha256,
 			uint32_t loader_off, uint32_t loader_len,
 			uint32_t sig_off, uint32_t sig_len,
@@ -110,6 +114,8 @@ static void pack_header(struct shirudo_upatch_header *h,
 	h->nr_maps          = htole32(nr_maps);
 	h->nr_progs         = htole32(nr_progs);
 	h->extra_off        = htole32(extra_off);
+	h->type             = htole32(type);
+	h->reserved         = 0;
 }
 
 static uint16_t rd_le16(const void *p)
@@ -128,7 +134,7 @@ static uint32_t rd_le32(const void *p)
 	return le32toh(v);
 }
 
-/* Read a small regular file (<= 1 MiB) into a malloc'd buffer. 0/-errno. */
+/* Read a regular payload (<= 16 MiB) into a malloc'd buffer. 0/-errno. */
 static int read_small_file(const char *path, char **out, uint32_t *out_len)
 {
 	struct stat st;
@@ -148,7 +154,7 @@ static int read_small_file(const char *path, char **out, uint32_t *out_len)
 		return e;
 	}
 	if (!S_ISREG(st.st_mode) || st.st_size <= 0 ||
-	    st.st_size > 1024 * 1024) {
+	    st.st_size > 16 * 1024 * 1024) {
 		close(fd);
 		return -EINVAL;
 	}
@@ -166,6 +172,14 @@ static int read_small_file(const char *path, char **out, uint32_t *out_len)
 	*out = buf;
 	*out_len = (uint32_t)st.st_size;
 	return 0;
+}
+
+static int sha256_buffer(const void *buf, size_t len, uint8_t out[32])
+{
+	unsigned int out_len = 0;
+
+	return EVP_Digest(buf, len, out, &out_len, EVP_sha256(), NULL) == 1 &&
+		out_len == 32 ? 0 : -EIO;
 }
 
 static bool unsupported_kprobe_section(const char *sec)
@@ -740,7 +754,7 @@ static int build_prog_metadata(struct bpf_object *obj, uint32_t nr_progs,
 	struct bpf_program *p;
 	size_t len, base_len, md_alloc_len;
 	uint32_t i = 0, n_seen = 0, nr_uprobe_targets = 0;
-	bool has_serializer = false;
+	bool has_serializer = false, has_test_run = false;
 	int err;
 
 	*out = NULL;
@@ -833,10 +847,28 @@ static int build_prog_metadata(struct bpf_object *obj, uint32_t nr_progs,
 			continue;
 		}
 		if (is_syscall_section(sec)) {
-			pr_err("SEC(\"syscall\") program '%s' must be named %s<map>",
-			       bpf_program__name(p), SHIRUDO_SERIALIZER_PREFIX);
-			err = -EINVAL;
-			goto err_free;
+			const char *prog_name = bpf_program__name(p);
+			size_t prefix_len = strlen(SHIRUDO_TEST_RUN_PREFIX);
+
+			if (!prog_name || strncmp(prog_name, SHIRUDO_TEST_RUN_PREFIX,
+						  prefix_len) != 0 ||
+			    prog_name[prefix_len] == '\0') {
+				pr_err("SEC(\"syscall\") program '%s' must be named %s<id>",
+				       prog_name ?: "?", SHIRUDO_TEST_RUN_PREFIX);
+				err = -EINVAL;
+				goto err_free;
+			}
+			if (has_test_run) {
+				pr_err("only one %s test-run program is supported",
+				       SHIRUDO_TEST_RUN_PREFIX);
+				err = -EINVAL;
+				goto err_free;
+			}
+			has_test_run = true;
+			md->progs[i].role =
+				htole32(SHIRUDO_UPATCH_PROG_ROLE_TEST_RUN);
+			i++;
+			continue;
 		}
 		if (unsupported_kprobe_section(sec)) {
 			pr_err("unsupported kprobe section '%s'; use kprobe/<symbol> or kretprobe/<symbol>",
@@ -1212,7 +1244,7 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 	ex.name_len   = htole32(name_len);
 	ex.source_len = htole32(src_len);
 
-	pack_header(&hdr, upatch_name, flags,
+	pack_header(&hdr, upatch_name, SHIRUDO_UPATCH_TYPE_BPF, flags,
 		    sio.payload_sha256,
 		    loader_off, opts.insns_sz,
 		    sig_off, (uint32_t)sio.signature_sz,
@@ -1301,6 +1333,72 @@ int shirudo_build_package_load(const char *bpf_o, const char *src_path,
 	return err;
 }
 
+int shirudo_build_package_java_load(const char *jar_path,
+				    const char *out_upatch,
+				    const char *upatch_name,
+				    const char *telemetry_upatch)
+{
+	struct shirudo_upatch_header hdr;
+	struct shirudo_java_upatch_metadata metadata = {};
+	uint8_t digest[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN];
+	char *jar = NULL;
+	uint32_t jar_len = 0;
+	uint32_t metadata_len = 0;
+	int fd = -1, err;
+
+	err = read_small_file(jar_path, &jar, &jar_len);
+	if (err) {
+		pr_err("read Java agent %s: %s", jar_path, strerror(-err));
+		return err;
+	}
+	err = sha256_buffer(jar, jar_len, digest);
+	if (err)
+		goto out;
+	if (telemetry_upatch && telemetry_upatch[0]) {
+		if (!shirudo_upatch_name_valid(telemetry_upatch)) {
+			pr_err("invalid Java telemetry upatch name: %s",
+			       telemetry_upatch);
+			err = -EINVAL;
+			goto out;
+		}
+		metadata.magic = htole32(SHIRUDO_JAVA_UPATCH_METADATA_MAGIC);
+		metadata.version = htole32(SHIRUDO_JAVA_UPATCH_METADATA_VERSION);
+		strncpy(metadata.telemetry_upatch, telemetry_upatch,
+			sizeof(metadata.telemetry_upatch) - 1);
+		metadata_len = sizeof(metadata);
+	}
+
+	pack_header(&hdr, upatch_name, SHIRUDO_UPATCH_TYPE_JAVA, 0,
+			digest, 0, 0, 0, 0,
+			(uint32_t)sizeof(hdr) + jar_len, metadata_len,
+			(uint32_t)sizeof(hdr), jar_len, 0, 0, 0, 0);
+	fd = open(out_upatch, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd < 0) {
+		err = -errno;
+		goto out;
+	}
+	err = write_all(fd, &hdr, sizeof(hdr));
+	if (!err)
+		err = write_all(fd, jar, jar_len);
+	if (!err && metadata_len)
+		err = write_all(fd, &metadata, metadata_len);
+	if (!err && fsync(fd) != 0)
+		err = -errno;
+	if (close(fd) != 0 && !err)
+		err = -errno;
+	fd = -1;
+	if (err)
+		unlink(out_upatch);
+	else
+		pr_info("wrote %s (java jar=%uB name=%s)", out_upatch,
+			jar_len, upatch_name);
+out:
+	if (fd >= 0)
+		close(fd);
+	xfree(jar, jar_len);
+	return err;
+}
+
 /* Locate the BPF .rodata map. libbpf names it "<objname>.rodata". */
 static struct bpf_map *find_rodata(struct bpf_object *obj)
 {
@@ -1368,4 +1466,32 @@ int shirudo_build_package_unload(const char *upatch_name,
 			       SHIRUDO_DIRECTIVE_UNLOAD,
 			       payload_sha256, 32,
 			       NULL, pkey_path, cert_path);
+}
+
+int shirudo_build_package_java_unload(const char *name,
+				      const unsigned char payload_sha256[32],
+				      const char *out_upatch)
+{
+	struct shirudo_upatch_header hdr;
+	int fd = -1, err;
+
+	pack_header(&hdr, name, SHIRUDO_UPATCH_TYPE_JAVA,
+			SHIRUDO_DIRECTIVE_UNLOAD, payload_sha256,
+			0, 0, 0, 0, (uint32_t)sizeof(hdr), 32,
+			0, 0, 0, 0, 0, 0);
+	fd = open(out_upatch, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd < 0)
+		return -errno;
+	err = write_all(fd, &hdr, sizeof(hdr));
+	if (!err)
+		err = write_all(fd, payload_sha256, 32);
+	if (!err && fsync(fd) != 0)
+		err = -errno;
+	if (close(fd) != 0 && !err)
+		err = -errno;
+	if (err)
+		unlink(out_upatch);
+	else
+		pr_info("wrote %s (java unload name=%s)", out_upatch, name);
+	return err;
 }

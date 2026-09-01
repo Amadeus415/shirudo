@@ -16,6 +16,7 @@ struct shirudo_upatch {
 	struct shirudo_upatch_header	hdr;	/* host byte order */
 	const unsigned char		*map;
 	size_t				map_size;
+	size_t				header_size;
 	/* Parsed extras: embedded C source (all zero when absent). */
 	const char			*source;
 	uint32_t			source_len;
@@ -56,7 +57,12 @@ const void *shirudo_upatch_signature(const struct shirudo_upatch *u);
 const void *shirudo_upatch_metadata(const struct shirudo_upatch *u);
 const void *shirudo_upatch_data(const struct shirudo_upatch *u);
 
+/* Decode optional Java LOAD metadata. */
+int shirudo_java_upatch_metadata(const struct shirudo_upatch *u,
+					struct shirudo_java_upatch_metadata *out);
+
 bool shirudo_upatch_is_unload(const struct shirudo_upatch *u);
+const char *shirudo_upatch_type_str(const struct shirudo_upatch *u);
 
 /* True if a parsed extras blob (embedded C source) is present. */
 bool shirudo_upatch_has_source(const struct shirudo_upatch *u);
