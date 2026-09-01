@@ -42,6 +42,7 @@ jobs:
             libelf-dev \
             libncurses-dev \
             libssl-dev \
+            llvm \
             openssl \
             pahole \
             python3 \
