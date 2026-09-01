@@ -223,7 +223,16 @@ tpm2_getrandom 8 >/dev/null
 
 log "importing operator certificate and attaching the measured Shirudo LSM"
 install -d -m 0700 /var/lib/shirudo/keys
-install -m 0644 "$BUNDLE/fixtures/cert.der" \
+
+package_cert="${TEST_VM_PACKAGE_CERT:-$BUNDLE/fixtures/cert.der}"
+if [[ -n "${TEST_VM_PACKAGE_CERT:-}" ]]; then
+	[[ "$package_cert" == /mnt/shirudo-bundle/fixtures/package-cert.der &&
+	   -s "$package_cert" ]] || {
+		log "package certificate is missing from the host bundle"
+		exit 1
+	}
+fi
+install -m 0644 "$package_cert" \
 	/var/lib/shirudo/keys/cert.der
 rm -f /var/lib/shirudo/keys/signing_key.pem
 /usr/local/bin/shirudo init

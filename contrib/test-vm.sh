@@ -77,6 +77,7 @@ LEGACY_MAP_EXPORT_TENANT_ID="${TEST_VM_MAP_EXPORT_TENANT_ID:-}"
 MAP_EXPORT_INSECURE="${TEST_VM_MAP_EXPORT_INSECURE:-}"
 MAP_EXPORT_CA="${TEST_VM_MAP_EXPORT_CA:-}"
 OCI_CA="${TEST_VM_OCI_CA:-}"
+PACKAGE_CERT="${TEST_VM_PACKAGE_CERT:-}"
 BPM_OCI_REPOSITORY_RAW="${TEST_VM_BPM_OCI_REPOSITORY:-}"
 BPM_OCI_INDEX_CERT="${TEST_VM_BPM_OCI_INDEX_CERT:-}"
 BPM_OCI_SOURCE="default"
@@ -217,6 +218,15 @@ validate_oci_ca()
 		[[ -f "$OCI_CA" && -r "$OCI_CA" && -s "$OCI_CA" ]] ||
 			die "TEST_VM_OCI_CA is not a readable, non-empty regular file: $OCI_CA"
 	fi
+}
+
+validate_package_cert()
+{
+	[[ -z "$PACKAGE_CERT" ]] && return 0
+	[[ "$VM_MODE" == interactive ]] ||
+		die "TEST_VM_PACKAGE_CERT is supported only for interactive make vm"
+	[[ -f "$PACKAGE_CERT" && -r "$PACKAGE_CERT" && -s "$PACKAGE_CERT" ]] ||
+		die "TEST_VM_PACKAGE_CERT is not a readable, non-empty regular file: $PACKAGE_CERT"
 }
 
 validate_bpm_oci()
@@ -941,6 +951,7 @@ validate_mode
 validate_kernel_selection
 validate_map_export
 validate_oci_ca
+validate_package_cert
 validate_bpm_oci
 check_host_dependencies
 validate_host_bundle
@@ -978,6 +989,11 @@ if [[ -n "$OCI_CA" ]]; then
 	OCI_CA_DIR="${RUN_DIR}/oci-ca"
 	mkdir -p "$OCI_CA_DIR"
 	install -m 0644 "$OCI_CA" "$OCI_CA_DIR/ca.crt"
+fi
+
+if [[ -n "$PACKAGE_CERT" ]]; then
+	[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/package-cert.der" ]] ||
+		die "host VM bundle has no package certificate; run 'make test-vm-bundle' first"
 fi
 
 if [[ -n "$BPM_OCI_ENDPOINT" ]]; then
@@ -1046,6 +1062,10 @@ printf '      export TEST_VM_DNS_FUZZ_CASES=%q\n' "$DNS_FUZZ_CASES" >>"$USER_DAT
 printf '      export TEST_VM_SSH_PUBLIC_KEY=%q\n' "$SSH_PUBLIC_KEY" >>"$USER_DATA"
 if [[ -n "$OCI_CA_DIR" ]]; then
 	printf '      export TEST_VM_OCI_CA=/mnt/shirudo-oci/ca.crt\n' >>"$USER_DATA"
+fi
+if [[ -n "$PACKAGE_CERT" ]]; then
+	printf '      export TEST_VM_PACKAGE_CERT=/mnt/shirudo-bundle/fixtures/package-cert.der\n' \
+		>>"$USER_DATA"
 fi
 if [[ -n "$BPM_OCI_ENDPOINT" ]]; then
 	printf '      export TEST_VM_BPM_OCI_SOURCE=%q\n' \

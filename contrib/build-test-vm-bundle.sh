@@ -23,6 +23,7 @@ ROOTFS_CACHE="${WORK_DIR}/cache/rootfs/${ROOTFS_NAME}"
 LOCK_FILE="${BUNDLE_DIR}.lock"
 STAMP_FILE="${TEST_VM_BUNDLE_STAMP:-${BUNDLE_DIR}/.stamp}"
 STAMP_INPUTS="${TEST_VM_BUNDLE_INPUTS:-}"
+PACKAGE_CERT="${TEST_VM_PACKAGE_CERT:-}"
 RUNTIME_PREP_VERSION=1
 
 log()
@@ -34,6 +35,13 @@ die()
 {
 	log "error: $*"
 	exit 1
+}
+
+validate_package_cert()
+{
+	[[ -z "$PACKAGE_CERT" ]] && return 0
+	[[ -f "$PACKAGE_CERT" && -r "$PACKAGE_CERT" && -s "$PACKAGE_CERT" ]] ||
+		die "TEST_VM_PACKAGE_CERT is not a readable, non-empty regular file: $PACKAGE_CERT"
 }
 
 require_command()
@@ -255,6 +263,8 @@ bundle_is_current()
 command -v flock >/dev/null 2>&1 ||
 	die "flock is required; install it with: sudo apt-get install -y util-linux"
 
+validate_package_cert
+
 mkdir -p "$(dirname "$BUNDLE_DIR")"
 exec 9>"$LOCK_FILE"
 flock 9
@@ -439,9 +449,15 @@ mv /tmp/shirudo-test-uprobe-target \
 
 cp "$FIXTURE_WORK/trusted/cert.der" "$TMP_DIR/fixtures/cert.der"
 cp "$FIXTURE_WORK/own/cert.der" "$TMP_DIR/fixtures/own.der"
+if [[ -n "$PACKAGE_CERT" ]]; then
+	install -m 0644 "$PACKAGE_CERT" "$TMP_DIR/fixtures/package-cert.der"
+else
+	install -m 0644 "$FIXTURE_WORK/trusted/cert.der" \
+		"$TMP_DIR/fixtures/package-cert.der"
+fi
 (
 	cd "$TMP_DIR/fixtures"
-	sha256sum -- *.upatch cert.der own.der > manifest
+	sha256sum -- *.upatch cert.der own.der package-cert.der > manifest
 )
 
 printf 'shirudo-test-vm-bundle-v1\n' >"$TMP_DIR/format"

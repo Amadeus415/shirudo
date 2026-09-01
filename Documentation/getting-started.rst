@@ -294,6 +294,20 @@ The CA is copied into the per-VM state directory through a read-only QEMU
 share and installed into the guest system trust store during bootstrap.  The
 VM continues to verify both the registry certificate chain and its hostname.
 
+When using ``make vm`` to inspect a package built with a non-ephemeral operator
+key, pass the matching public package certificate as well::
+
+    make vm \
+        TEST_VM_PACKAGE_CERT=$HOME/.config/bpm/cert.der \
+        TEST_VM_OCI_CA=/path/to/registry-ca.pem
+
+The public certificate is copied into the host VM bundle and used as the
+guest's ``/var/lib/shirudo/keys/cert.der``.  The corresponding
+``signing_key.pem`` remains on the build host and is never copied into the
+bundle or guest.  ``TEST_VM_PACKAGE_CERT`` is intended for interactive
+``make vm``; normal target-test VMs continue using their ephemeral fixture
+signer.
+
 To also register a BPM OCI repository during VM bootstrap, provide the
 repository endpoint and its signed-index certificate.  The optional source
 name before ``=`` is the name used by ``bpm install``; without it, ``default``

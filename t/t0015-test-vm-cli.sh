@@ -79,7 +79,7 @@ test_expect_success 'test-vm imports the host-built payload' '
 	grep -q "mount_tag=shirudo-bundle" ../contrib/test-vm.sh &&
 	grep -q "importing host-built Shirudo payload" \
 		../contrib/test-vm-guest.sh &&
-	grep -q "install -m 0644 \"\$BUNDLE/fixtures/cert.der\"" \
+	grep -q "package_cert=\"\${TEST_VM_PACKAGE_CERT:-\$BUNDLE/fixtures/cert.der}\"" \
 		../contrib/test-vm-guest.sh &&
 	! grep -q "vmlinux.h" ../contrib/test-vm-guest.sh &&
 	! grep -q "shirudo-build" ../contrib/test-vm-guest.sh &&
@@ -311,6 +311,31 @@ test_expect_success 'test-vm validates a custom OCI CA file before boot' '
 		>"$WORK/missing-oci-ca.out" 2>&1 &&
 	grep -q "TEST_VM_OCI_CA is not a readable, non-empty regular file" \
 		"$WORK/missing-oci-ca.out"
+'
+
+test_expect_success 'test-vm passes a public package certificate into the guest bundle' '
+	grep -q "TEST_VM_PACKAGE_CERT" ../Makefile &&
+	grep -q "TEST_VM_BUNDLE_INPUTS" ../Makefile &&
+	grep -q "PACKAGE_CERT=\"\${TEST_VM_PACKAGE_CERT:-}\"" \
+		../contrib/build-test-vm-bundle.sh &&
+	grep -q "package-cert.der" ../contrib/build-test-vm-bundle.sh &&
+	grep -q "export TEST_VM_PACKAGE_CERT=/mnt/shirudo-bundle/fixtures/package-cert.der" \
+		"$RUNNER" &&
+	grep -q "supported only for interactive make vm" "$RUNNER" &&
+	grep -q "TEST_VM_PACKAGE_CERT" ../contrib/test-vm-guest.sh &&
+	grep -q "install -m 0644 \"\$package_cert\"" \
+		../contrib/test-vm-guest.sh
+'
+
+test_expect_success 'test-vm validates a custom package certificate before boot' '
+	printf kernel >"$WORK/package-cert-kernel" &&
+	! TEST_VM_WORK_DIR="$WORK/missing-package-cert" \
+		VM_MODE=interactive \
+		TEST_VM_KERNEL="$WORK/package-cert-kernel" \
+		TEST_VM_PACKAGE_CERT="$WORK/no-package-cert.der" "$RUNNER" \
+		>"$WORK/missing-package-cert.out" 2>&1 &&
+	grep -q "TEST_VM_PACKAGE_CERT is not a readable, non-empty regular file" \
+		"$WORK/missing-package-cert.out"
 '
 
 test_expect_success 'test-vm bootstraps a BPM OCI repository from the host' '

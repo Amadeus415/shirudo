@@ -163,6 +163,7 @@ shirudo make targets (run from the repo root):
              TEST_VM_MAP_EXPORT_CA (optional PEM CA file),
              TEST_VM_MAP_EXPORT_INSECURE=true (explicit HTTP only),
              TEST_VM_OCI_CA (optional PEM CA file for guest OCI trust),
+             TEST_VM_PACKAGE_CERT (optional public package cert.der),
              TEST_VM_BPM_OCI_REPOSITORY (optional name=oci://endpoint),
              TEST_VM_BPM_OCI_INDEX_CERT (repository index certificate),
              TEST_VM_ROOTFS_URL/SHA256 (custom base image selection),
@@ -213,7 +214,8 @@ TEST_VM_BUNDLE_INPUTS := $(sort \
 	Makefile Makefile.config Makefile.shirudo Makefile.version config.mk \
 	contrib/build-test-vm-bundle.sh contrib/test-vm-guest.sh \
 	contrib/prepare-test-vm-runtime.sh contrib/test-vm-runtime-packages \
-	$(TEST_VM_BUNDLE_SOURCES) $(TEST_VM_BUNDLE_ARTIFACTS))
+	$(TEST_VM_BUNDLE_SOURCES) $(TEST_VM_BUNDLE_ARTIFACTS) \
+	$(if $(strip $(TEST_VM_PACKAGE_CERT)),$(TEST_VM_PACKAGE_CERT)))
 
 
 test-vm-bundle: $(TEST_VM_BUNDLE_STAMP)
@@ -225,6 +227,7 @@ $(TEST_VM_BUNDLE_STAMP): $(TEST_VM_BUNDLE_INPUTS)
 		TEST_VM_UBUNTU_CODENAME="$(TEST_VM_UBUNTU_CODENAME)" \
 		TEST_VM_ROOTFS_URL="$(TEST_VM_ROOTFS_URL)" \
 		TEST_VM_ROOTFS_SHA256="$(TEST_VM_ROOTFS_SHA256)" \
+		TEST_VM_PACKAGE_CERT="$(TEST_VM_PACKAGE_CERT)" \
 		TEST_VM_BUNDLE_STAMP="$(abspath $(TEST_VM_BUNDLE_STAMP))" \
 		TEST_VM_BUNDLE_INPUTS="$(abspath $(TEST_VM_BUNDLE_INPUTS))" \
 		contrib/build-test-vm-bundle.sh
@@ -295,6 +298,7 @@ test-tgt-obs-fuzz: test-vm-bundle
 		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
 		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
 		TEST_VM_OCI_CA="$(TEST_VM_OCI_CA)" \
+		TEST_VM_PACKAGE_CERT="$(TEST_VM_PACKAGE_CERT)" \
 		TEST_VM_BPM_OCI_REPOSITORY="$(TEST_VM_BPM_OCI_REPOSITORY)" \
 		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
