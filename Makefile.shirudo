@@ -115,6 +115,7 @@ UTIL_SRCS := \
     util/tpm.c \
     util/chain.c \
     util/config.c \
+    util/bpm_source_config.c \
     util/eventlog.c \
     util/json.c \
     util/report.c \
@@ -399,6 +400,7 @@ install-operator: install shirudo-build bpf/vmlinux.h $(BPF_HEADERS_OUT) $(BPF_L
 TEST_HELPERS := t/helper/test-json-parser \
                 t/helper/test-chain \
 		t/helper/test-config \
+		t/helper/test-bpm-source \
                 t/helper/test-selector \
                 t/helper/test-bpf-load \
 		t/helper/test-dns-prog-run \
@@ -424,6 +426,10 @@ t/helper/test-chain: t/helper/test-chain.c util/chain.o util/tpm.o util/log.o \
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -ltss2-esys -ltss2-tctildr
 
 t/helper/test-config: t/helper/test-config.c util/config.o util/log.o
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+t/helper/test-bpm-source: t/helper/test-bpm-source.c util/bpm_source_config.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 

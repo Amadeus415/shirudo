@@ -6,6 +6,7 @@ cd "$(dirname "$0")"
 . ./test-lib.sh
 
 SHIRUDO=../shirudo
+BPM_SOURCE_HELPER=helper/test-bpm-source
 
 test_expect_success 'bpm exposes native subcommands to completion' '
 	out=$($SHIRUDO bpm --list-cmds) &&
@@ -24,6 +25,12 @@ test_expect_success 'bpm help describes the target package workflow' '
 
 test_expect_success 'bpm rejects an unknown subcommand' '
 	! $SHIRUDO bpm not-a-command >/dev/null 2>&1
+'
+
+test_expect_success 'bpm parses spaced repository source assignments' '
+	out=$($BPM_SOURCE_HELPER) &&
+	echo "$out" | grep -qx "endpoint=oci://registry.test:5443" &&
+	echo "$out" | grep -qx "key_file=/etc/shirudo/bpm/keys/jbrust.pem"
 '
 
 test_done

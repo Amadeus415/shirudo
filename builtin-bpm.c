@@ -34,6 +34,7 @@
 #include <curl/curl.h>
 
 #include "builtin.h"
+#include "util/bpm_source_config.h"
 #include "util/help.h"
 #include "util/json.h"
 #include "util/log.h"
@@ -854,7 +855,7 @@ static int source_path(const char *name, char *out, size_t out_sz)
 
 static int load_source(const char *name, struct bpm_source *s)
 {
-	char path[PATH_MAX], line[PATH_MAX], *eq, *key, *val;
+	char path[PATH_MAX], line[PATH_MAX];
 	FILE *fp;
 	int rc;
 
@@ -863,13 +864,13 @@ static int load_source(const char *name, struct bpm_source *s)
 	fp = fopen(path, "r"); if (!fp) return -errno;
 	snprintf(s->name, sizeof(s->name), "%s", name);
 	while (fgets(line, sizeof(line), fp)) {
-		key = line; while (isspace((unsigned char)*key)) key++;
-		eq = strchr(key, '='); if (!eq) continue;
-		*eq++ = 0; val = eq;
-		while (isspace((unsigned char)*val)) val++;
-		val[strcspn(val, "\r\n")] = 0;
-		if (!strcmp(key, "endpoint")) snprintf(s->endpoint, sizeof(s->endpoint), "%s", val);
-		else if (!strcmp(key, "key_file")) snprintf(s->key_file, sizeof(s->key_file), "%s", val);
+		rc = shirudo_bpm_parse_source_line(line,
+					    s->endpoint, sizeof(s->endpoint),
+					    s->key_file, sizeof(s->key_file));
+		if (rc) {
+			fclose(fp);
+			return rc;
+		}
 	}
 	fclose(fp);
 	if (!s->endpoint[0] || !s->key_file[0]) return -EINVAL;
