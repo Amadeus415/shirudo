@@ -208,6 +208,9 @@ scripts/config --enable NET_9P
 scripts/config --enable NET_9P_VIRTIO
 scripts/config --enable 9P_FS
 scripts/config --enable OVERLAY_FS
+scripts/config --enable SQUASHFS
+scripts/config --enable SQUASHFS_XZ
+scripts/config --enable SQUASHFS_ZSTD
 scripts/config --enable EXT4_FS
 scripts/config --enable EFI_PARTITION
 scripts/config --enable ISO9660_FS
@@ -266,6 +269,9 @@ require_config CONFIG_NET_9P y
 require_config CONFIG_NET_9P_VIRTIO y
 require_config CONFIG_9P_FS y
 require_config CONFIG_OVERLAY_FS y
+require_config CONFIG_SQUASHFS y
+require_config CONFIG_SQUASHFS_XZ y
+require_config CONFIG_SQUASHFS_ZSTD y
 require_config CONFIG_EXT4_FS y
 require_config CONFIG_EFI_PARTITION y
 require_config CONFIG_ISO9660_FS y
