@@ -13,6 +13,7 @@ test_expect_success 'bpm exposes native subcommands to completion' '
 	echo "$out" | grep -qx config &&
 	echo "$out" | grep -qx repo &&
 	echo "$out" | grep -qx key &&
+	echo "$out" | grep -qx pull &&
 	echo "$out" | grep -qx install &&
 	echo "$out" | grep -qx upgrade
 '
@@ -20,7 +21,22 @@ test_expect_success 'bpm exposes native subcommands to completion' '
 test_expect_success 'bpm help describes the target package workflow' '
 	out=$($SHIRUDO bpm --help 2>&1) &&
 	echo "$out" | grep -q "signed target-local BPM packages" &&
-	echo "$out" | grep -q "refresh signed repository indexes"
+	echo "$out" | grep -q "refresh signed repository indexes" &&
+	echo "$out" | grep -q "download an OCI package"
+'
+
+test_expect_success 'bpm pull validates package references before network access' '
+	! $SHIRUDO bpm pull ./package.bee >/dev/null 2>&1 &&
+	! $SHIRUDO bpm pull oci://registry.example/repository >/dev/null 2>&1
+'
+
+test_expect_success 'bpm pull without a reference prints OCI usage' '
+	if out=$($SHIRUDO bpm pull 2>&1); then
+		false
+	else
+		echo "$out" | grep -q "The package reference must start with oci://" &&
+		echo "$out" | grep -q "oci://quay.io/namespace/package:tag"
+	fi
 '
 
 test_expect_success 'bpm rejects an unknown subcommand' '
