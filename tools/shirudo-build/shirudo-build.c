@@ -24,6 +24,10 @@
 #include "upatch.h"
 #include "vmlinux.h"
 
+#ifndef SHIRUDO_VMLINUX_PATH
+#define SHIRUDO_VMLINUX_PATH "/usr/local/share/shirudo/vmlinux.h"
+#endif
+
 #define SHIRUDO_SHA256_HEX_LEN	64
 
 static void usage(FILE *fp)
@@ -54,8 +58,8 @@ static void usage(FILE *fp)
 		"           explicit --key/--cert override both.\n"
 		"--key default without --keys-dir/%s: %s\n"
 		"--cert default without --keys-dir/%s: %s\n"
-		"--vmlinux: explicit; else ./vmlinux.h, then\n"
-		"           /usr/share/shirudo/vmlinux.h.\n"
+		"--vmlinux: explicit; else ./vmlinux.h, ./bpf/vmlinux.h,\n"
+		"           then %s.\n"
 		"--payload-sha256: 64 hex chars; if omitted, read from the local\n"
 		"                  archive /var/lib/shirudo/upatches/<name>.upatch,\n"
 		"                  else all-zero (target skips the payload check).\n"
@@ -65,7 +69,7 @@ static void usage(FILE *fp)
 		"                  path on stdout. A debugging aid.\n",
 		SHIRUDO_KEYS_DIR_ENV, SHIRUDO_KEYS_DIR_ENV,
 		SHIRUDO_SIGNING_KEY_PATH, SHIRUDO_KEYS_DIR_ENV,
-		SHIRUDO_CERT_PATH);
+		SHIRUDO_CERT_PATH, SHIRUDO_VMLINUX_PATH);
 }
 
 static int parse_hex_sha256(const char *s, uint8_t out[32])
@@ -405,9 +409,9 @@ int main(int argc, char **argv)
 			shirudo_build_locate_vmlinux(vmlinux_override);
 		if (!vmlinux_h) {
 			pr_err("vmlinux.h not found (tried %s, ./vmlinux.h, "
-			       "./bpf/vmlinux.h, /usr/share/shirudo/vmlinux.h)",
+			       "./bpf/vmlinux.h, %s)",
 			       vmlinux_override ? vmlinux_override
-						: "(none)");
+						 : "(none)", SHIRUDO_VMLINUX_PATH);
 			return 1;
 		}
 		if (emit_artifacts) {

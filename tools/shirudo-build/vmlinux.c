@@ -10,6 +10,10 @@
 
 #include "vmlinux.h"
 
+#ifndef SHIRUDO_VMLINUX_PATH
+#define SHIRUDO_VMLINUX_PATH "/usr/local/share/shirudo/vmlinux.h"
+#endif
+
 const char *shirudo_build_locate_vmlinux(const char *override)
 {
 	if (override)
@@ -18,7 +22,7 @@ const char *shirudo_build_locate_vmlinux(const char *override)
 		return "./vmlinux.h";
 	if (access("./bpf/vmlinux.h", R_OK) == 0)
 		return "./bpf/vmlinux.h";
-	if (access("/usr/share/shirudo/vmlinux.h", R_OK) == 0)
-		return "/usr/share/shirudo/vmlinux.h";
+	if (access(SHIRUDO_VMLINUX_PATH, R_OK) == 0)
+		return SHIRUDO_VMLINUX_PATH;
 	return NULL;
 }

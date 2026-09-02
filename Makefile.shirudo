@@ -55,6 +55,8 @@ SHIRUDO_LIBEXEC_DIR ?= $(libexecdir)/shirudo
 # Where operator-installed BPF headers live on a packaged host;
 # also baked into shirudo-build as a runtime fallback -I path.
 SHIRUDO_BPF_INCDIR  ?= $(sharedir)/shirudo/bpf/include
+# Installed kernel BTF types used as the default vmlinux.h fallback.
+SHIRUDO_VMLINUX_PATH ?= $(sharedir)/shirudo/vmlinux.h
 
 WARNINGS := -Wall -Wextra -Wno-unused-parameter -Wstrict-prototypes \
             -Wmissing-prototypes -Wpointer-arith -Wshadow
@@ -62,7 +64,8 @@ WARNINGS := -Wall -Wextra -Wno-unused-parameter -Wstrict-prototypes \
 CFLAGS_BASE := -O2 -g -std=gnu11 $(WARNINGS) \
                -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE \
                -DSHIRUDO_LIBEXEC_DIR='"$(SHIRUDO_LIBEXEC_DIR)"' \
-               -DSHIRUDO_BPF_INCDIR='"$(SHIRUDO_BPF_INCDIR)"'
+               -DSHIRUDO_BPF_INCDIR='"$(SHIRUDO_BPF_INCDIR)"' \
+               -DSHIRUDO_VMLINUX_PATH='"$(SHIRUDO_VMLINUX_PATH)"'
 
 INCLUDES := \
     -I. \
