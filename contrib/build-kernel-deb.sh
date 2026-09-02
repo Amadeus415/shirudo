@@ -196,6 +196,7 @@ scripts/config --enable SYSTEM_DATA_VERIFICATION
 scripts/config --enable TCG_TPM
 scripts/config --enable TCG_TIS_CORE
 scripts/config --enable TCG_TIS
+scripts/config --enable TCG_CRB
 scripts/config --enable UPROBES
 scripts/config --enable SECURITY
 scripts/config --enable SECURITYFS
@@ -251,6 +252,7 @@ require_config CONFIG_DEBUG_INFO_BTF y
 require_config CONFIG_TCG_TPM y
 require_config CONFIG_TCG_TIS_CORE y
 require_config CONFIG_TCG_TIS y
+require_config CONFIG_TCG_CRB y
 require_config CONFIG_UPROBES y
 require_config CONFIG_SECURITYFS y
 require_config CONFIG_PCI y
