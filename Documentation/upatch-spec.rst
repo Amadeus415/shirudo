@@ -241,9 +241,9 @@ offset      size  field                  meaning
 +144        16    map                    NUL-terminated serializer target map
 ==========  ====  =====================  ====================================
 
-Version 1 ends after the fixed program entries and cannot contain attach
-kind 7. Version 1 ends there when it has no uprobe programs. If any
-entry has attach kind 7, version 2 appends one ``UPUT`` target block:
+Version 1 optionally appends one ``UPUT`` target block after the fixed
+program entries when any entry has attach kind 7. When there are no uprobe
+programs, version 1 ends after the fixed program entries:
 
 ==========  ====  =====================  ====================================
 offset      size  field                  meaning
