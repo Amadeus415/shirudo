@@ -317,8 +317,8 @@ func TestInstallBPMPackageDownloadsFromOCI(t *testing.T) {
 			},
 		}},
 		Annotations: map[string]string{
-			"dev.isovalent.bpm.package.name":    "hello-bee-world",
-			"dev.isovalent.bpm.package.version": "0.1.0",
+			"dev.shirudo.bpm.package.name":    "hello-bee-world",
+			"dev.shirudo.bpm.package.version": "0.1.0",
 		},
 	}
 	manifestBody, err := json.Marshal(manifest)

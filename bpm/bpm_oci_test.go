@@ -179,10 +179,10 @@ func TestPutBPMPackage(t *testing.T) {
 	if packageManifest.Layers[0].MediaType != bpmOCIPackageLayerMediaType {
 		t.Fatalf("layer media type = %q", packageManifest.Layers[0].MediaType)
 	}
-	if packageManifest.Annotations["dev.isovalent.bpm.package.name"] != "hello-bee-world" {
+	if packageManifest.Annotations["dev.shirudo.bpm.package.name"] != "hello-bee-world" {
 		t.Fatalf("annotations = %#v", packageManifest.Annotations)
 	}
-	if packageManifest.Annotations["dev.isovalent.bpm.package.version"] != "0.1.0" {
+	if packageManifest.Annotations["dev.shirudo.bpm.package.version"] != "0.1.0" {
 		t.Fatalf("annotations = %#v", packageManifest.Annotations)
 	}
 
@@ -281,8 +281,8 @@ func TestGetBPMPackage(t *testing.T) {
 			},
 		}},
 		Annotations: map[string]string{
-			"dev.isovalent.bpm.package.name":    "hello-bee-world",
-			"dev.isovalent.bpm.package.version": "0.1.0",
+			"dev.shirudo.bpm.package.name":    "hello-bee-world",
+			"dev.shirudo.bpm.package.version": "0.1.0",
 		},
 	}
 	manifestBody, err := json.Marshal(manifest)

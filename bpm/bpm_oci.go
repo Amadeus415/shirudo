@@ -24,9 +24,9 @@ const (
 	bpmOCIScheme                = "oci://"
 	bpmOCIManifestMediaType     = "application/vnd.oci.image.manifest.v1+json"
 	bpmOCIEmptyConfigMediaType  = "application/vnd.oci.empty.v1+json"
-	bpmOCIConfigMediaType       = "application/vnd.isovalent.bee.config.v1+json"
-	bpmOCIPackageLayerMediaType = "application/vnd.isovalent.bee.package.v1+gzip"
-	bpmOCIPublicKeyArtifactType = "application/vnd.isovalent.bpm.public-key.v1+der"
+	bpmOCIConfigMediaType       = "application/vnd.shirudo.bpm.config.v1+json"
+	bpmOCIPackageLayerMediaType = "application/vnd.shirudo.bpm.package.v1+gzip"
+	bpmOCIPublicKeyArtifactType = "application/vnd.shirudo.bpm.public-key.v1+der"
 	bpmOCIPublicKeyMediaType    = "application/pkix-cert"
 )
 
@@ -317,10 +317,10 @@ func (client *bpmOCIRegistryClient) pushPackage(ctx context.Context, archive bpm
 		Config:        configDescriptor,
 		Layers:        []bpmOCIDescriptor{layerDescriptor},
 		Annotations: map[string]string{
-			"dev.isovalent.bpm.package.name":    archive.Metadata.Name,
-			"dev.isovalent.bpm.package.version": archive.Metadata.Version,
-			"org.opencontainers.image.title":    archive.Metadata.Name,
-			"org.opencontainers.image.version":  archive.Metadata.Version,
+			"dev.shirudo.bpm.package.name":     archive.Metadata.Name,
+			"dev.shirudo.bpm.package.version":  archive.Metadata.Version,
+			"org.opencontainers.image.title":   archive.Metadata.Name,
+			"org.opencontainers.image.version": archive.Metadata.Version,
 		},
 	}
 	manifestBody, err := json.Marshal(manifest)
@@ -510,7 +510,7 @@ func packageFilenameFromManifest(ref bpmOCIReference, manifest bpmOCIManifest, l
 		}
 	}
 
-	name := strings.TrimSpace(manifest.Annotations["dev.isovalent.bpm.package.name"])
+	name := strings.TrimSpace(manifest.Annotations["dev.shirudo.bpm.package.name"])
 	if name == "" {
 		name = path.Base(ref.Repository.Name)
 	}

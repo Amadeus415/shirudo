@@ -25,6 +25,10 @@
 #include <zlib.h>
 
 #include <curl/curl.h>
+#include <openssl/bio.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
 
 #include "builtin.h"
 #include "util/bpm_source_config.h"
@@ -36,6 +40,10 @@
 #include "util/macros.h"
 #include "util/paths.h"
 #include "util/upatch.h"
+
+#ifndef SHIRUDO_LIBEXEC_DIR
+#define SHIRUDO_LIBEXEC_DIR "/usr/local/libexec/shirudo"
+#endif
 
 #define BPM_MAX_NAME 128
 #define BPM_MAX_ENDPOINT 512
@@ -50,7 +58,11 @@
 #define BPM_INDEX_TAG "stable"
 #define BPM_INDEX_MEDIA "application/vnd.shirudo.bpm.index.v1+json"
 #define BPM_INDEX_SIG_MEDIA "application/vnd.shirudo.bpm.index.signature.v1"
-#define BPM_PACKAGE_MEDIA "application/vnd.isovalent.bee.package.v1+gzip"
+#define BPM_PACKAGE_MEDIA "application/vnd.shirudo.bpm.package.v1+gzip"
+#define BPM_CONFIG_MEDIA "application/vnd.shirudo.bpm.config.v1+json"
+#define BPM_EMPTY_CONFIG_MEDIA "application/vnd.oci.empty.v1+json"
+#define BPM_PUBLIC_KEY_ARTIFACT "application/vnd.shirudo.bpm.public-key.v1+der"
+#define BPM_PUBLIC_KEY_MEDIA "application/pkix-cert"
 
 struct bpm_source {
 	char name[BPM_MAX_NAME];
@@ -104,6 +116,14 @@ struct bpm_oci_client {
 	char token[4096];
 	char ca_file[PATH_MAX];
 	struct shirudo_tls_ca tls_ca;
+};
+
+struct bpm_package_info {
+	char name[BPM_MAX_NAME];
+	char version[BPM_MAX_NAME];
+	char signer[BPM_MAX_DIGEST];
+	unsigned char *cert;
+	size_t cert_len;
 };
 
 static void bpm_copy_string(char *dst, size_t dst_sz, const char *src)
@@ -170,13 +190,13 @@ static int bpm_buffer_append(struct bpm_buffer *b, const void *data, size_t len)
 	size_t want;
 	unsigned char *p;
 
-	if (len > BPM_MAX_HTTP_BODY - b->len)
+	if (len >= BPM_MAX_HTTP_BODY - b->len)
 		return -E2BIG;
 	want = b->len + len;
-	if (want > b->cap) {
+	if (want + 1 > b->cap) {
 		size_t cap = b->cap ? b->cap : 4096;
 
-		while (cap < want) {
+		while (cap <= want) {
 			if (cap > BPM_MAX_HTTP_BODY / 2) {
 				cap = BPM_MAX_HTTP_BODY;
 				break;
@@ -191,6 +211,7 @@ static int bpm_buffer_append(struct bpm_buffer *b, const void *data, size_t len)
 	}
 	memcpy(b->data + b->len, data, len);
 	b->len += len;
+	b->data[b->len] = '\0';
 	return 0;
 }
 
@@ -223,8 +244,8 @@ static size_t bpm_header(void *ptr, size_t size, size_t nmemb, void *ud)
 		return n;
 	memcpy(line, ptr, n);
 	line[n] = '\0';
-	if (!strncasecmp(line, "WWW-Authenticate:", 18)) {
-		v = line + 18;
+	if (!strncasecmp(line, "WWW-Authenticate:", 17)) {
+		v = line + 17;
 		while (isspace((unsigned char)*v)) v++;
 		bpm_copy_string(r->www_auth, sizeof(r->www_auth), v);
 	} else if (!strncasecmp(line, "Content-Type:", 13)) {
@@ -440,9 +461,10 @@ static int parse_endpoint(const char *endpoint, struct bpm_oci_client *c)
 	return load_registry_auth(c->registry, c);
 }
 
-static int curl_once(struct bpm_oci_client *c, const char *method,
-		     const char *url, const char *accept, const char *auth,
-		     struct bpm_http_response *r, FILE *file)
+static int curl_once_ex(struct bpm_oci_client *c, const char *method,
+			const char *url, const char *accept,
+			const char *content_type, const void *body, size_t body_len,
+			const char *auth, struct bpm_http_response *r, FILE *file)
 {
 	CURL *curl;
 	struct curl_slist *headers = NULL;
@@ -457,6 +479,11 @@ static int curl_once(struct bpm_oci_client *c, const char *method,
 		snprintf(h, sizeof(h), "Accept: %s", accept);
 		headers = curl_slist_append(headers, h);
 	}
+	if (content_type) {
+		char h[256];
+		snprintf(h, sizeof(h), "Content-Type: %s", content_type);
+		headers = curl_slist_append(headers, h);
+	}
 	if (auth) {
 		char h[8192];
 		snprintf(h, sizeof(h), "Authorization: %s", auth);
@@ -464,6 +491,8 @@ static int curl_once(struct bpm_oci_client *c, const char *method,
 	}
 	curl_easy_setopt(curl, CURLOPT_URL, url);
 	curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
+	if (!strcasecmp(method, "HEAD"))
+		curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 	curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf);
 	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
@@ -489,6 +518,10 @@ static int curl_once(struct bpm_oci_client *c, const char *method,
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
 	curl_easy_setopt(curl, CURLOPT_SSL_CTX_FUNCTION, shirudo_sslctx_callback);
 	curl_easy_setopt(curl, CURLOPT_SSL_CTX_DATA, &c->tls_ca);
+	if (body) {
+		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+		curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)body_len);
+	}
 	if (file) {
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, bpm_write_file);
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
@@ -512,6 +545,13 @@ static int curl_once(struct bpm_oci_client *c, const char *method,
 	curl_easy_cleanup(curl);
 	shirudo_tls_ca_cleanup(&c->tls_ca);
 	return status < 0 ? -EHOSTUNREACH : 0;
+}
+
+static int curl_once(struct bpm_oci_client *c, const char *method,
+		     const char *url, const char *accept, const char *auth,
+		     struct bpm_http_response *r, FILE *file)
+{
+	return curl_once_ex(c, method, url, accept, NULL, NULL, 0, auth, r, file);
 }
 
 static int parse_challenge(const char *header, char *realm, size_t rsz,
@@ -545,38 +585,59 @@ static int parse_challenge(const char *header, char *realm, size_t rsz,
 
 static int get_bearer_token(struct bpm_oci_client *c, const char *challenge)
 {
+	const char *provided_token = getenv("BPM_OCI_BEARER_TOKEN");
 	char realm[PATH_MAX] = {}, service[256] = {}, scope[512] = {};
 	char url[PATH_MAX * 2];
-	CURL *curl;
+	char basic[2048], auth_header[sizeof(basic) + 32];
+	CURL *curl = NULL;
+	struct curl_slist *headers = NULL;
 	struct bpm_http_response r = {};
 	CURLcode cc;
 	char *esc_service = NULL, *esc_scope = NULL;
 	char *token;
+	int rc = -EINVAL;
 
+	if (provided_token && *provided_token) {
+		if (strlen(provided_token) >= sizeof(c->token))
+			return -E2BIG;
+		bpm_copy_string(c->token, sizeof(c->token), provided_token);
+		return 0;
+	}
 	if (parse_challenge(challenge, realm, sizeof(realm), service,
 			    sizeof(service), scope, sizeof(scope)))
 		return -EINVAL;
-	curl = curl_easy_init(); if (!curl) return -ENOMEM;
+	curl = curl_easy_init();
+	if (!curl)
+		return -ENOMEM;
 	esc_service = curl_easy_escape(curl, service, 0);
 	esc_scope = curl_easy_escape(curl, scope, 0);
+	if (!esc_service || !esc_scope)
+		goto out;
 	if (snprintf(url, sizeof(url), "%s?service=%s&scope=%s", realm,
-		     esc_service ? esc_service : "", esc_scope ? esc_scope : "") >=
-	    (int)sizeof(url)) {
-		curl_free(esc_service); curl_free(esc_scope); curl_easy_cleanup(curl); return -ENAMETOOLONG;
+		     esc_service, esc_scope) >= (int)sizeof(url)) {
+		rc = -ENAMETOOLONG;
+		goto out;
 	}
-	curl_free(esc_service); curl_free(esc_scope);
 	if (c->username[0]) {
-		char up[sizeof(c->username) + sizeof(c->password) + 2];
-		if (snprintf(up, sizeof(up), "%s:%s", c->username, c->password) >=
-		    (int)sizeof(up)) {
-			curl_easy_cleanup(curl);
-			return -E2BIG;
+		rc = encode_basic(c->username, c->password, basic,
+				   sizeof(basic));
+		if (rc)
+			goto out;
+		if (snprintf(auth_header, sizeof(auth_header),
+			     "Authorization: Basic %s", basic) >=
+		    (int)sizeof(auth_header)) {
+			rc = -E2BIG;
+			goto out;
 		}
-		curl_easy_setopt(curl, CURLOPT_USERPWD, up);
-		curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+		headers = curl_slist_append(headers, auth_header);
+		if (!headers) {
+			rc = -ENOMEM;
+			goto out;
+		}
 	}
 	curl_easy_setopt(curl, CURLOPT_URL, url);
 	curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, bpm_write_memory);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &r);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
@@ -585,20 +646,36 @@ static int get_bearer_token(struct bpm_oci_client *c, const char *challenge)
 	curl_easy_setopt(curl, CURLOPT_SSL_CTX_DATA, &c->tls_ca);
 	cc = curl_easy_perform(curl);
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &r.status);
-	if (cc != CURLE_OK) { curl_easy_cleanup(curl); shirudo_tls_ca_cleanup(&c->tls_ca); free(r.body.data); return -EHOSTUNREACH; }
-	if (r.status >= 300) { curl_easy_cleanup(curl); shirudo_tls_ca_cleanup(&c->tls_ca); free(r.body.data); return -EACCES; }
+	if (cc != CURLE_OK) {
+		rc = -EHOSTUNREACH;
+		goto out;
+	}
+	if (r.status >= 300) {
+		rc = -EACCES;
+		goto out;
+	}
 	token = strstr((char *)r.body.data, "\"token\"");
 	if (!token) token = strstr((char *)r.body.data, "\"access_token\"");
-	if (!token || !(token = strchr(token, ':'))) { curl_easy_cleanup(curl); shirudo_tls_ca_cleanup(&c->tls_ca); free(r.body.data); return -EINVAL; }
+	if (!token || !(token = strchr(token, ':')))
+		goto out;
 	while (*++token && isspace((unsigned char)*token)) {}
-	if (*token++ != '"') { curl_easy_cleanup(curl); shirudo_tls_ca_cleanup(&c->tls_ca); free(r.body.data); return -EINVAL; }
+	if (*token++ != '"')
+		goto out;
 	{
 		char *end = strchr(token, '"');
-		if (!end || (size_t)(end - token) >= sizeof(c->token)) { curl_easy_cleanup(curl); shirudo_tls_ca_cleanup(&c->tls_ca); free(r.body.data); return -EINVAL; }
+		if (!end || (size_t)(end - token) >= sizeof(c->token))
+			goto out;
 		memcpy(c->token, token, end - token); c->token[end - token] = 0;
 	}
-	curl_easy_cleanup(curl); shirudo_tls_ca_cleanup(&c->tls_ca); free(r.body.data);
-	return 0;
+	rc = 0;
+out:
+	curl_free(esc_service);
+	curl_free(esc_scope);
+	curl_slist_free_all(headers);
+	curl_easy_cleanup(curl);
+	shirudo_tls_ca_cleanup(&c->tls_ca);
+	free(r.body.data);
+	return rc;
 }
 
 static int oci_get_memory(struct bpm_oci_client *c, const char *url,
@@ -670,6 +747,62 @@ static int oci_get_file(struct bpm_oci_client *c, const char *url,
 	return rc;
 }
 
+/* A request helper for OCI uploads. Unlike the download helpers above, it
+ * preserves the response headers (notably Location) and supports a request
+ * body while still retrying once after a registry authentication challenge. */
+static int oci_request(struct bpm_oci_client *c, const char *method,
+			const char *url, const char *accept, const char *content_type,
+			const void *body, size_t body_len, struct bpm_http_response *r)
+{
+	char auth[8192] = {};
+	int rc;
+
+	*r = (struct bpm_http_response){};
+	rc = curl_once_ex(c, method, url, accept, content_type, body, body_len,
+			  NULL, r, NULL);
+	if (rc)
+		return rc;
+	if (r->status == 401 && r->www_auth[0]) {
+		if (!strncasecmp(r->www_auth, "Bearer", 6)) {
+			rc = get_bearer_token(c, r->www_auth);
+			if (rc)
+				return rc;
+			snprintf(auth, sizeof(auth), "Bearer %s", c->token);
+		} else if (!strncasecmp(r->www_auth, "Basic", 5) && c->username[0]) {
+			char encoded[2048];
+
+			rc = encode_basic(c->username, c->password, encoded,
+					   sizeof(encoded));
+			if (rc)
+				return rc;
+			snprintf(auth, sizeof(auth), "Basic %s", encoded);
+		} else {
+			return -EACCES;
+		}
+		free(r->body.data);
+		*r = (struct bpm_http_response){};
+		rc = curl_once_ex(c, method, url, accept, content_type, body,
+				   body_len, auth, r, NULL);
+		if (rc)
+			return rc;
+	}
+	if (r->status < 200 || r->status >= 300)
+	{
+		if (r->status != 404) {
+			if (r->body.data && r->body.len) {
+				size_t n = r->body.len > 512 ? 512 : r->body.len;
+
+				pr_err("bpm OCI request %s: HTTP %ld: %.*s", url,
+				       r->status, (int)n, r->body.data);
+			} else {
+				pr_err("bpm OCI request %s: HTTP %ld", url, r->status);
+			}
+		}
+		return r->status == 404 ? -ENOENT : -EACCES;
+	}
+	return 0;
+}
+
 struct desc_sink {
 	struct bpm_descriptor *items;
 	int n;
@@ -709,7 +842,7 @@ static int parse_manifest(const unsigned char *body, size_t len,
 	sub[3] = (struct shirudo_json_field){ .key = "annotations", .type = SHIRUDO_JSON_T_OBJECT,
 		.sub = layer_annotations, .n_sub = ARRAY_SIZE(layer_annotations) };
 	manifest_annotations[0] = (struct shirudo_json_field){
-		.key = "dev.isovalent.bpm.package.name", .type = SHIRUDO_JSON_T_STRING,
+		.key = "dev.shirudo.bpm.package.name", .type = SHIRUDO_JSON_T_STRING,
 		.dst = sink.package_name, .dst_cap = sizeof(sink.package_name) };
 	memset(root, 0, sizeof(root));
 	root[0] = (struct shirudo_json_field){ .key = "schemaVersion", .type = SHIRUDO_JSON_T_INT,
@@ -787,6 +920,47 @@ static int parse_pull_ref(const char *raw, struct bpm_oci_client *c,
 	if (!bpm_package_name_ok(strrchr(repository, '/') ?
 				 strrchr(repository, '/') + 1 : repository) ||
 	    !bpm_version_ok(tag) || !isalnum((unsigned char)tag[0]))
+		return -EINVAL;
+	return parse_endpoint(endpoint, c);
+}
+
+static int parse_push_repo(const char *raw, struct bpm_oci_client *c,
+			   char *repository, size_t repository_sz)
+{
+	char normalized[PATH_MAX], endpoint[BPM_MAX_ENDPOINT];
+	const char *p, *slash;
+
+	if (!raw || strlen(raw) >= sizeof(normalized))
+		return -EINVAL;
+	trim_string(raw, normalized, sizeof(normalized));
+	if (strncmp(normalized, "oci://", 6))
+		return -EINVAL;
+	p = normalized + 6;
+	slash = strchr(p, '/');
+	if (!*p || !slash || slash == p || !slash[1] || strchr(p, '@') ||
+	    strchr(p, '?') || strchr(p, '#'))
+		return -EINVAL;
+	if ((size_t)(slash - p) >= sizeof(endpoint) - 6 ||
+	    strlen(slash + 1) >= repository_sz)
+		return -ENAMETOOLONG;
+	memcpy(endpoint, "oci://", 6);
+	memcpy(endpoint + 6, p, slash - p);
+	endpoint[6 + (slash - p)] = '\0';
+	bpm_copy_string(repository, repository_sz, slash + 1);
+	if (strchr(repository, ':') || strstr(repository, "//") ||
+	    strstr(repository, ".."))
+		return -EINVAL;
+	for (const char *part = repository; *part;) {
+		const char *end = strchr(part, '/');
+		if (!end)
+			end = part + strlen(part);
+		if (end == part || (end - part == 1 && part[0] == '.') ||
+		    (end - part == 2 && !strncmp(part, "..", 2)))
+			return -EINVAL;
+		part = *end ? end + 1 : end;
+	}
+	if (!bpm_package_name_ok(strrchr(repository, '/') ?
+				 strrchr(repository, '/') + 1 : repository))
 		return -EINVAL;
 	return parse_endpoint(endpoint, c);
 }
@@ -1099,6 +1273,91 @@ static bool digest_matches(const char *want, const char *hex)
 		!strcasecmp(want + 7, hex);
 }
 
+static int upload_location(const struct bpm_oci_client *c, const char *location,
+			   char *out, size_t out_sz)
+{
+	size_t base_len = strlen(c->base_url);
+
+	if (!location || !*location)
+		return -EINVAL;
+	if (location[0] == '/') {
+		if (snprintf(out, out_sz, "%s%s", c->base_url, location) >=
+		    (int)out_sz)
+			return -ENAMETOOLONG;
+		return 0;
+	}
+	if (strncmp(location, c->base_url, base_len) ||
+	    location[base_len] != '/')
+		return -EPERM;
+	if (strlen(location) >= out_sz)
+		return -ENAMETOOLONG;
+	bpm_copy_string(out, out_sz, location);
+	return 0;
+}
+
+static int oci_push_blob(struct bpm_oci_client *c, const char *repository,
+			 const void *body, size_t body_len, const char *media,
+			 struct bpm_descriptor *out)
+{
+	struct bpm_http_response r = {};
+	char hex[65], digest[72], url[PATH_MAX], upload[PATH_MAX];
+	char location[PATH_MAX], *sep;
+	int rc;
+
+	if (sha256_buffer_hex(body, body_len, hex, sizeof(hex)))
+		return -EINVAL;
+	if (snprintf(digest, sizeof(digest), "sha256:%s", hex) >=
+	    (int)sizeof(digest))
+		return -ENAMETOOLONG;
+	if ((rc = make_oci_url(c, repository, "blobs", digest, url,
+				       sizeof(url))))
+		return rc;
+	rc = oci_request(c, "HEAD", url, NULL, NULL, NULL, 0, &r);
+	free(r.body.data);
+	if (!rc) {
+		bpm_copy_string(out->media, sizeof(out->media), media);
+		bpm_copy_string(out->digest, sizeof(out->digest), digest);
+		out->size = (int64_t)body_len;
+		return 0;
+	}
+	if (rc != -ENOENT)
+		return rc;
+
+	if ((rc = make_oci_url(c, repository, "blobs/uploads", "", url,
+				       sizeof(url))))
+		return rc;
+	rc = oci_request(c, "POST", url, NULL, NULL, NULL, 0, &r);
+	if (rc)
+		goto out;
+	if (r.status != 202 || !r.location[0]) {
+		rc = r.status == 202 ? -EINVAL : -EACCES;
+		goto out;
+	}
+	bpm_copy_string(location, sizeof(location), r.location);
+	free(r.body.data);
+	r = (struct bpm_http_response){};
+	if ((rc = upload_location(c, location, upload, sizeof(upload))))
+		goto out;
+	sep = strchr(upload, '?') ? "&" : "?";
+	if (snprintf(url, sizeof(url), "%s%sdigest=%s", upload, sep, digest) >=
+	    (int)sizeof(url)) {
+		rc = -ENAMETOOLONG;
+		goto out;
+	}
+	rc = oci_request(c, "PUT", url, NULL, "application/octet-stream",
+			 body, body_len, &r);
+	if (!rc && r.status != 201)
+		rc = -EACCES;
+	if (!rc) {
+		bpm_copy_string(out->media, sizeof(out->media), media);
+		bpm_copy_string(out->digest, sizeof(out->digest), digest);
+		out->size = (int64_t)body_len;
+	}
+out:
+	free(r.body.data);
+	return rc;
+}
+
 static int tar_octal(const char *p, size_t n, uint64_t *out)
 {
 	uint64_t v = 0; size_t i = 0;
@@ -1121,6 +1380,431 @@ static bool safe_archive_rel(const char *name)
 		p = *q ? q + 1 : q;
 	}
 	return true;
+}
+
+static bool package_member_name_ok(const char *name, const char *member)
+{
+	const char *slash;
+
+	if (!safe_archive_rel(name) || !member)
+		return false;
+	slash = strchr(name, '/');
+	return slash && slash != name && strncmp(name, "./", 2) &&
+		!strchr(slash + 1, '/') &&
+		!strcmp(slash + 1, member);
+}
+
+static int read_package_member(const char *archive, const char *member,
+			       unsigned char **out, size_t *out_len, size_t max)
+{
+	gzFile gz = gzopen(archive, "rb");
+	unsigned char h[512];
+	int rc = -ENOENT;
+
+	if (!gz)
+		return -errno;
+	for (;;) {
+		int n = gzread(gz, h, sizeof(h));
+		uint64_t size, remain, pad;
+		char name[101];
+		bool zero = true;
+
+		if (n == 0)
+			break;
+		if (n != (int)sizeof(h)) {
+			rc = -EINVAL;
+			break;
+		}
+		for (size_t i = 0; i < sizeof(h); i++)
+			if (h[i]) {
+				zero = false;
+				break;
+			}
+		if (zero)
+			break;
+		memcpy(name, h, 100);
+		name[100] = '\0';
+		if (!memchr(h, '\0', 100) || tar_octal((char *)h + 124, 12, &size)) {
+			rc = -EINVAL;
+			break;
+		}
+		remain = size;
+		if (package_member_name_ok(name, member)) {
+			unsigned char *body;
+			if (size > max || size > SIZE_MAX - 1) {
+				rc = -E2BIG;
+				break;
+			}
+			body = malloc((size_t)size + 1);
+			if (!body) {
+				rc = -ENOMEM;
+				break;
+			}
+			while (remain) {
+				size_t want = remain > 65536 ? 65536 : (size_t)remain;
+				n = gzread(gz, body + size - remain, (unsigned)want);
+				if (n <= 0) {
+					free(body);
+					rc = -EINVAL;
+					goto done;
+				}
+				remain -= (size_t)n;
+			}
+			body[size] = '\0';
+			*out = body;
+			*out_len = (size_t)size;
+			rc = 0;
+			break;
+		}
+		while (remain) {
+			unsigned char discard[65536];
+			size_t want = remain > sizeof(discard) ? sizeof(discard) : (size_t)remain;
+			n = gzread(gz, discard, (unsigned)want);
+			if (n <= 0) {
+				rc = -EINVAL;
+				goto done;
+			}
+			remain -= (size_t)n;
+		}
+		pad = (512 - (size % 512)) % 512;
+		while (pad) {
+			unsigned char discard[512];
+			size_t want = pad > sizeof(discard) ? sizeof(discard) : (size_t)pad;
+			n = gzread(gz, discard, (unsigned)want);
+			if (n <= 0) {
+				rc = -EINVAL;
+				goto done;
+			}
+			pad -= (size_t)n;
+		}
+	}
+done:
+	if (gzclose(gz) != Z_OK && rc == 0) {
+		free(*out);
+		*out = NULL;
+		*out_len = 0;
+		rc = -EINVAL;
+	}
+	return rc;
+}
+
+static X509 *read_x509_memory(const unsigned char *body, size_t len)
+{
+	BIO *b;
+	X509 *x;
+
+	if (len > INT_MAX)
+		return NULL;
+	b = BIO_new_mem_buf(body, (int)len);
+	if (!b)
+		return NULL;
+	x = d2i_X509_bio(b, NULL);
+	if (!x) {
+		BIO_reset(b);
+		x = PEM_read_bio_X509(b, NULL, NULL, NULL);
+	}
+	BIO_free(b);
+	return x;
+}
+
+/* Hash the exact DER SubjectPublicKeyInfo representation used by Go's
+ * x509.MarshalPKIXPublicKey.  Keep this explicit instead of relying on
+ * X509_pubkey_digest(), whose meaning is easy to confuse with a digest of
+ * the key material itself when diagnosing package signer mismatches. */
+static int x509_spki_sha256(const X509 *cert, unsigned char digest[32])
+{
+	X509_PUBKEY *spki;
+	unsigned char *der = NULL, *p;
+	unsigned int digest_len = 0;
+	int der_len, encoded_len, rc = -EINVAL;
+
+	spki = X509_get_X509_PUBKEY((X509 *)cert);
+	if (!spki)
+		return -EINVAL;
+	der_len = i2d_X509_PUBKEY(spki, NULL);
+	if (der_len <= 0)
+		return -EINVAL;
+	der = malloc((size_t)der_len);
+	if (!der)
+		return -ENOMEM;
+	p = der;
+	encoded_len = i2d_X509_PUBKEY(spki, &p);
+	if (encoded_len != der_len)
+		goto out;
+	if (!EVP_Digest(der, (size_t)der_len, digest, &digest_len,
+			EVP_sha256(), NULL) || digest_len != 32)
+		goto out;
+	rc = 0;
+out:
+	free(der);
+	return rc;
+}
+
+static int load_package_info(const char *archive, struct bpm_package_info *info)
+{
+	unsigned char *environment = NULL;
+	struct {
+		char name[BPM_MAX_NAME];
+		char version[BPM_MAX_NAME];
+		char signer[BPM_MAX_DIGEST];
+	} parsed = {};
+	struct shirudo_json_field package_fields[2], shirudo_fields[1], root[2];
+	unsigned char digest[32];
+	X509 *cert = NULL;
+	char hex[EVP_MAX_MD_SIZE * 2 + 1];
+	size_t environment_len;
+	int rc;
+
+	memset(package_fields, 0, sizeof(package_fields));
+	package_fields[0] = (struct shirudo_json_field){
+		.key = "name", .type = SHIRUDO_JSON_T_STRING,
+		.dst = parsed.name, .dst_cap = sizeof(parsed.name),
+	};
+	package_fields[1] = (struct shirudo_json_field){
+		.key = "version", .type = SHIRUDO_JSON_T_STRING,
+		.dst = parsed.version, .dst_cap = sizeof(parsed.version),
+	};
+	shirudo_fields[0] = (struct shirudo_json_field){
+		.key = "spki_sha256_fingerprint", .type = SHIRUDO_JSON_T_STRING,
+		.dst = parsed.signer, .dst_cap = sizeof(parsed.signer),
+	};
+	root[0] = (struct shirudo_json_field){
+		.key = "package", .type = SHIRUDO_JSON_T_OBJECT,
+		.sub = package_fields, .n_sub = ARRAY_SIZE(package_fields),
+	};
+	root[1] = (struct shirudo_json_field){
+		.key = "shirudo", .type = SHIRUDO_JSON_T_OBJECT,
+		.sub = shirudo_fields, .n_sub = ARRAY_SIZE(shirudo_fields),
+	};
+
+	rc = read_package_member(archive, "build-environment.json", &environment,
+				 &environment_len, 4u * 1024u * 1024u);
+	if (rc)
+		return rc;
+	if (shirudo_json_parse((const char *)environment, environment_len,
+				       root, ARRAY_SIZE(root)) ||
+	    !root[0].seen || !parsed.name[0] || !parsed.version[0] ||
+	    !bpm_package_name_ok(parsed.name) || !bpm_version_ok(parsed.version)) {
+		rc = -EINVAL;
+		goto out;
+	}
+
+	rc = read_package_member(archive, "cert.der", &info->cert, &info->cert_len,
+				 4u * 1024u * 1024u);
+	if (rc)
+		goto out;
+	cert = read_x509_memory(info->cert, info->cert_len);
+	if (!cert || x509_spki_sha256(cert, digest)) {
+		rc = -EINVAL;
+		goto out;
+	}
+	for (unsigned int i = 0; i < sizeof(digest); i++)
+		snprintf(hex + i * 2, 3, "%02x", digest[i]);
+	hex[sizeof(digest) * 2] = '\0';
+	if (parsed.signer[0] && strcasecmp(parsed.signer, hex)) {
+		pr_err("bpm push: package signer fingerprint mismatch: "
+		       "certificate=%s build-environment.json=%s",
+		       hex, parsed.signer);
+		rc = -EKEYREJECTED;
+		goto out;
+	}
+	bpm_copy_string(info->name, sizeof(info->name), parsed.name);
+	bpm_copy_string(info->version, sizeof(info->version), parsed.version);
+	bpm_copy_string(info->signer, sizeof(info->signer), hex);
+	rc = 0;
+out:
+	X509_free(cert);
+	free(environment);
+	if (rc) {
+		free(info->cert);
+		info->cert = NULL;
+		info->cert_len = 0;
+	}
+	return rc;
+}
+
+static void emit_descriptor(struct shirudo_json_emit *e, const char *key,
+			    const struct bpm_descriptor *d, const char *title)
+{
+	if (key)
+		shirudo_json_obj_open_key(e, key);
+	else
+		shirudo_json_obj_open(e);
+	shirudo_json_kv_string(e, "mediaType", d->media);
+	shirudo_json_kv_string(e, "digest", d->digest);
+	shirudo_json_kv_int(e, "size", d->size);
+	if (title) {
+		shirudo_json_obj_open_key(e, "annotations");
+		shirudo_json_kv_string(e, "org.opencontainers.image.title", title);
+		shirudo_json_obj_close(e);
+	}
+	shirudo_json_obj_close(e);
+}
+
+static int oci_put_manifest(struct bpm_oci_client *c, const char *repository,
+			    const char *reference, const unsigned char *body,
+			    size_t body_len, char *digest, size_t digest_sz)
+{
+	struct bpm_http_response r = {};
+	char hex[65], url[PATH_MAX];
+	int rc;
+
+	if (sha256_buffer_hex(body, body_len, hex, sizeof(hex)) ||
+	    snprintf(digest, digest_sz, "sha256:%s", hex) >= (int)digest_sz)
+		return -ENAMETOOLONG;
+	if ((rc = make_oci_url(c, repository, "manifests", reference, url,
+				       sizeof(url))))
+		return rc;
+	rc = oci_request(c, "PUT", url, "application/vnd.oci.image.manifest.v1+json",
+			 "application/vnd.oci.image.manifest.v1+json", body, body_len, &r);
+	free(r.body.data);
+	return rc;
+}
+
+static int push_package(const char *package_path, const char *raw_repository,
+			const char **reference_out)
+{
+	struct bpm_oci_client c = {};
+	struct bpm_package_info info = {};
+	struct bpm_descriptor config, layer, key_config, key_layer, subject;
+	struct shirudo_json_emit e = {};
+	unsigned char *archive = NULL, *manifest = NULL;
+	const char *base;
+	char repository[BPM_MAX_ENDPOINT], package_digest[72], key_digest[72];
+	char hex[65];
+	char reference[PATH_MAX];
+	char config_body[] = "{\"mediaType\":\"" BPM_CONFIG_MEDIA "\"}";
+	char empty_config[] = "{}";
+	char package_title[PATH_MAX];
+	char *manifest_body;
+	char *key_manifest_body = NULL;
+	struct stat st;
+	size_t archive_len, manifest_len, key_manifest_len;
+	int rc;
+
+	if (!package_path || !*package_path)
+		return -EINVAL;
+	if (stat(package_path, &st))
+		return -errno;
+	if (!S_ISREG(st.st_mode))
+		return -EINVAL;
+	if ((rc = read_small_file(package_path, &archive, &archive_len,
+				  BPM_MAX_HTTP_BODY)))
+		return rc;
+	if ((rc = load_package_info(package_path, &info)))
+		goto out;
+	if ((rc = parse_push_repo(raw_repository, &c, repository,
+					 sizeof(repository))))
+		goto out;
+	base = strrchr(package_path, '/');
+	base = base ? base + 1 : package_path;
+	if (!*base || strlen(base) >= sizeof(package_title)) {
+		rc = -ENAMETOOLONG;
+		goto out;
+	}
+	bpm_copy_string(package_title, sizeof(package_title), base);
+
+	if ((rc = oci_push_blob(&c, repository, config_body,
+				 strlen(config_body), BPM_CONFIG_MEDIA, &config)))
+		goto out;
+	if ((rc = oci_push_blob(&c, repository, archive, archive_len,
+				 BPM_PACKAGE_MEDIA, &layer)))
+		goto out;
+
+	manifest_body = calloc(1, 8192);
+	if (!manifest_body) {
+		rc = -ENOMEM;
+		goto out;
+	}
+	e.buf = manifest_body;
+	e.cap = 8192;
+	shirudo_json_obj_open(&e);
+	shirudo_json_kv_int(&e, "schemaVersion", 2);
+	shirudo_json_kv_string(&e, "mediaType", "application/vnd.oci.image.manifest.v1+json");
+	emit_descriptor(&e, "config", &config, NULL);
+	shirudo_json_arr_open(&e, "layers");
+	emit_descriptor(&e, NULL, &layer, package_title);
+	shirudo_json_arr_close(&e);
+	shirudo_json_obj_open_key(&e, "annotations");
+	shirudo_json_kv_string(&e, "dev.shirudo.bpm.package.name", info.name);
+	shirudo_json_kv_string(&e, "dev.shirudo.bpm.package.version", info.version);
+	shirudo_json_kv_string(&e, "org.opencontainers.image.title", info.name);
+	shirudo_json_kv_string(&e, "org.opencontainers.image.version", info.version);
+	shirudo_json_obj_close(&e);
+	shirudo_json_obj_close(&e);
+	if (e.err) {
+		free(manifest_body);
+		rc = e.err;
+		goto out;
+	}
+	manifest_len = e.len;
+	manifest = (unsigned char *)manifest_body;
+	if ((rc = oci_put_manifest(&c, repository, info.version, manifest,
+				   manifest_len, package_digest, sizeof(package_digest))))
+		goto out;
+
+	/* Publish the package certificate as an OCI referrer, matching the
+	 * artifact layout consumed by the Go BPM implementation. */
+	if ((rc = oci_push_blob(&c, repository, empty_config, strlen(empty_config),
+				 BPM_EMPTY_CONFIG_MEDIA, &key_config)))
+		goto out;
+	if ((rc = oci_push_blob(&c, repository, info.cert, info.cert_len,
+				 BPM_PUBLIC_KEY_MEDIA, &key_layer)))
+		goto out;
+	subject = (struct bpm_descriptor){
+		.media = "application/vnd.oci.image.manifest.v1+json",
+	};
+	bpm_copy_string(subject.digest, sizeof(subject.digest), package_digest);
+	subject.size = (int64_t)manifest_len;
+	key_manifest_body = calloc(1, 8192);
+	if (!key_manifest_body) {
+		rc = -ENOMEM;
+		goto out;
+	}
+	e = (struct shirudo_json_emit){ .buf = key_manifest_body, .cap = 8192 };
+	shirudo_json_obj_open(&e);
+	shirudo_json_kv_int(&e, "schemaVersion", 2);
+	shirudo_json_kv_string(&e, "mediaType", "application/vnd.oci.image.manifest.v1+json");
+	shirudo_json_kv_string(&e, "artifactType", BPM_PUBLIC_KEY_ARTIFACT);
+	emit_descriptor(&e, "config", &key_config, NULL);
+	shirudo_json_arr_open(&e, "layers");
+	emit_descriptor(&e, NULL, &key_layer, NULL);
+	shirudo_json_arr_close(&e);
+	shirudo_json_obj_open_key(&e, "subject");
+	shirudo_json_kv_string(&e, "mediaType", subject.media);
+	shirudo_json_kv_string(&e, "digest", subject.digest);
+	shirudo_json_kv_int(&e, "size", subject.size);
+	shirudo_json_obj_close(&e);
+	shirudo_json_obj_close(&e);
+	if (e.err) {
+		rc = e.err;
+		goto out;
+	}
+	key_manifest_len = e.len;
+	if (sha256_buffer_hex(key_manifest_body, key_manifest_len, hex,
+			      sizeof(hex)) ||
+	    snprintf(key_digest, sizeof(key_digest), "sha256:%s", hex) >=
+		(int)sizeof(key_digest)) {
+		rc = -EINVAL;
+		goto out;
+	}
+	if ((rc = oci_put_manifest(&c, repository, key_digest,
+				   (const unsigned char *)key_manifest_body,
+				   key_manifest_len, key_digest, sizeof(key_digest))))
+		goto out;
+	if (snprintf(reference, sizeof(reference), "oci://%s/%s:%s",
+		     c.registry, repository, info.version) >= (int)sizeof(reference)) {
+		rc = -ENAMETOOLONG;
+		goto out;
+	}
+	*reference_out = strdup(reference);
+	rc = *reference_out ? 0 : -ENOMEM;
+out:
+	free(key_manifest_body);
+	free(manifest);
+	free(info.cert);
+	free(archive);
+	return rc;
 }
 
 static int extract_archive(const char *archive, const char *dest)
@@ -1639,13 +2323,37 @@ static const struct shirudo_help_item bpm_subcmds[] = {
 	{ "repo", "refresh signed repository indexes" },
 	{ "key", "add a trusted package certificate" },
 	{ "pull", "download an OCI package into the current directory" },
+	{ "push", "publish an OCI package from the operator" },
 	{ "install", "download and activate a package" },
 	{ "upgrade", "activate newer cached package versions" },
 };
 
-static const struct shirudo_help bpm_help = {
+static const struct shirudo_help_item bpm_target_subcmds[] = {
+	{ "config", "register and manage OCI repositories" },
+	{ "repo", "refresh signed repository indexes" },
+	{ "key", "add a trusted package certificate" },
+	{ "pull", "download an OCI package into the current directory" },
+	{ "install", "download and activate a package" },
+	{ "upgrade", "activate newer cached package versions" },
+};
+
+static bool bpm_operator_available(void)
+{
+	return access(SHIRUDO_LIBEXEC_DIR "/shirudo-build", X_OK) == 0;
+}
+
+static const struct shirudo_help bpm_target_help = {
 	.usage = "shirudo bpm <config|repo|key|pull|install|upgrade>",
 	.summary = "Manage signed target-local BPM packages backed by OCI repositories.",
+	.sections = (const struct shirudo_help_section[]) {
+		{ "subcommands:", bpm_target_subcmds, ARRAY_SIZE(bpm_target_subcmds) },
+	},
+	.n_sections = 1,
+};
+
+static const struct shirudo_help bpm_operator_help = {
+	.usage = "shirudo bpm <config|repo|key|pull|push|install|upgrade>",
+	.summary = "Manage signed OCI packages and publish packages from the operator.",
 	.sections = (const struct shirudo_help_section[]) {
 		{ "subcommands:", bpm_subcmds, ARRAY_SIZE(bpm_subcmds) },
 	},
@@ -1661,6 +2369,15 @@ static void bpm_pull_usage(void)
 		"  shirudo bpm pull oci://quay.io/namespace/package:tag\n");
 }
 
+static void bpm_push_usage(void)
+{
+	fprintf(stderr,
+		"usage: shirudo bpm push <package-file> <repository>\n\n"
+		"The repository must start with oci:// and must not include a tag.\n"
+		"Example:\n"
+		"  shirudo bpm push ./package.bee oci://quay.io/namespace/package\n");
+}
+
 static int bpm_finish(int lock, int rc, const char *action)
 {
 	if (lock >= 0) {
@@ -1673,18 +2390,24 @@ static int bpm_finish(int lock, int rc, const char *action)
 
 int cmd_bpm(int argc, const char **argv)
 {
+	const struct shirudo_help *help = bpm_operator_available() ?
+		&bpm_operator_help : &bpm_target_help;
+	const struct shirudo_help_item *subcmds = bpm_operator_available() ?
+		bpm_subcmds : bpm_target_subcmds;
+	size_t n_subcmds = bpm_operator_available() ? ARRAY_SIZE(bpm_subcmds) :
+		ARRAY_SIZE(bpm_target_subcmds);
 	const char *sub;
 
 	if (argc < 2 || shirudo_is_help(argv[1])) {
-		shirudo_print_help(&bpm_help);
+		shirudo_print_help(help);
 		return argc < 2 ? 2 : 0;
 	}
 	if (shirudo_is_list_cmds(argv[1])) {
-		shirudo_print_subcmd_list(bpm_subcmds, ARRAY_SIZE(bpm_subcmds));
+		shirudo_print_subcmd_list(subcmds, n_subcmds);
 		return 0;
 	}
-	sub = shirudo_resolve_subcommand("shirudo bpm", argv[1], bpm_subcmds,
-					ARRAY_SIZE(bpm_subcmds));
+	sub = shirudo_resolve_subcommand("shirudo bpm", argv[1], subcmds,
+					 n_subcmds);
 	if (!sub)
 		return 2;
 	if (!strcmp(sub, "config"))
@@ -1704,6 +2427,27 @@ int cmd_bpm(int argc, const char **argv)
 			return bpm_fail("initialize curl", -EIO);
 		rc = pull_package(argv[2]);
 		return bpm_finish(-1, rc, "pull");
+	}
+	if (!strcmp(sub, "push")) {
+		const char *reference = NULL;
+		int rc, result;
+
+		if (argc == 3 && shirudo_is_help(argv[2])) {
+			bpm_push_usage();
+			return 0;
+		}
+		if (argc != 4) {
+			bpm_push_usage();
+			return 2;
+		}
+		if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
+			return bpm_fail("initialize curl", -EIO);
+		rc = push_package(argv[2], argv[3], &reference);
+		result = bpm_finish(-1, rc, "push");
+		if (!result)
+			printf("%s\n", reference);
+		free((void *)reference);
+		return result;
 	}
 	if (!strcmp(sub, "repo") && argc >= 3 && !strcmp(argv[2], "update")) {
 		int lock, rc = 0;

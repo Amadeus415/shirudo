@@ -182,7 +182,8 @@ void shirudo_tls_ca_cleanup(struct shirudo_tls_ca *ca)
 
 CURLcode shirudo_sslctx_callback(CURL *curl, void *sslctx, void *userptr)
 {
-	const char *path = userptr;
+	const struct shirudo_tls_ca *ca = userptr;
+	const char *path = ca ? ca->path : NULL;
 	BIO *bio;
 	X509 *cert;
 
