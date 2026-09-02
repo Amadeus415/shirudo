@@ -104,6 +104,117 @@ The flow of artifacts mirrors ``git push``:
                                                   → upatch link pinned
                                                   → TPM chain extended
 
+End-to-end flow charts
+======================
+
+The following charts show the package-manager and observability paths in
+their implementation order.  A ``.bee`` is the OCI-published package
+envelope; it contains one or more ``.upatch`` artifacts.
+
+Build and publish
+-----------------
+
+::
+
+    C source/object (.bpf.c/.bpf.o) --+
+                                       +--> bpm build
+    Java agent (.jar) -----------------+        |
+                                                +-------------------------+
+                                                |                         |
+                                                v                         v
+                                  C: compile/gen_loader/sign  Java: package JAR
+                                                |                         |
+                                                +------------+------------+
+                                                             v
+                                                      .upatch artifact(s)
+                                                             |
+                                                             v
+                                             .bee package (contains .upatch)
+                                                             |
+                                      bpm push <package.bee> oci://...
+                                                             |
+                                                             v
+                                                       OCI repository
+
+``gen_loader`` and BPF CMS signing are performed by the operator-side
+builder.  Java upatches carry the JAR payload and intentionally do not use
+the kernel loader signing path in v1.
+
+Pull and load
+-------------
+
+::
+
+    OCI repository
+          |
+          | pull
+          v
+    systemd BPM update/install
+    (repo update + upgrade, or bpm install)
+          |
+          v
+    signed index and package digest checks
+          |
+          v
+    pull .bee package
+          |
+          v
+    unpack .bee
+          |
+          v
+    .upatch payload
+       /       \
+      v         v
+    Java      BPF
+      |         |
+      v         v
+    install   kernel signature check
+    JAR          |
+      |         v
+      v    execute embedded loader
+    Java         |
+    runtime     v
+             BPF LSM load gate
+             + filesystem seal
+                   |
+                   v
+             pinned and active
+                 upatch
+
+The target does not run ``gen_loader``.  It verifies and executes the loader
+already embedded in the signed ``.upatch`` produced during the build.
+
+Map export
+----------
+
+::
+
+    shirudo upatch map --otel --all
+                    |
+                    v
+             pinned map(s)
+               /       \
+              v         v
+       serializer     direct map reader
+    (when pinned)    (other map types)
+              \       /
+               v     v
+             LuaJIT Lua decoder
+                    |
+                    v
+              OTLP/HTTP push
+                    |
+                    v
+              OTEL Collector
+                    |
+                    v
+                 ClickHouse
+
+Serializer-backed maps use the pinned serializer program to produce the
+decoder input pages; other supported map types are read directly.  Shirudo
+pushes OTLP data to the Collector, while ClickHouse is a downstream
+Collector destination.
+
 There are no other channels. There is no shirudo-specific listener on
 the target, no agent daemon, no out-of-band heartbeat. ``sshd`` is the
 only always-on infrastructure shirudo needs.
