@@ -113,14 +113,8 @@ DYNAMIC_LIBS := \
     $(LIBCRYPTO_LIBS) -lssl $(LIBSSH_LIBS) $(TSS2_LIBS) \
     $(LIBELF_LIBS) $(ZLIB_LIBS) $(LIBCURL_LIBS)
 
-# Target binaries use one static mbedTLS/libcurl closure. Other libcurl
-# dependencies remain dynamically linked as specified by config-target.mk.
-TARGET_DYNAMIC_LIBS := \
-    $(LIBSSH_LIBS) $(TSS2_LIBS) $(LIBELF_LIBS) $(ZLIB_LIBS)
-
 CFLAGS += $(LUAJIT_CFLAGS) -DSHIRUDO_HAVE_LUAJIT
 DYNAMIC_LIBS += $(LUAJIT_LIBS)
-TARGET_DYNAMIC_LIBS += $(LUAJIT_LIBS)
 
 ifeq ($(SHIRUDO_BUNDLE_RPATH),1)
 RPATH_LDFLAGS := -Wl,--disable-new-dtags -Wl,-rpath,'$$ORIGIN/../lib/shirudo'
@@ -361,7 +355,9 @@ shirudo-target: $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF
 	@printf '  LD      $@ (static mbedTLS)\n'
 	$(Q)$(LD) $(CFLAGS) $(TARGET_MBEDTLS_CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ \
 	    $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) \
-	    $(STATIC_LIBS) $(TARGET_MBEDTLS_LINK_LIBS) $(TARGET_DYNAMIC_LIBS)
+	    $(STATIC_LIBS) $(TARGET_MBEDTLS_STATIC_LINK_LIBS) \
+	    $(TARGET_STATIC_RUNTIME_LINK_LIBS) \
+	    -Wl,-Bdynamic $(TARGET_MBEDTLS_DYNAMIC_LINK_LIBS)
 
 # util/loader.o has a make-level dep on every embedded bpf object.
 util/loader.o: $(BPF_OBJS)

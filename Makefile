@@ -89,7 +89,8 @@ target-config:
 		CONFIG_OUT=config-target.mk \
 		SHIRUDO_TARGET_PKG_CONFIG_PATH="$(SHIRUDO_TARGET_PKG_CONFIG_PATH)" \
 		SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR="$(SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR)" \
-		SHIRUDO_TARGET_MBEDTLS_LIBDIR="$(SHIRUDO_TARGET_MBEDTLS_LIBDIR)" config.mk
+		SHIRUDO_TARGET_MBEDTLS_LIBDIR="$(SHIRUDO_TARGET_MBEDTLS_LIBDIR)" \
+		SHIRUDO_TARGET_STATIC_LIBDIR="$(SHIRUDO_TARGET_STATIC_LIBDIR)" config.mk
 
 define HELP_TEXT
 
@@ -98,7 +99,9 @@ shirudo make targets (run from the repo root):
   Build
     make                   build the shirudo binary (default target)
     make shirudo-target    build the target binary with static mbedTLS and
-                           a static mbedTLS-backed libcurl
+                           a static mbedTLS-backed libcurl and runtime
+                           libraries (set SHIRUDO_TARGET_STATIC_LIBDIR when
+                           static system archives use a custom directory)
     make ... SHIRUDO_DEBUG=0
                            omit DWARF debug information from C objects
     make shirudo-build     build the operator-only artifact builder

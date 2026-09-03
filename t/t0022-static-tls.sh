@@ -17,6 +17,10 @@ test_expect_success 'target binary has no shared TLS closure' '
 	! readelf -d "$TARGET" | grep -Eq "lib(curl|ssl|crypto|mbedtls|mbedx509|mbedcrypto)\\.so"
 '
 
+test_expect_success 'target runtime libraries are linked from static archives' '
+	! readelf -d "$TARGET" | grep -Eq "lib(rtmp|psl|z|ssh|tss2-esys|tss2-tctildr|elf|luajit-5\\.1)\\.so"
+'
+
 test_expect_success 'target binary has no OpenSSL or mbedTLS unresolved symbols' '
 	! nm -u "$TARGET" | grep -Eq "(^| )(SSL|OPENSSL|EVP_|X509|CMS_|mbedtls_)"
 '
