@@ -147,9 +147,11 @@ mbedTLS and a static libcurl built with ``--with-mbedtls``:
     make -j shirudo-target \
       SHIRUDO_TARGET_PKG_CONFIG_PATH=/path/to/libcurl/lib/pkgconfig:/path/to/mbedtls/lib/pkgconfig
 
-For a non-system mbedTLS installation, also set
-``SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR`` and
-``SHIRUDO_TARGET_MBEDTLS_LIBDIR``.
+For a non-system mbedTLS installation, set
+``TARGET_DEPS_MBEDTLS_PREFIX``,
+``SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR``,
+``SHIRUDO_TARGET_MBEDTLS_LIBDIR``, and
+``TARGET_DEPS_MBEDTLS_PKG_CONFIG_PATH`` when using ``make target-deps``.
 
 If those runtime archives are staged in one directory, set
 ``SHIRUDO_TARGET_STATIC_LIBDIR`` to that directory. Ubuntu's TPM2-TSS

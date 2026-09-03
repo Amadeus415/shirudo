@@ -35,13 +35,25 @@ completionsdir ?= $(sharedir)/bash-completion/completions
 # Absolute by default (systemd does not scan /usr/local); packagers override.
 systemdunitdir ?= /usr/lib/systemd/system
 
+# Local target dependency build defaults. These are overridable for a
+# non-system mbedTLS installation or a prebuilt dependency prefix.
+TARGET_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || gcc -print-multiarch)
+TARGET_DEPS_DIR ?= build/target-deps
+TARGET_DEPS_CURL_PREFIX ?= $(TARGET_DEPS_DIR)/mbedtls-curl
+SHIRUDO_TARGET_PKG_CONFIG_PATH ?= $(TARGET_DEPS_CURL_PREFIX)/lib/pkgconfig:/usr/lib/$(TARGET_MULTIARCH)/pkgconfig
+SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR ?= /usr/include
+SHIRUDO_TARGET_MBEDTLS_LIBDIR ?= /usr/lib/$(TARGET_MULTIARCH)
+SHIRUDO_TARGET_STATIC_LIBDIR ?= $(TARGET_DEPS_DIR)/lib
+TARGET_DEPS_MBEDTLS_PREFIX ?= /usr
+TARGET_DEPS_MBEDTLS_PKG_CONFIG_PATH ?= $(SHIRUDO_TARGET_MBEDTLS_LIBDIR)/pkgconfig
+
 export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdir \
        systemdunitdir SHIRUDO_TARGET_PKG_CONFIG_PATH \
        SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR SHIRUDO_TARGET_MBEDTLS_LIBDIR \
        SHIRUDO_TARGET_STATIC_LIBDIR
 export VM_SSH_COMMAND
 
-.PHONY: all help target shirudo-target target-config shirudo-build test-helpers bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
+.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build test-helpers bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
         distclean test examples config
 
@@ -82,9 +94,25 @@ DEB_PATHS := prefix=$(DEB_PREFIX) exec_prefix=$(DEB_PREFIX) \
 all: config
 	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=operator CONFIG_MK=config.mk all
 
+target-deps:
+	+$(Q)$(MAKE) -f Makefile.target-deps \
+		TARGET_DEPS_DIR="$(TARGET_DEPS_DIR)" \
+		TARGET_STATIC_LIBDIR="$(SHIRUDO_TARGET_STATIC_LIBDIR)" \
+		TARGET_CURL_PREFIX="$(TARGET_DEPS_CURL_PREFIX)" \
+		TARGET_MBEDTLS_PREFIX="$(TARGET_DEPS_MBEDTLS_PREFIX)" \
+		TARGET_MBEDTLS_INCLUDEDIR="$(SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR)" \
+		TARGET_MBEDTLS_LIBDIR="$(SHIRUDO_TARGET_MBEDTLS_LIBDIR)" \
+		TARGET_MBEDTLS_PKG_CONFIG_PATH="$(TARGET_DEPS_MBEDTLS_PKG_CONFIG_PATH)"
+
+target-deps-clean:
+	+$(Q)$(MAKE) -f Makefile.target-deps \
+		TARGET_DEPS_DIR="$(TARGET_DEPS_DIR)" clean
+
 target: shirudo-target
 
-shirudo-target: target-config
+shirudo-target:
+	+$(Q)$(MAKE) target-deps
+	+$(Q)$(MAKE) target-config
 	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=target CONFIG_MK=config-target.mk shirudo-target
 
 target-config:
@@ -101,6 +129,7 @@ shirudo make targets (run from the repo root):
 
   Build
     make                   build the shirudo binary (default target)
+    make target-deps       build and stage static target dependencies
     make target             alias for make shirudo-target
     make shirudo-target    build the target binary with static mbedTLS and
                            a static mbedTLS-backed libcurl and runtime
@@ -180,6 +209,7 @@ shirudo make targets (run from the repo root):
              SHIRUDO_TARGET_PKG_CONFIG_PATH (target mbedTLS/libcurl .pc dirs),
              SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR/LIBDIR (non-system mbedTLS),
              SHIRUDO_TARGET_STATIC_LIBDIR (static runtime archive directory),
+             TARGET_DEPS_MBEDTLS_PREFIX/PKG_CONFIG_PATH (target-deps inputs),
              VM_NAME (optional unique VM name), VM_TENANT (OTEL tenant),
              VM_SSH_COMMAND (optional one-off command for make vm-ssh),
              TEST_VM_SSH_PORT (optional fixed localhost SSH port),
@@ -355,11 +385,12 @@ test-vm-clean: vm-clean
 # bundled one carries an rpath), so the recipe rebuilds the target artifact
 # between them.
 bintar-pkg: config packaging/tar/install.sh packaging/tar/bundle-libs.sh
-	+$(Q)$(MAKE) target-config
 	@printf '  STAGE   $(INSTALLER_STAGE)  (system libs)\n'
 	$(Q)rm -rf $(INSTALLER_STAGE) $(INSTALLER_TARBALL)
 	$(Q)rm -f shirudo shirudo-target
 	$(Q)install -d $(INSTALLER_STAGE) $(dir $(INSTALLER_TARBALL))
+	+$(Q)$(MAKE) target-deps
+	+$(Q)$(MAKE) target-config
 	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=target CONFIG_MK=config-target.mk \
 	    LDFLAGS='$(LDFLAGS)' \
 	    SHIRUDO_BUNDLE_RPATH=0 \
@@ -374,6 +405,8 @@ bintar-pkg: config packaging/tar/install.sh packaging/tar/bundle-libs.sh
 	$(Q)rm -rf $(STATIC_IMAGE_STAGE) $(STATIC_IMAGE_TARBALL)
 	$(Q)rm -f shirudo shirudo-target
 	$(Q)install -d $(STATIC_IMAGE_STAGE) $(dir $(STATIC_IMAGE_TARBALL))
+	+$(Q)$(MAKE) target-deps
+	+$(Q)$(MAKE) target-config
 	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=target CONFIG_MK=config-target.mk \
 	    LDFLAGS='$(LDFLAGS)' \
 	    SHIRUDO_BUNDLE_RPATH=1 \
@@ -430,7 +463,9 @@ config.mk: Makefile.config
 install: all
 	+$(Q)$(MAKE) -f Makefile.shirudo install
 
-install-target: all target-config
+install-target: all
+	+$(Q)$(MAKE) target-deps
+	+$(Q)$(MAKE) target-config
 	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=target CONFIG_MK=config-target.mk install-target
 
 install-operator: all
@@ -465,4 +500,6 @@ clean:
 
 distclean: clean
 	$(Q)rm -f config.mk
+	+$(Q)$(MAKE) -f Makefile.target-deps \
+		TARGET_DEPS_DIR="$(TARGET_DEPS_DIR)" clean
 	$(Q)$(MAKE) -f Makefile.shirudo distclean

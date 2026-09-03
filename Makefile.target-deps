@@ -1,0 +1,133 @@
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Authors of shirudo
+#
+# Makefile.target-deps -- build and stage target-side static dependencies.
+
+SHELL := /bin/sh
+
+TARGET_DEPS_DIR ?= build/target-deps
+TARGET_STATIC_LIBDIR ?= $(TARGET_DEPS_DIR)/lib
+TARGET_CURL_PREFIX ?= $(TARGET_DEPS_DIR)/mbedtls-curl
+TARGET_SOURCE_DIR ?= $(TARGET_DEPS_DIR)/src
+
+CURL_VERSION ?= 8.18.0
+TSS_VERSION ?= 4.1.3
+
+TARGET_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || gcc -print-multiarch)
+TARGET_SYSTEM_LIBDIR ?= /usr/lib/$(TARGET_MULTIARCH)
+TARGET_MBEDTLS_PREFIX ?= /usr
+TARGET_MBEDTLS_INCLUDEDIR ?= /usr/include
+TARGET_MBEDTLS_LIBDIR ?= $(TARGET_SYSTEM_LIBDIR)
+TARGET_MBEDTLS_PKG_CONFIG_PATH ?= $(TARGET_MBEDTLS_LIBDIR)/pkgconfig
+
+CURL_TARBALL := $(TARGET_SOURCE_DIR)/curl-$(CURL_VERSION).tar.xz
+CURL_SOURCE := $(TARGET_SOURCE_DIR)/curl-$(CURL_VERSION)
+CURL_STAMP := $(TARGET_CURL_PREFIX)/.built
+
+TSS_SOURCE := $(TARGET_SOURCE_DIR)/tpm2-tss-$(TSS_VERSION)
+TSS_STAMP := $(TARGET_STATIC_LIBDIR)/.tpm2-tss-built
+STATIC_ARCHIVES_STAMP := $(TARGET_STATIC_LIBDIR)/.system-archives-staged
+ENV_FILE := $(TARGET_DEPS_DIR)/target.env
+
+SYSTEM_ARCHIVES := \
+	$(TARGET_SYSTEM_LIBDIR)/libssh.a \
+	$(TARGET_SYSTEM_LIBDIR)/libelf.a \
+	$(TARGET_SYSTEM_LIBDIR)/libz.a \
+	$(TARGET_SYSTEM_LIBDIR)/libluajit-5.1.a
+
+TSS_ARCHIVES := \
+	libtss2-esys.a \
+	libtss2-tctildr.a \
+	libtss2-sys.a \
+	libtss2-mu.a
+
+.PHONY: all clean check-system-archives
+
+all: $(CURL_STAMP) $(TSS_STAMP) $(STATIC_ARCHIVES_STAMP) $(ENV_FILE)
+	@printf 'shirudo: target dependencies ready\n'
+	@printf 'shirudo: run make target (or source %s)\n' '$(ENV_FILE)'
+
+$(CURL_STAMP):
+	@mkdir -p "$(TARGET_SOURCE_DIR)" "$(TARGET_CURL_PREFIX)"
+	@if test ! -f "$(CURL_TARBALL)"; then \
+		curl -fsSL "https://curl.se/download/curl-$(CURL_VERSION).tar.xz" \
+			-o "$(CURL_TARBALL)"; \
+	fi
+	@rm -rf "$(CURL_SOURCE)"
+	@tar -C "$(TARGET_SOURCE_DIR)" -xf "$(CURL_TARBALL)"
+	@cd "$(CURL_SOURCE)" && \
+		PKG_CONFIG_PATH="$(TARGET_MBEDTLS_PKG_CONFIG_PATH)" \
+		CPPFLAGS="-I$(TARGET_MBEDTLS_INCLUDEDIR)" \
+		LDFLAGS="-L$(TARGET_MBEDTLS_LIBDIR)" \
+		./configure \
+			--prefix="$(TARGET_CURL_PREFIX)" \
+			--with-mbedtls="$(TARGET_MBEDTLS_PREFIX)" \
+			--enable-static \
+			--disable-shared
+	@$(MAKE) -C "$(CURL_SOURCE)" -j$$(nproc)
+	@$(MAKE) -C "$(CURL_SOURCE)" install
+	@touch "$@"
+
+$(TSS_STAMP):
+	@mkdir -p "$(TARGET_SOURCE_DIR)" "$(TARGET_STATIC_LIBDIR)"
+	@if test ! -d "$(TSS_SOURCE)"; then \
+		git clone --depth 1 --branch "$(TSS_VERSION)" \
+			https://github.com/tpm2-software/tpm2-tss.git "$(TSS_SOURCE)"; \
+	fi
+	@cd "$(TSS_SOURCE)" && ./bootstrap
+	@cd "$(TSS_SOURCE)" && \
+		./configure \
+			--prefix="$(TARGET_DEPS_DIR)" \
+			--libdir="$(TARGET_STATIC_LIBDIR)" \
+			--enable-static \
+			--disable-shared \
+			--disable-fapi \
+			--disable-policy \
+			--disable-tcti-cmd \
+			--disable-tcti-i2c-ftdi \
+			--disable-tcti-i2c-helper \
+			--disable-tcti-libtpms \
+			--disable-tcti-pcap \
+			--disable-tcti-spi-ftdi \
+			--disable-tcti-spi-helper \
+			--disable-tcti-spi-ltt2go \
+			--disable-tcti-spidev \
+			--disable-tcti-mssim \
+			--disable-tcti-swtpm
+	@$(MAKE) -C "$(TSS_SOURCE)" -j$$(nproc)
+	@$(MAKE) -C "$(TSS_SOURCE)" install
+	@touch "$@"
+
+check-system-archives:
+	@for archive in $(SYSTEM_ARCHIVES); do \
+		if test ! -f "$$archive"; then \
+			printf 'shirudo: missing static archive: %s\n' "$$archive" >&2; \
+			exit 1; \
+		fi; \
+	done
+
+$(STATIC_ARCHIVES_STAMP): check-system-archives $(TSS_STAMP)
+	@mkdir -p "$(TARGET_STATIC_LIBDIR)"
+	@for archive in $(SYSTEM_ARCHIVES); do \
+		install -m 0644 "$$archive" "$(TARGET_STATIC_LIBDIR)/$$(basename "$$archive")"; \
+	done
+	@for archive in $(TSS_ARCHIVES); do \
+		if test ! -f "$(TARGET_STATIC_LIBDIR)/$$archive"; then \
+			printf 'shirudo: TPM2-TSS build did not produce %s\n' "$$archive" >&2; \
+			exit 1; \
+		fi; \
+	done
+	@touch "$@"
+
+$(ENV_FILE): $(CURL_STAMP) $(STATIC_ARCHIVES_STAMP)
+	@mkdir -p "$(TARGET_DEPS_DIR)"
+	@{ \
+		printf '%s\n' '# Source this file or use make target from the repository root.'; \
+		printf 'export SHIRUDO_TARGET_PKG_CONFIG_PATH=%s\n' "$(TARGET_CURL_PREFIX)/lib/pkgconfig:$(TARGET_MBEDTLS_PKG_CONFIG_PATH)"; \
+		printf 'export SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR=%s\n' "$(TARGET_MBEDTLS_INCLUDEDIR)"; \
+		printf 'export SHIRUDO_TARGET_MBEDTLS_LIBDIR=%s\n' "$(TARGET_MBEDTLS_LIBDIR)"; \
+		printf 'export SHIRUDO_TARGET_STATIC_LIBDIR=%s\n' "$(TARGET_STATIC_LIBDIR)"; \
+	} > "$@"
+
+clean:
+	@rm -rf "$(TARGET_DEPS_DIR)"
