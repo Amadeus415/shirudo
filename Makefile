@@ -37,10 +37,11 @@ systemdunitdir ?= /usr/lib/systemd/system
 
 export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdir \
        systemdunitdir SHIRUDO_TARGET_PKG_CONFIG_PATH \
-       SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR SHIRUDO_TARGET_MBEDTLS_LIBDIR
+       SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR SHIRUDO_TARGET_MBEDTLS_LIBDIR \
+       SHIRUDO_TARGET_STATIC_LIBDIR
 export VM_SSH_COMMAND
 
-.PHONY: all help shirudo-target target-config shirudo-build test-helpers bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
+.PHONY: all help target shirudo-target target-config shirudo-build test-helpers bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
         distclean test examples config
 
@@ -81,6 +82,8 @@ DEB_PATHS := prefix=$(DEB_PREFIX) exec_prefix=$(DEB_PREFIX) \
 all: config
 	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=operator CONFIG_MK=config.mk all
 
+target: shirudo-target
+
 shirudo-target: target-config
 	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=target CONFIG_MK=config-target.mk shirudo-target
 
@@ -98,6 +101,7 @@ shirudo make targets (run from the repo root):
 
   Build
     make                   build the shirudo binary (default target)
+    make target             alias for make shirudo-target
     make shirudo-target    build the target binary with static mbedTLS and
                            a static mbedTLS-backed libcurl and runtime
                            libraries (set SHIRUDO_TARGET_STATIC_LIBDIR when
@@ -175,6 +179,7 @@ shirudo make targets (run from the repo root):
   Variables: prefix (=/usr/local), bindir, libexecdir, systemdunitdir,
              SHIRUDO_TARGET_PKG_CONFIG_PATH (target mbedTLS/libcurl .pc dirs),
              SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR/LIBDIR (non-system mbedTLS),
+             SHIRUDO_TARGET_STATIC_LIBDIR (static runtime archive directory),
              VM_NAME (optional unique VM name), VM_TENANT (OTEL tenant),
              VM_SSH_COMMAND (optional one-off command for make vm-ssh),
              TEST_VM_SSH_PORT (optional fixed localhost SSH port),

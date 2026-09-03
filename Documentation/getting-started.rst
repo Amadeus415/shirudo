@@ -127,8 +127,10 @@ features are all hard prerequisites.
 
 shirudo builds a dynamic developer/operator binary by default. Target
 installers additionally build a target-profile binary with static mbedTLS and
-an mbedTLS-backed static libcurl. The target build requires mbedTLS development
-archives and a separate libcurl build configured with ``--with-mbedtls``:
+an mbedTLS-backed static libcurl. It also statically links the libssh, TPM2-TSS
+(ESYS, TCTI loader, SYS, and MU), libelf, zlib, and LuaJIT runtime archives.
+The target build requires the corresponding static development archives and a
+separate libcurl build configured with ``--with-mbedtls``:
 
 .. code-block:: sh
 
@@ -148,6 +150,11 @@ mbedTLS and a static libcurl built with ``--with-mbedtls``:
 For a non-system mbedTLS installation, also set
 ``SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR`` and
 ``SHIRUDO_TARGET_MBEDTLS_LIBDIR``.
+
+If those runtime archives are staged in one directory, set
+``SHIRUDO_TARGET_STATIC_LIBDIR`` to that directory. Ubuntu's TPM2-TSS
+development package may provide only shared libraries; build TPM2-TSS with
+``--enable-static --disable-shared`` when necessary.
 
 The first build is slow — it compiles libbpf, libelf, and ``bpftool``
 (build-time only) from the bpf-next submodule. Subsequent rebuilds
