@@ -29,9 +29,9 @@
 
 #include <bpf/btf.h>
 #include <curl/curl.h>
-#include <openssl/evp.h>
 #include <zlib.h>
 
+#include "crypto.h"
 #include "json.h"
 #include "config.h"
 #include "malloc.h"
@@ -1933,7 +1933,7 @@ struct snapshot_writer {
 	FILE		*file;
 	z_stream	z;
 	gz_header	header;
-	EVP_MD_CTX	*md;
+	struct shirudo_sha256_ctx md;
 	uint64_t	json_bytes;
 	uint64_t	object_bytes;
 	bool		deflate_ready;
@@ -1986,7 +1986,7 @@ static int snapshot_write_compressed(struct snapshot_writer *w,
 		return -EOVERFLOW;
 	if (len && fwrite(data, 1, len, w->file) != len)
 		return -EIO;
-	if (len && EVP_DigestUpdate(w->md, data, len) != 1)
+	if (len && shirudo_sha256_update(&w->md, data, len) != 0)
 		return -EIO;
 	w->object_bytes += len;
 	return 0;
@@ -1998,10 +1998,7 @@ static int snapshot_writer_init(struct snapshot_writer *w, FILE *file)
 
 	memset(w, 0, sizeof(*w));
 	w->file = file;
-	w->md = EVP_MD_CTX_new();
-	if (!w->md)
-		return -ENOMEM;
-	if (EVP_DigestInit_ex(w->md, EVP_sha256(), NULL) != 1)
+	if (shirudo_sha256_init(&w->md) != 0)
 		return -EIO;
 	zr = deflateInit2(&w->z, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16,
 			  8, Z_DEFAULT_STRATEGY);
@@ -2020,10 +2017,8 @@ static void snapshot_writer_abort(struct snapshot_writer *w)
 {
 	if (w->deflate_ready)
 		deflateEnd(&w->z);
-	if (w->md)
-		EVP_MD_CTX_free(w->md);
+	shirudo_sha256_free(&w->md);
 	w->deflate_ready = false;
-	w->md = NULL;
 }
 
 static int snapshot_json_sink(void *ctx, const char *data, size_t len)
@@ -2063,7 +2058,6 @@ static int snapshot_writer_finish(struct snapshot_writer *w,
 				  struct s3_snapshot *snapshot)
 {
 	unsigned char out[S3_GZIP_BUFFER_SIZE];
-	unsigned int digest_len = 0;
 	int zr, rc;
 
 	do {
@@ -2082,11 +2076,8 @@ static int snapshot_writer_finish(struct snapshot_writer *w,
 	if (deflateEnd(&w->z) != Z_OK)
 		return -EIO;
 	w->deflate_ready = false;
-	if (EVP_DigestFinal_ex(w->md, snapshot->sha256, &digest_len) != 1 ||
-	    digest_len != sizeof(snapshot->sha256))
+	if (shirudo_sha256_final(&w->md, snapshot->sha256) != 0)
 		return -EIO;
-	EVP_MD_CTX_free(w->md);
-	w->md = NULL;
 	if (fflush(w->file) != 0 || fseeko(w->file, 0, SEEK_SET) != 0)
 		return -EIO;
 	snapshot->json_bytes = w->json_bytes;
@@ -2094,8 +2085,9 @@ static int snapshot_writer_finish(struct snapshot_writer *w,
 	for (size_t i = 0; i < sizeof(snapshot->sha256); i++)
 		snprintf(snapshot->sha256_hex + i * 2, 3, "%02x",
 			 snapshot->sha256[i]);
-	if (EVP_EncodeBlock((unsigned char *)snapshot->sha256_b64,
-			    snapshot->sha256, sizeof(snapshot->sha256)) != 44)
+	if (shirudo_base64_encode(snapshot->sha256, sizeof(snapshot->sha256),
+				  snapshot->sha256_b64,
+				  sizeof(snapshot->sha256_b64)) != 0)
 		return -EIO;
 	snapshot->sha256_b64[44] = '\0';
 	return 0;

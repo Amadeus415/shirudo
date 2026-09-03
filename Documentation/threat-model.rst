@@ -56,8 +56,8 @@ Explicitly out of scope
 - Hardware attacks on the TPM (probing the chip, glitching, side
   channels). shirudo trusts the TPM.
 - Supply-chain compromise of compilers (``clang``, ``gcc``), of
-  libraries shirudo links (``libbpf``, ``libssh``, ``libcrypto``,
-  ``libtss2``), or of the host distribution.
+  libraries shirudo links (``libbpf``, ``libcurl``, ``libssl``,
+  ``libcrypto``, ``libssh``, ``libtss2``), or of the host distribution.
 - Denial of service — neither against the BPF subsystem nor against
   shirudo itself. The LSM may refuse legitimate operations under
   attack; that is a feature, not a bug, but it is not protection
@@ -240,18 +240,19 @@ optimise for one and tolerate the other:
   administration.
 
 - **No subprocesses at runtime.** Every external operation goes
-  through a linked library — OpenSSL, libssh, libtss2, libbpf. The
+  through a linked library — the profile's TLS provider (OpenSSL on the
+  operator, mbedTLS on the target), libssh, libtss2, and libbpf. The
   runtime footprint is bounded deterministically to "the shirudo
   binary plus its dependencies" — no shell on the path, no ``ssh``
   or ``scp`` binary required, no ``tpm2_pcrread`` CLI. Predictable
   even on glibc-less embedded distributions (musl, uClibc), as long
   as the relevant library ABIs are available.
 
-- **One signed binary, two roles.** The same shirudo binary runs on
-  operator and target; role separation is by *which artifacts are
+- **One source, two role profiles.** The same shirudo source and command
+  run on operator and target; role separation is by *which artifacts are
   present locally* (private key on operator, cert in the keyring on
-  target), not by separate builds. Distributions package one binary
-  per architecture, not one per role. **MVP supports x86_64 and
+  target), while distributions build a dynamic operator profile and a
+  target profile with static mbedTLS-backed libcurl. **MVP supports x86_64 and
   arm64**; both are little-endian, so the on-disk artifact format
   and wire protocols work uncompromised across them. The
   ``SHIRUDO_VERSION_ID`` pre-flight check (per-build hash over
@@ -1494,11 +1495,12 @@ shirudo uses ``libtss2-esys`` to talk to ``/dev/tpmrm0`` via the
 Build and distribution
 ----------------------
 
-shirudo's threat model assumes the operator binary on the operator
-machine and the operator binary on the target machine are the
-*same* binary — built from the same source tree, with the same
-compiler, against the same libraries. Substitution of either is
-out of scope (supply chain).
+shirudo's threat model assumes the operator and target binaries are
+built from the same source tree and compiler. Their link profiles are
+intentionally different: the operator uses the dynamic library profile,
+while the target statically links its mbedTLS/libcurl TLS closure and
+dynamically links the remaining libraries. Substitution of either binary
+or its link inputs is out of scope (supply chain).
 
 Specifically out of scope:
 
@@ -1513,8 +1515,8 @@ Specifically out of scope:
   inside shirudo. On the **target**, clang and the
   ``shirudo-build`` dispatcher are not installed at all — see
   `Operator-only attack surface`_ below.
-- Malicious ``libbpf``, ``libssh``, ``libcrypto``, ``libtss2``,
-  ``libelf``, ``zlib`` — the seven libraries shirudo links
+- Malicious ``libbpf``, ``libcurl``, ``libssl``, ``libcrypto``,
+  ``libssh``, ``libtss2``, ``libelf``, ``zlib`` — the libraries shirudo links
   (plus ``libc``) per the explicit allowlist in PLAN.md
   §"Minimal, vetted library dependencies". Compromising any
   of these defeats shirudo, but the list is **deliberately

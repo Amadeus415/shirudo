@@ -1,6 +1,7 @@
 # Build artefacts
 /build/
 /shirudo
+/shirudo-target
 /shirudo-build
 /shirudo.tar.gz
 /shirudo-static.tar.gz
@@ -58,6 +59,7 @@
 # regenerated every build).
 .config
 config.mk
+config-target.mk
 util/version_id.c
 
 # Editor / OS noise

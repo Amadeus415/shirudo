@@ -8,11 +8,27 @@
 #   2. generated headers   (bpf/vmlinux.h)
 #   3. compiled objects    (util/*.o, builtin-*.o, shirudo.o, bpf/*.bpf.o)
 #   4. embedded BPF        (util/loader.o, .incbin of bpf/*.bpf.o)
-#   5. link                (shirudo, shirudo-build)
+#   5. link                (shirudo, shirudo-target, shirudo-build)
 
 include Makefile.version
 
--include config.mk
+PROFILE ?= operator
+CONFIG_MK ?= config.mk
+-include $(CONFIG_MK)
+
+ifeq ($(PROFILE),target)
+OBJ_PREFIX := build/target/
+CRYPTO_SRC := util/crypto_mbedtls.c
+CRYPTO_CFLAGS := $(TARGET_MBEDTLS_CFLAGS)
+CRYPTO_DEFINE := -DSHIRUDO_CRYPTO_MBEDTLS
+else
+OBJ_PREFIX :=
+CRYPTO_SRC := util/crypto_openssl.c
+CRYPTO_CFLAGS :=
+CRYPTO_DEFINE := -DSHIRUDO_CRYPTO_OPENSSL
+endif
+
+obj = $(OBJ_PREFIX)$(1)
 
 # ----- toolchain --------------------------------------------------
 
@@ -67,7 +83,10 @@ SHIRUDO_VMLINUX_PATH ?= $(sharedir)/shirudo/vmlinux.h
 WARNINGS := -Wall -Wextra -Wno-unused-parameter -Wstrict-prototypes \
             -Wmissing-prototypes -Wpointer-arith -Wshadow
 
-CFLAGS_BASE := -O2 -g -std=gnu11 $(WARNINGS) \
+SHIRUDO_DEBUG ?= 1
+DEBUG_CFLAGS := $(if $(filter 1 yes y true,$(SHIRUDO_DEBUG)),-g,)
+
+CFLAGS_BASE := -O2 $(DEBUG_CFLAGS) -std=gnu11 $(WARNINGS) \
                -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE \
                -DSHIRUDO_LIBEXEC_DIR='"$(SHIRUDO_LIBEXEC_DIR)"' \
                -DSHIRUDO_BPF_INCDIR='"$(SHIRUDO_BPF_INCDIR)"' \
@@ -82,9 +101,11 @@ INCLUDES := \
 
 CFLAGS := $(CFLAGS_BASE) $(INCLUDES) \
           $(LIBCRYPTO_CFLAGS) $(LIBSSH_CFLAGS) $(TSS2_CFLAGS) \
-          $(LIBELF_CFLAGS) $(ZLIB_CFLAGS) $(LIBCURL_CFLAGS)
+          $(LIBELF_CFLAGS) $(ZLIB_CFLAGS) $(LIBCURL_CFLAGS) \
+          $(CRYPTO_CFLAGS) $(CRYPTO_DEFINE)
 
-# Static-link these; dynamic-link the rest (libcrypto, libssh, tss2).
+# libbpf is always linked from its archive. The normal shirudo binary keeps
+# the existing dynamic OpenSSL/libcurl profile for operator builds.
 STATIC_LIBS = \
     $(LIBBPF_A)
 
@@ -92,8 +113,14 @@ DYNAMIC_LIBS := \
     $(LIBCRYPTO_LIBS) -lssl $(LIBSSH_LIBS) $(TSS2_LIBS) \
     $(LIBELF_LIBS) $(ZLIB_LIBS) $(LIBCURL_LIBS)
 
+# Target binaries use one static mbedTLS/libcurl closure. Other libcurl
+# dependencies remain dynamically linked as specified by config-target.mk.
+TARGET_DYNAMIC_LIBS := \
+    $(LIBSSH_LIBS) $(TSS2_LIBS) $(LIBELF_LIBS) $(ZLIB_LIBS)
+
 CFLAGS += $(LUAJIT_CFLAGS) -DSHIRUDO_HAVE_LUAJIT
 DYNAMIC_LIBS += $(LUAJIT_LIBS)
+TARGET_DYNAMIC_LIBS += $(LUAJIT_LIBS)
 
 ifeq ($(SHIRUDO_BUNDLE_RPATH),1)
 RPATH_LDFLAGS := -Wl,--disable-new-dtags -Wl,-rpath,'$$ORIGIN/../lib/shirudo'
@@ -111,6 +138,7 @@ CLANG_BPF := $(CLANG) -target bpf -O2 -g -Wall -Wextra \
 # ----- source manifests -------------------------------------------
 
 UTIL_SRCS := \
+	$(CRYPTO_SRC) \
     util/parse-options.c \
     util/loader.c \
     util/upatch.c \
@@ -149,9 +177,15 @@ UTIL_SRCS := \
     util/upatch_resolve.c \
     util/upatch_table.c
 
+ifeq ($(PROFILE),target)
+BUILTIN_GENKEY_SRC := builtin-genkey-mbedtls.c
+else
+BUILTIN_GENKEY_SRC := builtin-genkey.c
+endif
+
 BUILTIN_SRCS := \
     builtin-init.c \
-    builtin-genkey.c \
+    $(BUILTIN_GENKEY_SRC) \
     builtin-status.c \
     builtin-keys.c \
     builtin-config.c \
@@ -195,13 +229,13 @@ BUILD_SRCS := \
 
 # ----- derived names ----------------------------------------------
 
-UTIL_OBJS    := $(UTIL_SRCS:.c=.o)
-BUILTIN_OBJS := $(BUILTIN_SRCS:.c=.o)
+UTIL_OBJS    := $(foreach s,$(UTIL_SRCS),$(call obj,$(s:.c=.o)))
+BUILTIN_OBJS := $(foreach s,$(BUILTIN_SRCS),$(call obj,$(s:.c=.o)))
 BPF_OBJS     := $(BPF_SRCS:.c=.bpf.o)
-BUILD_OBJS   := $(BUILD_SRCS:.c=.o)
+BUILD_OBJS   := $(foreach s,$(BUILD_SRCS),$(call obj,$(s:.c=.o)))
 
-MAIN_OBJ     := shirudo.o
-VERSION_OBJ  := util/version_id.o
+MAIN_OBJ     := $(call obj,shirudo.o)
+VERSION_OBJ  := $(call obj,util/version_id.o)
 
 # Header-dependency tracking (-MMD -MP writes a .d per .o). Without this,
 # changing a header would leave dependent .o files stale -- e.g. a struct
@@ -213,7 +247,7 @@ DEPS     := $(DEP_OBJS:.o=.d)
 
 # ----- top-level goals --------------------------------------------
 
-.PHONY: all install install-target install-operator clean distclean check test \
+.PHONY: all install install-common install-target install-operator clean distclean check test \
 		test-helpers \
 		javaagent-bridge \
         bpf libbpf bpftool
@@ -263,6 +297,11 @@ endif
 
 %.o: %.c
 	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+build/target/%.o: %.c
+	@printf '  CC      $@\n'
+	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 -include $(DEPS)
@@ -318,6 +357,12 @@ shirudo: $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A)
 	    $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) \
 	    $(STATIC_LIBS) $(DYNAMIC_LIBS)
 
+shirudo-target: $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A)
+	@printf '  LD      $@ (static mbedTLS)\n'
+	$(Q)$(LD) $(CFLAGS) $(TARGET_MBEDTLS_CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ \
+	    $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) \
+	    $(STATIC_LIBS) $(TARGET_MBEDTLS_LINK_LIBS) $(TARGET_DYNAMIC_LIBS)
+
 # util/loader.o has a make-level dep on every embedded bpf object.
 util/loader.o: $(BPF_OBJS)
 
@@ -368,11 +413,12 @@ systemd/shirudo-bpm-repo-update.service: systemd/shirudo-bpm-repo-update.service
 	@printf '  GEN     $@\n'
 	$(Q)sed 's|@bindir@|$(bindir)|g' $< > $@
 
-# Common to both roles: the one shirudo binary + its completion.
-install: shirudo
+install: shirudo install-common
 	@printf '  INSTALL $(DESTDIR)$(bindir)/shirudo\n'
 	$(Q)install -d $(DESTDIR)$(bindir)
 	$(Q)install -m 0755 shirudo $(DESTDIR)$(bindir)/shirudo
+
+install-common:
 	@printf '  INSTALL $(DESTDIR)$(completionsdir)/shirudo\n'
 	$(Q)install -d $(DESTDIR)$(completionsdir)
 	$(Q)install -m 0644 completion/shirudo.bash \
@@ -381,13 +427,16 @@ install: shirudo
 # Target machines additionally get the reboot-persistence, periodic map
 # export, and status keepalive units. They are deliberately NOT in
 # install-operator.
-install-target: install javaagent-bridge systemd/shirudo.service \
+install-target: shirudo-target install-common javaagent-bridge systemd/shirudo.service \
 		systemd/shirudo-map-export.service \
 		systemd/shirudo-map-export.timer \
 		systemd/shirudo-keepalive.service \
 		systemd/shirudo-keepalive.timer \
 		systemd/shirudo-bpm-repo-update.service \
 		systemd/shirudo-bpm-repo-update.timer
+	@printf '  INSTALL $(DESTDIR)$(bindir)/shirudo (static mbedTLS)\n'
+	$(Q)install -d $(DESTDIR)$(bindir)
+	$(Q)install -m 0755 shirudo-target $(DESTDIR)$(bindir)/shirudo
 	@printf '  INSTALL $(DESTDIR)$(systemdunitdir)/shirudo*.service,timer\n'
 	$(Q)install -d $(DESTDIR)$(systemdunitdir)
 	$(Q)install -m 0644 systemd/shirudo.service \
@@ -446,10 +495,10 @@ t/helper/test-json-parser: t/helper/test-json-parser.c util/json.o
 # only exercise the pure helpers, but the symbols must still resolve.
 # util/malloc.o brings in x*/shirudo_libc_free that chain.o/tpm.o use.
 # util/config.o resolves shirudo_config_load(), called by tpm.o.
-t/helper/test-chain: t/helper/test-chain.c util/chain.o util/tpm.o util/log.o \
+t/helper/test-chain: t/helper/test-chain.c util/chain.o util/crypto_openssl.o util/tpm.o util/log.o \
                      util/config.o util/malloc.o
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -ltss2-esys -ltss2-tctildr
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl -ltss2-esys -ltss2-tctildr
 
 t/helper/test-config: t/helper/test-config.c util/config.o util/log.o
 	@printf '  CC      $@\n'
@@ -485,7 +534,7 @@ t/helper/test-kernel-abi: t/helper/test-kernel-abi.c util/kernel_abi.o \
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LIBELF_LIBS) $(ZLIB_LIBS)
 
 t/helper/test-otel-map: t/helper/test-otel-map.c util/upatch_maps.o \
-                        util/upatch_maps_otel.o util/serializer.o \
+                        util/upatch_maps_otel.o util/crypto_openssl.o util/serializer.o \
                         util/upatch_decode.o util/upatch_resolve.o \
                         util/upatch.o util/json.o \
                         util/malloc.o $(LIBBPF_A)
@@ -522,9 +571,10 @@ check test: shirudo $(TEST_HELPERS)
 # ----- clean ------------------------------------------------------
 
 clean:
-	$(Q)rm -f shirudo tools/shirudo-build/shirudo-build $(TEST_HELPERS)
+	$(Q)rm -f shirudo shirudo-target tools/shirudo-build/shirudo-build $(TEST_HELPERS)
 	$(Q)rm -f $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) \
 	          $(BUILD_OBJS) $(VERSION_OBJ) util/version_id.c
+	$(Q)rm -rf build/target
 	$(Q)rm -f $(DEPS) t/helper/*.d
 	$(Q)rm -f $(BPF_OBJS) bpf/vmlinux.h systemd/shirudo.service \
 	          systemd/shirudo-map-export.service \

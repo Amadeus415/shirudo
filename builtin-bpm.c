@@ -13,13 +13,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <openssl/bio.h>
-#include <openssl/cms.h>
-#include <openssl/err.h>
-#include <openssl/evp.h>
-#include <openssl/pem.h>
-#include <openssl/ssl.h>
-#include <openssl/x509.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -35,6 +28,7 @@
 
 #include "builtin.h"
 #include "util/bpm_source_config.h"
+#include "util/crypto.h"
 #include "util/help.h"
 #include "util/json.h"
 #include "util/log.h"
@@ -108,9 +102,8 @@ struct bpm_oci_client {
 	char password[256];
 	char token[4096];
 	char ca_file[PATH_MAX];
+	struct shirudo_tls_ca tls_ca;
 };
-
-static X509 *read_x509_any(const char *path);
 
 static void bpm_copy_string(char *dst, size_t dst_sz, const char *src)
 {
@@ -424,17 +417,16 @@ static int parse_endpoint(const char *endpoint, struct bpm_oci_client *c)
 		return -ENAMETOOLONG;
 	if (getenv("BPM_OCI_CA_FILE")) {
 		const char *ca_file = getenv("BPM_OCI_CA_FILE");
-		X509 *ca;
+		struct shirudo_cert ca = {};
 
 		if (strlen(ca_file) >= sizeof(c->ca_file))
 			return -ENAMETOOLONG;
 		bpm_copy_string(c->ca_file, sizeof(c->ca_file), ca_file);
-		ca = read_x509_any(c->ca_file);
-		if (!ca) {
-			pr_err("bpm OCI: BPM_OCI_CA_FILE is not a readable PEM certificate");
+		if (shirudo_cert_read_file(c->ca_file, &ca) != 0) {
+			pr_err("bpm OCI: BPM_OCI_CA_FILE is not a readable certificate");
 			return -EINVAL;
 		}
-		X509_free(ca);
+		shirudo_cert_free(&ca);
 	}
 	if (c->ca_file[0]) {
 		struct stat st;
@@ -443,31 +435,8 @@ static int parse_endpoint(const char *endpoint, struct bpm_oci_client *c)
 			return -EINVAL;
 		}
 	}
+	c->tls_ca.path = c->ca_file;
 	return load_registry_auth(c->registry, c);
-}
-
-static CURLcode bpm_sslctx(CURL *curl, void *sslctx, void *userptr)
-{
-	struct bpm_oci_client *c = userptr;
-	BIO *bio;
-	X509 *cert;
-
-	(void)curl;
-	if (!c->ca_file[0])
-		return CURLE_OK;
-	bio = BIO_new_file(c->ca_file, "rb");
-	if (!bio)
-		return CURLE_SSL_CACERT_BADFILE;
-	cert = PEM_read_bio_X509(bio, NULL, NULL, NULL);
-	BIO_free(bio);
-	if (!cert)
-		return CURLE_SSL_CACERT_BADFILE;
-	/* CURLOPT_CAINFO would replace libcurl's normal trust bundle.  Add the
-	 * configured CA to the existing OpenSSL store instead. */
-	if (X509_STORE_add_cert(SSL_CTX_get_cert_store(sslctx), cert) != 1)
-		ERR_clear_error();
-	X509_free(cert);
-	return CURLE_OK;
 }
 
 static int curl_once(struct bpm_oci_client *c, const char *method,
@@ -517,8 +486,8 @@ static int curl_once(struct bpm_oci_client *c, const char *method,
 	}
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-	curl_easy_setopt(curl, CURLOPT_SSL_CTX_FUNCTION, bpm_sslctx);
-	curl_easy_setopt(curl, CURLOPT_SSL_CTX_DATA, c);
+	curl_easy_setopt(curl, CURLOPT_SSL_CTX_FUNCTION, shirudo_sslctx_callback);
+	curl_easy_setopt(curl, CURLOPT_SSL_CTX_DATA, &c->tls_ca);
 	if (file) {
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, bpm_write_file);
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
@@ -540,6 +509,7 @@ static int curl_once(struct bpm_oci_client *c, const char *method,
 	}
 	curl_slist_free_all(headers);
 	curl_easy_cleanup(curl);
+	shirudo_tls_ca_cleanup(&c->tls_ca);
 	return status < 0 ? -EHOSTUNREACH : 0;
 }
 
@@ -610,23 +580,23 @@ static int get_bearer_token(struct bpm_oci_client *c, const char *challenge)
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &r);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-	curl_easy_setopt(curl, CURLOPT_SSL_CTX_FUNCTION, bpm_sslctx);
-	curl_easy_setopt(curl, CURLOPT_SSL_CTX_DATA, c);
+	curl_easy_setopt(curl, CURLOPT_SSL_CTX_FUNCTION, shirudo_sslctx_callback);
+	curl_easy_setopt(curl, CURLOPT_SSL_CTX_DATA, &c->tls_ca);
 	cc = curl_easy_perform(curl);
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &r.status);
-	if (cc != CURLE_OK) { curl_easy_cleanup(curl); free(r.body.data); return -EHOSTUNREACH; }
-	if (r.status >= 300) { curl_easy_cleanup(curl); free(r.body.data); return -EACCES; }
+	if (cc != CURLE_OK) { curl_easy_cleanup(curl); shirudo_tls_ca_cleanup(&c->tls_ca); free(r.body.data); return -EHOSTUNREACH; }
+	if (r.status >= 300) { curl_easy_cleanup(curl); shirudo_tls_ca_cleanup(&c->tls_ca); free(r.body.data); return -EACCES; }
 	token = strstr((char *)r.body.data, "\"token\"");
 	if (!token) token = strstr((char *)r.body.data, "\"access_token\"");
-	if (!token || !(token = strchr(token, ':'))) { curl_easy_cleanup(curl); free(r.body.data); return -EINVAL; }
+	if (!token || !(token = strchr(token, ':'))) { curl_easy_cleanup(curl); shirudo_tls_ca_cleanup(&c->tls_ca); free(r.body.data); return -EINVAL; }
 	while (*++token && isspace((unsigned char)*token)) {}
-	if (*token++ != '"') { curl_easy_cleanup(curl); free(r.body.data); return -EINVAL; }
+	if (*token++ != '"') { curl_easy_cleanup(curl); shirudo_tls_ca_cleanup(&c->tls_ca); free(r.body.data); return -EINVAL; }
 	{
 		char *end = strchr(token, '"');
-		if (!end || (size_t)(end - token) >= sizeof(c->token)) { curl_easy_cleanup(curl); free(r.body.data); return -EINVAL; }
+		if (!end || (size_t)(end - token) >= sizeof(c->token)) { curl_easy_cleanup(curl); shirudo_tls_ca_cleanup(&c->tls_ca); free(r.body.data); return -EINVAL; }
 		memcpy(c->token, token, end - token); c->token[end - token] = 0;
 	}
-	curl_easy_cleanup(curl); free(r.body.data);
+	curl_easy_cleanup(curl); shirudo_tls_ca_cleanup(&c->tls_ca); free(r.body.data);
 	return 0;
 }
 
@@ -967,37 +937,15 @@ static int parse_index(const unsigned char *body, size_t len,
 	return 0;
 }
 
-static X509 *read_x509_any(const char *path)
-{
-	BIO *b = BIO_new_file(path, "rb");
-	X509 *x;
-	if (!b) return NULL;
-	x = PEM_read_bio_X509(b, NULL, NULL, NULL);
-	if (!x) { BIO_reset(b); x = d2i_X509_bio(b, NULL); }
-	BIO_free(b);
-	return x;
-}
-
 static int verify_cms(const unsigned char *payload, size_t payload_len,
 		      const unsigned char *sig, size_t sig_len, const char *cert_path)
 {
-	BIO *sb = BIO_new_mem_buf(sig, (int)sig_len);
-	BIO *db = BIO_new_mem_buf(payload, (int)payload_len);
-	BIO *out = BIO_new(BIO_s_null());
-	CMS_ContentInfo *cms = NULL;
-	X509 *cert = read_x509_any(cert_path);
-	X509_STORE *store = X509_STORE_new();
+	struct shirudo_cert cert = {};
 	int rc = -EINVAL;
 
-	if (!sb || !db || !out || !cert || !store) goto done;
-	cms = d2i_CMS_bio(sb, NULL);
-	if (!cms || X509_STORE_add_cert(store, cert) != 1) goto done;
-	if (CMS_verify(cms, NULL, store, db, out, CMS_BINARY | CMS_DETACHED) != 1) goto done;
-	rc = 0;
-done:
-	if (rc) ERR_clear_error();
-	CMS_ContentInfo_free(cms); X509_STORE_free(store); X509_free(cert);
-	BIO_free(out); BIO_free(db); BIO_free(sb);
+	if (!shirudo_cert_read_file(cert_path, &cert))
+		rc = shirudo_verify_detached(payload, payload_len, sig, sig_len, &cert);
+	shirudo_cert_free(&cert);
 	return rc;
 }
 
@@ -1117,34 +1065,32 @@ static int make_oci_url(const struct bpm_oci_client *c, const char *repo,
 
 static int sha256_file_hex(const char *path, char *hex, size_t hex_sz)
 {
-	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-	unsigned char digest[EVP_MAX_MD_SIZE];
-	unsigned int n = 0;
+	struct shirudo_sha256_ctx ctx;
+	unsigned char digest[SHIRUDO_CRYPTO_SHA256_LEN];
 	unsigned char buf[65536];
 	ssize_t nr;
 	int fd, rc = -EIO;
 
-	if (!ctx || hex_sz < 65) { EVP_MD_CTX_free(ctx); return -EINVAL; }
-	fd = open(path, O_RDONLY | O_CLOEXEC); if (fd < 0) { EVP_MD_CTX_free(ctx); return -errno; }
-	if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1) goto done;
+	if (hex_sz < 65 || shirudo_sha256_init(&ctx) != 0) return -EINVAL;
+	fd = open(path, O_RDONLY | O_CLOEXEC); if (fd < 0) { shirudo_sha256_free(&ctx); return -errno; }
 	while ((nr = read(fd, buf, sizeof(buf))) > 0)
-		if (EVP_DigestUpdate(ctx, buf, (size_t)nr) != 1) goto done;
-	if (nr < 0 || EVP_DigestFinal_ex(ctx, digest, &n) != 1) goto done;
-	for (unsigned int i = 0; i < n; i++) snprintf(hex + i * 2, 3, "%02x", digest[i]);
-	hex[n * 2] = 0; rc = 0;
+		if (shirudo_sha256_update(&ctx, buf, (size_t)nr) != 0) goto done;
+	if (nr < 0 || shirudo_sha256_final(&ctx, digest) != 0) goto done;
+	for (unsigned int i = 0; i < sizeof(digest); i++) snprintf(hex + i * 2, 3, "%02x", digest[i]);
+	hex[64] = 0; rc = 0;
 done:
-	close(fd); EVP_MD_CTX_free(ctx); return rc;
+	close(fd); shirudo_sha256_free(&ctx); return rc;
 }
 
 static int sha256_buffer_hex(const void *data, size_t len,
 			     char *hex, size_t hex_sz)
 {
-	unsigned char digest[EVP_MAX_MD_SIZE]; unsigned int n = 0;
-	if (hex_sz < 65 || EVP_Digest(data, len, digest, &n, EVP_sha256(), NULL) != 1 || n != 32)
+	unsigned char digest[SHIRUDO_CRYPTO_SHA256_LEN];
+	if (hex_sz < 65 || shirudo_sha256_buffer(data, len, digest) != 0)
 		return -EINVAL;
-	for (unsigned int i = 0; i < n; i++)
+	for (unsigned int i = 0; i < sizeof(digest); i++)
 		snprintf(hex + i * 2, 3, "%02x", digest[i]);
-	hex[n * 2] = 0;
+	hex[64] = 0;
 	return 0;
 }
 
@@ -1237,32 +1183,32 @@ static int extract_archive(const char *archive, const char *dest)
 
 static int cert_matches_active(const char *path)
 {
-	X509 *a = read_x509_any(path), *b = read_x509_any(SHIRUDO_CERT_PATH);
-	EVP_PKEY *pa, *pb;
-	unsigned char da[EVP_MAX_MD_SIZE], db[EVP_MAX_MD_SIZE];
-	unsigned int na = 0, nb = 0;
+	struct shirudo_cert a = {}, b = {};
+	unsigned char da[SHIRUDO_CRYPTO_SHA256_LEN], db[SHIRUDO_CRYPTO_SHA256_LEN];
 	int rc = -EINVAL;
-	if (!a || !b) goto out;
-	pa = X509_get_pubkey(a); pb = X509_get_pubkey(b); if (!pa || !pb) { EVP_PKEY_free(pa); EVP_PKEY_free(pb); goto out; }
-	/* Compare DER SubjectPublicKeyInfo using the stable X509 public-key digest. */
-	if (X509_pubkey_digest(a, EVP_sha256(), da, &na) && X509_pubkey_digest(b, EVP_sha256(), db, &nb) && na == nb && !memcmp(da, db, na)) rc = 0;
-	EVP_PKEY_free(pa); EVP_PKEY_free(pb);
-out:
-	X509_free(a); X509_free(b); return rc;
+	if (!shirudo_cert_read_file(path, &a) &&
+	    !shirudo_cert_read_file(SHIRUDO_CERT_PATH, &b) &&
+	    !shirudo_cert_pubkey_digest(&a, da) &&
+	    !shirudo_cert_pubkey_digest(&b, db) &&
+	    !memcmp(da, db, sizeof(da)))
+		rc = 0;
+	shirudo_cert_free(&a);
+	shirudo_cert_free(&b);
+	return rc;
 }
 
 static int install_key_file(const char *src)
 {
-	X509 *x = read_x509_any(src);
-	unsigned char digest[EVP_MAX_MD_SIZE]; unsigned int n = 0;
+	struct shirudo_cert x = {};
+	unsigned char digest[SHIRUDO_CRYPTO_SHA256_LEN];
 	char hex[65], dst[PATH_MAX], linktmp[PATH_MAX];
 	struct stat st;
 	int rc;
-	if (!x || !X509_pubkey_digest(x, EVP_sha256(), digest, &n) || n != 32) { X509_free(x); return -EINVAL; }
-	for (unsigned int i = 0; i < n; i++)
+	if (shirudo_cert_read_file(src, &x) || shirudo_cert_pubkey_digest(&x, digest)) { shirudo_cert_free(&x); return -EINVAL; }
+	for (unsigned int i = 0; i < sizeof(digest); i++)
 		snprintf(hex + 2*i, 3, "%02x", digest[i]);
 	hex[64] = 0;
-	X509_free(x);
+	shirudo_cert_free(&x);
 	rc = path_mkdir_p(SHIRUDO_KEYS_DIR, 0700); if (rc) return rc;
 	if (snprintf(dst, sizeof(dst), "%s/%s.der", SHIRUDO_KEYS_DIR, hex) >= (int)sizeof(dst)) return -ENAMETOOLONG;
 	if (copy_file(src, dst, 0644)) return -EIO;
@@ -1667,16 +1613,17 @@ static int cmd_bpm_config(int argc, const char **argv)
 		return 0;
 	}
 	if (!strcmp(argv[2], "add") && argc >= 5) {
-		struct bpm_source s = {}; const char *key = NULL; char managed[PATH_MAX]; X509 *cert = NULL;
+		struct bpm_source s = {}; const char *key = NULL; char managed[PATH_MAX];
+		struct shirudo_cert cert = {};
 		bpm_copy_string(s.name, sizeof(s.name), argv[3]);
 		bpm_copy_string(s.endpoint, sizeof(s.endpoint), argv[4]);
 		for (int i = 5; i < argc; i++) {
 			if (!strncmp(argv[i], "--key-file=", 11)) key = argv[i] + 11;
 			else if (!strcmp(argv[i], "--key-file") && i + 1 < argc) key = argv[++i];
 		}
-		cert = key ? read_x509_any(key) : NULL;
-		if (!bpm_name_ok(s.name) || !key || parse_endpoint(s.endpoint, &(struct bpm_oci_client){}) || !cert) { X509_free(cert); pr_err("bpm: register add requires a valid oci:// endpoint and --key-file certificate"); return 2; }
-		X509_free(cert);
+		if (!key || shirudo_cert_read_file(key, &cert)) { shirudo_cert_free(&cert); pr_err("bpm: register add requires a valid oci:// endpoint and --key-file certificate"); return 2; }
+		if (!bpm_name_ok(s.name) || parse_endpoint(s.endpoint, &(struct bpm_oci_client){}) ) { shirudo_cert_free(&cert); pr_err("bpm: register add requires a valid oci:// endpoint and --key-file certificate"); return 2; }
+		shirudo_cert_free(&cert);
 		if (path_mkdir_p(SHIRUDO_BPM_REGISTRIES_DIR, 0700) || path_mkdir_p(SHIRUDO_BPM_KEYS_DIR, 0700)) return 1;
 		if (snprintf(managed, sizeof(managed), "%s/%s.der", SHIRUDO_BPM_KEYS_DIR, s.name) >= (int)sizeof(managed)) return 1;
 		if (copy_file(key, managed, 0644)) return 1;

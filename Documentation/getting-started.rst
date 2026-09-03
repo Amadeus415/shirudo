@@ -16,12 +16,13 @@ end-to-end happy path. Two machines are involved:
   embedded device, anywhere shirudo's BPF LSM will run. Holds only
   the public cert.
 
-The same core shirudo binary runs on both. What separates the two
-roles is which artifacts are present locally, not which build you
-installed — **but the operator additionally needs a second
-package**, ``shirudo-build``, which contains the artifact-signing
-binary. ``shirudo-build`` and its ``clang`` dependency are
-operator-only; they never ship to a target.
+The same core shirudo source and command run on both. Distribution
+packages use role-specific link profiles: the target embeds its TLS
+libraries, while the operator retains the dynamic profile. What separates
+the two roles is still which artifacts are present locally — **but the
+operator additionally needs a second package**, ``shirudo-build``, which
+contains the artifact-signing binary. ``shirudo-build`` and its ``clang``
+dependency are operator-only; they never ship to a target.
 
 ==========================  =======================  =================
 Package                     Operator host?           Target host?
@@ -66,22 +67,24 @@ state beyond the contents of ``/var/lib/shirudo/keys/`` and
 1. Install runtime dependencies
 ================================
 
-shirudo dynamic-links a small number of libraries. On a Debian-family
-target:
+The target binary statically links mbedTLS and an mbedTLS-backed libcurl. It
+therefore needs only the remaining target-side shared libraries. On a
+Debian-family target:
 
 .. code-block:: sh
 
-    apt-get install libssl3 libssh-4 libtss2-esys-3.0.2-0 libtss2-tcti-device0
+    apt-get install libssh-4 libtss2-esys-3.0.2-0 libtss2-tcti-device0
 
 On a Fedora-family target:
 
 .. code-block:: sh
 
-    dnf install openssl-libs libssh tpm2-tss
+    dnf install libssh tpm2-tss
 
-Both the operator machine and the target need ``libcrypto`` and
-``libssh``. The target additionally needs ``libtss2`` for TPM
-measurement.
+The operator binary keeps the dynamic profile and needs the distribution's
+runtime packages for libcurl, libssl, libcrypto, and libssh. Target builds
+require the corresponding static development archives at build time; those
+archives are not installed on the target.
 
 shirudo's MVP supports **x86_64 and arm64** targets. Both
 architectures are little-endian, and the on-disk ``.upatch`` format
@@ -122,7 +125,10 @@ features are all hard prerequisites.
 3. Build shirudo
 =================
 
-shirudo builds from source as a single static-link-most-things binary:
+shirudo builds a dynamic developer/operator binary by default. Target
+installers additionally build a target-profile binary with static mbedTLS and
+an mbedTLS-backed static libcurl. The target build requires mbedTLS development
+archives and a separate libcurl build configured with ``--with-mbedtls``:
 
 .. code-block:: sh
 
@@ -130,6 +136,18 @@ shirudo builds from source as a single static-link-most-things binary:
     cd shirudo
     git submodule update --init    # pulls third_party/bpf-next
     make -j
+
+To build the target artifact, provide pkg-config directories containing
+mbedTLS and a static libcurl built with ``--with-mbedtls``:
+
+.. code-block:: sh
+
+    make -j shirudo-target \
+      SHIRUDO_TARGET_PKG_CONFIG_PATH=/path/to/libcurl/lib/pkgconfig:/path/to/mbedtls/lib/pkgconfig
+
+For a non-system mbedTLS installation, also set
+``SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR`` and
+``SHIRUDO_TARGET_MBEDTLS_LIBDIR``.
 
 The first build is slow — it compiles libbpf, libelf, and ``bpftool``
 (build-time only) from the bpf-next submodule. Subsequent rebuilds
@@ -1515,12 +1533,12 @@ Developer setup: one box as operator and target
 ================================================
 
 For hacking on shirudo it is convenient to play **both** roles on a
-single machine. This works because shirudo is one binary whose role is
-decided by which artifacts are present locally, not by a build flag: put
-the signing key on the box and it is an operator; put the cert in the
-keyring and run ``init`` and it is a target. On a dev box both sets of
-artifacts co-locate under ``/var/lib/shirudo/`` and ``shirudo keys``
-shows both halves.
+single machine. This works because the same command and source support both
+roles: put the signing key on the box and it is an operator; put the cert in
+the keyring and run ``init`` and it is a target. On a dev box both sets of
+artifacts co-locate under ``/var/lib/shirudo/`` and ``shirudo keys`` shows
+both halves. Use the target profile when testing the target runtime
+dependency boundary.
 
 This is a development convenience only. A real deployment keeps the
 private key on the operator and never on a target; see

@@ -36,10 +36,11 @@ completionsdir ?= $(sharedir)/bash-completion/completions
 systemdunitdir ?= /usr/lib/systemd/system
 
 export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdir \
-       systemdunitdir
+       systemdunitdir SHIRUDO_TARGET_PKG_CONFIG_PATH \
+       SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR SHIRUDO_TARGET_MBEDTLS_LIBDIR
 export VM_SSH_COMMAND
 
-.PHONY: all help shirudo-build test-helpers bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
+.PHONY: all help shirudo-target target-config shirudo-build test-helpers bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
         distclean test examples config
 
@@ -78,7 +79,17 @@ DEB_PATHS := prefix=$(DEB_PREFIX) exec_prefix=$(DEB_PREFIX) \
              systemdunitdir=/usr/lib/systemd/system
 
 all: config
-	+$(Q)$(MAKE) -f Makefile.shirudo all
+	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=operator CONFIG_MK=config.mk all
+
+shirudo-target: target-config
+	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=target CONFIG_MK=config-target.mk shirudo-target
+
+target-config:
+	+$(Q)$(MAKE) -f Makefile.config -B SHIRUDO_PROFILE=target \
+		CONFIG_OUT=config-target.mk \
+		SHIRUDO_TARGET_PKG_CONFIG_PATH="$(SHIRUDO_TARGET_PKG_CONFIG_PATH)" \
+		SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR="$(SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR)" \
+		SHIRUDO_TARGET_MBEDTLS_LIBDIR="$(SHIRUDO_TARGET_MBEDTLS_LIBDIR)" config.mk
 
 define HELP_TEXT
 
@@ -86,6 +97,10 @@ shirudo make targets (run from the repo root):
 
   Build
     make                   build the shirudo binary (default target)
+    make shirudo-target    build the target binary with static mbedTLS and
+                           a static mbedTLS-backed libcurl
+    make ... SHIRUDO_DEBUG=0
+                           omit DWARF debug information from C objects
     make shirudo-build     build the operator-only artifact builder
                            (compile + sign .upatch; ships in the operator
                            package, never to a target)
@@ -145,10 +160,9 @@ shirudo make targets (run from the repo root):
                            shirudo-build).
                            Rebuilds from clean with prefix=/usr.
     make bintar-pkg        Two distro-agnostic target-installer tarballs:
-                           shirudo.tar.gz (expects system libssh/libtss2/
-                           libcrypto on the target) and shirudo-static.tar.gz
-                           (bundles those libs via rpath; for embedded,
-                           legacy, or minimal targets).
+                           both use the target binary with static mbedTLS and
+                           mbedTLS-backed libcurl; shirudo-static.tar.gz also
+                           bundles the remaining dynamic libraries via rpath.
 
   Other
     make examples          build the examples/ tree
@@ -156,6 +170,8 @@ shirudo make targets (run from the repo root):
     make help              show this overview
 
   Variables: prefix (=/usr/local), bindir, libexecdir, systemdunitdir,
+             SHIRUDO_TARGET_PKG_CONFIG_PATH (target mbedTLS/libcurl .pc dirs),
+             SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR/LIBDIR (non-system mbedTLS),
              VM_NAME (optional unique VM name), VM_TENANT (OTEL tenant),
              VM_SSH_COMMAND (optional one-off command for make vm-ssh),
              TEST_VM_SSH_PORT (optional fixed localhost SSH port),
@@ -322,23 +338,21 @@ vm-clean:
 
 test-vm-clean: vm-clean
 
-# Build two target-installer tarballs (kernel-style `bin*-pkg`):
-#   shirudo.tar.gz         -- expects system libssh/libtss2/libcrypto on
-#                             the target (any distro with matching ABI).
-#   shirudo-static.tar.gz  -- bundles those libs into lib/shirudo/ via
-#                             $ORIGIN-relative rpath, for embedded / legacy
-#                             / minimal targets where the system libs are
-#                             missing or too old.
+# Build two target-installer tarballs (kernel-style `bin*-pkg`). Both target
+# binaries statically link mbedTLS and mbedTLS-backed libcurl. The static image
+# additionally bundles the remaining dynamic libraries into lib/shirudo/ via
+# an $ORIGIN-relative rpath for embedded / legacy / minimal targets.
 # Each tarball contains a staged install-target tree under root/ plus an
-# install.sh wrapper. The two flavors need different binary builds (the
-# bundled one carries an rpath), so the recipe rebuilds the binary
+# install.sh wrapper. The two flavors need different target binary builds (the
+# bundled one carries an rpath), so the recipe rebuilds the target artifact
 # between them.
 bintar-pkg: config packaging/tar/install.sh packaging/tar/bundle-libs.sh
+	+$(Q)$(MAKE) target-config
 	@printf '  STAGE   $(INSTALLER_STAGE)  (system libs)\n'
 	$(Q)rm -rf $(INSTALLER_STAGE) $(INSTALLER_TARBALL)
-	$(Q)rm -f shirudo
+	$(Q)rm -f shirudo shirudo-target
 	$(Q)install -d $(INSTALLER_STAGE) $(dir $(INSTALLER_TARBALL))
-	+$(Q)$(MAKE) -f Makefile.shirudo \
+	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=target CONFIG_MK=config-target.mk \
 	    LDFLAGS='$(LDFLAGS)' \
 	    SHIRUDO_BUNDLE_RPATH=0 \
 	    DESTDIR=$(abspath $(INSTALLER_ROOT)) \
@@ -350,9 +364,9 @@ bintar-pkg: config packaging/tar/install.sh packaging/tar/bundle-libs.sh
 	    $(notdir $(INSTALLER_STAGE))
 	@printf '  STAGE   $(STATIC_IMAGE_STAGE)  (bundled libs)\n'
 	$(Q)rm -rf $(STATIC_IMAGE_STAGE) $(STATIC_IMAGE_TARBALL)
-	$(Q)rm -f shirudo
+	$(Q)rm -f shirudo shirudo-target
 	$(Q)install -d $(STATIC_IMAGE_STAGE) $(dir $(STATIC_IMAGE_TARBALL))
-	+$(Q)$(MAKE) -f Makefile.shirudo \
+	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=target CONFIG_MK=config-target.mk \
 	    LDFLAGS='$(LDFLAGS)' \
 	    SHIRUDO_BUNDLE_RPATH=1 \
 	    DESTDIR=$(abspath $(STATIC_IMAGE_ROOT)) \
@@ -408,8 +422,8 @@ config.mk: Makefile.config
 install: all
 	+$(Q)$(MAKE) -f Makefile.shirudo install
 
-install-target: all
-	+$(Q)$(MAKE) -f Makefile.shirudo install-target
+install-target: all target-config
+	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=target CONFIG_MK=config-target.mk install-target
 
 install-operator: all
 	+$(Q)$(MAKE) -f Makefile.shirudo install-operator

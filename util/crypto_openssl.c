@@ -1,0 +1,197 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 Authors of shirudo */
+
+#include <errno.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <openssl/bio.h>
+#include <openssl/cms.h>
+#include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+
+#include "crypto.h"
+
+static X509 *read_x509(const char *path)
+{
+	BIO *bio = BIO_new_file(path, "rb");
+	X509 *cert;
+
+	if (!bio)
+		return NULL;
+	cert = PEM_read_bio_X509(bio, NULL, NULL, NULL);
+	if (!cert) {
+		BIO_reset(bio);
+		cert = d2i_X509_bio(bio, NULL);
+	}
+	BIO_free(bio);
+	return cert;
+}
+
+int shirudo_sha256_init(struct shirudo_sha256_ctx *ctx)
+{
+	EVP_MD_CTX *md;
+
+	if (!ctx)
+		return -EINVAL;
+	ctx->impl = NULL;
+	md = EVP_MD_CTX_new();
+	if (!md || EVP_DigestInit_ex(md, EVP_sha256(), NULL) != 1) {
+		EVP_MD_CTX_free(md);
+		return -EIO;
+	}
+	ctx->impl = md;
+	return 0;
+}
+
+int shirudo_sha256_update(struct shirudo_sha256_ctx *ctx,
+			 const void *data, size_t len)
+{
+	if (!ctx || !ctx->impl || (len && !data))
+		return -EINVAL;
+	return EVP_DigestUpdate(ctx->impl, data, len) == 1 ? 0 : -EIO;
+}
+
+int shirudo_sha256_final(struct shirudo_sha256_ctx *ctx,
+			uint8_t out[SHIRUDO_CRYPTO_SHA256_LEN])
+{
+	unsigned int len = 0;
+	int rc;
+
+	if (!ctx || !ctx->impl || !out)
+		return -EINVAL;
+	rc = EVP_DigestFinal_ex(ctx->impl, out, &len) == 1 && len == 32 ? 0 : -EIO;
+	EVP_MD_CTX_free(ctx->impl);
+	ctx->impl = NULL;
+	return rc;
+}
+
+void shirudo_sha256_free(struct shirudo_sha256_ctx *ctx)
+{
+	if (!ctx)
+		return;
+	EVP_MD_CTX_free(ctx->impl);
+	ctx->impl = NULL;
+}
+
+int shirudo_sha256_buffer(const void *data, size_t len,
+			 uint8_t out[SHIRUDO_CRYPTO_SHA256_LEN])
+{
+	struct shirudo_sha256_ctx ctx;
+	int rc;
+
+	rc = shirudo_sha256_init(&ctx);
+	if (!rc)
+		rc = shirudo_sha256_update(&ctx, data, len);
+	if (!rc)
+		rc = shirudo_sha256_final(&ctx, out);
+	else
+		shirudo_sha256_free(&ctx);
+	return rc;
+}
+
+int shirudo_base64_encode(const uint8_t *data, size_t len,
+			  char *out, size_t out_sz)
+{
+	size_t need = 4 * ((len + 2) / 3) + 1;
+
+	if (!data || !out || out_sz < need || len > INT_MAX)
+		return -EINVAL;
+	if (EVP_EncodeBlock((unsigned char *)out, data, (int)len) < 0)
+		return -EIO;
+	out[need - 1] = '\0';
+	return 0;
+}
+
+int shirudo_cert_read_file(const char *path, struct shirudo_cert *cert)
+{
+	if (!cert)
+		return -EINVAL;
+	cert->impl = read_x509(path);
+	return cert->impl ? 0 : -EINVAL;
+}
+
+void shirudo_cert_free(struct shirudo_cert *cert)
+{
+	if (!cert)
+		return;
+	X509_free(cert->impl);
+	cert->impl = NULL;
+}
+
+int shirudo_cert_pubkey_digest(const struct shirudo_cert *cert,
+			       uint8_t out[SHIRUDO_CRYPTO_SHA256_LEN])
+{
+	unsigned int len = 0;
+
+	if (!cert || !cert->impl || !out ||
+	    X509_pubkey_digest(cert->impl, EVP_sha256(), out, &len) != 1 || len != 32)
+		return -EINVAL;
+	return 0;
+}
+
+int shirudo_verify_detached(const uint8_t *payload, size_t payload_len,
+			    const uint8_t *signature, size_t signature_len,
+			    const struct shirudo_cert *cert)
+{
+	BIO *sig = NULL, *data = NULL, *out = NULL;
+	CMS_ContentInfo *cms = NULL;
+	X509_STORE *store = NULL;
+	int rc = -EINVAL;
+
+	if (!payload || !signature || !cert || !cert->impl ||
+	    payload_len > INT_MAX || signature_len > INT_MAX)
+		return -EINVAL;
+	sig = BIO_new_mem_buf(signature, (int)signature_len);
+	data = BIO_new_mem_buf(payload, (int)payload_len);
+	out = BIO_new(BIO_s_null());
+	store = X509_STORE_new();
+	if (!sig || !data || !out || !store || X509_STORE_add_cert(store, cert->impl) != 1)
+		goto done;
+	cms = d2i_CMS_bio(sig, NULL);
+	if (cms && CMS_verify(cms, NULL, store, data, out,
+				     CMS_BINARY | CMS_DETACHED) == 1)
+		rc = 0;
+done:
+	if (rc)
+		ERR_clear_error();
+	CMS_ContentInfo_free(cms);
+	X509_STORE_free(store);
+	BIO_free(out);
+	BIO_free(data);
+	BIO_free(sig);
+	return rc;
+}
+
+void shirudo_tls_ca_cleanup(struct shirudo_tls_ca *ca)
+{
+	if (ca)
+		ca->impl = NULL;
+}
+
+CURLcode shirudo_sslctx_callback(CURL *curl, void *sslctx, void *userptr)
+{
+	const char *path = userptr;
+	BIO *bio;
+	X509 *cert;
+
+	(void)curl;
+	if (!path || !path[0])
+		return CURLE_OK;
+	bio = BIO_new_file(path, "rb");
+	if (!bio)
+		return CURLE_SSL_CACERT_BADFILE;
+	cert = PEM_read_bio_X509(bio, NULL, NULL, NULL);
+	BIO_free(bio);
+	if (!cert)
+		return CURLE_SSL_CACERT_BADFILE;
+	if (X509_STORE_add_cert(SSL_CTX_get_cert_store(sslctx), cert) != 1)
+		ERR_clear_error();
+	X509_free(cert);
+	return CURLE_OK;
+}

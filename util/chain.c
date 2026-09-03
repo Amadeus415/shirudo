@@ -14,36 +14,33 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include <openssl/evp.h>
-
 #include "chain.h"
+#include "crypto.h"
 #include "malloc.h"
 #include "paths.h"
 #include "tpm.h"
 
 void shirudo_sha256(const void *data, size_t len, uint8_t out[32])
 {
-	unsigned int n = 32;
-
-	EVP_Digest(data, len, out, &n, EVP_sha256(), NULL);
+	if (shirudo_sha256_buffer(data, len, out) != 0)
+		memset(out, 0, 32);
 }
 
 void shirudo_sha256_2(const void *a, size_t a_len,
 		      const void *b, size_t b_len, uint8_t out[32])
 {
-	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+	struct shirudo_sha256_ctx ctx;
 
-	if (!ctx) {
+	if (shirudo_sha256_init(&ctx) != 0) {
 		memset(out, 0, 32);
 		return;
 	}
-	if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) == 1 &&
-	    EVP_DigestUpdate(ctx, a, a_len) == 1 &&
-	    (b_len == 0 || EVP_DigestUpdate(ctx, b, b_len) == 1))
-		EVP_DigestFinal_ex(ctx, out, NULL);
-	else
+	if (shirudo_sha256_update(&ctx, a, a_len) != 0 ||
+	    (b_len && shirudo_sha256_update(&ctx, b, b_len) != 0) ||
+	    shirudo_sha256_final(&ctx, out) != 0) {
 		memset(out, 0, 32);
-	EVP_MD_CTX_free(ctx);
+		shirudo_sha256_free(&ctx);
+	}
 }
 
 void shirudo_hex_encode(const uint8_t *in, size_t n, char *out)

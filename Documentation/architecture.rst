@@ -55,7 +55,8 @@ human operator (or an AI agent acting on their behalf) generates
 signing material, signs BPF artifacts, and pushes them to one or many
 targets. It needs:
 
-- ``libcrypto`` and ``libssh`` linked into the shirudo binary.
+- The dynamic-profile shirudo binary and its runtime libcurl/OpenSSL,
+  libcrypto, and libssh dependencies.
 - The signing key and cert under ``/var/lib/shirudo/keys/``.
 - The operator's SSH material under ``~/.ssh/`` (agent socket,
   default keys, ``known_hosts``).
@@ -65,9 +66,10 @@ the kernel cryptographically verifies every BPF program before loading
 and where the BPF LSM hook enforces "only signed loader progs from
 userspace". It needs:
 
-- The same shirudo binary, with the same library set linked in (plus
-  libtss2 for TPM measurement). Distributions ship one binary, not
-  two.
+- A target-profile shirudo binary with mbedTLS and an mbedTLS-backed libcurl
+  statically linked, plus the remaining shared libraries and libtss2 for
+  TPM measurement. Operator and target packages intentionally use separate
+  link profiles.
 - A **current upstream Linux kernel** with the relevant config
   options (``BPF_SYSCALL``, ``BPF_LSM``, ``KEYS``,
   ``X509_CERTIFICATE_PARSER``, ``PKCS7_MESSAGE_PARSER``,
