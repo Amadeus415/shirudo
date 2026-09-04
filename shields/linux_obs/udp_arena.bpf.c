@@ -782,6 +782,7 @@ int BPF_PROG(track_udp_sendmsg, struct socket *sock, struct msghdr *msg,
 	__u16 port = 0;
 	struct sock *sk;
 	int addrlen;
+	int firewall_rc = 0;
 
 	if (size <= 0 || !sock || !msg)
 		return 0;
@@ -792,8 +793,6 @@ int BPF_PROG(track_udp_sendmsg, struct socket *sock, struct msghdr *msg,
 	if (!sk)
 		return 0;
 	if (sk->sk_protocol != IPPROTO_UDP)
-		return 0;
-	if (!task_exec_current_uid(task, &uid))
 		return 0;
 
 	addr = msg->msg_name;
@@ -806,6 +805,13 @@ int BPF_PROG(track_udp_sendmsg, struct socket *sock, struct msghdr *msg,
 			return 0;
 	}
 
+#ifdef LINUX_OBS_COMBINED
+	if (ip.family == AF_INET)
+		firewall_rc = ipv4_shields_enforce(ip.addr4);
+#endif
+	if (!task_exec_current_uid(task, &uid))
+		return firewall_rc;
+
 	udp_table_touch(&uid, &ip, port, bpf_ktime_get_ns());
-	return 0;
+	return firewall_rc;
 }

@@ -55,7 +55,7 @@ export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdi
        SHIRUDO_TARGET_STATIC_LIBDIR
 export VM_SSH_COMMAND
 
-.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build test-helpers bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
+.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build test-helpers linux-obs-ipv4-shields bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
         distclean test examples config
 
@@ -244,6 +244,11 @@ help:
 shirudo-build: config
 	+$(Q)$(MAKE) -f Makefile.shirudo shirudo-build
 
+linux-obs-ipv4-shields:
+	$(Q)python3 shields/linux_obs/gen_ipv4_shields.py \
+		shields/linux_obs/ipv4.list \
+		shields/linux_obs/ipv4_shields_generated.h
+
 test-helpers: config
 	+$(Q)$(MAKE) -f Makefile.shirudo test-helpers
 
@@ -263,7 +268,8 @@ TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
 	t/helper/*.c t/helper/*.py completion/* systemd/*.in systemd/*.timer \
 	test-vm/fixtures/*.c test-vm/fixtures/*.lua \
 	test-vm/fixtures/decoders/* \
-	shields/linux_obs/*.c shields/linux_obs/*.h shields/linux_obs/Beefile \
+	shields/linux_obs/*.c shields/linux_obs/*.h shields/linux_obs/*.list \
+		shields/linux_obs/*.py shields/linux_obs/Beefile \
 	shields/linux_obs/decoders/* \
 	shields/java_sql_inj/Beefile shields/java_sql_inj/README.md \
 	shields/java_sql_inj/javaagent_metrics.bpf.c \

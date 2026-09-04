@@ -786,20 +786,28 @@ int BPF_PROG(track_tcp_connect, struct socket *sock, struct sockaddr *address,
 	struct sock_exec_uid_meta *meta;
 	struct tcp_endpoint endpoint = {};
 	struct sock *sk;
+	int firewall_rc = 0;
 
 	if (!sock)
+		return 0;
+	if ((sock->type & SOCK_TYPE_MASK) != SOCK_STREAM)
 		return 0;
 
 	sk = sock->sk;
 	if (!sk)
 		return 0;
-
-	meta = bpf_sk_storage_get(&obs_i_sock, sk, 0, 0);
-	if (!meta || !meta->present)
+	if (sk->sk_protocol != 0 && sk->sk_protocol != IPPROTO_TCP)
 		return 0;
 	if (!tcp_endpoint_from_sockaddr(address, addrlen, &endpoint))
 		return 0;
 
-	tcp_table_touch(&meta->uid, &endpoint, bpf_ktime_get_ns());
-	return 0;
+	meta = bpf_sk_storage_get(&obs_i_sock, sk, 0, 0);
+	if (meta && meta->present)
+		tcp_table_touch(&meta->uid, &endpoint, bpf_ktime_get_ns());
+
+#ifdef LINUX_OBS_COMBINED
+	if (endpoint.family == AF_INET)
+		firewall_rc = ipv4_shields_enforce(endpoint.addr4);
+#endif
+	return firewall_rc;
 }

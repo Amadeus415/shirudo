@@ -341,11 +341,29 @@ build_fixture()
 build_obs_fixture()
 {
 	local keys_dir="$1"
+	local source_dir="$FIXTURE_WORK/linux_obs"
+
+	# Keep the production blocklist out of the integration fixture. The
+	# fixture is deliberately built from a reserved address so TCP and UDP
+	# denial can be tested without external network state.
+	mkdir -p "$source_dir/decoders"
+	for source in \
+		linux-observability.bpf.c exec_uid_arena.bpf.c exec_uid_common.h \
+		tcp_connect_arena.bpf.c udp_arena.bpf.c dns_arena.bpf.c \
+		ipv4_shields_arena.bpf.c gen_ipv4_shields.py; do
+		cp "$REPO_ROOT/shields/linux_obs/$source" "$source_dir/$source"
+	done
+	cp "$REPO_ROOT/shields/linux_obs/decoders/"*.lua "$source_dir/decoders/"
+	cat >"$source_dir/ipv4.list" <<'EOF'
+203.0.113.10/32
+EOF
+	python3 "$source_dir/gen_ipv4_shields.py" \
+		"$source_dir/ipv4.list" "$source_dir/ipv4_shields_generated.h"
 
 	(
 		cd "$REPO_ROOT"
 		"$REPO_ROOT/tools/shirudo-build/shirudo-build" \
-			"$REPO_ROOT/shields/linux_obs/linux-observability.bpf.c" \
+			"$source_dir/linux-observability.bpf.c" \
 			-o "$TMP_DIR/fixtures/linux-observability.upatch" \
 			--name linux-observability --vmlinux "$REPO_ROOT/bpf/vmlinux.h" \
 			--key "$keys_dir/signing_key.pem" \

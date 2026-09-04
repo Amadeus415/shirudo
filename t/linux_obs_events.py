@@ -52,6 +52,58 @@ def udp_event():
         raise RuntimeError("UDP listener received an unexpected payload")
 
 
+def ipv4_firewall_event():
+    allowed_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    allowed_udp.sendto(b"allowed", ("127.0.0.1", 9))
+    allowed_udp.close()
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+    client = socket.create_connection(("127.0.0.1", port), timeout=3)
+    accepted, _ = server.accept()
+    client.close()
+    accepted.close()
+    server.close()
+
+    blocked_tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        blocked_tcp.settimeout(3)
+        blocked_tcp.connect(("203.0.113.10", 80))
+    except OSError as error:
+        if error.errno != 13:
+            raise RuntimeError(f"blocked TCP returned errno {error.errno}")
+    else:
+        raise RuntimeError("blocked TCP connect unexpectedly succeeded")
+    finally:
+        blocked_tcp.close()
+
+    blocked_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        blocked_udp.sendto(b"blocked", ("203.0.113.10", 9))
+    except OSError as error:
+        if error.errno != 13:
+            raise RuntimeError(f"blocked UDP sendto returned errno {error.errno}")
+    else:
+        raise RuntimeError("blocked UDP sendto unexpectedly succeeded")
+    finally:
+        blocked_udp.close()
+
+    connected_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        connected_udp.connect(("203.0.113.10", 9))
+        connected_udp.send(b"blocked")
+    except OSError as error:
+        if error.errno != 13:
+            raise RuntimeError(f"blocked connected UDP returned errno {error.errno}")
+    else:
+        raise RuntimeError("blocked connected UDP send unexpectedly succeeded")
+    finally:
+        connected_udp.close()
+
+
 def dns_name(name):
     labels = [label.encode() for label in name.split(".")]
     if not labels or any(not label or len(label) > 63 for label in labels):
@@ -188,7 +240,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "mode",
-        choices=("all", "exec", "tcp", "udp", "dns", "dns-long", "dns-many"),
+        choices=("all", "exec", "tcp", "udp", "dns", "dns-long", "dns-many",
+                 "ipv4-firewall"),
     )
     mode = parser.parse_args().mode
     if mode in ("all", "exec"):
@@ -203,6 +256,8 @@ def main():
         dns_long_event()
     if mode == "dns-many":
         dns_many_answers_event()
+    if mode == "ipv4-firewall":
+        ipv4_firewall_event()
 
 
 if __name__ == "__main__":

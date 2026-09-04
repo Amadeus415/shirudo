@@ -31,7 +31,7 @@ trap cleanup EXIT
 export_maps()
 {
 	output="$1"
-	for map in exec_arena tcp_arena udp_arena dns_arena; do
+	for map in exec_arena tcp_arena udp_arena dns_arena ipv4_shields; do
 		"$SHIRUDO_BIN" upatch map "$NAME" "$map" \
 			--json="$output" >/dev/null
 	done
@@ -54,9 +54,14 @@ cat >"$WORK/check.py" <<'PY'
 import json
 import sys
 
-records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+documents = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+records = [document for document in documents
+           if isinstance(document, dict) and "map" in document]
+metrics = [document for document in documents if isinstance(document, list)]
 expected = {"exec_arena", "tcp_arena", "udp_arena", "dns_arena"}
-assert {record["map"] for record in records} == expected, records
+assert {record["map"] for record in records} == expected, documents
+assert len(metrics) == 1, documents
+assert metrics[0][0]["name"] == "enforcement.ipv4_shields_metric", metrics
 for record in records:
     assert record["schema"] == 1, record
     assert record["upatch"] == "linux-observability", record
@@ -67,8 +72,9 @@ cat >"$WORK/check_initial.py" <<'PY'
 import json
 import sys
 
-records = {r["map"]: r for r in
-           (json.loads(line) for line in open(sys.argv[1], encoding="utf-8"))}
+documents = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+records = {record["map"]: record for record in documents
+           if isinstance(record, dict)}
 assert all(records[name]["records"] for name in records), records
 exec_ids = {(r["executable"]["dev"], r["executable"]["ino"])
             for r in records["exec_arena"]["records"]}
@@ -87,13 +93,28 @@ assert any(r["address"] == "203.0.113.75" and
            for r in records["dns_arena"]["records"])
 PY
 
+cat >"$WORK/check_metric.py" <<'PY'
+import json
+import sys
+
+documents = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+metrics = [document for document in documents if isinstance(document, list)]
+assert len(metrics) == 1, documents
+metric = metrics[0][0]
+assert metric["name"] == "enforcement.ipv4_shields_metric", metric
+points = metric["sum"]["dataPoints"]
+values = {point["attributes"][0]["value"]["stringValue"]: int(point["asInt"])
+          for point in points}
+assert values == {"allowed": 2, "denied": 3}, values
+PY
+
 cat >"$WORK/check_empty.py" <<'PY'
 import json
 import sys
 
 records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 for record in records:
-    if record["map"] != "exec_arena":
+    if isinstance(record, dict) and record["map"] != "exec_arena":
         assert not record["records"], record
 PY
 
@@ -101,19 +122,30 @@ cat >"$WORK/check_exec_only.py" <<'PY'
 import json
 import sys
 
-records = {r["map"]: r for r in
-           (json.loads(line) for line in open(sys.argv[1], encoding="utf-8"))}
+documents = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+records = {record["map"]: record for record in documents
+           if isinstance(record, dict)}
 assert records["exec_arena"]["records"], records
 for name in ("tcp_arena", "udp_arena", "dns_arena"):
     assert not records[name]["records"], (name, records)
 PY
 
-test_expect_success 'combined observability upatch loads with four serializers' '
+test_expect_success 'combined observability upatch loads with five serializers' '
 	load_observability &&
 	[ -e "/var/lib/shirudo/bpffs/upatches/$NAME/serializers/exec_arena" ] &&
 	[ -e "/var/lib/shirudo/bpffs/upatches/$NAME/serializers/tcp_arena" ] &&
 	[ -e "/var/lib/shirudo/bpffs/upatches/$NAME/serializers/udp_arena" ] &&
-	[ -e "/var/lib/shirudo/bpffs/upatches/$NAME/serializers/dns_arena" ]
+	[ -e "/var/lib/shirudo/bpffs/upatches/$NAME/serializers/dns_arena" ] &&
+	[ -e "/var/lib/shirudo/bpffs/upatches/$NAME/serializers/ipv4_shields" ]
+'
+
+test_expect_success 'IPv4 shields enforce TCP and UDP and export counters' '
+	python3 linux_obs_events.py ipv4-firewall >"$WORK/firewall-events.log" 2>&1 &&
+	export_maps "$WORK/firewall.ndjson" >"$WORK/firewall-export.log" 2>&1 &&
+	python3 "$WORK/check_metric.py" "$WORK/firewall.ndjson" >"$WORK/firewall-check.log" 2>&1 || {
+		cp -a "$WORK" /mnt/shirudo-out/t1210-firewall-work 2>/dev/null || true
+		false
+	}
 '
 
 test_expect_success 'exec, TCP, UDP, and DNS produce structured batches' '

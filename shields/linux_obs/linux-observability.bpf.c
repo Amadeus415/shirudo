@@ -37,7 +37,7 @@ struct {
 
 /*
  * The exporter associates serializers with named maps. libbpf permits only
- * one ARENA map per object, so these four one-slot public views provide the
+ * one ARENA map per object, so these five one-slot public views provide the
  * stable map names while the actual records live in obs_i_arena.
  */
 struct {
@@ -68,10 +68,18 @@ struct {
 	__type(value, __u8);
 } dns_arena SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u8);
+} ipv4_shields SEC(".maps");
+
 #define exec_arena obs_i_arena
 #define tcp_arena obs_i_arena
 #define udp_arena obs_i_arena
 #define dns_arena obs_i_arena
+#define ipv4_shields obs_i_arena
 
 const struct shirudo_decoder_manifest exec_decoder SEC(".rodata") = {
 	.magic = SHIRUDO_DECODER_MANIFEST_MAGIC,
@@ -124,6 +132,9 @@ const struct shirudo_decoder_manifest dns_decoder SEC(".rodata") = {
 	.source = "decoders/dns.lua",
 	.entrypoint = "decode",
 };
+
+#include "ipv4_shields_arena.bpf.c"
+#undef ipv4_shields
 
 #define serial_set_error exec_serial_set_error
 #define serial_init_page_chunk exec_serial_init_page_chunk
