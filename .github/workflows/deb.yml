@@ -63,6 +63,7 @@ jobs:
               libssl-dev \
               libkrb5-dev \
               libssh-dev \
+              libfido2-dev \
               libtss2-dev \
               libelf-dev \
               zlib1g-dev \
@@ -82,17 +83,68 @@ jobs:
 
             git config --global --add safe.directory /host
 
-            # Build the static target dependencies using the repository's
-            # shared dependency Makefile. The target Makefile supplies the
-            # resulting paths through its default build/target-deps prefix.
-            make target-deps
+            # Build the static target dependencies outside the /host mount.
+            # The recursive Make-based builder crashes in the LVH guest, so
+            # keep this CI-only path explicit and pass the staged paths below.
+            rm -rf /tmp/shirudo-target-deps /tmp/shirudo-mbedtls-curl /tmp/curl-8.18.0
+            mkdir -p /tmp/shirudo-target-deps/lib
+
+            curl -fsSL https://curl.se/download/curl-8.18.0.tar.xz \
+              -o /tmp/curl-8.18.0.tar.xz
+            tar -C /tmp -xf /tmp/curl-8.18.0.tar.xz
+            cd /tmp/curl-8.18.0
+            ./configure \
+              --prefix=/tmp/shirudo-mbedtls-curl \
+              --with-mbedtls=/usr \
+              --enable-static \
+              --disable-shared
+            make -j4
+            make install
+
+            git clone --depth 1 --branch 4.1.3 \
+              https://github.com/tpm2-software/tpm2-tss.git \
+              /tmp/shirudo-target-deps/tpm2-tss
+            cd /tmp/shirudo-target-deps/tpm2-tss
+            ./bootstrap
+            ./configure \
+              --prefix=/tmp/shirudo-target-deps \
+              --libdir=/tmp/shirudo-target-deps/lib \
+              --enable-static \
+              --disable-shared \
+              --disable-fapi \
+              --disable-policy \
+              --disable-tcti-cmd \
+              --disable-tcti-i2c-ftdi \
+              --disable-tcti-i2c-helper \
+              --disable-tcti-libtpms \
+              --disable-tcti-pcap \
+              --disable-tcti-spi-ftdi \
+              --disable-tcti-spi-helper \
+              --disable-tcti-spi-ltt2go \
+              --disable-tcti-spidev \
+              --disable-tcti-mssim \
+              --disable-tcti-swtpm
+            make -j4
+            make install
+
+            install -m 0644 /usr/lib/x86_64-linux-gnu/libssh.a /tmp/shirudo-target-deps/lib/libssh.a
+            install -m 0644 /usr/lib/x86_64-linux-gnu/libelf.a /tmp/shirudo-target-deps/lib/libelf.a
+            install -m 0644 /usr/lib/x86_64-linux-gnu/libz.a /tmp/shirudo-target-deps/lib/libz.a
+            install -m 0644 /usr/lib/x86_64-linux-gnu/libluajit-5.1.a /tmp/shirudo-target-deps/lib/libluajit-5.1.a
+
+            cd /host
 
             # The LVH /host mount makes git dirty checks expensive. For CI,
             # use a fixed package/runtime version instead of asking git.
             make bindeb-pkg \
               DEB_RAW_VERSION=0.0.0-ci \
               DEB_VERSION=0.0.0-ci \
-              SHIRUDO_GIT_DESCRIBE='printf 0.0.0-ci'
+              SHIRUDO_GIT_DESCRIBE='printf 0.0.0-ci' \
+              TARGET_DEPS_PREBUILT=1 \
+              SHIRUDO_TARGET_PKG_CONFIG_PATH=/tmp/shirudo-mbedtls-curl/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig \
+              SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR=/usr/include \
+              SHIRUDO_TARGET_MBEDTLS_LIBDIR=/usr/lib/x86_64-linux-gnu \
+              SHIRUDO_TARGET_STATIC_LIBDIR=/tmp/shirudo-target-deps/lib
 
             # These libraries must be present in the target executable rather
             # than in its DT_NEEDED list.

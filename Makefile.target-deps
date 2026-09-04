@@ -10,13 +10,14 @@ TARGET_STATIC_LIBDIR ?= $(TARGET_DEPS_DIR)/lib
 TARGET_CURL_PREFIX ?= $(TARGET_DEPS_DIR)/mbedtls-curl
 TARGET_SOURCE_DIR ?= $(TARGET_DEPS_DIR)/src
 
-# configure's --prefix/--libdir options require absolute paths, while users
-# commonly invoke this file through the top-level Makefile with relative
-# build directories.
-override TARGET_DEPS_DIR := $(abspath $(TARGET_DEPS_DIR))
-override TARGET_STATIC_LIBDIR := $(abspath $(TARGET_STATIC_LIBDIR))
-override TARGET_CURL_PREFIX := $(abspath $(TARGET_CURL_PREFIX))
-override TARGET_SOURCE_DIR := $(abspath $(TARGET_SOURCE_DIR))
+# configure's --prefix/--libdir options require absolute paths. CURDIR is
+# already absolute and avoids evaluating GNU Make's abspath function on
+# host-mounted filesystems used by the CI VM.
+target-absolute = $(if $(filter /%,$(1)),$(1),$(CURDIR)/$(1))
+override TARGET_DEPS_DIR := $(call target-absolute,$(TARGET_DEPS_DIR))
+override TARGET_STATIC_LIBDIR := $(call target-absolute,$(TARGET_STATIC_LIBDIR))
+override TARGET_CURL_PREFIX := $(call target-absolute,$(TARGET_CURL_PREFIX))
+override TARGET_SOURCE_DIR := $(call target-absolute,$(TARGET_SOURCE_DIR))
 
 CURL_VERSION ?= 8.18.0
 TSS_VERSION ?= 4.1.3

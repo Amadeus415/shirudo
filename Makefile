@@ -38,8 +38,8 @@ systemdunitdir ?= /usr/lib/systemd/system
 # Local target dependency build defaults. These are overridable for a
 # non-system mbedTLS installation or a prebuilt dependency prefix.
 TARGET_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || gcc -print-multiarch)
-TARGET_DEPS_DIR ?= $(abspath build/target-deps)
-TARGET_DEPS_CURL_PREFIX ?= $(abspath $(TARGET_DEPS_DIR)/mbedtls-curl)
+TARGET_DEPS_DIR ?= $(CURDIR)/build/target-deps
+TARGET_DEPS_CURL_PREFIX ?= $(TARGET_DEPS_DIR)/mbedtls-curl
 TARGET_DEPS_MBEDTLS_PREFIX ?= /usr
 TARGET_DEPS_MBEDTLS_INCLUDEDIR ?= /usr/include
 TARGET_DEPS_MBEDTLS_LIBDIR ?= /usr/lib/$(TARGET_MULTIARCH)
@@ -47,7 +47,7 @@ TARGET_DEPS_MBEDTLS_PKG_CONFIG_PATH ?= $(TARGET_DEPS_MBEDTLS_LIBDIR)/pkgconfig
 SHIRUDO_TARGET_PKG_CONFIG_PATH ?= $(TARGET_DEPS_CURL_PREFIX)/lib/pkgconfig:$(TARGET_DEPS_MBEDTLS_PKG_CONFIG_PATH)
 SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR ?= $(TARGET_DEPS_MBEDTLS_INCLUDEDIR)
 SHIRUDO_TARGET_MBEDTLS_LIBDIR ?= $(TARGET_DEPS_MBEDTLS_LIBDIR)
-SHIRUDO_TARGET_STATIC_LIBDIR ?= $(abspath $(TARGET_DEPS_DIR)/lib)
+SHIRUDO_TARGET_STATIC_LIBDIR ?= $(TARGET_DEPS_DIR)/lib
 
 export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdir \
        systemdunitdir SHIRUDO_TARGET_PKG_CONFIG_PATH \
@@ -97,6 +97,9 @@ all: config
 	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=operator CONFIG_MK=config.mk all
 
 target-deps:
+ifeq ($(TARGET_DEPS_PREBUILT),1)
+	@printf 'shirudo: using prebuilt target dependencies\n'
+else
 	+$(Q)$(MAKE) -f Makefile.target-deps \
 		TARGET_DEPS_DIR="$(TARGET_DEPS_DIR)" \
 		TARGET_STATIC_LIBDIR="$(SHIRUDO_TARGET_STATIC_LIBDIR)" \
@@ -105,6 +108,7 @@ target-deps:
 		TARGET_MBEDTLS_INCLUDEDIR="$(TARGET_DEPS_MBEDTLS_INCLUDEDIR)" \
 		TARGET_MBEDTLS_LIBDIR="$(TARGET_DEPS_MBEDTLS_LIBDIR)" \
 		TARGET_MBEDTLS_PKG_CONFIG_PATH="$(TARGET_DEPS_MBEDTLS_PKG_CONFIG_PATH)"
+endif
 
 target-deps-clean:
 	+$(Q)$(MAKE) -f Makefile.target-deps \
