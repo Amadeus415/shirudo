@@ -57,7 +57,7 @@ jobs:
               automake \
               doxygen \
               libacl1-dev \
-              libftdi-dev \
+              libftdi1-dev \
               libini-config-dev \
               libmbedtls-dev \
               libssl-dev \
