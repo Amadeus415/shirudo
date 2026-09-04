@@ -61,6 +61,7 @@ jobs:
               libini-config-dev \
               libmbedtls-dev \
               libssl-dev \
+              libkrb5-dev \
               libssh-dev \
               libtss2-dev \
               libelf-dev \
