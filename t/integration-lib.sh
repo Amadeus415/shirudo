@@ -50,15 +50,3 @@ d = json.loads(raw[i:]) if i >= 0 else {}
 print(d.get(sys.argv[1], ""))
 ' "$1"
 }
-
-# Extract targets[0].<field> from a rollout aggregate report on stdin.
-report_target_field() {
-	python3 -c '
-import sys, json
-raw = sys.stdin.read()
-i = raw.find("{")
-d = json.loads(raw[i:]) if i >= 0 else {}
-t = (d.get("targets") or [{}])[0]
-print(t.get(sys.argv[1], ""))
-' "$1"
-}

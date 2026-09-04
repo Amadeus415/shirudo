@@ -2,7 +2,7 @@
 
 > Status: roadmap / forward-looking design. Layers on the existing platform in
 > `PLAN.md` (signed `.upatch`, signature-gated `BPF_PROG_LOAD`, TPM measurement,
-> agentless target, `rollout`); read `PLAN.md` first. The userspace counterpart
+> agentless target, and direct target-local loading); read `PLAN.md` first. The userspace counterpart
 > is `PLAN.uspace.md`. Primary sources under `research/`.
 
 ## Context

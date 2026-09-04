@@ -81,31 +81,6 @@ _shirudo()
 			COMPREPLY=( $(compgen -W "example/package" -- "$cur") )
 		fi
 		;;
-	remote)
-		if (( cword == 2 )); then
-			local subs
-			subs=$("$bin" remote --list-cmds 2>/dev/null)
-			COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
-		elif [[ $sub == label && cword -eq 3 ]]; then
-			local subs
-			subs=$("$bin" remote label --list-cmds 2>/dev/null)
-			COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
-		elif [[ $cur == -* ]]; then
-			case "$sub" in
-			add)
-				COMPREPLY=( $(compgen -W "--label" -- "$cur") )
-				;;
-			list)
-				COMPREPLY=( $(compgen -W "--json \
-					--filter= --selector=" -- "$cur") )
-				;;
-			label)
-				COMPREPLY=( $(compgen -W "--filter= \
-					--selector=" -- "$cur") )
-				;;
-			esac
-		fi
-		;;
 	build)
 		if [[ $cur == -* ]]; then
 			COMPREPLY=( $(compgen -W "-o --name --key --cert \
@@ -115,31 +90,6 @@ _shirudo()
 			COMPREPLY=( $(compgen -f -X '!*.bpf.c' -- "$cur") \
 				    $(compgen -f -X '!*.bpf.o' -- "$cur") \
 				    $(compgen -d -- "$cur") )
-		fi
-		;;
-	rollout)
-		if [[ $cur == -* ]]; then
-			COMPREPLY=( $(compgen -W "--expect-chain= \
-				--expect-version-id= --report= --filter= \
-				--selector= --no-precheck --no-version-check \
-				--dry-run --sudo" -- "$cur") )
-		else
-			COMPREPLY=( $(compgen -f -X '!*.upatch' -- "$cur") \
-				    $(compgen -d -- "$cur") )
-		fi
-		;;
-	nodes)
-		if (( cword == 2 )); then
-			local subs
-			subs=$("$bin" nodes --list-cmds 2>/dev/null)
-			COMPREPLY=( $(compgen -W "$subs --json --filter= \
-				--selector=" -- "$cur") )
-		elif [[ $sub == show ]]; then
-			COMPREPLY=( $(compgen -W "--json --show-full upatches" \
-				-- "$cur") )
-		else
-			COMPREPLY=( $(compgen -W "--json --filter= \
-				--selector=" -- "$cur") )
 		fi
 		;;
 	init)

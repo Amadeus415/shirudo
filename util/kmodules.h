@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Authors of shirudo
  *
  * Parse /proc/modules and render an ASCII dependency tree. Used by
- * `shirudo status --include-modules` and `shirudo nodes show`.
+ * `shirudo status --include-modules`.
  */
 
 #ifndef SHIRUDO_UTIL_KMODULES_H

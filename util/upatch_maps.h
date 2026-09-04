@@ -4,7 +4,7 @@
  *
  * Read pinned upatch maps under /var/lib/shirudo/bpffs/upatches/<name>/
  * maps/<map>. Shared by `shirudo upatch map` (CLI), `shirudo status
- * --include-maps` (target-local JSON/human), and `shirudo nodes show`
+ * --include-maps` (target-local JSON/human), and direct target inspection
  * (operator pulls the same JSON over SSH).
  *
  * Surface targets the common observability case (counters, small
@@ -138,7 +138,7 @@ void shirudo_upatch_map_print_inline(const struct shirudo_map_summary *m);
  * object helper is for callers wrapping map views in arrays.
  *
  * NULL `v` emits nothing. The shape matches the one documented in
- * PLAN.md so target-local status and operator-side nodes show agree.
+ * PLAN.md so target-local status output remains stable.
  */
 void shirudo_upatch_maps_emit_json_fields(struct shirudo_json_emit *e,
 					  const struct shirudo_map_view *v);

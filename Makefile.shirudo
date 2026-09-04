@@ -100,7 +100,7 @@ INCLUDES := \
     -Ithird_party/bpf-next/tools/include/uapi
 
 CFLAGS := $(CFLAGS_BASE) $(INCLUDES) \
-          $(LIBCRYPTO_CFLAGS) $(LIBSSH_CFLAGS) $(TSS2_CFLAGS) \
+          $(LIBCRYPTO_CFLAGS) $(TSS2_CFLAGS) \
           $(LIBELF_CFLAGS) $(ZLIB_CFLAGS) $(LIBCURL_CFLAGS) \
           $(CRYPTO_CFLAGS) $(CRYPTO_DEFINE)
 
@@ -110,7 +110,7 @@ STATIC_LIBS = \
     $(LIBBPF_A)
 
 DYNAMIC_LIBS := \
-    $(LIBCRYPTO_LIBS) -lssl $(LIBSSH_LIBS) $(TSS2_LIBS) \
+    $(LIBCRYPTO_LIBS) -lssl $(TSS2_LIBS) \
     $(LIBELF_LIBS) $(ZLIB_LIBS) $(LIBCURL_LIBS)
 
 CFLAGS += $(LUAJIT_CFLAGS) -DSHIRUDO_HAVE_LUAJIT
@@ -141,7 +141,6 @@ UTIL_SRCS := \
     util/harden.c \
     util/preflight.c \
     util/kernel_abi.c \
-    util/ssh.c \
     util/log.c \
     util/tpm.c \
     util/chain.c \
@@ -150,13 +149,10 @@ UTIL_SRCS := \
     util/eventlog.c \
     util/json.c \
     util/report.c \
-    util/selector.c \
-    util/remotes.c \
     util/malloc.c \
     util/sysinfo.c \
     util/similar.c \
     util/help.c \
-    util/icmp.c \
     util/timefmt.c \
     util/conditions.c \
     util/format.c \
@@ -185,9 +181,6 @@ BUILTIN_SRCS := \
     builtin-config.c \
     builtin-upatch.c \
     builtin-bpm.c \
-    builtin-rollout.c \
-    builtin-nodes.c \
-    builtin-remote.c \
     builtin-build.c \
     builtin-version.c
 
@@ -472,7 +465,6 @@ TEST_HELPERS := t/helper/test-json-parser \
                 t/helper/test-chain \
 		t/helper/test-config \
 		t/helper/test-bpm-source \
-                t/helper/test-selector \
                 t/helper/test-bpf-load \
 		t/helper/test-dns-prog-run \
                 t/helper/test-kernel-abi \
@@ -501,11 +493,6 @@ t/helper/test-config: t/helper/test-config.c util/config.o util/log.o
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 t/helper/test-bpm-source: t/helper/test-bpm-source.c util/bpm_source_config.o
-	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
-
-t/helper/test-selector: t/helper/test-selector.c util/selector.o \
-                        util/remotes.o util/malloc.o util/log.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 

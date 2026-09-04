@@ -95,7 +95,8 @@ mkdir -p "$stage/DEBIAN"
 " in-kernel BPF loader programs can install BPF code. This package installs" \
 " the operator-side tooling: the shirudo binary plus shirudo-build, which" \
 " compiles and CMS-signs .upatch artifacts. It is for the machine that holds" \
-" the private signing key and drives rollouts; it does not install the" \
+" the private signing key and produces artifacts for direct target loading;" \
+" it does not install the" \
 " target systemd units."
 	fi
 } > "$stage/DEBIAN/control"

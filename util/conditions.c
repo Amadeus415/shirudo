@@ -2,9 +2,7 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Shared security-operator conditions block + status verdict. Used
- * by `shirudo nodes show` (fetched), `shirudo status` (local), and
- * the `shirudo nodes` drift table.
+ * Shared local security conditions block + status verdict.
  */
 
 #include <stdio.h>

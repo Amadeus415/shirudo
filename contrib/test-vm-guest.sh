@@ -176,7 +176,7 @@ configure_map_export
 }
 log "using prepared Ubuntu runtime image"
 
-log "configuring loopback root SSH for the libssh integration test"
+log "configuring loopback root SSH for direct target access"
 install -d -m 0700 /root/.ssh
 ssh-keygen -q -t ed25519 -N '' -f /root/.ssh/id_ed25519
 cat /root/.ssh/id_ed25519.pub >>/root/.ssh/authorized_keys

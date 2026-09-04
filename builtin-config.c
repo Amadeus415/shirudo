@@ -108,27 +108,6 @@ int cmd_config(int argc, const char **argv)
 		printf("# tpm.tcti = (unset -- using device:/dev/tpmrm0)\n\n");
 	}
 
-	printf("# `shirudo nodes` ICMP probe budget per target. Best-effort:\n"
-	       "# tries an unprivileged dgram ICMP socket, then falls back to\n"
-	       "# a raw socket (CAP_NET_RAW, e.g. a root operator). The drift\n"
-	       "# table still renders (with PING = n/a) when neither is allowed\n"
-	       "# (no CAP_NET_RAW and the operator gid isn't in\n"
-	       "# net.ipv4.ping_group_range). Set nodes.icmp_probes = 0 to\n"
-	       "# disable ICMP probing entirely (no socket opened; PING column\n"
-	       "# shows `off`).\n");
-	printf("nodes.icmp_timeout_ms = %u\n", cfg.nodes_icmp_timeout_ms);
-	printf("nodes.icmp_probes = %u\n\n", cfg.nodes_icmp_probes);
-
-	printf("# Per-`shirudo nodes show <name>` display caps. The operator\n"
-	       "# asks the target to ship this many kernel-log records and\n"
-	       "# truncates the (unbounded) module-load list to this many\n"
-	       "# rows. A value of 0 disables that section entirely (the\n"
-	       "# corresponding --include-* flag is dropped). Range 0..100,\n"
-	       "# 0=disabled. Defaults: 10 each.\n");
-	printf("nodes.kernel_log_lines = %u\n", cfg.nodes_kernel_log_lines);
-	printf("nodes.module_loads_lines = %u\n\n",
-	       cfg.nodes_module_loads_lines);
-
 	printf("# Periodic `shirudo upatch map --all` export. Empty JSON and\n"
 	       "# OTLP destinations leave the installed timer idle. Every emitted\n"
 	       "# map must carry a signed Lua decoder declaring log or metric.\n"

@@ -2,7 +2,7 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Human-readable formatters shared across status/nodes/keys renderers.
+ * Human-readable formatters shared across status and keys renderers.
  */
 
 #ifndef SHIRUDO_UTIL_FORMAT_H

@@ -388,7 +388,7 @@ test_expect_success 'operator and target runners have disjoint explicit scopes' 
 	for test_name in \
 		t1101-seal.sh t1102-eventlog-full.sh t1103-version-gate.sh \
 		t1104-payload-mismatch.sh t1105-siggate.sh t1106-keyring-swap.sh \
-		t1107-load-unload.sh t1108-tpm-chain.sh t1109-rollout-libssh.sh \
+		t1107-load-unload.sh t1108-tpm-chain.sh \
 		t1110-lsm-deny.sh t1111-upatch-get.sh \
 		t1112-prog-load-keyring-gate.sh t1113-mount-lockdown.sh \
 		t1114-uprobe-multi.sh t1115-map-export-all.sh \

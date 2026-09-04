@@ -54,11 +54,11 @@ void shirudo_print_subcmd_list(const struct shirudo_help_item *items,
 
 /*
  * Render the unknown-subcommand error for a dispatcher (`shirudo
- * remote bogus`, `shirudo upatch foo`, ...) in the same style the
+ * unknown command, `shirudo upatch foo`, ...) in the same style the
  * top-level `shirudo` dispatcher already uses for unknown commands:
  * a "'<bad>' is not a known subcommand" line, a "See ... --help"
  * pointer, and Levenshtein-derived "Did you mean one of:" matches
- * drawn from `subcmds`. cmd_label is e.g. "shirudo remote".
+ * drawn from `subcmds`. cmd_label identifies the current dispatcher.
  */
 void shirudo_help_unknown_subcommand(const char *cmd_label,
 				     const char *bad,
@@ -68,8 +68,7 @@ void shirudo_help_unknown_subcommand(const char *cmd_label,
 /*
  * Resolve `input` against `subcmds` using shirudo_resolve()'s tiered
  * matching (exact, then unique prefix-of-candidate, then candidate-
- * is-prefix-of-input) so that `nod` -> `nodes`, `remotes` -> `remote`,
- * `li` -> `list`, `ad` -> `add` all work.
+ * is-prefix-of-input) so that abbreviated supported commands work.
  *
  * Returns the canonical name on a unique match. Returns NULL on
  * failure with stderr already populated: a Levenshtein "Did you

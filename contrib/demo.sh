@@ -5,9 +5,9 @@
 # contrib/demo.sh -- a narrated, screen-recordable walkthrough of shirudo,
 # runnable straight from a bare git checkout. It plays BOTH roles (operator
 # and target) on this one host and uses root@localhost over real SSH as the
-# "remote target", so a newbie can watch the whole signed-BPF lifecycle:
+# target, so a newbie can watch the whole signed-BPF lifecycle:
 # build + sign -> lock down the kernel -> prove unsigned BPF is refused ->
-# roll out the signed mitigation -> observe -> roll back.
+# load the signed mitigation -> observe -> roll back.
 #
 # Each step prints an explanation and the exact command FIRST, then runs it
 # and shows the real output. Pauses between steps (Enter) let you pace a
@@ -28,7 +28,6 @@ AUTO=0			# --auto: no pauses, no typing effect
 ASSUME_YES=0		# --yes:  skip the destructive-action confirmation
 USE_COLOR=1		# --no-color
 USE_TYPE=1		# --no-type: disable the typewriter effect
-REMOTE="root@localhost"	# --remote=<dest>
 FORCE_NO_TPM=0		# --no-tpm
 DO_CLEANUP=0		# --cleanup
 TYPE_DELAY=0.018
@@ -39,7 +38,6 @@ usage: contrib/demo.sh [options]
 
   -a, --auto         run without pausing between steps (also disables typing)
   -y, --yes          skip the "this modifies the system" confirmation
-      --remote=DEST  ssh destination to use as the target (default: $REMOTE)
       --no-tpm       force degraded mode (do not use the TPM)
       --no-color     plain output
       --no-type      disable the typewriter effect, keep pauses
@@ -59,7 +57,6 @@ for arg in "$@"; do
 	--no-type)	USE_TYPE=0 ;;
 	--no-tpm)	FORCE_NO_TPM=1 ;;
 	--cleanup)	DO_CLEANUP=1 ;;
-	--remote=*)	REMOTE="${arg#*=}" ;;
 	-h|--help)	usage; exit 0 ;;
 	*)		printf 'unknown option: %s\n' "$arg" >&2; usage >&2; exit 2 ;;
 	esac
@@ -266,18 +263,18 @@ cat <<EOF
   attacker's unsigned BPF does not. ${DIM}(threat T1 -- proven below.)${RST}
 
   ${BOLD}${YEL}The loop this demo walks:${RST}
-    ${CYN}agent writes .bpf.c${RST} -> ${CYN}operator signs${RST} -> ${CYN}rollout to the fleet (SSH)${RST}
+    ${CYN}agent writes .bpf.c${RST} -> ${CYN}operator signs${RST} -> ${CYN}direct SSH/scp to a target${RST}
     -> ${CYN}observe${RST} -> ${CYN}agent decides${RST} -> ${CYN}signed rollback${RST}
     ${DIM}tight, auditable, reboot-free.${RST}
 
   ${BOLD}One binary, two roles${RST} -- like 'git push', signed artifacts flow outward:
     ${BOLD}${GRN}operator${RST}  the agent's side: holds the signing key; builds + signs
-              .upatch artifacts; drives the fleet (rollout / nodes / status).
+              .upatch artifacts; copies them to targets for direct loading.
     ${BOLD}${GRN}target${RST}    holds only the PUBLIC cert (sealed keyring) + a TPM chain;
               ${BOLD}agentless${RST} -- one-shot CLI under sshd, no daemon, no socket.
 
-  This demo plays ${BOLD}both roles${RST} on this host, with ${BOLD}${BLU}${REMOTE}${RST} as the
-  remote target over real SSH.
+  This demo plays ${BOLD}both roles${RST} on this host. The target-side commands
+  shown below are the same commands an operator can run after using scp/ssh.
 
   ${BOLD}${YEL}Commands, in order:${RST}
     ${YEL} 1.${RST} make ... && make install         -- build + install (operator+target)
@@ -287,10 +284,10 @@ cat <<EOF
     ${YEL} 5.${RST} (load UNSIGNED BPF)             -- baseline: root can inject BPF today
     ${YEL} 6.${RST} ${CYN}shirudo init${RST}                    -- lock down bpf() (+ TPM chain)
     ${YEL} 7.${RST} (load UNSIGNED BPF)             -- now ${RED}DENIED${RST} -- attacker locked out
-    ${YEL} 8.${RST} ${CYN}shirudo rollout${RST}                 -- deploy the SIGNED fix over SSH
+    ${YEL} 8.${RST} ${CYN}shirudo upatch load${RST}              -- load the SIGNED fix locally
     ${YEL} 9.${RST} ${CYN}shirudo status / list / get${RST}     -- observe loaded state + chain
     ${YEL}10.${RST} (open an AF_ALG socket)         -- the fix is enforcing
-    ${YEL}11.${RST} ${CYN}shirudo build --unload / rollout${RST} -- signed rollback; loop closes
+    ${YEL}11.${RST} ${CYN}shirudo build --unload / upatch unload${RST} -- signed rollback; loop closes
 
 EOF
 
@@ -299,7 +296,7 @@ EOF
 # ---------------------------------------------------------------------------
 
 NO_TPM_FLAG=""
-ROLLOUT_PRECHECK=""
+PRECHECK_FLAG=""
 PROBE_CC="${CC:-cc}"
 command -v "$PROBE_CC" >/dev/null 2>&1 || PROBE_CC="clang"
 
@@ -314,22 +311,13 @@ else
 fi
 
 if [ "$FORCE_NO_TPM" = 1 ]; then
-	NO_TPM_FLAG=" --no-tpm"; ROLLOUT_PRECHECK=" --no-precheck"
+	NO_TPM_FLAG=" --no-tpm"; PRECHECK_FLAG=" --no-precheck"
 	note "TPM: forced off (--no-tpm); the measurement chain will not be recorded."
 elif [ -e /dev/tpmrm0 ]; then
 	good "TPM: /dev/tpmrm0 present -- the NV measurement chain will be used if it can be defined"
 else
-	NO_TPM_FLAG=" --no-tpm"; ROLLOUT_PRECHECK=" --no-precheck"
+	NO_TPM_FLAG=" --no-tpm"; PRECHECK_FLAG=" --no-precheck"
 	note "TPM: none -- running degraded (--no-tpm); LSM still enforces, chain not measured."
-fi
-
-USE_SSH=1
-if ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE" true >/dev/null 2>&1; then
-	good "SSH: $REMOTE reachable with key auth -- rollout will use real SSH"
-else
-	USE_SSH=0
-	note "SSH: $REMOTE not reachable non-interactively; rollout will fall back to a"
-	note "     local 'shirudo upatch load' (same code path, minus the transport)."
 fi
 
 command -v "$PROBE_CC" >/dev/null 2>&1 && good "C compiler: $PROBE_CC (for the unsigned-load + AF_ALG probes)" \
@@ -561,26 +549,18 @@ say "Read-only observability still works (status uses only read-only bpf cmds):"
 run "$STATUS" || true
 
 # ---------------------------------------------------------------------------
-# 8. remote add + rollout the SIGNED upatch
+# 8. load the SIGNED upatch
 # ---------------------------------------------------------------------------
 
-step 8 "Deploy the agent's signed fix to the fleet  (shirudo rollout)"
-say "The deploy half of the loop. Targets are addressed by registered name (or"
-say "a Kubernetes-style label selector across a whole fleet), never raw"
-say "user@host. 'rollout' SFTP-pushes the artifact and runs 'shirudo upatch"
-say "load' on each target over SSH -- ${BOLD}agentless${RST}: no daemon, no open socket."
-run "shirudo remote rm demo >/dev/null 2>&1; shirudo remote add demo $REMOTE"
-run "shirudo remote list"
+step 8 "Load the agent's signed fix on the target"
+say "Copy the artifact to the target with scp, then run the target-local"
+say "loader through ssh. The target remains ${BOLD}agentless${RST}: no daemon and"
+say "no shirudo-owned listening socket. This demo runs that same load locally."
 say ""
 say "Push it. The kernel ${BOLD}${GRN}verifies the CMS signature${RST} against the sealed keyring"
 say "before the loader runs -- ${BOLD}every deployed patch, kernel or (later) userspace,"
 say "enters through this one signature-gated BPF_PROG_LOAD${RST}, nothing else:"
-if [ "$USE_SSH" = 1 ]; then
-	run "shirudo rollout $UPATCH demo${ROLLOUT_PRECHECK}"
-else
-	note "(no loopback SSH; using the identical local load path instead)"
-	run "shirudo upatch load $UPATCH${ROLLOUT_PRECHECK}"
-fi
+run "shirudo upatch load $UPATCH${PRECHECK_FLAG}"
 
 # ---------------------------------------------------------------------------
 # 9. observe
@@ -602,7 +582,7 @@ run "shirudo upatch get $NAME" || true
 # ---------------------------------------------------------------------------
 
 step 10 "Prove the mitigation: AF_ALG sockets are now blocked"
-say "Before the rollout this succeeded. With the signed program attached to"
+say "Before the load this succeeded. With the signed program attached to"
 say "lsm/socket_create, the kernel now refuses AF_ALG socket creation:"
 if [ -n "$AFALG_PROBE" ]; then
 	if run "$AFALG_PROBE"; then
@@ -621,7 +601,7 @@ fi
 step 11 "Close the loop: signed rollback"
 say "The agent (or operator) decides the fix is no longer needed -- the kernel"
 say "shipped the upstream patch, say -- and rolls it back. There is no separate"
-say "'rollback' verb: removal is a rollout of a signed ${BOLD}UNLOAD directive${RST}, through"
+say "'rollback' verb: removal is a target-local load of a signed ${BOLD}UNLOAD directive${RST}, through"
 say "the ${BOLD}${GRN}same signature-gated path${RST} as load, bound to the exact payload it removes."
 PAYLOAD=$(shirudo upatch info --json "$UPATCH" 2>/dev/null \
 	  | grep -oE '"payload_sha256":"[0-9a-f]+"' | head -1 | cut -d'"' -f4)
@@ -630,11 +610,7 @@ if [ -n "${PAYLOAD:-}" ]; then
 else
 	run "shirudo build --unload $NAME -o $UNLOAD"
 fi
-if [ "$USE_SSH" = 1 ]; then
-	run "shirudo rollout $UNLOAD demo${ROLLOUT_PRECHECK}"
-else
-	run "shirudo upatch unload $NAME${ROLLOUT_PRECHECK}"
-fi
+run "shirudo upatch unload $NAME${PRECHECK_FLAG}"
 say ""
 say "AF_ALG works again -- the mitigation is gone, cleanly and measurably:"
 if [ -n "$AFALG_PROBE" ]; then

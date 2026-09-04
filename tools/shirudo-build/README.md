@@ -4,7 +4,7 @@
 for shirudo. It compiles BPF source, runs libbpf's `gen_loader`, CMS-
 signs the resulting loader bytes with the operator's private key, and
 serialises the result as a `.upatch` container ready for
-`shirudo rollout`.
+direct target-side loading.
 
 ## Why a separate binary
 

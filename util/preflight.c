@@ -167,7 +167,7 @@ static void check_cert(struct shirudo_preflight_result *r)
 		pass(c);
 	else
 		fail(r, c,
-		     "%s missing or empty (rollout the operator's cert)",
+		     "%s missing or empty (copy the operator's cert)",
 		     SHIRUDO_CERT_PATH);
 }
 

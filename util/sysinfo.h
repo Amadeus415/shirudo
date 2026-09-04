@@ -4,7 +4,7 @@
  *
  * Host system overview gathered from /proc, /etc and uname(2) -- no
  * subprocess. Surfaced by `shirudo status --include-system` and
- * rendered by `shirudo nodes show`.
+ * rendered by `shirudo status`.
  */
 
 #ifndef SHIRUDO_SYSINFO_H
@@ -38,9 +38,7 @@ struct shirudo_json_emit;
 
 /*
  * Emit *si as a JSON "system":{...} object. The single source of truth
- * for the wire shape, so `shirudo status --include-system` (which fills
- * *si locally) and `shirudo nodes show` (which parses one back over
- * SSH) cannot drift. The matching parse schema is the inverse mapping.
+ * for the `shirudo status --include-system` JSON shape.
  */
 void shirudo_sysinfo_emit_json(struct shirudo_json_emit *e,
 			       const struct shirudo_sysinfo *si);

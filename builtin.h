@@ -10,9 +10,6 @@
 
 /* Operator-side. */
 int cmd_genkey(int argc, const char **argv);
-int cmd_rollout(int argc, const char **argv);
-int cmd_remote(int argc, const char **argv);
-int cmd_nodes(int argc, const char **argv);
 int cmd_build(int argc, const char **argv);
 
 /* Target-side. */

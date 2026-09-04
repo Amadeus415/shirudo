@@ -12,7 +12,8 @@
  * Expected use:
  *     shirudo build examples/verifier-reject-null-deref.bpf.c \
  *         -o verifier-reject-null-deref.upatch
- *     shirudo rollout verifier-reject-null-deref.upatch <target>
+ *     scp verifier-reject-null-deref.upatch <target>:/tmp/
+ *     ssh <target> sudo shirudo upatch load /tmp/verifier-reject-null-deref.upatch
  *
  * Expected target-side result: payload_load / verifier_rejected.
  */

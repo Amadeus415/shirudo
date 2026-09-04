@@ -2,8 +2,8 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Per-upatch resolvers shared by `shirudo status`, `shirudo nodes
- * show`, and `shirudo upatch get`: turn a loaded upatch's bpffs pin
+ * Per-upatch resolvers shared by `shirudo status` and
+ * `shirudo upatch get`: turn a loaded upatch's bpffs pin
  * into the attach-hook string (lsm/foo, fentry/bar, ...) and the
  * loaded-at timestamp (pin ctime).
  *

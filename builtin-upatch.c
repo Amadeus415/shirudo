@@ -2392,10 +2392,10 @@ static int eventlog_room(struct shirudo_op_report *rep, const char *op)
 }
 
 /*
- * First pre-flight gate: refuse a version-skewed operator/target pair.
- * The caller (rollout) passes the operator's SHIRUDO_VERSION_ID as
+ * First pre-flight gate: refuse a version-skewed caller/target pair.
+ * A caller may pass the expected SHIRUDO_VERSION_ID as
  * --expect-version-id; if it differs from this target's, the two were
- * built from different shirudo sources and no fleet op should proceed
+ * built from different shirudo sources and the operation should not proceed
  * (version_mismatch, EPERM). Runs before the chain/keyring checks
  * because a skew makes those comparisons meaningless. A standalone load
  * with no --expect-version-id (or --no-version-check) skips it.

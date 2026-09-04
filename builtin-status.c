@@ -4,8 +4,8 @@
  *
  * Local readiness + state report: shirudo status [--json] [--otel]
  * [--include-tpm].
- * Local-only -- never contacts a remote (that is `shirudo nodes`). Safe
- * to run before `init` (everything degrades to "absent"/false).
+ * Local-only -- never contacts another host. Safe to run before `init`
+ * (everything degrades to "absent"/false).
  */
 
 #include <dirent.h>
@@ -33,6 +33,8 @@
 #include "util/conditions.h"
 #include "util/config.h"
 #include "util/eventlog.h"
+
+#define SHIRUDO_KERNEL_LOG_MAX 100
 #include "util/help.h"
 #include "util/json.h"
 #include "util/macros.h"
@@ -309,9 +311,8 @@ static void print_eventlog_table(void)
 }
 
 /*
- * Same shape `shirudo nodes show` renders -- "System Info:" header,
- * 2-space indent, 16-col label column. Caller prints any preceding
- * blank line, this prints the section starting with the header.
+ * Print the "System Info:" section with a 2-space indent and 16-column
+ * label column. Caller prints any preceding blank line.
  */
 static void print_system_human(const struct shirudo_sysinfo *si)
 {
@@ -399,8 +400,7 @@ static void usage(void)
 /*
  * Build the upatches_loaded table rows from a scandir() listing.
  * Each row is resolved via the shared util (location + pin ctime +
- * payload xattr) so target-local status and `nodes show <name>
- * upatches` agree. Returns the row count; *out is heap-owned (xfree
+ * payload xattr). Returns the row count; *out is heap-owned (xfree
  * by caller with n * sizeof(*out)).
  */
 static size_t build_upatches_table(struct dirent **ups, int n_ups,
@@ -452,9 +452,8 @@ static size_t build_upatches_table(struct dirent **ups, int n_ups,
 
 /*
  * Convert local probes into the shared conditions input. `shirudo
- * status` always runs on-host, so reachable/parsed are trivially
- * true; that gives the shared verdict / Conditions block the same
- * meaning here as in `shirudo nodes show`.
+ * status` always runs on-host, so reachable/parsed are trivially true;
+ * this gives the shared verdict / Conditions block its local meaning.
  */
 static void local_cond_input(struct shirudo_conditions_input *in,
 			     int lsm_attached, int keyring_present,
@@ -483,7 +482,7 @@ static void local_cond_input(struct shirudo_conditions_input *in,
 	};
 }
 
-/* Compose roles like nodes show: "target", "operator", or both. */
+/* Compose the locally detected roles: "target", "operator", or both. */
 static const char *roles_str(int is_target, int is_operator)
 {
 	if (is_target && is_operator)
@@ -575,10 +574,10 @@ int cmd_status(int argc, const char **argv)
 
 			v = strtoul(argv[i] + 20, &end, 0);
 			if (*end != '\0' || v < 1 ||
-			    v > SHIRUDO_NODES_RECENT_MAX) {
+			    v > SHIRUDO_KERNEL_LOG_MAX) {
 				fprintf(stderr, "status: --include-kernellog=N "
 					"must be 1..%d\n",
-					SHIRUDO_NODES_RECENT_MAX);
+					SHIRUDO_KERNEL_LOG_MAX);
 				return 2;
 			}
 			include_kernel_log = true;

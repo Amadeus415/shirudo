@@ -61,10 +61,6 @@ static bool set_string(char *dst, size_t cap, const char *val)
 static void config_defaults(struct shirudo_config *cfg)
 {
 	*cfg = (struct shirudo_config){};
-	cfg->nodes_icmp_timeout_ms = 1000;
-	cfg->nodes_icmp_probes = 1;
-	cfg->nodes_kernel_log_lines = 10;
-	cfg->nodes_module_loads_lines = 10;
 	cfg->map_export_valid = true;
 	cfg->map_export_otel_retries = 3;
 	cfg->map_export_log_record_max_bytes = SHIRUDO_MAP_EXPORT_LOG_RECORD_MAX_DEFAULT;
@@ -170,58 +166,6 @@ int shirudo_config_load_path(struct shirudo_config *cfg, const char *path)
 					snprintf(cfg->tpm_tcti,
 						 sizeof(cfg->tpm_tcti),
 						 "%s", val);
-			} else if (strcmp(key, "nodes.icmp_timeout_ms") == 0) {
-				unsigned long v;
-				char *end;
-
-				v = strtoul(val, &end, 0);
-				if (*end != '\0' || v > UINT_MAX)
-					pr_warn("config: nodes.icmp_timeout_ms:"
-						" bad value '%s' (ignored)",
-						val);
-				else
-					cfg->nodes_icmp_timeout_ms =
-						(unsigned int)v;
-			} else if (strcmp(key, "nodes.icmp_probes") == 0) {
-				unsigned long v;
-				char *end;
-
-				v = strtoul(val, &end, 0);
-				if (*end != '\0' || v > 16)
-					pr_warn("config: nodes.icmp_probes:"
-						" bad value '%s' (ignored;"
-						" must be 0..16, 0=disabled)",
-						val);
-				else
-					cfg->nodes_icmp_probes = (unsigned int)v;
-			} else if (strcmp(key, "nodes.kernel_log_lines") == 0) {
-				unsigned long v;
-				char *end;
-
-				v = strtoul(val, &end, 0);
-				if (*end != '\0' ||
-				    v > SHIRUDO_NODES_RECENT_MAX)
-					pr_warn("config: nodes.kernel_log_lines:"
-						" bad value '%s' (ignored;"
-						" must be 0..%d, 0=disabled)",
-						val, SHIRUDO_NODES_RECENT_MAX);
-				else
-					cfg->nodes_kernel_log_lines =
-						(unsigned int)v;
-			} else if (strcmp(key, "nodes.module_loads_lines") == 0) {
-				unsigned long v;
-				char *end;
-
-				v = strtoul(val, &end, 0);
-				if (*end != '\0' ||
-				    v > SHIRUDO_NODES_RECENT_MAX)
-					pr_warn("config: nodes.module_loads_lines:"
-						" bad value '%s' (ignored;"
-						" must be 0..%d, 0=disabled)",
-						val, SHIRUDO_NODES_RECENT_MAX);
-				else
-					cfg->nodes_module_loads_lines =
-						(unsigned int)v;
 			} else if (strcmp(key, "map_export.json_path") == 0) {
 				if (!set_string(cfg->map_export_json_path,
 						sizeof(cfg->map_export_json_path), val))

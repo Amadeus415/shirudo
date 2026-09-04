@@ -4,7 +4,7 @@
 > capability shirudo does **not** yet implement. It layers on the existing
 > platform described in `PLAN.md` (the signed `.upatch` pipeline, the
 > signature-gated `BPF_PROG_LOAD` trust boundary, TPM measurement, the
-> agentless target model, and `rollout`); read `PLAN.md` first. The
+> agentless target model); read `PLAN.md` first. The
 > kernel-space counterpart is `PLAN.kspace.md`. Primary sources are vendored
 > under `research/` (see `research/README.md`).
 
@@ -440,7 +440,8 @@ To fold into `Documentation/threat-model.rst`:
 - **P0 — Tier-A spike + plumbing.** Validate the synthetic-early-return semantics
   against the XOL path; add the uprobe attach kinds and the target-descriptor TLV
   to `include/shirudo/upatch.h` and `shirudo build`.
-- **P1 — C/C++/Rust Tier-A end to end.** Author -> build -> sign -> `rollout` ->
+- **P1 — C/C++/Rust Tier-A end to end.** Author -> build -> sign -> direct
+  artifact transfer and target-local load ->
   attach -> pin -> measure, for native binaries; `status`/`list` surfacing;
   failure taxonomy.
 - **P2 — Go Tier-2.** Entry-only shielding with ABIInternal argument mapping; no

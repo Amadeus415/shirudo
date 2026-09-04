@@ -1,7 +1,12 @@
 # shirudo — BPF LSM Security Platform: MVP Implementation Plan
 
-> Status: **design only — not yet implemented**. This document is the
-> approved plan. Refine in place; revisit before implementation begins.
+> Status: **implemented, with historical sections retained for design
+> context**. The current command/package boundary is documented in
+> `Documentation/architecture.rst`. The former operator-side `nodes`,
+> `rollout`, and `remote` features, selectors, and libssh transport were
+> removed; operators use existing `scp`/`ssh` to invoke target-local
+> commands. Do not use the superseded network-operation sections below as
+> an implementation target.
 
 ## Context
 

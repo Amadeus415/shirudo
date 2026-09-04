@@ -1,7 +1,8 @@
 # shirudo example upatches
 
 This directory contains reference BPF upatches that operators can
-build, sign, and roll out as-is, or use as templates for their own.
+build and sign for direct loading on a target, or use as templates
+for their own.
 Each example is a single `.bpf.c` source file plus this README; the
 build is the standard `clang -target bpf -O2 -g -c` against the
 shared `bpf/lib/` headers and the build-time-generated
@@ -73,13 +74,12 @@ clang -target bpf -O2 -g -Wall -Wextra \
 shirudo build my-upatch.bpf.o -o my-upatch.upatch
 ```
 
-## Signing and rolling out
+## Signing and loading on a target
 
 On the operator machine (which holds the signing key):
 
 ```sh
 shirudo build examples/cve-2026-31431.bpf.c
-shirudo rollout examples/cve-2026-31431.bpf.upatch prod-fleet-a prod-fleet-b ...
 ```
 
 `shirudo build` compiles, runs gen_loader, signs, and packages
@@ -87,12 +87,21 @@ the `.upatch` in one step. There is no separate `sign` subcommand
 — the entire artifact-producing pipeline lives in the
 operator-only `shirudo-build` binary.
 
+Copy the signed artifact to a target and load it there with the
+target's existing SSH access:
+
+```sh
+scp examples/cve-2026-31431.bpf.upatch user@target:/tmp/
+ssh user@target sudo shirudo upatch load /tmp/cve-2026-31431.bpf.upatch
+```
+
 To roll back when the upstream kernel fix has landed:
 
 ```sh
 shirudo build --unload cve-2026-31431
 # -> writes cve-2026-31431.unload.upatch in the current directory
-shirudo rollout cve-2026-31431.unload.upatch prod-fleet-a prod-fleet-b ...
+scp cve-2026-31431.unload.upatch user@target:/tmp/
+ssh user@target sudo shirudo upatch unload cve-2026-31431
 ```
 
 ## Index
@@ -102,7 +111,7 @@ shirudo rollout cve-2026-31431.unload.upatch prod-fleet-a prod-fleet-b ...
 | [`cve-2026-31431.bpf.c`](cve-2026-31431.bpf.c) | Mitigates CVE-2026-31431 by refusing every userspace `socket(AF_ALG, …)` call. Hooks the BPF LSM `socket_create` hook; returns `-EPERM` when `family == AF_ALG`; allows everything else. Carries the dual `(GPL-2.0 OR BSD-2-Clause)` SPDX header required for BPF LSM programs. |
 | [`cve-2026-43501.bpf.c`](cve-2026-43501.bpf.c) | Mitigates CVE-2026-43501 by dropping IPv6 packets carrying an RPL Segment Routing header before the kernel RPL parser runs. Hooks Shirudo's `SEC("netfilter")` IPv6 pre-routing attach path and counts drops in `blocked_rpl`. |
 | [`arena-tree-serializer.bpf.c`](arena-tree-serializer.bpf.c) | Demonstrates serializer-only map reading for `BPF_MAP_TYPE_ARENA`: a `SEC("syscall")` program named `shirudo_serialize__tree_arena` builds an arena-resident binary tree and writes paged records into the reserved `shirudo_ser` output map. |
-| [`verifier-reject-null-deref.bpf.c`](verifier-reject-null-deref.bpf.c) | Negative test artifact for operator rollout paths. It compiles and packages, but intentionally dereferences a null/scalar pointer so target-side BPF payload load should fail with verifier rejection. |
+| [`verifier-reject-null-deref.bpf.c`](verifier-reject-null-deref.bpf.c) | Negative test artifact for target-side load paths. It compiles and packages, but intentionally dereferences a null/scalar pointer so payload load should fail with verifier rejection. |
 
 ## Conventions for new examples
 

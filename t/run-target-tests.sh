@@ -22,7 +22,6 @@ for t in \
 	t1105-siggate.sh \
 	t1107-load-unload.sh \
 	t1108-tpm-chain.sh \
-	t1109-rollout-libssh.sh \
 	t1110-lsm-deny.sh \
 	t1111-upatch-get.sh \
 	t1112-prog-load-keyring-gate.sh \

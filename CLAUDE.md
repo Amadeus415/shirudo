@@ -36,15 +36,13 @@ about the codebase. Lower-tier models may read, but may not write.
 
 ## Current state
 
-**The repo is in the planning phase.** No source code has been written yet —
-this directory currently contains `PLAN.md`, this file, `Documentation/`,
-and `.git`. Before doing anything else, **read both `PLAN.md` and
-`Documentation/threat-model.rst`** for the full approved design and its
-security spec. Treat `PLAN.md` as the source of truth for *what* shirudo
-is and how it will be built; treat `Documentation/threat-model.rst` as
-the source of truth for *what shirudo defends against and why* — the
-invariants every security-relevant code path must hold. Refine these in
-place rather than designing in chat.
+**The repo contains the implemented MVP.** Before changing security-
+critical code, read `Documentation/architecture.rst` and
+`Documentation/threat-model.rst`. `PLAN.md` retains the original design
+history; the architecture and code are authoritative for the current
+scope. The operator builds and signs artifacts, while existing scp/ssh
+invokes target-local commands. Do not reintroduce the removed fleet,
+remote-management, or SSH transport layers.
 
 ## What shirudo is
 
@@ -59,18 +57,14 @@ one-shot CLI invocation fronted by the system's `sshd`.
 There is a deliberate **operator-machine vs target-machine split**:
 
 - *Operator machine* holds the private signing key; produces signed
-  `.upatch` artifacts; runs `rollout` / `nodes` / `status` against
-  one or more targets.
+  `.upatch` artifacts; uses existing `scp`/`ssh` to invoke local
+  target commands.
 - *Target machine* holds only the public X.509 cert in a named kernel
   keyring, plus a TPM2 NV-extend chain that measures every state
   transition; cryptographically verifies every BPF load.
-- `shirudo rollout` pushes signed `.upatch` artifacts from operator →
-  target. There is no separate `rollback` verb: a removal is just a
-  rollout of a signed UNLOAD-directive `.upatch`, and the file's
-  `DIRECTIVE_UNLOAD` flag selects `upatch load` vs `upatch unload` on
-  the target. One command — one mental model — covers deploy and
-  remove. The transport goes over **libssh** linked into the binary —
-  there is no `fork+exec` of `ssh`/`scp`/`sftp` at any point.
+- The operator copies signed `.upatch` artifacts with existing `scp`
+  and invokes target-local `upatch load` or `upatch unload` with
+  existing `ssh`. Shirudo does not own the transport or fleet state.
 
 **One binary, two roles**: the same shirudo executable runs on both
 sides. Role separation is by which artifacts are present locally (private
@@ -85,10 +79,10 @@ specs. Consult them whenever the answer matters:
 
 | Path | Purpose |
 |---|---|
-| `Documentation/threat-model.rst` | **Authoritative security design document.** Adversary classes, per-node threats (operator + target), trust boundaries, deployment-range constraints (datacenter-scale fleets through embedded edge devices), residual risks, deferred mitigations. **Consult before designing or implementing any security-relevant code path.** When implementation and threat model disagree, one of them is wrong — fix one of the two; never let them drift silently apart. |
+| `Documentation/threat-model.rst` | **Authoritative security design document.** Trust boundaries, addressed threats, residual risks, and deferred mitigations. **Consult before designing or implementing any security-relevant code path.** |
 | `PLAN.md` | Implementation plan: MVP scope, subcommands, `.upatch` format, build system, project layout. Source of truth for *what* and *how*, complementary to the *why* in `threat-model.rst`. |
-| `Documentation/architecture.rst` | (Not yet written, planned.) Will hold the timeless contributor-facing architecture description, derived from PLAN.md once implementation has settled. |
-| `Documentation/getting-started.rst` | (Not yet written, planned.) Operator quickstart for the happy path. |
+| `Documentation/architecture.rst` | Contributor-facing architecture and the current operator/target boundary. |
+| `Documentation/getting-started.rst` | Operator quickstart for build, transfer, load, status, and unload. |
 
 ## Critical external references
 
@@ -177,10 +171,6 @@ load-bearing — consult them directly rather than reasoning from memory:
   BSD-2-Clause OR-branch):
   - `libcrypto` (OpenSSL crypto-primitives half — X.509, EVP, CMS,
     SHA-256). **Not `libssl`** — shirudo does no TLS.
-  - `libssh ≥ 0.10` — used by `rollout`/`status`/`nodes` for SFTP
-    and SSH-exec channels. There is **no** runtime dependency on the
-    OpenSSH client binaries (`ssh`/`scp`/`sftp`) — shirudo never
-    `fork+exec`s.
   - `libtss2-esys ≥ 4.0` and `libtss2-tcti-device` (tpm2-tss) — used
     on the target for the NV-extend chain.
   Same binary on both sides; the operator never opens the TPM,
@@ -190,7 +180,7 @@ load-bearing — consult them directly rather than reasoning from memory:
 
 - **No subprocesses at runtime, ever — with one named exception.**
   Every external operation in the core `shirudo` binary goes
-  through a linked library (OpenSSL, libssh, libtss2, libbpf,
+  through a linked library (OpenSSL, libtss2, libbpf,
   raw `syscall()` for keyctl). The core binary never `fork`s and
   never `execve`s any program on either side. **The single
   exception** is the operator-only `shirudo build` subcommand,
@@ -373,7 +363,7 @@ load-bearing — consult them directly rather than reasoning from memory:
 - **Pre-flight TPM state check on every state-changing operation.**
   Before any extend, the target verifies that its current NV chain
   value matches `--expect-chain=<hex>` (auto-derived from a pre-status
-  by `rollout`, or pinned explicitly by an AI agent
+  by the caller, or pinned explicitly by an AI agent
   maintaining its own per-host expected chain). Mismatch → refuse
   with `category: tampered`, no `BPF_PROG_LOAD`, no chain extend, no
   eventlog write. This is the optimistic-concurrency mechanism
@@ -628,7 +618,7 @@ Target machine:
 - `/var/lib/shirudo/keys/{cert.der}` — public cert (no private key on
   the target, ever).
 - `/var/lib/shirudo/upatches/` — installed `.upatch` files.
-- `/var/lib/shirudo/incoming/` — `rollout` staging directory.
+- `/var/lib/shirudo/incoming/` — target-local artifact staging directory.
 - `/var/lib/shirudo/eventlog` — append-only JSON-lines record of every
   TPM chain extension (init/upatch_load/upatch_unload). Mode 0600,
   integrity-checked by the on-TPM NV chain.
@@ -661,8 +651,7 @@ Target machine:
 - `/var/lib/shirudo/bpffs/upatches/<name>/maps/<map_name>` — every
   map the signed loader created, auto-pinned by shirudo after
   attach (`util/upatch_maps.h`). Read-back via `shirudo upatch
-  map` (target-local) and `shirudo status --include-maps` /
-  `shirudo nodes show --include-maps` (operator over SSH). Covered
+  map` and `shirudo status --include-maps`. Covered
   by the same `bpf2.c` `inode_unlink` / `seal.c` LSM hooks as the
   link pin -- a non-shirudo `rm` is denied. Cleanup on
   `upatch unload` descends into `maps/` first (unlink every map,
@@ -673,16 +662,14 @@ Operator machine:
 
 - `/var/lib/shirudo/keys/{signing_key.pem,cert.der}` — keys, mode 0600
   root-only. **Private key only ever exists on the operator.**
-- `$XDG_CONFIG_HOME/shirudo/remotes.d/<name>.conf` — per-user remote
-  registry (drop-in style, one file per remote).
-- `/etc/shirudo/remotes.d/<name>.conf` — system-wide remote registry
-  (alternative location for shared operator hosts).
+- Existing SSH configuration, credentials, and host-key policy remain
+  outside shirudo and are used directly by the operator.
 
 ## Helpful invariants when reviewing future changes
 
 - **Minimal vetted library dependencies, no random library crap.**
   shirudo links exactly the libraries it cannot do without:
-  `libc`, `libcrypto`, `libssh ≥ 0.10`, `libtss2-esys` +
+  `libc`, `libcrypto`, `libtss2-esys` +
   `libtss2-tcti-device`, `libbpf`, `libelf`, `zlib`. Nothing
   else — every additional library expands the supply-chain
   attack surface. When reviewing a change that adds a new
@@ -725,30 +712,10 @@ Operator machine:
   enforced independently by `BPF_MAP_FREEZE` at creation — even if the
   LSM detached, userspace `BPF_MAP_UPDATE_ELEM` on those maps would
   still return `-EPERM`. Two independent enforcement points, by design.
-- **All operator→target operations require a registered remote
-  name OR a label selector.** `shirudo rollout`/`nodes`
-  reject literal `user@host[:port]` destinations; the target
-  must have been registered via `shirudo remote add <name>
-  <user@host[:port]> [--label key=value ...]` first. Targets are
-  selected by explicit names (`shirudo rollout foo.upatch
-  prod-a prod-b`) or by Kubernetes-style **label expressions**
-  (`shirudo rollout foo.upatch --selector='type=production &&
-  location=us-east-1'`). Selector grammar supports `=`, `!=`,
-  existence (`key`), non-existence (`!key`), `&&`, `||`, and
-  parentheses; `&&` binds tighter than `||`. Empty match set is
-  an error. `shirudo nodes` is the fleet observability command:
-  iterates the registered remote set in parallel, aggregates TPM
-  chain + loaded-upatch state per node, produces a drift table
-  (human or `--json`); supports both `--filter=<glob>` (by name)
-  and `--selector=<expr>` (by labels), which can combine.
-  `shirudo status` is **local-only** (target or operator); it
-  does not take destination arguments. Labels are operator-side
-  metadata only — no security boundary, no synchronisation to
-  targets, plain `key=value` lines in
-  `~/.config/shirudo/remotes.d/<name>.conf` under the `label.`
-  prefix. See PLAN.md §"Subcommands" rows for
-  `nodes`/`rollout`/`status` and §"Remote registry —
-  Label selectors".
+- **Target status and mutation are local-only.** `shirudo status`,
+  `shirudo upatch load`, and `shirudo upatch unload` never take a
+  destination and never open SSH. Operators use existing `scp` and
+  `ssh` when they need to transfer an artifact or invoke a target.
 - **Every signed artifact loads through the same `BPF_PROG_LOAD +
   signature + keyring_id` path.** This applies to the LSM bootstrap
   loader, every LOAD `.upatch`, and every UNLOAD directive. If you
@@ -757,17 +724,15 @@ Operator machine:
   The target machine never touches the private signing key.** If a
   code path crosses this line, it's a bug, full stop.
 - **The operator stays stateless.** The only things shirudo itself
-  writes on the operator are: the registry (`remotes.d/<name>.conf`),
-  the signing keypair (`signing_key.pem` + `cert.der`, written only by
+  writes on the operator are the signing keypair (`signing_key.pem` + `cert.der`, written only by
   `shirudo genkey` into `--keys-dir`), and artifacts/reports the
   operator *explicitly names* (`shirudo build -o`, `--emit-artifacts`,
   `--report=<path>`). It must never grow a hidden, shirudo-managed
   store: no upatch archive, no expected-chain / per-host state cache,
   no rollout history, no last-state file, no lockfile, no cache dir,
-  no on-disk log (events go to `syslog` → journald only), no local
-  rollout staging (the `.upatch` is streamed over SFTP, never copied
-  locally). `--expect-chain` stays derived live from a pre-status or
-  supplied by the caller; shirudo persists nothing between invocations.
+  no on-disk log (events go to `syslog` → journald only), and no
+  transport staging. `--expect-chain` is supplied by the caller from
+  target-local status; shirudo persists nothing between invocations.
   `/var/lib/shirudo/upatches/` on the operator is **read-only
   convention** — `shirudo-build` reads it to auto-derive
   `--payload-sha256` for UNLOAD directives, but never writes it
@@ -790,7 +755,7 @@ Operator machine:
   A concurrent legitimate operator that has advanced the chain
   causes a refusal — the second operator must re-status and re-issue
   with the refreshed expected chain. This is correctness behavior,
-  not a bug. AI agents driving rollouts must handle `tampered`
+  not a bug. Automation driving target operations must handle `tampered`
   as "refresh state, decide", not as "retry with same input".
 - **shirudo's project license is BSD-2-Clause** and every line of
   code in the binary must be either fresh BSD-2-Clause or vendored
@@ -858,15 +823,11 @@ future work" for full descriptions.
 
 ### Explicitly out of scope (don't propose features in these areas)
 
-- **SSH key management.** shirudo is a libssh client. It uses
-  whatever SSH infrastructure operators already run (OpenSSH,
-  signed-CA SSH, smart cards, Vault SSH, jump hosts —
-  whatever). shirudo never generates SSH keys, never rotates
-  them, never distributes public keys to targets'
-  `authorized_keys`, never parses `~/.ssh/config` beyond
-  libssh's defaults, never has opinions on SSH best practice.
-  Same posture as `git push`. See PLAN.md §"Explicitly out of
-  scope".
+- **SSH key management.** shirudo delegates artifact transfer and
+  command invocation to whatever SSH infrastructure operators already
+  run (OpenSSH, signed-CA SSH, smart cards, Vault SSH, jump hosts,
+  and so on). shirudo never generates or rotates SSH keys, distributes
+  `authorized_keys`, or has opinions on SSH best practice.
 - **Audit / log retention policy.** shirudo writes events via
   `syslog(3)` → journald; retention/rotation/archival is
   journald's job (`journald.conf`, `systemd-journal-upload`,
@@ -881,13 +842,6 @@ future work" for full descriptions.
 
 If a future request seems to want shirudo to do any of these,
 push back with a reference to this section.
-- **Remote groups / wildcards** in the registry, for fleet-scale
-  operation (`shirudo rollout foo.upatch @prod` expansion).
-
-Note: `upatch unload` (signed UNLOAD directives) is **in MVP**, not
-deferred. There is **no separate `rollback` command** — removal is a
-`shirudo rollout` of a signed UNLOAD-directive `.upatch`; the file's
-`DIRECTIVE_UNLOAD` flag makes the target run `upatch unload` instead of
-`upatch load`. LSM ringbuf drain has been **redesigned** from a
-push-style daemon to an on-demand poll, to honor the
-agentless-on-target invariant.
+Signed `upatch unload` directives are in MVP. The operator builds and
+signs the directive, transfers it with existing SSH tooling, and runs
+the target-local unload command. LSM ringbuf drain remains deferred.

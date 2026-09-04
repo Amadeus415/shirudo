@@ -309,7 +309,6 @@ done <<'EOF'
 t/helper/test-json-parser
 t/helper/test-chain
 t/helper/test-config
-t/helper/test-selector
 t/helper/test-bpf-load
 t/helper/test-dns-prog-run
 t/helper/test-kernel-abi

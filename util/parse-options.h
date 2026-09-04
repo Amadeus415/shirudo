@@ -10,7 +10,7 @@
 
 /*
  * TODO: design + implement once a subcommand needs structured
- * argument parsing. The first user is likely builtin-rollout.c.
+ * argument parsing.
  */
 
 #endif /* SHIRUDO_PARSE_OPTIONS_H */

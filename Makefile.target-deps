@@ -39,7 +39,8 @@ STATIC_ARCHIVES_STAMP := $(TARGET_STATIC_LIBDIR)/.system-archives-staged
 ENV_FILE := $(TARGET_DEPS_DIR)/target.env
 
 SYSTEM_ARCHIVES := \
-	$(TARGET_SYSTEM_LIBDIR)/libssh.a \
+	$(TARGET_SYSTEM_LIBDIR)/libcrypto.a \
+	$(TARGET_SYSTEM_LIBDIR)/libjitterentropy.a \
 	$(TARGET_SYSTEM_LIBDIR)/libelf.a \
 	$(TARGET_SYSTEM_LIBDIR)/libz.a \
 	$(TARGET_SYSTEM_LIBDIR)/libluajit-5.1.a

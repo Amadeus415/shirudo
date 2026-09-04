@@ -2,11 +2,8 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Shared "security-operator health" conditions block. Single source
- * of truth for the Conditions block in `shirudo nodes show` (fetched
- * over SSH) and `shirudo status` (computed locally) and any future
- * caller. Both feed in the same flat input shape; both get the same
- * verdict string and the same human-printable block out.
+ * Shared local security-health conditions block. `shirudo status`
+ * feeds the flat input shape and receives the verdict and human output.
  */
 
 #ifndef SHIRUDO_CONDITIONS_H
@@ -17,9 +14,8 @@
 #include <stdint.h>
 
 /*
- * Fields mirror the `shirudo status` JSON one-for-one. `reachable` /
- * `parsed` are meaningful only for SSH-fetched callers (nodes show);
- * `shirudo status` itself sets both to true and `unreach` to NULL.
+ * Fields mirror the `shirudo status` JSON one-for-one. `reachable`
+ * and `parsed` are true for the local caller.
  * The *_seen flags reflect "did the JSON carry a non-null value for
  * this nullable scalar," since the schema parser leaves them untouched
  * on null.
@@ -71,8 +67,7 @@ void shirudo_conditions_print(const struct shirudo_condition *c, size_t n);
  * Single-word aggregate verdict (severity worst -> best):
  *   unreachable -> unparseable -> tampered -> lsm-off ->
  *   init-pending -> degraded -> ok
- * Used by `shirudo nodes` STATUS column, the `Status:` line in
- * `nodes show` / `shirudo status`, and the drift-table JSON.
+ * Used by the `Status:` line in `shirudo status` and its JSON output.
  */
 const char *shirudo_status_verdict(const struct shirudo_conditions_input *in);
 

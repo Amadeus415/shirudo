@@ -8,7 +8,7 @@ The .upatch container format
 
 This document specifies the on-disk ``.upatch`` container: the portable,
 signed unit shirudo's operator side produces (``shirudo build``) and the
-target side consumes (``shirudo upatch load`` / ``unload``, ``rollout``).
+target side consumes (``shirudo upatch load`` / ``unload``).
 It is the authoritative byte-level reference; the structures live in
 ``include/shirudo/upatch.h``, the writer in
 ``tools/shirudo-build/package.c``, and the reader in ``util/upatch.c``.
@@ -442,8 +442,8 @@ Production and consumption
   sections, and the advisory embedded source) and ``shirudo upatch
   list``.
 - **Consumed by** ``shirudo upatch load`` / ``unload`` on the target
-  (signature-gated ``BPF_PROG_LOAD`` via the sealed keyring serial), and
-  pushed by ``shirudo rollout`` over libssh.
+  (signature-gated ``BPF_PROG_LOAD`` via the sealed keyring serial).
+  Operators transfer the artifact with their existing SSH tooling.
 - **Introspected after load** by ``shirudo upatch get <name>``, which
   reads the loaded program's line_info + BTF from the kernel (the
   authoritative view of what is loaded).

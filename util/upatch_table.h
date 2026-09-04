@@ -4,13 +4,10 @@
  *
  * Shared NAME / LOCATION / MAPS / AGE renderer for the "upatches
  * loaded" section. Used by:
- *   - `shirudo status` (local view, both human and --json),
- *   - `shirudo nodes show <name>` describe view,
- *   - `shirudo nodes show <name> upatches` table.
+ *   - `shirudo status` (local view, both human and --json).
  *
- * One source of truth so the three views never diverge in shape.
- * Each caller assembles a row[] vector its own way (target-local
- * file walk vs operator-side parsed JSON); the renderer doesn't
+ * The caller assembles a row[] vector from the target-local file walk;
+ * the renderer doesn't
  * touch syscalls or eventlog state itself.
  */
 

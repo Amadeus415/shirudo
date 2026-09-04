@@ -19,9 +19,8 @@
 #include "util/similar.h"
 
 /*
- * Which side a command runs on. The operator holds the signing key and
- * drives remote targets; the target runs one-shot under sshd; local
- * commands work on either side.
+ * Which side a command runs on. The operator holds the signing key; the
+ * target runs one-shot under sshd; local commands work on either side.
  */
 enum cmd_group {
 	GROUP_OPERATOR,
@@ -49,9 +48,6 @@ static int cmd_help(int argc, const char **argv);
 static const struct cmd commands[] = {
 	{ "genkey",	cmd_genkey,	GROUP_OPERATOR,	"generate the signing key + cert" },
 	{ "build",	cmd_build,	GROUP_OPERATOR,	"compile + sign a .upatch" },
-	{ "rollout",	cmd_rollout,	GROUP_OPERATOR,	"push a .upatch (load or unload) to registered remotes" },
-	{ "remote",	cmd_remote,	GROUP_OPERATOR,	"manage the remote registry" },
-	{ "nodes",	cmd_nodes,	GROUP_OPERATOR,	"fleet observability across registered remotes" },
 
 	{ "init",	cmd_init,	GROUP_TARGET,	"bootstrap the BPF LSM on this target" },
 	{ "upatch",	cmd_upatch,	GROUP_TARGET,	"load / unload (target); list / info (read-only, anywhere)" },
@@ -145,8 +141,8 @@ int main(int argc, const char **argv)
 		names[i] = commands[i].name;
 
 	/*
-	 * Tolerant resolution: 'node' -> 'nodes', 'remotes' -> 'remote',
-	 * 'rolllout' is left to the Levenshtein "did you mean" pass below.
+	 * Tolerant resolution is left to the Levenshtein "did you mean" pass
+	 * below.
 	 */
 	n_match = shirudo_resolve(argv[1], names, commands_n,
 				  matches, ARRAY_SIZE(matches));
