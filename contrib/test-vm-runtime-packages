@@ -6,6 +6,7 @@ libjson-c5
 libluajit-5.1-2
 libtss2-esys-3.0.2-0t64
 libtss2-tctildr0t64
+netperf
 openssh-server
 python3
 rsync

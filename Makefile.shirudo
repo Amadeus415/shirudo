@@ -473,7 +473,8 @@ TEST_HELPERS := t/helper/test-json-parser \
                 t/helper/test-upatch-prog-metadata \
                 t/helper/test-upatch-decode \
                 t/helper/test-upatch-serializer-pages \
-                t/helper/test-signed-load
+                t/helper/test-signed-load \
+                t/helper/test-exec-churn
 
 t/helper/test-json-parser: t/helper/test-json-parser.c util/json.o
 	@printf '  CC      $@\n'
@@ -544,6 +545,10 @@ t/helper/test-upatch-decode: t/helper/test-upatch-decode.c \
 			      util/upatch_decode.o util/upatch.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS)
+
+t/helper/test-exec-churn: t/helper/test-exec-churn.c
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 test-helpers: $(TEST_HELPERS)
 

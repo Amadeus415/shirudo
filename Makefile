@@ -55,7 +55,7 @@ export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdi
        SHIRUDO_TARGET_STATIC_LIBDIR
 export VM_SSH_COMMAND
 
-.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build test-helpers linux-obs-ipv4-shields bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
+.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build test-helpers linux-obs-ipv4-shields bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz bench test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
         distclean test examples config
 
@@ -173,6 +173,8 @@ shirudo make targets (run from the repo root):
     make test-tgt-obs-fuzz boot the observability VM and additionally run the
                            seeded DNS mutation corpus (defaults: 5000 cases,
                            seed 0x53484952)
+    make bench             run paired target-VM Linux observability benchmarks;
+                           results are written under build/benchmarks
     make test-vm            compatibility alias for make test-tgt
     make test-vm-bundle    build/reuse the host-side Shirudo payload used by
                            make vm and make test-tgt, plus target-test fixtures;
@@ -268,6 +270,7 @@ TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
 	t/helper/*.c t/helper/*.py completion/* systemd/*.in systemd/*.timer \
 	test-vm/fixtures/*.c test-vm/fixtures/*.lua \
 	test-vm/fixtures/decoders/* \
+	contrib/benchmark-linux-observability.sh t/linux_obs_benchmark.py \
 	shields/linux_obs/*.c shields/linux_obs/*.h shields/linux_obs/*.list \
 		shields/linux_obs/*.py shields/linux_obs/Beefile \
 	shields/linux_obs/decoders/* \
@@ -377,6 +380,9 @@ test-tgt-obs-fuzz: test-vm-bundle
 		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
+
+bench: test-vm-bundle
+	$(Q)bash contrib/benchmark-linux-observability.sh
 
 vm-stop:
 	$(Q)VM_NAME="$(VM_NAME)" \
