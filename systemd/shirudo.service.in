@@ -18,6 +18,12 @@
 #   systemctl enable shirudo.service
 # On a target without a TPM, create /etc/shirudo/init.env containing
 #   SHIRUDO_INIT_ARGS=--no-tpm
+# On a legacy kernel without native BPF signing, explicitly commit the
+# compatibility mode on first boot. The mode is persisted under
+# /var/lib/shirudo/mode and cannot be changed by a later init invocation:
+#   SHIRUDO_INIT_ARGS=--trusted-root
+# Combine options in one value when needed, for example:
+#   SHIRUDO_INIT_ARGS="--trusted-root --no-tpm"
 
 [Unit]
 Description=shirudo: bring up the BPF LSM and re-apply signed upatches

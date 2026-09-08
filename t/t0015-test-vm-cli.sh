@@ -150,6 +150,16 @@ test_expect_success 'make vm selects supported stable kernel artifacts' '
 		"$WORK/stable-vm-make.out"
 '
 
+test_expect_success 'stable VM selection enables trusted-root bootstrap' '
+	make -n -C .. vm KERNEL=6.18 TEST_VM_WORK_DIR="$WORK/stable-mode" \
+		>"$WORK/stable-mode-make.out" 2>&1 &&
+	grep -q "TEST_VM_TRUSTED_ROOT=\"1\"" "$WORK/stable-mode-make.out" &&
+	make -n -C .. vm KERNEL=bpf-next TEST_VM_WORK_DIR="$WORK/next-mode" \
+		>"$WORK/next-mode-make.out" 2>&1 &&
+	grep -q "TEST_VM_TRUSTED_ROOT=\"0\"" "$WORK/next-mode-make.out" &&
+	grep -q -- "--trusted-root" ../contrib/test-vm-guest.sh
+'
+
 test_expect_success 'make kernel builds a tagged third-party Linux source' '
 	grep -q "^kernel: \$(KERNEL_BUILD_STAMP)" ../Makefile &&
 	grep -q "KERNEL_TAG=\"\${KERNEL_TAG:-bpf-next}\"" \

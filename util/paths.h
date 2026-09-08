@@ -24,6 +24,7 @@
 #define SHIRUDO_INCOMING_DIR		SHIRUDO_VAR_LIB "/incoming"
 #define SHIRUDO_LOCKS_DIR		SHIRUDO_VAR_LIB "/locks"
 #define SHIRUDO_EVENTLOG_PATH		SHIRUDO_VAR_LIB "/eventlog"
+#define SHIRUDO_MODE_PATH		SHIRUDO_VAR_LIB "/mode"
 #define SHIRUDO_KEYRING_SERIAL_PATH	SHIRUDO_VAR_LIB "/keyring.serial"
 #define SHIRUDO_BPFFS_DIR		SHIRUDO_VAR_LIB "/bpffs"
 #define SHIRUDO_BPM_ETC_DIR		"/etc/shirudo/bpm"

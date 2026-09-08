@@ -17,6 +17,7 @@ UPPER=/var/tmp/shirudo-upper
 OVERLAY_WORK=/var/tmp/shirudo-overlay-work
 WORKSPACE=/workspace/shirudo
 VM_MODE="${VM_MODE:-test}"
+TRUSTED_ROOT="${TEST_VM_TRUSTED_ROOT:-0}"
 
 log()
 {
@@ -240,7 +241,11 @@ install_java_sql_inj_example
 log "checking custom-kernel and vTPM prerequisites"
 mountpoint -q /sys/kernel/security || mount -t securityfs securityfs /sys/kernel/security
 grep -qw bpf /sys/kernel/security/lsm
-grep -aq signature_size /sys/kernel/btf/vmlinux
+if [[ "$TRUSTED_ROOT" == 1 ]]; then
+	log "native BPF signing is optional: using trusted-root mode"
+else
+	grep -aq signature_size /sys/kernel/btf/vmlinux
+fi
 test -c /dev/tpm0
 test -c /dev/tpmrm0
 tpm2_getrandom 8 >/dev/null
@@ -259,11 +264,16 @@ fi
 install -m 0644 "$package_cert" \
 	/var/lib/shirudo/keys/cert.der
 rm -f /var/lib/shirudo/keys/signing_key.pem
-/usr/local/bin/shirudo init
+init_args=()
+if [[ "$TRUSTED_ROOT" == 1 ]]; then
+	init_args+=(--trusted-root)
+fi
+/usr/local/bin/shirudo init "${init_args[@]}"
 test -e /var/lib/shirudo/bpffs/lsm_link
 /usr/local/bin/shirudo status --json --include-tpm >/tmp/shirudo-status.json
 python3 - /tmp/shirudo-status.json <<'PY'
 import json
+import os
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as status_file:
@@ -273,6 +283,9 @@ if not tpm.get("chain"):
     raise SystemExit("shirudo status reported no TPM chain")
 if tpm.get("chain_matches_eventlog") is not True:
     raise SystemExit("TPM chain does not match the Shirudo event log")
+expected_mode = "trusted-root" if os.environ.get("TEST_VM_TRUSTED_ROOT") == "1" else "untrusted-root"
+if status.get("mode") != expected_mode:
+    raise SystemExit(f"expected mode {expected_mode}, got {status.get('mode')}")
 PY
 
 if [[ "$VM_MODE" == interactive ]]; then

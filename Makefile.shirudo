@@ -145,6 +145,7 @@ UTIL_SRCS := \
     util/tpm.c \
     util/chain.c \
     util/config.c \
+    util/mode.c \
     util/bpm_source_config.c \
     util/eventlog.c \
     util/json.c \
@@ -200,6 +201,7 @@ BPF_LIB_HEADERS    := bpf/lib/shirudo_bpf_common.h \
 # .incbin into util/loader.o. bpf/lib/ is include-only.
 BPF_SRCS := \
     bpf/bpf2.c \
+    bpf/bpf2-trusted-root.c \
     bpf/seal.c \
     bpf/unload.c
 
@@ -308,6 +310,8 @@ bpf/%.bpf.o: bpf/%.c bpf/vmlinux.h $(BPF_HEADERS_OUT)
 	    -Ithird_party/bpf-next/tools/include/uapi \
 	    -c $< -o $@
 
+bpf/bpf2-trusted-root.bpf.o: bpf/bpf2.c
+
 # ----- version_id ------------------------------------------------
 
 # Regenerated every build; cheap (one sha256sum invocation).
@@ -354,6 +358,7 @@ shirudo-target: $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF
 
 # util/loader.o has a make-level dep on every embedded bpf object.
 util/loader.o: $(BPF_OBJS)
+build/target/util/loader.o: $(BPF_OBJS)
 
 # shirudo-build links util/sign.c (CMS signer) plus a subset of util,
 # plus util/loader.o for its .incbin of bpf/unload.bpf.o (used by
@@ -463,6 +468,7 @@ install-operator: install shirudo-build bpf/vmlinux.h $(BPF_HEADERS_OUT) $(BPF_L
 # Compiled test helpers (also usable as fuzz entry points).
 TEST_HELPERS := t/helper/test-json-parser \
                 t/helper/test-chain \
+		 t/helper/test-mode \
 		t/helper/test-config \
 		t/helper/test-bpm-source \
                 t/helper/test-bpf-load \
@@ -486,6 +492,12 @@ t/helper/test-json-parser: t/helper/test-json-parser.c util/json.o
 # util/config.o resolves shirudo_config_load(), called by tpm.o.
 t/helper/test-chain: t/helper/test-chain.c util/chain.o util/crypto_openssl.o util/tpm.o util/log.o \
                      util/config.o util/malloc.o
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl -ltss2-esys -ltss2-tctildr
+
+t/helper/test-mode: t/helper/test-mode.c util/mode.o util/chain.o \
+			     util/crypto_openssl.o util/tpm.o util/log.o \
+			     util/config.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl -ltss2-esys -ltss2-tctildr
 

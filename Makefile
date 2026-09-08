@@ -228,6 +228,8 @@ shirudo make targets (run from the repo root):
              KERNEL_REPOSITORY (third-party Linux git repository),
              KERNEL_SOURCE_DIR (existing clean Linux checkout),
              KERNEL_CONFIG (optional kernel config),
+             TEST_VM_TRUSTED_ROOT=1 (use trusted-root for stable-kernel VMs;
+             selected automatically for non-bpf-next KERNEL values),
              VM_SSH_COMMAND (optional one-off command for make vm-ssh),
              TEST_VM_SSH_PORT (optional fixed localhost SSH port),
              TEST_VM_MAP_EXPORT_ENDPOINT (OTLP base URL),
@@ -325,6 +327,11 @@ else
   $(error unsupported VM KERNEL '$(VM_KERNEL)'; choose bpf-next, 7.2, 6.18, 6.12, 6.6, or 6.1)
 endif
 
+# Stable third-party kernels do not carry the native Shirudo signing ABI.
+# Test VMs therefore select trusted-root automatically; callers can override
+# this for a kernel that has been patched with native signing support.
+TEST_VM_TRUSTED_ROOT ?= $(if $(filter bpf-next,$(VM_KERNEL_TAG)),0,1)
+
 KERNEL_TAG ?= $(if $(strip $(TAG)),$(TAG),bpf-next)
 KERNEL_TAG_VERSION := $(patsubst v%,%,$(KERNEL_TAG))
 KERNEL_REPOSITORY ?= https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
@@ -382,6 +389,7 @@ vm: $(VM_KERNEL_DEP) test-vm-bundle
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
 		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
 		TEST_VM_SSH_PORT="$(TEST_VM_SSH_PORT)" \
+		TEST_VM_TRUSTED_ROOT="$(TEST_VM_TRUSTED_ROOT)" \
 		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
 		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
 		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
@@ -405,6 +413,7 @@ test-tgt: $(VM_KERNEL_DEP) test-vm-bundle
 		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
 		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
+		TEST_VM_TRUSTED_ROOT="$(TEST_VM_TRUSTED_ROOT)" \
 		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
 		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
 		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
@@ -420,6 +429,7 @@ test-tgt-obs: $(VM_KERNEL_DEP) test-vm-bundle
 		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
 		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
+		TEST_VM_TRUSTED_ROOT="$(TEST_VM_TRUSTED_ROOT)" \
 		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
 		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
 		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
@@ -438,6 +448,7 @@ test-tgt-obs-fuzz: $(VM_KERNEL_DEP) test-vm-bundle
 		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
 		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
+		TEST_VM_TRUSTED_ROOT="$(TEST_VM_TRUSTED_ROOT)" \
 		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
 		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
 		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
@@ -451,6 +462,7 @@ test-tgt-obs-fuzz: $(VM_KERNEL_DEP) test-vm-bundle
 
 bench: $(VM_KERNEL_DEP) test-vm-bundle
 	$(Q)TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
+		TEST_VM_TRUSTED_ROOT="$(TEST_VM_TRUSTED_ROOT)" \
 		bash contrib/benchmark-linux-observability.sh
 
 vm-stop:

@@ -17,6 +17,7 @@ struct shirudo_embedded_bpf {
 };
 
 const struct shirudo_embedded_bpf *shirudo_bpf2_blob(void);
+const struct shirudo_embedded_bpf *shirudo_bpf2_trusted_root_blob(void);
 const struct shirudo_embedded_bpf *shirudo_seal_blob(void);
 const struct shirudo_embedded_bpf *shirudo_unload_blob(void);
 

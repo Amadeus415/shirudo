@@ -61,6 +61,22 @@ kernel, use:
 make vm KERNEL=6.18 VM_NAME=kernel-6.18
 ```
 
+Stable-kernel VM preparation automatically initializes Shirudo with
+``--trusted-root`` because those third-party kernels do not carry the native
+Shirudo signing ABI. The mode is committed in the guest and the status and
+keepalive payload report ``trusted-root``. Override the test harness only when
+the selected kernel was separately patched with native signing support:
+
+```sh
+make vm KERNEL=6.18 TEST_VM_TRUSTED_ROOT=0 VM_NAME=kernel-6.18
+```
+
+The bpf-next default uses ``untrusted-root`` and native kernel signatures.
+Production systemd provisioning follows the same rule explicitly: put
+``SHIRUDO_INIT_ARGS=--trusted-root`` in ``/etc/shirudo/init.env`` before the
+first boot on a legacy kernel. Do not copy ``signing_key.pem`` to the guest;
+trusted-root userspace verification needs only the public ``cert.der``.
+
 `KERNEL=v6.18` is also accepted. The selected kernel artifact is built first
 when absent, then the normal host bundle and prepared runtime QCOW2 are built
 or reused. The same selector is supported by `make test-tgt`,

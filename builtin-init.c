@@ -33,9 +33,11 @@
 #include "util/json.h"
 #include "util/macros.h"
 #include "util/keyring.h"
+#include "util/kernel_abi.h"
 #include "util/loader.h"
 #include "util/log.h"
 #include "util/malloc.h"
+#include "util/mode.h"
 #include "util/paths.h"
 #include "util/preflight.h"
 #include "util/seal.h"
@@ -386,7 +388,7 @@ static int attach_seal(struct bpf_object **obj_out, struct bpf_link **links)
 	return 0;
 }
 
-static int init_lsm(void)
+static int init_lsm(enum shirudo_mode mode, bool native_signing)
 {
 	/* Must match struct shirudo_sb_id in bpf/bpf2.c byte-for-byte. */
 	struct shirudo_sb_id {
@@ -394,7 +396,7 @@ static int init_lsm(void)
 		uint32_t	exe_dev;
 		uint64_t	exe_ino;
 		int32_t		keyring_serial;
-		uint32_t	pad;
+		uint32_t	mode;
 	} id = {};
 	/*
 	 * The four mount-lifecycle guards over shirudo's bpffs. Table-driven
@@ -411,8 +413,9 @@ static int init_lsm(void)
 		{ "shirudo_lsm_sb_remount", SHIRUDO_SB_REMOUNT_LINK_PIN },
 	};
 	struct bpf_link *mount_links[ARRAY_SIZE(mount_hooks)] = {};
-	const struct shirudo_embedded_bpf *blob = shirudo_bpf2_blob();
-	struct bpf_program *p_bpf, *p_unlink, *p_setx, *p_rmx, *p_pload;
+	const struct shirudo_embedded_bpf *blob = native_signing ?
+		shirudo_bpf2_blob() : shirudo_bpf2_trusted_root_blob();
+	struct bpf_program *p_bpf, *p_unlink, *p_setx, *p_rmx, *p_pload = NULL;
 	struct bpf_object *obj = NULL, *seal_obj = NULL;
 	struct bpf_link *link_bpf = NULL, *link_unlink = NULL;
 	struct bpf_link *link_setx = NULL, *link_rmx = NULL, *link_pload = NULL;
@@ -466,6 +469,7 @@ static int init_lsm(void)
 	}
 	id.exe_dev = kernel_dev_t(st.st_dev);
 	id.exe_ino = (uint64_t)st.st_ino;
+	id.mode = mode == SHIRUDO_MODE_TRUSTED_ROOT ? 1 : 0;
 
 	/*
 	 * The trust anchor lsm/bpf_prog_load enforces: only a load the
@@ -507,10 +511,12 @@ static int init_lsm(void)
 						  "shirudo_lsm_inode_setxattr");
 	p_rmx = bpf_object__find_program_by_name(obj,
 						 "shirudo_lsm_inode_removexattr");
-	p_pload = bpf_object__find_program_by_name(obj,
+	if (native_signing)
+		p_pload = bpf_object__find_program_by_name(obj,
 						   "shirudo_lsm_bpf_prog_load");
 	p_bpf = bpf_object__find_program_by_name(obj, "shirudo_lsm_bpf");
-	if (!p_unlink || !p_setx || !p_rmx || !p_pload || !p_bpf) {
+	if (!p_unlink || !p_setx || !p_rmx || !p_bpf ||
+	    (native_signing && !p_pload)) {
 		pr_err("expected programs missing in bpf2 object");
 		err = -ENOENT;
 		goto out;
@@ -571,10 +577,13 @@ static int init_lsm(void)
 	if (err)
 		goto out;
 
-	err = attach_pin(p_pload, SHIRUDO_LSM_PROG_LOAD_LINK_PIN, &link_pload);
-	if (err) {
-		pr_err("attach lsm/bpf_prog_load: %s", strerror(-err));
-		goto out;
+	if (native_signing) {
+		err = attach_pin(p_pload, SHIRUDO_LSM_PROG_LOAD_LINK_PIN,
+				 &link_pload);
+		if (err) {
+			pr_err("attach lsm/bpf_prog_load: %s", strerror(-err));
+			goto out;
+		}
 	}
 
 	err = attach_pin(p_bpf, SHIRUDO_LSM_LINK_PIN, &link_bpf);
@@ -583,8 +592,9 @@ static int init_lsm(void)
 		goto out;
 	}
 
-	pr_info("bpf2 + seal attached: lsm/bpf gate live, bpffs and "
-		"/var/lib/shirudo sealed");
+	pr_info("bpf2 + seal attached: lsm/bpf gate live (%s), bpffs and "
+		"/var/lib/shirudo sealed",
+		native_signing ? "kernel signatures" : "trusted root fallback");
 	err = 0;
 out:
 	for (i = 0; i < (int)ARRAY_SIZE(seal_links); i++)
@@ -893,6 +903,7 @@ static int chain_extend_init(const struct restore_entry *set, size_t n,
 static const struct shirudo_help_item init_options[] = {
 	{ "--check-only", "run the pre-flight only; never touch kernel state" },
 	{ "--no-tpm",     "proceed without TPM (degraded mode)" },
+	{ "--trusted-root", "commit userspace signature verification fallback" },
 };
 
 static const struct shirudo_help_section init_help_sections[] = {
@@ -901,7 +912,7 @@ static const struct shirudo_help_section init_help_sections[] = {
 };
 
 static const struct shirudo_help init_help = {
-	.usage      = "shirudo init [--check-only] [--no-tpm]",
+	.usage      = "shirudo init [--check-only] [--no-tpm] [--trusted-root]",
 	.summary    = "Bootstrap the BPF LSM on this target. Idempotent; safe "
 		      "to re-run.\nThe pinned link survives the process exit.",
 	.sections   = init_help_sections,
@@ -918,6 +929,10 @@ int cmd_init(int argc, const char **argv)
 {
 	struct shirudo_preflight_opts opts = {};
 	struct shirudo_preflight_result res;
+	struct shirudo_mode_state mode_state = {};
+	uint8_t cert_sha256[32];
+	enum shirudo_mode mode = SHIRUDO_MODE_UNTRUSTED_ROOT;
+	bool mode_committed = false, native_signing = true;
 	bool check_only = false;
 	int i, rc;
 
@@ -928,6 +943,8 @@ int cmd_init(int argc, const char **argv)
 			check_only = true;
 		} else if (strcmp(a, "--no-tpm") == 0) {
 			opts.allow_no_tpm = true;
+		} else if (strcmp(a, "--trusted-root") == 0) {
+			mode = SHIRUDO_MODE_TRUSTED_ROOT;
 		} else if (shirudo_is_help(a)) {
 			shirudo_print_help(&init_help);
 			return 0;
@@ -937,6 +954,33 @@ int cmd_init(int argc, const char **argv)
 			return 2;
 		}
 	}
+
+	rc = shirudo_mode_read(&mode_state);
+	if (rc == 0) {
+		mode_committed = true;
+		if (mode_state.mode == SHIRUDO_MODE_UNTRUSTED_ROOT &&
+			mode == SHIRUDO_MODE_TRUSTED_ROOT) {
+			pr_err("init: trusted-root cannot downgrade an existing "
+			       "untrusted-root commitment");
+			return 1;
+		}
+		mode = mode_state.mode;
+	} else if (rc != -ENOENT) {
+		pr_err("init: invalid mode state %s: %s", SHIRUDO_MODE_PATH,
+		       strerror(-rc));
+		return 1;
+	}
+	rc = shirudo_chain_cert_sha256(cert_sha256);
+	if (rc) {
+		pr_err("init: read certificate digest: %s", strerror(-rc));
+		return 1;
+	}
+	if (mode_committed &&
+	    !shirudo_ct_eq(cert_sha256, mode_state.cert_sha256, 32)) {
+		pr_err("init: certificate differs from the committed mode state");
+		return 1;
+	}
+	opts.mode = mode;
 
 	shirudo_preflight_run(&opts, &res);
 	print_preflight(&res);
@@ -950,13 +994,23 @@ int cmd_init(int argc, const char **argv)
 	if (check_only)
 		return 0;
 
+	rc = init_bpffs();
+	if (rc)
+		return 1;
+	if (!mode_committed) {
+		rc = shirudo_mode_commit(mode, cert_sha256);
+		if (rc) {
+			pr_err("init: commit mode state: %s", strerror(-rc));
+			return 1;
+		}
+	}
+
 	rc = init_keyring();
 	if (rc)
 		return 1;
 
-	rc = init_bpffs();
-	if (rc)
-		return 1;
+	if (shirudo_kernel_abi_check(NULL, 0) != 0)
+		native_signing = false;
 
 	/*
 	 * Label the binary + the /var/lib/shirudo tree (bpffs skipped)
@@ -968,7 +1022,7 @@ int cmd_init(int argc, const char **argv)
 		pr_warn("init: seal label-walk incomplete: %s "
 			"(some files may be unsealed)", strerror(-rc));
 
-	rc = init_lsm();
+	rc = init_lsm(mode, native_signing);
 	if (rc)
 		return 1;
 

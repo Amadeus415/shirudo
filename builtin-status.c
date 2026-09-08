@@ -39,8 +39,10 @@
 #include "util/json.h"
 #include "util/macros.h"
 #include "util/keyring.h"
+#include "util/kernel_abi.h"
 #include "util/log.h"
 #include "util/malloc.h"
+#include "util/mode.h"
 #include "util/paths.h"
 #include "util/kmodules.h"
 #include "util/kmsg.h"
@@ -537,6 +539,10 @@ int cmd_status(int argc, const char **argv)
 	bool show_full = false;
 	unsigned int kernel_log_lines = 10;
 	bool lsm_attached, keyring_present, is_operator, cert_present, is_target;
+	struct shirudo_mode_state mode_state = {};
+	enum shirudo_mode mode = SHIRUDO_MODE_UNTRUSTED_ROOT;
+	bool mode_committed = false, mode_valid = true;
+	bool native_signing = false;
 	key_serial_t keyring_serial, keyring_pinned;
 	struct shirudo_sysinfo sysi = {};
 	struct shirudo_config otel_cfg = {};
@@ -647,6 +653,18 @@ int cmd_status(int argc, const char **argv)
 	is_operator = access(SHIRUDO_SIGNING_KEY_PATH, F_OK) == 0;
 	cert_present = access(SHIRUDO_CERT_PATH, F_OK) == 0;
 	is_target = cert_present || lsm_attached || keyring_present;
+	{
+		int mode_rc = shirudo_mode_read(&mode_state);
+
+		if (mode_rc == 0) {
+			mode = mode_state.mode;
+			mode_committed = true;
+		} else if (mode_rc != -ENOENT) {
+			mode_valid = false;
+		}
+	}
+	if (mode_committed && is_target)
+		native_signing = shirudo_kernel_abi_check(NULL, 0) == 0;
 
 	n_ups = scandir(SHIRUDO_BPFFS_UPATCHES_DIR, &ups, notdot, alphasort);
 	if (n_ups < 0)
@@ -707,6 +725,12 @@ int cmd_status(int argc, const char **argv)
 		shirudo_json_kv_string(&e, "version_id", shirudo_version_id);
 		shirudo_json_kv_bool(&e, "is_target", is_target);
 		shirudo_json_kv_bool(&e, "is_operator", is_operator);
+		shirudo_json_kv_string(&e, "mode", shirudo_mode_status_name(mode));
+		shirudo_json_kv_bool(&e, "mode_committed", mode_committed);
+		shirudo_json_kv_bool(&e, "mode_state_valid", mode_valid);
+		shirudo_json_kv_bool(&e, "kernel_signature_supported", native_signing);
+		shirudo_json_kv_string(&e, "load_authorization",
+				       shirudo_mode_authorization(mode, native_signing));
 		{
 			struct shirudo_conditions_input cin;
 			struct shirudo_condition conds[SHIRUDO_CONDITIONS_MAX];
@@ -952,6 +976,13 @@ int cmd_status(int argc, const char **argv)
 		printf("Host:              %s\n", hostname);
 		printf("Roles:             %s\n",
 		       roles_str(is_target, is_operator));
+		printf("Mode:              %s%s\n",
+		       shirudo_mode_status_name(mode),
+		       mode_committed ? "" : "  (not committed; default)");
+		if (!mode_valid)
+			printf("Mode state:        INVALID (%s)\n", SHIRUDO_MODE_PATH);
+		printf("Load authorization: %s\n",
+		       shirudo_mode_authorization(mode, native_signing));
 		if (reason[0])
 			printf("Status:            %s  (%s)\n", verdict,
 			       reason);

@@ -58,8 +58,25 @@ If the machine has no usable TPM, initialize in degraded mode:
 
 The BPF LSM and target kernel configuration must support the features
 described in ``Documentation/architecture.rst``. The init command
-installs the certificate into the target keyring, attaches the
-enforcement links, and prepares the private bpffs state.
+installs the public certificate into the target keyring, attaches the
+enforcement links, and prepares the private bpffs state. Init commits
+the selected root mode in ``/var/lib/shirudo/mode``. The default
+``untrusted-root`` mode requires native kernel BPF-signature support.
+
+For a kernel without that support, select the compatibility mode on its
+first initialization:
+
+::
+
+    sudo shirudo init --trusted-root
+
+This mode is irreversible through Shirudo: subsequent boots reuse the
+committed mode, and ``shirudo status`` (including the systemd keepalive
+payload) reports ``trusted-root`` or ``untrusted-root``. In
+``trusted-root`` mode Shirudo verifies each upatch signature in target
+userspace before loading an unsigned outer loader. The target stores only
+the public ``cert.der`` and parsed public-key state; the private
+``signing_key.pem`` remains on the operator/build host.
 
 Create a signing key
 ====================

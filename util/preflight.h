@@ -10,6 +10,8 @@
 
 #include <stdbool.h>
 
+#include "mode.h"
+
 #define SHIRUDO_PREFLIGHT_DETAIL_MAX	256
 
 enum shirudo_preflight_id {
@@ -39,6 +41,7 @@ struct shirudo_preflight_result {
 
 struct shirudo_preflight_opts {
 	bool	allow_no_tpm;
+	enum shirudo_mode mode;
 };
 
 /*

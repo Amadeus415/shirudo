@@ -9,15 +9,18 @@
  *                       enforcement policy": kernel-context (signed
  *                       loader) calls return immediately; userspace
  *                       BPF_PROG_LOAD must be prog_type=SYSCALL AND
- *                       have a non-zero signature (a cheap pre-filter;
- *                       the authoritative verdict is enforced by
- *                       lsm/bpf_prog_load below, after the kernel has
- *                       verified the signature); a fixed denylist of
+ *                       have a non-zero signature in native mode (a cheap
+ *                       pre-filter; the authoritative verdict is enforced
+ *                       by lsm/bpf_prog_load below, after the kernel has
+ *                       verified the signature). In legacy trusted-root
+ *                       mode, permit only an unsigned SYSCALL loader from
+ *                       the frozen Shirudo executable identity; a fixed
+ *                       denylist of
  *                       mutating cmds is denied with -EPERM; everything
  *                       else (readonly ops, BPF_PROG_TEST_RUN,
  *                       BPF_MAP_FREEZE, BPF_OBJ_PIN transitionally,
  *                       plus any future readonly cmd) is allowed.
- *   lsm/bpf_prog_load -- the admission gate that runs INSIDE the
+ *   lsm/bpf_prog_load -- the native-mode admission gate that runs INSIDE the
  *                       verifier, after signature verification, so the
  *                       kernel-recorded verdict is final here. A
  *                       userspace load is admitted only when the kernel
@@ -93,7 +96,7 @@ struct shirudo_sb_id {
 	__u32	exe_dev;
 	__u64	exe_ino;
 	__s32	keyring_serial;
-	__u32	pad;
+	__u32	mode;
 };
 
 struct {
@@ -103,11 +106,33 @@ struct {
 	__type(value, struct shirudo_sb_id);
 } shirudo_bpffs_sb SEC(".maps");
 
+#ifdef SHIRUDO_BPF2_LEGACY
+static __always_inline bool shirudo_current_exe_matches(void)
+{
+	struct shirudo_sb_id *id;
+	struct task_struct *task;
+	struct file *exe;
+	__u32 zero = 0, exe_dev;
+	__u64 exe_ino;
+
+	id = bpf_map_lookup_elem(&shirudo_bpffs_sb, &zero);
+	if (!id)
+		return false;
+	task = bpf_get_current_task_btf();
+	exe = BPF_CORE_READ(task, mm, exe_file);
+	if (!exe)
+		return false;
+	exe_dev = BPF_CORE_READ(exe, f_inode, i_sb, s_dev);
+	exe_ino = BPF_CORE_READ(exe, f_inode, i_ino);
+	return exe_dev == id->exe_dev && exe_ino == id->exe_ino;
+}
+#endif
+
 SEC("lsm/bpf")
 int BPF_PROG(shirudo_lsm_bpf, int cmd, union bpf_attr *attr,
 	     unsigned int size, bool kernel)
 {
-	__u32 prog_type, sig_sz;
+	__u32 prog_type;
 
 	if (kernel)
 		return 0;
@@ -120,12 +145,27 @@ int BPF_PROG(shirudo_lsm_bpf, int cmd, union bpf_attr *attr,
 		 * against attr->keyring_id immediately after this hook.
 		 */
 		prog_type = BPF_CORE_READ(attr, prog_type);
-		sig_sz = BPF_CORE_READ(attr, signature_size);
 		if (prog_type != BPF_PROG_TYPE_SYSCALL)
 			return -EACCES;
+#ifdef SHIRUDO_BPF2_LEGACY
+		{
+			struct shirudo_sb_id *id;
+			__u32 zero = 0;
+
+			id = bpf_map_lookup_elem(&shirudo_bpffs_sb, &zero);
+			if (!id || id->mode != 1 ||
+			    !shirudo_current_exe_matches())
+				return -EACCES;
+		}
+		return 0;
+#else
+		__u32 sig_sz;
+
+		sig_sz = BPF_CORE_READ(attr, signature_size);
 		if (sig_sz == 0)
 			return -EACCES;
 		return 0;
+#endif
 
 	/*
 	 * Vetted mutating cmds the signed-loader data-map + attach/pin
@@ -206,6 +246,7 @@ int BPF_PROG(shirudo_lsm_bpf, int cmd, union bpf_attr *attr,
  * signed loader running in kernel context; those are always allowed
  * (the loader itself passed this gate when it was loaded from userspace).
  */
+#ifndef SHIRUDO_BPF2_LEGACY
 SEC("lsm/bpf_prog_load")
 int BPF_PROG(shirudo_lsm_bpf_prog_load, struct bpf_prog *prog,
 	     union bpf_attr *attr, struct bpf_token *token, bool kernel)
@@ -239,6 +280,7 @@ int BPF_PROG(shirudo_lsm_bpf_prog_load, struct bpf_prog *prog,
 
 	return 0;
 }
+#endif
 
 /*
  * Verdict for an operation targeting an inode in superblock target_dev:

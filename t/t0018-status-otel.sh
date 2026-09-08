@@ -36,7 +36,12 @@ values = {
 }
 assert meta["path"] == "/v1/logs"
 assert record["eventName"] == "shirudo.keepalive"
-assert {"schema", "status", "conditions", "tpm"} <= values.keys()
+assert {"schema", "status", "mode", "mode_committed",
+        "mode_state_valid", "kernel_signature_supported",
+        "load_authorization", "conditions", "tpm"} <= values.keys()
+assert values["mode"] == {"stringValue": "untrusted-root"}
+assert values["mode_committed"] == {"boolValue": False}
+assert values["mode_state_valid"] == {"boolValue": True}
 assert values["tpm"]["kvlistValue"]
 status = values["status"]["stringValue"]
 severity = {

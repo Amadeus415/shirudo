@@ -20,6 +20,37 @@ program carries a valid PKCS#7 signature for the certificate in the
 requested upatch, and shirudo pins the resulting links and maps under
 ``/var/lib/shirudo/bpffs/``.
 
+Root modes and legacy kernels
+=============================
+
+Initialization commits one immutable root mode in
+``/var/lib/shirudo/mode``. The default ``untrusted-root`` mode uses the
+native kernel signature ABI: the kernel verifies the CMS signature and
+the BPF LSM admission hook checks the resulting ``bpf_prog_aux.sig``
+verdict. ``shirudo init --trusted-root`` commits the alternate
+``trusted-root`` mode for kernels that do not provide that ABI. A later
+``init`` cannot change the committed mode or certificate digest.
+
+When native signing is available, trusted-root still uses the native
+kernel verification path in addition to userspace verification. When it
+is unavailable, the target reads the public certificate from
+``/var/lib/shirudo/keys/cert.der``, verifies the detached CMS signature
+over ``loader_insns || data`` in userspace, and sends an unsigned outer
+``BPF_PROG_TYPE_SYSCALL`` loader to the kernel. There is no literal
+userspace access to ``bpf_prog_aux.sig``; that is kernel-private state.
+The legacy embedded BPF-LSM object has no signature-field references and
+does not attach ``lsm/bpf_prog_load``. Its ``lsm/bpf`` hook permits an
+unsigned outer loader only when its caller's executable ``(device,inode)``
+matches the identity frozen by the first initialization. Other userspace
+BPF loads remain denied.
+
+The target never needs the private signing key. Only the public
+certificate, its committed SHA-256 digest, and transient parsed public-key
+and signature buffers are held by target userspace during verification.
+Status JSON and the periodic ``shirudo.keepalive`` event include
+``mode``, ``mode_committed``, ``kernel_signature_supported``, and
+``load_authorization`` so monitoring can distinguish the two policies.
+
 shirudo is agentless on the target. There is no long-lived shirudo
 daemon and no shirudo-owned listening socket. The systemd unit used
 for reboot persistence is ``Type=oneshot``; ordinary target

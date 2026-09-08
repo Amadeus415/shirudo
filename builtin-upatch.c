@@ -33,6 +33,7 @@
 #include "builtin.h"
 #include "util/chain.h"
 #include "util/config.h"
+#include "util/crypto.h"
 #include "util/eventlog.h"
 #include "util/elf_target.h"
 #include "util/help.h"
@@ -42,6 +43,7 @@
 #include "util/keyring.h"
 #include "util/log.h"
 #include "util/malloc.h"
+#include "util/mode.h"
 #include "util/paths.h"
 #include "util/report.h"
 #include "util/seal.h"
@@ -112,6 +114,77 @@ static const char *cat_from_load_errno(int e)
 	case EPERM:		return "lsm_denied";
 	default:		return "verifier_rejected";
 	}
+}
+
+/*
+ * Verify the exact bytes signed by shirudo-build before using the loader.
+ * The target holds only cert.der; no private key is read by this path.
+ */
+static int verify_userspace_signature(const struct shirudo_upatch *u,
+				      const struct shirudo_mode_state *state,
+				      struct shirudo_op_report *rep)
+{
+	const void *insns, *data, *sig;
+	struct shirudo_cert cert = {};
+	uint8_t cert_sha[32];
+	unsigned char *payload = NULL;
+	size_t insns_len, data_len, total;
+	int rc;
+
+	if (!u || !state || u->hdr.signature_len == 0) {
+		rep_fail(rep, "userspace_signature_verify", "signature_rejected",
+			 EKEYREJECTED, "BPF upatch has no signature");
+		return -EKEYREJECTED;
+	}
+	rc = shirudo_chain_cert_sha256(cert_sha);
+	if (rc || !shirudo_ct_eq(cert_sha, state->cert_sha256,
+				 sizeof(cert_sha))) {
+		rep_fail(rep, "userspace_signature_verify", "tampered",
+			 rc ? -rc : EKEYREJECTED,
+			 "certificate differs from committed mode state");
+		return rc ? rc : -EKEYREJECTED;
+	}
+	rc = shirudo_cert_read_file(SHIRUDO_CERT_PATH, &cert);
+	if (rc) {
+		rep_fail(rep, "userspace_signature_verify", "signature_rejected",
+			 -rc, "cannot parse target certificate");
+		return rc;
+	}
+
+	insns = shirudo_upatch_loader(u);
+	data = shirudo_upatch_data(u);
+	sig = shirudo_upatch_signature(u);
+	insns_len = u->hdr.loader_insns_len;
+	data_len = u->hdr.data_len;
+	if (insns_len > SIZE_MAX - data_len) {
+		shirudo_cert_free(&cert);
+		rep_fail(rep, "userspace_signature_verify", "parser_rejected",
+			 EOVERFLOW, "signed payload is too large");
+		return -EOVERFLOW;
+	}
+	total = insns_len + data_len;
+	payload = xmalloc(total ? total : 1);
+	if (!payload) {
+		shirudo_cert_free(&cert);
+		rep_fail(rep, "userspace_signature_verify", "unknown", ENOMEM,
+			 "signed payload allocation failed");
+		return -ENOMEM;
+	}
+	memcpy(payload, insns, insns_len);
+	memcpy(payload + insns_len, data, data_len);
+	rc = shirudo_verify_detached(payload, total, sig,
+				     u->hdr.signature_len, &cert);
+	if (rc) {
+		pr_err("upatch: userspace CMS signature verification failed");
+		rep_fail(rep, "userspace_signature_verify", "signature_rejected",
+			 EKEYREJECTED, "CMS signature verification failed");
+		rc = -EKEYREJECTED;
+	} else {
+		pr_info("upatch: userspace CMS signature verified");
+	}
+	xfree(payload, total ? total : 1);
+	shirudo_cert_free(&cert);
+	return rc;
 }
 
 static const char *flag_str(const struct shirudo_upatch *u)
@@ -754,6 +827,36 @@ static int prog_load_signed(const struct bpf_insn *insns, size_t insn_cnt,
 	memcpy(attr.prog_name, prog_name,
 	       strnlen(prog_name, sizeof(attr.prog_name)));
 
+
+	fd = syscall(__NR_bpf, BPF_PROG_LOAD, &attr, sizeof(attr));
+	return (int)fd;
+}
+
+/*
+ * Legacy-kernel loader path. The signature has already been verified by
+ * userspace in trusted-root mode; deliberately leave the native signing
+ * attributes out of the request so kernels without that ABI can load it.
+ */
+static int prog_load_unsigned(const struct bpf_insn *insns, size_t insn_cnt,
+				      const char *prog_name, int loader_map_fd,
+				      char *log_buf, size_t log_sz)
+{
+	union bpf_attr attr = {};
+	int fd_array[1] = { loader_map_fd };
+	long fd;
+
+	attr.prog_type = BPF_PROG_TYPE_SYSCALL;
+	attr.insn_cnt = (uint32_t)insn_cnt;
+	attr.insns = (uint64_t)(uintptr_t)insns;
+	attr.license = (uint64_t)(uintptr_t)"Dual BSD/GPL";
+	attr.prog_flags = BPF_F_SLEEPABLE;
+	attr.log_level = log_buf ? 1 : 0;
+	attr.log_size = (uint32_t)log_sz;
+	attr.log_buf = (uint64_t)(uintptr_t)log_buf;
+	attr.fd_array = (uint64_t)(uintptr_t)fd_array;
+	attr.fd_array_cnt = 1;
+	memcpy(attr.prog_name, prog_name,
+	       strnlen(prog_name, sizeof(attr.prog_name)));
 
 	fd = syscall(__NR_bpf, BPF_PROG_LOAD, &attr, sizeof(attr));
 	return (int)fd;
@@ -1809,6 +1912,7 @@ static int upatch_apply(const char *path, bool verify_only,
 			struct shirudo_op_report *rep)
 {
 	struct shirudo_upatch u;
+	struct shirudo_mode_state mode_state = {};
 	struct shirudo_prog_spec *prog_specs = NULL;
 	const struct bpf_insn *insns;
 	const void *sig, *data;
@@ -1820,6 +1924,7 @@ static int upatch_apply(const char *path, bool verify_only,
 	int prog_fd = -1, map_fd = -1, rc;
 	struct shirudo_loader_ctx *cx = NULL;
 	uint32_t retval = 0;
+	bool native_signing = true;
 
 	vlog = xmalloc(SHIRUDO_VERIFIER_LOG_MAX);
 	if (!vlog) {
@@ -1888,6 +1993,26 @@ static int upatch_apply(const char *path, bool verify_only,
 		       u.hdr.loader_insns_len, sizeof(struct bpf_insn));
 		rep_fail(rep, "parse", "parser_rejected", 0,
 			 "loader_insns_len misaligned");
+		rc = 1;
+		goto out;
+	}
+
+	rc = shirudo_mode_read(&mode_state);
+	if (rc) {
+		pr_err("upatch: mode state unavailable: %s", strerror(-rc));
+		rep_fail(rep, "pre_flight", "tampered", -rc,
+			 "trusted mode state unavailable");
+		rc = 1;
+		goto out;
+	}
+	if (shirudo_kernel_abi_check(NULL, 0) != 0)
+		native_signing = false;
+	if (mode_state.mode == SHIRUDO_MODE_UNTRUSTED_ROOT &&
+	    !native_signing) {
+		pr_err("upatch: kernel lacks native signing support; "
+		       "trusted-root mode is required");
+		rep_fail(rep, "pre_flight", "kernel_abi_unsupported",
+			 EOPNOTSUPP, "native kernel signing is unavailable");
 		rc = 1;
 		goto out;
 	}
@@ -2076,7 +2201,8 @@ static int upatch_apply(const char *path, bool verify_only,
 
 		shirudo_sha256(insns, u.hdr.loader_insns_len, loader_digest);
 		map_fd = loader_map_create("__loader.map", u.hdr.data_len,
-					   loader_digest, sizeof(loader_digest));
+					   native_signing ? loader_digest : NULL,
+					   native_signing ? sizeof(loader_digest) : 0);
 	}
 	if (map_fd < 0) {
 		pr_err("__loader.map create: %s", strerror(errno));
@@ -2112,7 +2238,10 @@ static int upatch_apply(const char *path, bool verify_only,
 	}
 
 	/*
-	 * 4. BPF_PROG_LOAD with signature + keyring_id + fd_array_cnt=1.
+	 * 4. Verify the userspace signature in trusted-root mode, then issue
+	 *    BPF_PROG_LOAD. Native kernels receive the signature + keyring_id;
+	 *    legacy kernels receive an unsigned outer loader after userspace
+	 *    verification.
 	 *    The kernel resolves the exclusive metadata map from fd_array,
 	 *    appends its frozen contents to the instructions, and verifies
 	 *    the CMS signature over insns || metadata against the keyring --
@@ -2121,26 +2250,39 @@ static int upatch_apply(const char *path, bool verify_only,
 	 *    the kernel attests the metadata directly (see
 	 *    Documentation/bpf/signing.rst, "Load-time verification").
 	 */
+	if (mode_state.mode == SHIRUDO_MODE_TRUSTED_ROOT) {
+		rc = verify_userspace_signature(&u, &mode_state, rep);
+		if (rc) {
+			rc = 1;
+			goto out;
+		}
+	}
 	vlog[0] = '\0';
-	prog_fd = prog_load_signed(insns, insn_cnt, prog_name,
-				   sig, u.hdr.signature_len,
-				   (int32_t)keyring, map_fd,
-				   vlog, SHIRUDO_VERIFIER_LOG_MAX);
+	if (native_signing)
+		prog_fd = prog_load_signed(insns, insn_cnt, prog_name,
+					   sig, u.hdr.signature_len,
+					   (int32_t)keyring, map_fd,
+					   vlog, SHIRUDO_VERIFIER_LOG_MAX);
+	else
+		prog_fd = prog_load_unsigned(insns, insn_cnt, prog_name,
+					     map_fd, vlog,
+					     SHIRUDO_VERIFIER_LOG_MAX);
 	if (prog_fd < 0) {
 		int e = errno;
 
-		pr_err("BPF_PROG_LOAD (signed loader): %s", strerror(e));
+		pr_err("BPF_PROG_LOAD (outer loader): %s", strerror(e));
 		if (vlog[0])
 			fprintf(stderr, "loader verifier log:\n%s\n", vlog);
 		rep_fail(rep, "signed_loader_load", cat_from_load_errno(e), e,
-			 "BPF_PROG_LOAD of signed loader failed");
+			 "BPF_PROG_LOAD of outer loader failed");
 		shirudo_report_set_log(rep, vlog);
 		rc = 1;
 		goto out;
 	}
 
-	pr_info("loaded signed loader: prog_fd=%d keyring=%d "
-		"sig=%uB insns=%zu data=%uB",
+	pr_info("loaded %s loader: prog_fd=%d keyring=%d sig=%uB "
+		"insns=%zu data=%uB",
+		native_signing ? "signed" : "trusted-root unsigned",
 		prog_fd, (int)keyring, u.hdr.signature_len, insn_cnt,
 		u.hdr.data_len);
 
@@ -2309,19 +2451,31 @@ int shirudo_upatch_apply(const char *path)
 static int upatch_preflight(const char *expect_chain,
 			    struct shirudo_op_report *rep)
 {
+	struct shirudo_mode_state mode_state = {};
 	uint8_t want[SHIRUDO_CHAIN_DIGEST_LEN], have[SHIRUDO_CHAIN_DIGEST_LEN];
 	char have_hex[2 * SHIRUDO_CHAIN_DIGEST_LEN + 1];
 	char abi_detail[SHIRUDO_KERNEL_ABI_DETAIL_MAX];
 	int fd, rc;
 
-	rc = shirudo_kernel_abi_check(abi_detail, sizeof(abi_detail));
+	rc = shirudo_mode_read(&mode_state);
 	if (rc) {
+		pr_err("upatch: pre-flight refused (category: tampered, "
+		       "message: mode state unavailable)");
+		rep_fail(rep, "pre_flight", "tampered", -rc,
+			 "trusted mode state unavailable");
+		return rc;
+	}
+	rc = shirudo_kernel_abi_check(abi_detail, sizeof(abi_detail));
+	if (rc && mode_state.mode != SHIRUDO_MODE_TRUSTED_ROOT) {
 		pr_err("upatch: pre-flight refused (category: "
 		       "kernel_abi_unsupported, message: %s)", abi_detail);
 		rep_fail(rep, "pre_flight", "kernel_abi_unsupported",
 			 EOPNOTSUPP, abi_detail);
 		return rc;
 	}
+	if (rc)
+		pr_warn("upatch: native signing unavailable; using trusted-root "
+			"userspace verification fallback");
 
 	if (shirudo_keyring_find(SHIRUDO_KEYRING_NAME) < 0) {
 		pr_err("upatch load: pre-flight refused (category: tampered, "

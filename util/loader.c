@@ -16,6 +16,12 @@ asm(".section .rodata, \"a\"\n"
     ".previous\n");
 
 asm(".section .rodata, \"a\"\n"
+    ".global shirudo_bpf2_trusted_root_o; shirudo_bpf2_trusted_root_o:\n"
+    ".incbin \"bpf/bpf2-trusted-root.bpf.o\"\n"
+    ".global shirudo_bpf2_trusted_root_o_end; shirudo_bpf2_trusted_root_o_end:\n"
+    ".previous\n");
+
+asm(".section .rodata, \"a\"\n"
     ".global shirudo_seal_o; shirudo_seal_o:\n"
     ".incbin \"bpf/seal.bpf.o\"\n"
     ".global shirudo_seal_o_end; shirudo_seal_o_end:\n"
@@ -28,6 +34,7 @@ asm(".section .rodata, \"a\"\n"
     ".previous\n");
 
 extern const char shirudo_bpf2_o[], shirudo_bpf2_o_end[];
+extern const char shirudo_bpf2_trusted_root_o[], shirudo_bpf2_trusted_root_o_end[];
 extern const char shirudo_seal_o[], shirudo_seal_o_end[];
 extern const char shirudo_unload_bpf_o[], shirudo_unload_bpf_o_end[];
 
@@ -38,6 +45,11 @@ static const struct shirudo_embedded_bpf bpf2 = {
 	 * .size set at use-time -- end pointer arithmetic isn't a
 	 * constant expression.
 	 */
+};
+
+static const struct shirudo_embedded_bpf bpf2_trusted_root = {
+	.name = "bpf2-trusted-root",
+	.data = shirudo_bpf2_trusted_root_o,
 };
 
 static const struct shirudo_embedded_bpf seal = {
@@ -56,6 +68,16 @@ const struct shirudo_embedded_bpf *shirudo_bpf2_blob(void)
 
 	b = bpf2;
 	b.size = (size_t)(shirudo_bpf2_o_end - shirudo_bpf2_o);
+	return &b;
+}
+
+const struct shirudo_embedded_bpf *shirudo_bpf2_trusted_root_blob(void)
+{
+	static struct shirudo_embedded_bpf b;
+
+	b = bpf2_trusted_root;
+	b.size = (size_t)(shirudo_bpf2_trusted_root_o_end -
+				  shirudo_bpf2_trusted_root_o);
 	return &b;
 }
 
