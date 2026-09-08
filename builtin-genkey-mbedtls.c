@@ -21,6 +21,7 @@
 
 #include "builtin.h"
 #include "util/help.h"
+#include "util/io.h"
 #include "util/log.h"
 #include "util/macros.h"
 #include "util/paths.h"
@@ -77,26 +78,6 @@ static int path_exists(const char *path)
 	struct stat st;
 
 	return stat(path, &st) == 0;
-}
-
-static int write_all(int fd, const void *data, size_t len)
-{
-	const unsigned char *p = data;
-
-	while (len) {
-		ssize_t n = write(fd, p, len);
-
-		if (n < 0) {
-			if (errno == EINTR)
-				continue;
-			return -1;
-		}
-		if (!n)
-			return -1;
-		p += n;
-		len -= (size_t)n;
-	}
-	return 0;
 }
 
 static int init_key(struct gen_state *s)
@@ -181,7 +162,7 @@ static int write_private_pem(struct gen_state *s, const char *path)
 	if (fchmod(fd, 0600))
 		goto out;
 	n = mbedtls_pk_write_key_pem(&s->key, pem, sizeof(pem));
-	if (n || write_all(fd, pem, strlen((char *)pem)) || fsync(fd))
+	if (n || shirudo_write_all(fd, pem, strlen((char *)pem)) || fsync(fd))
 		goto out;
 	rc = 0;
 out:
@@ -206,7 +187,8 @@ static int write_cert_der(struct gen_state *s, mbedtls_x509write_cert *cert,
 		goto out;
 	n = mbedtls_x509write_crt_der(cert, der, sizeof(der),
 					      mbedtls_ctr_drbg_random, &s->drbg);
-	if (n <= 0 || write_all(fd, der + sizeof(der) - n, (size_t)n) || fsync(fd))
+	if (n <= 0 || shirudo_write_all(fd, der + sizeof(der) - n,
+					(size_t)n) || fsync(fd))
 		goto out;
 	rc = 0;
 out:

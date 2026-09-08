@@ -37,6 +37,7 @@
 #include "util/eventlog.h"
 #include "util/elf_target.h"
 #include "util/help.h"
+#include "util/io.h"
 #include "util/json.h"
 #include "util/kernel_abi.h"
 #include "util/macros.h"
@@ -2685,24 +2686,6 @@ static bool safe_upatch_name(const char *name)
 	return true;
 }
 
-static int write_all(int fd, const void *buf, size_t n)
-{
-	const char *p = buf;
-
-	while (n) {
-		ssize_t w = write(fd, p, n);
-
-		if (w < 0) {
-			if (errno == EINTR)
-				continue;
-			return -errno;
-		}
-		p += (size_t)w;
-		n -= (size_t)w;
-	}
-	return 0;
-}
-
 static int write_file_atomic(const char *path, const void *buf, size_t len,
 			     mode_t mode)
 {
@@ -2715,7 +2698,7 @@ static int write_file_atomic(const char *path, const void *buf, size_t len,
 	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
 	if (fd < 0)
 		return -errno;
-	rc = write_all(fd, buf, len);
+	rc = shirudo_write_all(fd, buf, len);
 	if (!rc && fchmod(fd, mode) != 0)
 		rc = -errno;
 	if (!rc && fsync(fd) != 0)
@@ -2925,12 +2908,12 @@ static int append_json_record(const char *path, const char *json, size_t len)
 			goto out_unlock;
 		}
 		if (last != '\n')
-			rc = write_all(fd, "\n", 1);
+			rc = shirudo_write_all(fd, "\n", 1);
 	}
 	if (!rc)
-		rc = write_all(fd, json, len);
+		rc = shirudo_write_all(fd, json, len);
 	if (!rc)
-		rc = write_all(fd, "\n", 1);
+		rc = shirudo_write_all(fd, "\n", 1);
 	if (!rc && fsync(fd) != 0)
 		rc = -errno;
 	if (rc && ftruncate(fd, original_size) != 0)
@@ -2961,7 +2944,7 @@ static int copy_file_atomic(const char *src, const char *dst)
 		return rc;
 	}
 	while ((r = read(in, buf, sizeof(buf))) > 0) {
-		rc = write_all(out, buf, (size_t)r);
+		rc = shirudo_write_all(out, buf, (size_t)r);
 		if (rc)
 			break;
 	}

@@ -14,27 +14,19 @@
 #include <unistd.h>
 
 #include "util/config.h"
+#include "util/io.h"
 
 static int write_config(const char *path, const char *contents)
 {
-	size_t left = strlen(contents);
-	const char *p = contents;
-	int fd;
+	int fd, rc;
 
 	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
 	if (fd < 0)
 		return -errno;
-	while (left) {
-		ssize_t n = write(fd, p, left);
-
-		if (n < 0) {
-			if (errno == EINTR)
-				continue;
-			close(fd);
-			return -errno;
-		}
-		p += n;
-		left -= (size_t)n;
+	rc = shirudo_write_all(fd, contents, strlen(contents));
+	if (rc) {
+		close(fd);
+		return rc;
 	}
 	return close(fd) == 0 ? 0 : -errno;
 }

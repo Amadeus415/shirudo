@@ -12,6 +12,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "io.h"
+
 extern char **environ;
 
 static uint64_t monotonic_ns(void)
@@ -66,7 +68,7 @@ static int worker(uint64_t deadline, int fd)
 			completed++;
 	}
 
-	if (write(fd, &completed, sizeof(completed)) != sizeof(completed))
+	if (shirudo_write_all(fd, &completed, sizeof(completed)))
 		return 1;
 	return 0;
 }

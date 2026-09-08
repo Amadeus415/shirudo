@@ -18,29 +18,12 @@
 
 #include "chain.h"
 #include "eventlog.h"
+#include "io.h"
 #include "json.h"
 #include "log.h"
 #include "malloc.h"
 #include "paths.h"
 #include "seal.h"
-
-static int write_all(int fd, const void *buf, size_t n)
-{
-	const char *p = buf;
-
-	while (n) {
-		ssize_t w = write(fd, p, n);
-
-		if (w < 0) {
-			if (errno == EINTR)
-				continue;
-			return -errno;
-		}
-		p += (size_t)w;
-		n -= (size_t)w;
-	}
-	return 0;
-}
 
 int shirudo_eventlog_append(const char *json_line)
 {
@@ -54,9 +37,9 @@ int shirudo_eventlog_append(const char *json_line)
 		return -errno;
 	}
 
-	rc = write_all(fd, json_line, len);
+	rc = shirudo_write_all(fd, json_line, len);
 	if (!rc && (len == 0 || json_line[len - 1] != '\n'))
-		rc = write_all(fd, "\n", 1);
+		rc = shirudo_write_all(fd, "\n", 1);
 	if (!rc && fsync(fd) != 0)
 		rc = -errno;
 

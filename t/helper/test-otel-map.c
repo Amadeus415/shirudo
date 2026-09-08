@@ -18,6 +18,7 @@
 #include <shirudo/upatch.h>
 
 #include "json.h"
+#include "io.h"
 #include "malloc.h"
 #include "upatch_maps.h"
 #include "upatch_maps_otel.h"
@@ -31,26 +32,6 @@ struct fixture {
 	uint32_t key;
 	unsigned char values[16];
 };
-
-static int write_all(int fd, const void *buf, size_t len)
-{
-	const unsigned char *p = buf;
-
-	while (len) {
-		ssize_t n = write(fd, p, len);
-
-		if (n < 0) {
-			if (errno == EINTR)
-				continue;
-			return -errno;
-		}
-		if (n == 0)
-			return -EIO;
-		p += n;
-		len -= (size_t)n;
-	}
-	return 0;
-}
 
 /* Build the smallest valid artifact carrying a decoder for offline tests. */
 static int make_decoder(bool metric, bool counter, bool snapshot,
@@ -152,7 +133,7 @@ static int make_decoder(bool metric, bool counter, bool snapshot,
 	trailer->decoder_off = htole32(0);
 	trailer->decoder_len = htole32(decoder_len);
 
-	rc = write_all(fd, file, file_len);
+	rc = shirudo_write_all(fd, file, file_len);
 	if (close(fd) != 0 && rc == 0)
 		rc = -errno;
 	xfree(file, file_len);

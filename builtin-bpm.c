@@ -30,6 +30,7 @@
 #include "util/bpm_source_config.h"
 #include "util/crypto.h"
 #include "util/help.h"
+#include "util/io.h"
 #include "util/json.h"
 #include "util/log.h"
 #include "util/macros.h"
@@ -952,7 +953,7 @@ static int verify_cms(const unsigned char *payload, size_t payload_len,
 static int copy_file(const char *src, const char *dst, mode_t mode)
 {
 	unsigned char buf[65536];
-	ssize_t n, w;
+	ssize_t n;
 	int in, out, rc = 0;
 
 	in = open(src, O_RDONLY | O_CLOEXEC);
@@ -960,8 +961,9 @@ static int copy_file(const char *src, const char *dst, mode_t mode)
 	out = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
 	if (out < 0) { rc = -errno; close(in); return rc; }
 	while ((n = read(in, buf, sizeof(buf))) > 0) {
-		w = write(out, buf, (size_t)n);
-		if (w != n) { rc = w < 0 ? -errno : -EIO; break; }
+		rc = shirudo_write_all(out, buf, (size_t)n);
+		if (rc)
+			break;
 	}
 	if (n < 0 && !rc) rc = -errno;
 	if (fsync(out) && !rc) rc = -errno;
@@ -974,13 +976,10 @@ static int atomic_write(const char *path, const void *data, size_t len, mode_t m
 {
 	char tmp[PATH_MAX];
 	int fd, rc = 0;
-	ssize_t n;
-
 	if (snprintf(tmp, sizeof(tmp), "%s.tmp.%ld", path, (long)getpid()) >= (int)sizeof(tmp)) return -ENAMETOOLONG;
 	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
 	if (fd < 0) return -errno;
-	n = write(fd, data, len);
-	if (n != (ssize_t)len) rc = n < 0 ? -errno : -EIO;
+	rc = shirudo_write_all(fd, data, len);
 	if (!rc && fsync(fd)) rc = -errno;
 	close(fd);
 	if (!rc && rename(tmp, path)) rc = -errno;
@@ -1242,7 +1241,7 @@ static int extract_package_cert(const char *archive, char *out, size_t out_sz)
 		if (type == '0' && !strcmp(strrchr(name, '/') ? strrchr(name, '/') + 1 : name, "cert.der")) {
 			fd = mkstemp(tmp); if (fd < 0) { rc = -errno; break; }
 			remain = size;
-			while (remain) { unsigned char buf[65536]; size_t want = remain > sizeof(buf) ? sizeof(buf) : (size_t)remain; n = gzread(gz, buf, (unsigned)want); if (n <= 0 || write(fd, buf, (size_t)n) != n) { rc = -EIO; break; } remain -= (size_t)n; }
+			while (remain) { unsigned char buf[65536]; size_t want = remain > sizeof(buf) ? sizeof(buf) : (size_t)remain; n = gzread(gz, buf, (unsigned)want); if (n <= 0) { rc = -EIO; break; } rc = shirudo_write_all(fd, buf, (size_t)n); if (rc) break; remain -= (size_t)n; }
 			if (!rc) { close(fd); fd = -1; if (strlen(tmp) >= out_sz) rc = -ENAMETOOLONG; else { snprintf(out, out_sz, "%s", tmp); rc = 0; } }
 			if (rc) { close(fd); fd = -1; unlink(tmp); }
 			if (!rc) break;

@@ -9,30 +9,11 @@
 #include <unistd.h>
 
 #include "chain.h"
+#include "io.h"
 #include "mode.h"
 #include "paths.h"
 
 #define MODE_FILE_MAX 256
-
-static int write_all(int fd, const void *buf, size_t len)
-{
-	const char *p = buf;
-
-	while (len) {
-		ssize_t n = write(fd, p, len);
-
-		if (n < 0) {
-			if (errno == EINTR)
-				continue;
-			return -errno;
-		}
-		if (n == 0)
-			return -EIO;
-		p += n;
-		len -= (size_t)n;
-	}
-	return 0;
-}
 
 const char *shirudo_mode_file_name(enum shirudo_mode mode)
 {
@@ -159,7 +140,7 @@ int shirudo_mode_commit(enum shirudo_mode mode,
 	fd = open(SHIRUDO_MODE_PATH,
 		  O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0400);
 	if (fd >= 0) {
-		rc = write_all(fd, buf, strlen(buf));
+		rc = shirudo_write_all(fd, buf, strlen(buf));
 		if (!rc && fsync(fd) != 0)
 			rc = -errno;
 		if (close(fd) != 0 && !rc)

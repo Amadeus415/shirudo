@@ -25,6 +25,7 @@
 
 #include "bpf/lib/shirudo_serializer.h"
 #include "elf_target.h"
+#include "io.h"
 #include "loader.h"
 #include "log.h"
 #include "malloc.h"
@@ -65,24 +66,6 @@ struct decoder_set {
 	struct decoder_file	*items;
 	uint32_t		nr_items;
 };
-
-static int write_all(int fd, const void *buf, size_t n)
-{
-	const char *p = buf;
-
-	while (n) {
-		ssize_t w = write(fd, p, n);
-
-		if (w < 0) {
-			if (errno == EINTR)
-				continue;
-			return -errno;
-		}
-		p += w;
-		n -= (size_t)w;
-	}
-	return 0;
-}
 
 static void pack_header(struct shirudo_upatch_header *h,
 			const char *name, uint32_t type, uint32_t flags,
@@ -1259,21 +1242,21 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 		pr_err("open %s: %s", out_path, strerror(errno));
 		goto out;
 	}
-	err = write_all(fd, &hdr, sizeof(hdr));
+	err = shirudo_write_all(fd, &hdr, sizeof(hdr));
 	if (!err)
-		err = write_all(fd, opts.insns, opts.insns_sz);
+		err = shirudo_write_all(fd, opts.insns, opts.insns_sz);
 	if (!err)
-		err = write_all(fd, sig_buf, sio.signature_sz);
+		err = shirudo_write_all(fd, sig_buf, sio.signature_sz);
 	if (!err && data_len)
-		err = write_all(fd, signed_data, data_len);
+		err = shirudo_write_all(fd, signed_data, data_len);
 	if (!err && write_meta_len)
-		err = write_all(fd, write_meta, write_meta_len);
+		err = shirudo_write_all(fd, write_meta, write_meta_len);
 	if (!err && extra_off) {
-		err = write_all(fd, &ex, sizeof(ex));
+		err = shirudo_write_all(fd, &ex, sizeof(ex));
 		if (!err && name_len)
-			err = write_all(fd, src_path, name_len);
+			err = shirudo_write_all(fd, src_path, name_len);
 		if (!err && src_len)
-			err = write_all(fd, src_buf, src_len);
+			err = shirudo_write_all(fd, src_buf, src_len);
 	}
 	if (!err && fsync(fd) != 0)
 		err = -errno;
@@ -1377,11 +1360,11 @@ int shirudo_build_package_java_load(const char *jar_path,
 		err = -errno;
 		goto out;
 	}
-	err = write_all(fd, &hdr, sizeof(hdr));
+	err = shirudo_write_all(fd, &hdr, sizeof(hdr));
 	if (!err)
-		err = write_all(fd, jar, jar_len);
+		err = shirudo_write_all(fd, jar, jar_len);
 	if (!err && metadata_len)
-		err = write_all(fd, &metadata, metadata_len);
+		err = shirudo_write_all(fd, &metadata, metadata_len);
 	if (!err && fsync(fd) != 0)
 		err = -errno;
 	if (close(fd) != 0 && !err)
@@ -1482,9 +1465,9 @@ int shirudo_build_package_java_unload(const char *name,
 	fd = open(out_upatch, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 	if (fd < 0)
 		return -errno;
-	err = write_all(fd, &hdr, sizeof(hdr));
+	err = shirudo_write_all(fd, &hdr, sizeof(hdr));
 	if (!err)
-		err = write_all(fd, payload_sha256, 32);
+		err = shirudo_write_all(fd, payload_sha256, 32);
 	if (!err && fsync(fd) != 0)
 		err = -errno;
 	if (close(fd) != 0 && !err)

@@ -18,6 +18,7 @@
 #include <linux/keyctl.h>
 
 #include "keyring.h"
+#include "io.h"
 #include "malloc.h"
 #include "paths.h"
 
@@ -148,8 +149,7 @@ int shirudo_keyring_pin_serial(key_serial_t serial)
 		  O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
 	if (fd < 0)
 		return -errno;
-	if (write(fd, buf, (size_t)len) != len)
-		rc = errno ? -errno : -EIO;
+	rc = shirudo_write_all(fd, buf, (size_t)len);
 	if (close(fd) < 0 && !rc)
 		rc = -errno;
 	return rc;

@@ -142,6 +142,7 @@ UTIL_SRCS := \
     util/preflight.c \
     util/kernel_abi.c \
     util/log.c \
+    util/io.c \
     util/tpm.c \
     util/chain.c \
     util/config.c \
@@ -367,7 +368,7 @@ build/target/util/loader.o: $(BPF_OBJS)
 tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o \
                                    util/parse-options.o util/upatch.o \
                                    util/log.o util/json.o util/loader.o \
-                                   util/malloc.o util/paths.o \
+                                   util/io.o util/malloc.o util/paths.o \
                                    util/elf_target.o \
                                    $(LIBBPF_A)
 	@printf '  LD      $@\n'
@@ -495,13 +496,13 @@ t/helper/test-chain: t/helper/test-chain.c util/chain.o util/crypto_openssl.o ut
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl -ltss2-esys -ltss2-tctildr
 
-t/helper/test-mode: t/helper/test-mode.c util/mode.o util/chain.o \
+t/helper/test-mode: t/helper/test-mode.c util/mode.o util/chain.o util/io.o \
 			     util/crypto_openssl.o util/tpm.o util/log.o \
 			     util/config.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl -ltss2-esys -ltss2-tctildr
 
-t/helper/test-config: t/helper/test-config.c util/config.o util/log.o
+t/helper/test-config: t/helper/test-config.c util/config.o util/io.o util/log.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
@@ -533,7 +534,7 @@ t/helper/test-otel-map: t/helper/test-otel-map.c util/upatch_maps.o \
                         util/upatch_maps_otel.o util/crypto_openssl.o util/serializer.o \
                         util/upatch_decode.o util/upatch_resolve.o \
                         util/upatch.o util/json.o \
-                        util/malloc.o $(LIBBPF_A)
+                        util/io.o util/malloc.o $(LIBBPF_A)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS)
 
@@ -558,7 +559,7 @@ t/helper/test-upatch-decode: t/helper/test-upatch-decode.c \
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS)
 
-t/helper/test-exec-churn: t/helper/test-exec-churn.c
+t/helper/test-exec-churn: t/helper/test-exec-churn.c util/io.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
