@@ -139,6 +139,30 @@ test_expect_success 'make vm and test-vm share named mode support' '
 	grep -q "VM_TENANT" ../contrib/test-vm.sh &&
 	grep -q "while :; do sleep 3600; done" ../contrib/test-vm.sh
 '
+test_expect_success 'make vm selects supported stable kernel artifacts' '
+	grep -q "VM_KERNEL_STABLE_VERSIONS := 7.2 6.18 6.12 6.6 6.1" ../Makefile &&
+	grep -q "make vm KERNEL=6.18" ../Makefile &&
+	grep -q "VM_KERNEL_ARTIFACT_DIR := artifacts/linux-\$(VM_KERNEL_TAG)-kernel-debs" ../Makefile &&
+	grep -q "TEST_VM_KERNEL=\"\$(abspath \$(VM_KERNEL_IMAGE))\"" ../Makefile &&
+	make -n -C .. vm KERNEL=6.18 TEST_VM_WORK_DIR="$WORK/stable-vm" \
+		>"$WORK/stable-vm-make.out" 2>&1 &&
+	grep -q "artifacts/linux-v6.18-kernel-debs/bzImage" \
+		"$WORK/stable-vm-make.out"
+'
+
+test_expect_success 'make kernel builds a tagged third-party Linux source' '
+	grep -q "^kernel: \$(KERNEL_BUILD_STAMP)" ../Makefile &&
+	grep -q "KERNEL_TAG=\"\${KERNEL_TAG:-bpf-next}\"" \
+		../contrib/build-kernel-deb.sh &&
+	grep -q "KERNEL_REPOSITORY=\"\${KERNEL_REPOSITORY:-https://git.kernel.org" \
+		../contrib/build-kernel-deb.sh &&
+	grep -q "git clone --depth 1 --branch" ../contrib/build-kernel-deb.sh &&
+	grep -q "make kernel KERNEL_TAG=v6.18" ../Makefile &&
+	! KERNEL_TAG=not-a-kernel-tag ../contrib/build-kernel-deb.sh \
+		>"$WORK/invalid-kernel-tag.out" 2>&1 &&
+	grep -q "KERNEL_TAG must be bpf-next or a Linux release tag" \
+		"$WORK/invalid-kernel-tag.out"
+'
 
 test_expect_success 'named VM console and SSH access helpers are wired up' '
 	grep -q "^vm-console:" ../Makefile &&

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Authors of shirudo
 #
-# Boot an Ubuntu guest with the bpf-next kernel and an swtpm vTPM.
+# Boot an Ubuntu guest with a selected Linux kernel and an swtpm vTPM.
 # In test mode it runs the live Shirudo integration suite; in interactive
 # mode it prepares the guest and leaves QEMU and swtpm running.
 #

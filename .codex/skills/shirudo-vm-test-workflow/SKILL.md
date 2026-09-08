@@ -25,6 +25,65 @@ make -j
 make bpf-next
 ```
 
+### Build stable kernel variants
+
+The default VM kernel is bpf-next. The supported stable-kernel selectors are
+`7.2`, `6.18`, `6.12`, `6.6`, and `6.1`. Build a tagged third-party Linux
+kernel with:
+
+```sh
+make kernel KERNEL_TAG=v6.18
+```
+
+`TAG=v6.18` is accepted as an alias. `make` does not accept
+`make kernel --tag=v6.18`; use the Make variable form. The builder clones the
+tag from the upstream Linux repository, applies any requested
+`KERNEL_PATCHES`, enables the VM-required configuration, and writes a
+versioned artifact directory such as
+`artifacts/linux-v6.18-kernel-debs/`. Override the source or configuration
+when needed:
+
+```sh
+make kernel KERNEL_TAG=v6.18 \
+  KERNEL_REPOSITORY=https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git \
+  KERNEL_SOURCE_DIR=/path/to/clean/linux \
+  KERNEL_CONFIG=/path/to/kernel.config
+```
+
+Kernel builds require the host packages checked by
+`contrib/build-kernel-deb.sh`; if any are missing, the command prints an
+install command. Do not install host packages without authorization.
+
+To build or reuse the image and boot an interactive VM on a selected stable
+kernel, use:
+
+```sh
+make vm KERNEL=6.18 VM_NAME=kernel-6.18
+```
+
+`KERNEL=v6.18` is also accepted. The selected kernel artifact is built first
+when absent, then the normal host bundle and prepared runtime QCOW2 are built
+or reused. The same selector is supported by `make test-tgt`,
+`make test-tgt-obs`, `make test-tgt-obs-fuzz`, and `make bench`.
+
+For a quick kernel verification, leave the named VM running and query it over
+SSH:
+
+```sh
+make vm KERNEL=6.18 VM_NAME=kernel-6.18
+make vm-ssh VM_NAME=kernel-6.18 \
+  VM_SSH_COMMAND='uname -a; test -r /sys/kernel/btf/vmlinux && echo BTF=present'
+make vm-stop VM_NAME=kernel-6.18
+```
+
+The VM image uses the selected kernel's `bzImage`; the host userspace bundle
+continues to use the repository's bpf-next build dependencies. Shirudo's
+documented feature floor is 7.2, so 6.18/6.12/6.6/6.1 are compatibility
+probes: they may boot while Shirudo preparation or target tests fail because
+required signed-loading or bpffs features are absent. Treat a kernel as
+verified only when the requested command or test exits successfully, and
+retain the VM logs for failures.
+
 The VM commands build or reuse the host bundle automatically. To build it
 explicitly, use:
 
@@ -95,10 +154,12 @@ compatibility alias `make test-vm` has the same behavior as `make test-tgt`.
 Test-mode VMs are stopped after the suite and retained for inspection.
 
 The default kernel is
-`artifacts/bpf-next-kernel-debs/bzImage`, produced by `make bpf-next`. A local
-raw kernel can be selected with `TEST_VM_KERNEL=/path/to/bzImage`; a remote
-kernel requires both `TEST_VM_KERNEL_URL` and its 64-hex-digit
-`TEST_VM_KERNEL_SHA256`. Resource and location overrides include
+`artifacts/bpf-next-kernel-debs/bzImage`, produced by `make bpf-next`. A
+stable `KERNEL=6.18` selection uses
+`artifacts/linux-v6.18-kernel-debs/bzImage`. A local raw kernel can be selected
+with `TEST_VM_KERNEL=/path/to/bzImage`; a remote kernel requires both
+`TEST_VM_KERNEL_URL` and its 64-hex-digit `TEST_VM_KERNEL_SHA256`. Resource and
+location overrides include
 `TEST_VM_CPUS`, `TEST_VM_MEMORY`, `TEST_VM_DISK_SIZE`, `TEST_VM_TIMEOUT`, and
 `TEST_VM_WORK_DIR`.
 

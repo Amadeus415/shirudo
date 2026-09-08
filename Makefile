@@ -55,7 +55,7 @@ export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdi
        SHIRUDO_TARGET_STATIC_LIBDIR
 export VM_SSH_COMMAND
 
-.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build test-helpers linux-obs-ipv4-shields bundle test-vm-bundle bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz bench test-vm test-vm-clean install \
+.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build test-helpers linux-obs-ipv4-shields bundle test-vm-bundle kernel bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz bench test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
         distclean test examples config
 
@@ -146,8 +146,12 @@ shirudo make targets (run from the repo root):
     make shirudo-build     build the operator-only artifact builder
                            (compile + sign .upatch; ships in the operator
                            package, never to a target)
-    make bpf-next          build bpf-next kernel DEBs, BTF, and BPF tools
-                           (KERNEL_CONFIG=path overrides x86_64_defconfig)
+    make kernel KERNEL_TAG=v6.18
+                           build a tagged third-party Linux kernel DEB/BTF
+                           bundle (KERNEL_CONFIG=path overrides defconfig)
+    make bpf-next          compatibility alias for make kernel
+    make vm KERNEL=6.18   boot a VM using a locally built stable kernel;
+                           supported selections: 7.2, 6.18, 6.12, 6.6, 6.1
     make clean             remove build artifacts
     make distclean         clean and drop the cached config.mk
 
@@ -219,6 +223,11 @@ shirudo make targets (run from the repo root):
              SHIRUDO_TARGET_STATIC_LIBDIR (static runtime archive directory),
              TARGET_DEPS_MBEDTLS_PREFIX/PKG_CONFIG_PATH (target-deps inputs),
              VM_NAME (optional unique VM name), VM_TENANT (OTEL tenant),
+             KERNEL (VM kernel: bpf-next, 7.2, 6.18, 6.12, 6.6, or 6.1),
+             KERNEL_TAG (kernel target tag, e.g. v6.18; TAG is an alias),
+             KERNEL_REPOSITORY (third-party Linux git repository),
+             KERNEL_SOURCE_DIR (existing clean Linux checkout),
+             KERNEL_CONFIG (optional kernel config),
              VM_SSH_COMMAND (optional one-off command for make vm-ssh),
              TEST_VM_SSH_PORT (optional fixed localhost SSH port),
              TEST_VM_MAP_EXPORT_ENDPOINT (OTLP base URL),
@@ -294,6 +303,42 @@ TEST_VM_BUNDLE_INPUTS := $(sort \
 	$(TEST_VM_BUNDLE_SOURCES) $(TEST_VM_BUNDLE_ARTIFACTS) \
 	$(if $(strip $(TEST_VM_PACKAGE_CERT)),$(TEST_VM_PACKAGE_CERT)))
 
+# `make vm` keeps bpf-next as its default, but can select a stable kernel
+# built from an upstream Linux tag. The stable list is intentionally explicit
+# so a typo cannot silently create a new VM kernel artifact directory.
+VM_KERNEL ?= $(if $(strip $(KERNEL)),$(KERNEL),bpf-next)
+VM_KERNEL_VERSION := $(patsubst v%,%,$(VM_KERNEL))
+VM_KERNEL_STABLE_VERSIONS := 7.2 6.18 6.12 6.6 6.1
+ifeq ($(VM_KERNEL),bpf-next)
+  VM_KERNEL_TAG := bpf-next
+  VM_KERNEL_ARTIFACT_DIR := artifacts/bpf-next-kernel-debs
+  VM_KERNEL_IMAGE :=
+  VM_KERNEL_STAMP :=
+  VM_KERNEL_DEP :=
+else ifneq ($(filter $(VM_KERNEL_VERSION),$(VM_KERNEL_STABLE_VERSIONS)),)
+  VM_KERNEL_TAG := v$(VM_KERNEL_VERSION)
+  VM_KERNEL_ARTIFACT_DIR := artifacts/linux-$(VM_KERNEL_TAG)-kernel-debs
+  VM_KERNEL_IMAGE := $(VM_KERNEL_ARTIFACT_DIR)/bzImage
+  VM_KERNEL_STAMP := $(VM_KERNEL_ARTIFACT_DIR)/bzImage.sha256sum
+  VM_KERNEL_DEP := $(VM_KERNEL_STAMP)
+else
+  $(error unsupported VM KERNEL '$(VM_KERNEL)'; choose bpf-next, 7.2, 6.18, 6.12, 6.6, or 6.1)
+endif
+
+KERNEL_TAG ?= $(if $(strip $(TAG)),$(TAG),bpf-next)
+KERNEL_TAG_VERSION := $(patsubst v%,%,$(KERNEL_TAG))
+KERNEL_REPOSITORY ?= https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+KERNEL_SOURCE_DIR ?=
+KERNEL_CONFIG ?=
+ifeq ($(KERNEL_TAG),bpf-next)
+  KERNEL_TAG_NORMALIZED := bpf-next
+  KERNEL_BUILD_ARTIFACT_DIR := artifacts/bpf-next-kernel-debs
+else
+  KERNEL_TAG_NORMALIZED := v$(KERNEL_TAG_VERSION)
+  KERNEL_BUILD_ARTIFACT_DIR := artifacts/linux-$(KERNEL_TAG_NORMALIZED)-kernel-debs
+endif
+KERNEL_BUILD_STAMP := $(KERNEL_BUILD_ARTIFACT_DIR)/bzImage.sha256sum
+
 
 test-vm-bundle: $(TEST_VM_BUNDLE_STAMP)
 
@@ -309,11 +354,31 @@ $(TEST_VM_BUNDLE_STAMP): $(TEST_VM_BUNDLE_INPUTS)
 		TEST_VM_BUNDLE_INPUTS="$(abspath $(TEST_VM_BUNDLE_INPUTS))" \
 		contrib/build-test-vm-bundle.sh
 
-bpf-next:
-	$(Q)KERNEL_PATCHES='$(KERNEL_PATCHES)' contrib/build-kernel-deb.sh
+kernel: $(KERNEL_BUILD_STAMP)
 
-vm: test-vm-bundle
+bpf-next: artifacts/bpf-next-kernel-debs/bzImage.sha256sum
+
+$(KERNEL_BUILD_STAMP):
+	$(Q)KERNEL_TAG='$(KERNEL_TAG_NORMALIZED)' \
+		KERNEL_PATCHES='$(KERNEL_PATCHES)' \
+		KERNEL_REPOSITORY='$(KERNEL_REPOSITORY)' \
+		KERNEL_SOURCE_DIR='$(KERNEL_SOURCE_DIR)' \
+		KERNEL_CONFIG='$(KERNEL_CONFIG)' \
+		OUTPUT_DIR="$(abspath $(KERNEL_BUILD_ARTIFACT_DIR))" \
+		contrib/build-kernel-deb.sh
+
+# A VM selection owns its kernel artifact independently of the generic
+# KERNEL_TAG selection used by `make kernel`.
+ifneq ($(VM_KERNEL_DEP),)
+ifneq ($(VM_KERNEL_TAG),$(KERNEL_TAG_NORMALIZED))
+$(VM_KERNEL_STAMP):
+	+$(Q)$(MAKE) kernel KERNEL_TAG='$(VM_KERNEL_TAG)'
+endif
+endif
+
+vm: $(VM_KERNEL_DEP) test-vm-bundle
 	$(Q)VM_MODE=interactive VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
 		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
 		TEST_VM_SSH_PORT="$(TEST_VM_SSH_PORT)" \
@@ -335,8 +400,9 @@ vm-ssh:
 	$(Q)VM_NAME="$(VM_NAME)" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" contrib/test-vm.sh --ssh
 
-test-tgt: test-vm-bundle
+test-tgt: $(VM_KERNEL_DEP) test-vm-bundle
 	$(Q)VM_MODE=test VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
 		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
 		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
@@ -349,8 +415,9 @@ test-tgt: test-vm-bundle
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
 
-test-tgt-obs: test-vm-bundle
+test-tgt-obs: $(VM_KERNEL_DEP) test-vm-bundle
 	$(Q)VM_MODE=test TEST_VM_SUITE=obs TEST_VM_DNS_FUZZ=0 VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
 		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
 		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
@@ -363,11 +430,12 @@ test-tgt-obs: test-vm-bundle
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
 
-test-tgt-obs-fuzz: test-vm-bundle
+test-tgt-obs-fuzz: $(VM_KERNEL_DEP) test-vm-bundle
 	$(Q)VM_MODE=test TEST_VM_SUITE=obs TEST_VM_DNS_FUZZ=1 \
 		TEST_VM_DNS_FUZZ_SEED="$(DNS_OBS_FUZZ_SEED)" \
 		TEST_VM_DNS_FUZZ_CASES="$(DNS_OBS_FUZZ_CASES)" \
 		VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
 		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
 		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
@@ -381,8 +449,9 @@ test-tgt-obs-fuzz: test-vm-bundle
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
 
-bench: test-vm-bundle
-	$(Q)bash contrib/benchmark-linux-observability.sh
+bench: $(VM_KERNEL_DEP) test-vm-bundle
+	$(Q)TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
+		bash contrib/benchmark-linux-observability.sh
 
 vm-stop:
 	$(Q)VM_NAME="$(VM_NAME)" \

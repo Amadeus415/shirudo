@@ -1,14 +1,41 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-KERNEL_LOCALVERSION="-bpf-next"
+KERNEL_TAG="${KERNEL_TAG:-bpf-next}"
+KERNEL_REPOSITORY="${KERNEL_REPOSITORY:-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git}"
 KERNEL_PATCHES="${KERNEL_PATCHES:-}"
 KERNEL_CONFIG="${KERNEL_CONFIG:-}"
-WORK_DIR="${WORK_DIR:-${RUNNER_TEMP:-/tmp}/bpf-next-kernel-build}"
-SOURCE_DIR="${WORK_DIR}/linux"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-KERNEL_SOURCE_DIR="${KERNEL_SOURCE_DIR:-${REPO_ROOT}/third_party/bpf-next}"
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/artifacts/bpf-next-kernel-debs}"
+KERNEL_SOURCE_DIR_INPUT="${KERNEL_SOURCE_DIR:-}"
+if [[ "$KERNEL_TAG" =~ ^[0-9]+\.[0-9]+([.][0-9]+)?$ ]]; then
+  KERNEL_TAG="v${KERNEL_TAG}"
+fi
+if [[ "$KERNEL_TAG" != "bpf-next" &&
+      ! "$KERNEL_TAG" =~ ^v[0-9]+\.[0-9]+([.][0-9]+)?$ ]]; then
+  echo "KERNEL_TAG must be bpf-next or a Linux release tag such as v6.18" >&2
+  exit 1
+fi
+KERNEL_ARTIFACT_NAME="bpf-next"
+if [[ "$KERNEL_TAG" != "bpf-next" ]]; then
+  KERNEL_ARTIFACT_NAME="linux-${KERNEL_TAG}"
+fi
+if [[ -z "${KERNEL_LOCALVERSION:-}" ]]; then
+  if [[ "$KERNEL_TAG" == "bpf-next" ]]; then
+    KERNEL_LOCALVERSION="-bpf-next"
+  else
+    KERNEL_LOCALVERSION="-shirudo-${KERNEL_TAG#v}"
+  fi
+fi
+WORK_DIR="${WORK_DIR:-${RUNNER_TEMP:-/tmp}/${KERNEL_ARTIFACT_NAME}-kernel-build}"
+SOURCE_DIR="${WORK_DIR}/linux"
+if [[ -n "$KERNEL_SOURCE_DIR_INPUT" ]]; then
+  KERNEL_SOURCE_DIR="$KERNEL_SOURCE_DIR_INPUT"
+elif [[ "$KERNEL_TAG" == "bpf-next" ]]; then
+  KERNEL_SOURCE_DIR="${REPO_ROOT}/third_party/bpf-next"
+else
+  KERNEL_SOURCE_DIR="$SOURCE_DIR"
+fi
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/artifacts/${KERNEL_ARTIFACT_NAME}-kernel-debs}"
 BUNDLE_PATH="${BUNDLE_PATH:-${OUTPUT_DIR}.tar.gz}"
 VMLINUX_PATH="${OUTPUT_DIR}/bzImage"
 VMLINUX_BTF_PATH="${OUTPUT_DIR}/vmlinux.btf"
@@ -53,7 +80,7 @@ check_build_dependencies() {
 
   if ! command -v dpkg-query >/dev/null 2>&1; then
     echo "cannot check kernel build dependencies: dpkg-query is not installed" >&2
-    echo "make bpf-next currently supports Debian and Ubuntu build hosts" >&2
+    echo "make kernel currently supports Debian and Ubuntu build hosts" >&2
     echo "Install the required packages with:" >&2
     print_dependency_install_command "${BUILD_DEPENDENCIES[@]}" >&2
     exit 1
@@ -79,6 +106,11 @@ check_build_dependencies
 rm -rf "$WORK_DIR" "$OUTPUT_DIR" "$BUNDLE_PATH" "${BUNDLE_PATH}.sha256sum"
 mkdir -p "$WORK_DIR" "$OUTPUT_DIR"
 
+if [[ "$KERNEL_TAG" != "bpf-next" && -z "$KERNEL_SOURCE_DIR_INPUT" ]]; then
+  echo "Fetching third-party Linux kernel ${KERNEL_TAG}"
+  git clone --depth 1 --branch "$KERNEL_TAG" \
+    "$KERNEL_REPOSITORY" "$KERNEL_SOURCE_DIR"
+fi
 if [[ ! -d "$KERNEL_SOURCE_DIR" ]]; then
   echo "kernel source directory not found: ${KERNEL_SOURCE_DIR}" >&2
   exit 1
@@ -89,14 +121,18 @@ if ! git -C "$KERNEL_SOURCE_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1
 fi
 if [[ -n "$(git -C "$KERNEL_SOURCE_DIR" status --porcelain)" ]]; then
   echo "kernel source checkout is dirty: ${KERNEL_SOURCE_DIR}" >&2
-  echo "commit or stash its changes before running make bpf-next" >&2
+  echo "commit or stash its changes before running make kernel" >&2
   exit 1
 fi
 
-submodule_commit="$(git -C "$KERNEL_SOURCE_DIR" rev-parse HEAD)"
-git clone --no-checkout "$KERNEL_SOURCE_DIR" "$SOURCE_DIR"
-cd "$SOURCE_DIR"
-git checkout --detach "$submodule_commit"
+if [[ "$KERNEL_SOURCE_DIR" == "$SOURCE_DIR" ]]; then
+  cd "$SOURCE_DIR"
+else
+  submodule_commit="$(git -C "$KERNEL_SOURCE_DIR" rev-parse HEAD)"
+  git clone --no-checkout "$KERNEL_SOURCE_DIR" "$SOURCE_DIR"
+  cd "$SOURCE_DIR"
+  git checkout --detach "$submodule_commit"
+fi
 
 upstream_commit="$(git rev-parse HEAD)"
 applied_patches=()
@@ -316,7 +352,7 @@ if [[ ! -s "$VMLINUX_BTF_PATH" ]]; then
   exit 1
 fi
 
-# Build the userspace BPF tools against the exact bpf-next checkout used for
+# Build the userspace BPF tools against the exact kernel checkout used for
 # the kernel. The VM runner consumes these artifacts instead of rebuilding
 # libbpf and bpftool for every fresh guest.
 echo "Building Shirudo BPF dependency artifacts"
@@ -336,8 +372,10 @@ bpftool_source=${kernel_commit}:tools/bpf/bpftool
 built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
 
-cat > "${OUTPUT_DIR}/bpf-next-kernel-build" <<EOF
+cat > "${OUTPUT_DIR}/${KERNEL_ARTIFACT_NAME}-kernel-build" <<EOF
 source_dir=${KERNEL_SOURCE_DIR}
+source_repository=${KERNEL_REPOSITORY}
+tag=${KERNEL_TAG}
 upstream_commit=${upstream_commit}
 commit=${kernel_commit}
 patches_requested=${KERNEL_PATCHES}
@@ -363,7 +401,7 @@ tar -C "$OUTPUT_DIR" -czf "$BUNDLE_PATH" .
   sha256sum "$(basename "$BUNDLE_PATH")" > "$(basename "$BUNDLE_PATH").sha256sum"
 )
 
-echo "Built kernel bzImage: ${VMLINUX_PATH}"
+echo "Built ${KERNEL_TAG} kernel bzImage: ${VMLINUX_PATH}"
 echo "Built kernel BTF: ${VMLINUX_BTF_PATH}"
 echo "Built Shirudo BPF dependency artifacts: ${BPF_DEPS_DIR}"
 echo "Built kernel deb bundle: ${BUNDLE_PATH}"
