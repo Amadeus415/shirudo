@@ -788,7 +788,7 @@ static void lua_split_page_slots(lua_State *L, int slots_idx,
 		return;
 	}
 
-	for (size_t i = slot_size; i + slot_size <= len; i += slot_size)
+	for (size_t i = 0; i + slot_size <= len; i += slot_size)
 		lua_store_slot(L, slots_idx, cursor + i / slot_size,
 			       data + i, slot_size);
 }
