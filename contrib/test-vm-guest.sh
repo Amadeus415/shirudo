@@ -24,6 +24,33 @@ log()
 	printf '[test-vm guest] %s\n' "$*"
 }
 
+install_kernel_modules()
+{
+	local module_root="${TEST_VM_KERNEL_MODULES:-}"
+	local release source target module
+
+	[[ -z "$module_root" ]] && return 0
+	release="$(uname -r)"
+	source="${module_root}/${release}"
+	target="/lib/modules/${release}"
+	[[ -d "$source" ]] || {
+		log "kernel module artifact has no modules for ${release}"
+		return 1
+	}
+	install -d /lib/modules
+	install -d "$target"
+	rsync -a --delete "${source}/" "${target}/"
+	depmod -a "$release"
+
+	for module in veth bridge 8021q br_netfilter nf_flow_table nf_flow_table_inet; do
+		modprobe "$module"
+	done
+	for module in veth bridge 8021q br_netfilter nf_flow_table nf_flow_table_inet; do
+		lsmod | awk -v module="$module" '$1 == module { found = 1 } END { exit !found }'
+	done
+	test -d /sys/module/nf_flow_table_procfs
+}
+
 configure_oci_ca()
 {
 	local ca_file="${TEST_VM_OCI_CA:-}"
@@ -214,6 +241,9 @@ else
 fi
 
 cd "$WORKSPACE"
+
+log "installing networking modules from the booted kernel artifact"
+install_kernel_modules
 
 log "importing host-built Shirudo payload"
 log "host bundle dependency mode: $(<"$BUNDLE/dependency-mode")"

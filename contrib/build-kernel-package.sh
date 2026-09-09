@@ -333,6 +333,13 @@ scripts/config --enable NETDEVICES
 scripts/config --enable ETHERNET
 scripts/config --enable NET_VENDOR_AMAZON
 scripts/config --module ENA_ETHERNET
+scripts/config --module VETH
+scripts/config --module BRIDGE
+scripts/config --module VLAN_8021Q
+scripts/config --module BRIDGE_NETFILTER
+scripts/config --module NF_FLOW_TABLE
+scripts/config --module NF_FLOW_TABLE_INET
+scripts/config --enable NF_FLOW_TABLE_PROCFS
 scripts/config --enable NVME_CORE
 scripts/config --enable BLK_DEV_NVME
 scripts/config --enable NVME_MULTIPATH
@@ -370,6 +377,13 @@ require_config CONFIG_NETDEVICES y
 require_config CONFIG_ETHERNET y
 require_config CONFIG_NET_VENDOR_AMAZON y
 require_config CONFIG_ENA_ETHERNET '[ym]'
+require_config CONFIG_VETH m
+require_config CONFIG_BRIDGE m
+require_config CONFIG_VLAN_8021Q m
+require_config CONFIG_BRIDGE_NETFILTER m
+require_config CONFIG_NF_FLOW_TABLE m
+require_config CONFIG_NF_FLOW_TABLE_INET m
+require_config CONFIG_NF_FLOW_TABLE_PROCFS y
 require_config CONFIG_NVME_CORE '[ym]'
 require_config CONFIG_BLK_DEV_NVME '[ym]'
 require_config CONFIG_DEVTMPFS y
@@ -413,6 +427,31 @@ else
     exit 1
   fi
 fi
+
+# The VM boots bzImage directly, so carry the matching module tree alongside
+# it. This keeps module loading deterministic for a selected kernel commit.
+MODULES_STAGE_DIR="${WORK_DIR}/modules"
+rm -rf "$MODULES_STAGE_DIR"
+mkdir -p "$MODULES_STAGE_DIR"
+IMAGE_DEB="$(find "$OUTPUT_DIR" -maxdepth 1 -type f \
+  -name 'linux-image-[0-9]*.deb' ! -name '*-dbg*.deb' -print -quit)"
+dpkg-deb -x "$IMAGE_DEB" "$MODULES_STAGE_DIR"
+MODULES_SOURCE_DIR=""
+for candidate in \
+  "$MODULES_STAGE_DIR/lib/modules/$kernel_release" \
+  "$MODULES_STAGE_DIR/usr/lib/modules/$kernel_release"; do
+  if [[ -d "$candidate" ]]; then
+    MODULES_SOURCE_DIR="$candidate"
+    break
+  fi
+done
+if [[ -z "$MODULES_SOURCE_DIR" ]]; then
+  echo "kernel image deb has no modules for ${kernel_release}" >&2
+  exit 1
+fi
+mkdir -p "$OUTPUT_DIR/lib/modules"
+cp -a "$MODULES_SOURCE_DIR" "$OUTPUT_DIR/lib/modules/"
+depmod -b "$OUTPUT_DIR" "$kernel_release"
 
 if [[ ! -s "arch/x86/boot/bzImage" ]]; then
   echo "kernel bzImage was not produced" >&2

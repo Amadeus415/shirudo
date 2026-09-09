@@ -76,6 +76,12 @@ SSH_PORT_REQUEST="${TEST_VM_SSH_PORT:-}"
 KERNEL_URL="${TEST_VM_KERNEL_URL:-}"
 KERNEL_SHA256="${TEST_VM_KERNEL_SHA256:-}"
 KERNEL_OVERRIDE="${TEST_VM_KERNEL:-}"
+KERNEL_ARTIFACT_INPUT="${TEST_VM_KERNEL_ARTIFACT_DIR:-}"
+if [[ -n "$KERNEL_ARTIFACT_INPUT" && "$KERNEL_ARTIFACT_INPUT" != /* ]]; then
+	KERNEL_ARTIFACT_DIR="$REPO_ROOT/$KERNEL_ARTIFACT_INPUT"
+else
+	KERNEL_ARTIFACT_DIR="$KERNEL_ARTIFACT_INPUT"
+fi
 ROOTFS_URL="${TEST_VM_ROOTFS_URL:-$DEFAULT_ROOTFS_URL}"
 ROOTFS_SHA256="${TEST_VM_ROOTFS_SHA256:-}"
 MAP_EXPORT_ENDPOINT="${TEST_VM_MAP_EXPORT_ENDPOINT:-}"
@@ -332,6 +338,13 @@ validate_kernel_selection()
 		[[ -s "$DEFAULT_KERNEL" ]] ||
 			die "kernel image not found: $DEFAULT_KERNEL; run 'make bpf-next' first"
 	fi
+}
+
+validate_kernel_artifact()
+{
+	[[ -z "$KERNEL_ARTIFACT_DIR" ]] && return 0
+	[[ -d "$KERNEL_ARTIFACT_DIR/lib/modules" ]] ||
+		die "kernel artifact has no lib/modules directory: $KERNEL_ARTIFACT_DIR"
 }
 
 validate_host_bundle()
@@ -976,6 +989,7 @@ done
 
 validate_mode
 validate_kernel_selection
+validate_kernel_artifact
 validate_map_export
 validate_oci_ca
 validate_package_cert
@@ -1067,7 +1081,7 @@ write_files:
     content: |
       #!/usr/bin/env bash
       set -uo pipefail
-      mkdir -p /mnt/shirudo-src /mnt/shirudo-bundle /mnt/shirudo-out
+	      mkdir -p /mnt/shirudo-src /mnt/shirudo-bundle /mnt/shirudo-out /mnt/shirudo-kernel
       if ! mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600 shirudo-out /mnt/shirudo-out; then
         echo "test-vm: could not mount result share" >/dev/ttyS0
         poweroff -f
@@ -1081,6 +1095,16 @@ write_files:
       exec > >(tee -a /dev/ttyS0 /mnt/shirudo-out/guest.log) 2>&1
       rc=0
 EOF
+if [[ -n "$KERNEL_ARTIFACT_DIR" ]]; then
+	cat >>"$USER_DATA" <<'EOF'
+      if ! mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,ro shirudo-kernel /mnt/shirudo-kernel; then
+        echo "test-vm: could not mount kernel artifact share" >/dev/ttyS0
+        poweroff -f
+        exit 1
+      fi
+      export TEST_VM_KERNEL_MODULES=/mnt/shirudo-kernel/lib/modules
+EOF
+fi
 printf '      export VM_MODE=%q\n' "$VM_MODE" >>"$USER_DATA"
 printf '      export TEST_VM_SUITE=%q\n' "$VM_SUITE" >>"$USER_DATA"
 printf '      export TEST_VM_TRUSTED_ROOT=%q\n' "$TRUSTED_ROOT" >>"$USER_DATA"
@@ -1194,6 +1218,12 @@ QEMU_ARGS=(
 	-monitor none \
 	-no-reboot
 )
+
+if [[ -n "$KERNEL_ARTIFACT_DIR" ]]; then
+	QEMU_ARGS+=(
+		-virtfs "local,id=shirudo-kernel,path=${KERNEL_ARTIFACT_DIR},mount_tag=shirudo-kernel,security_model=none,readonly=on"
+	)
+fi
 
 if [[ -n "$OTEL_CA_DIR" ]]; then
 	QEMU_ARGS+=(

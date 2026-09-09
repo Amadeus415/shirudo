@@ -173,7 +173,7 @@ test_expect_success 'make kernel builds a tagged third-party Linux source' '
 	grep -q "KERNEL_TAG must be bpf-next or a Linux release tag" \
 		"$WORK/invalid-kernel-tag.out"
 '
-	test_expect_success 'make vm and kernel select an exact stable commit' '
+test_expect_success 'make vm and kernel select an exact stable commit' '
 	make -n -C .. vm KERNEL=6.18 KERNEL_COMMIT=abcdef1234567 \
 		TEST_VM_WORK_DIR="$WORK/commit-vm" >"$WORK/commit-vm-make.out" 2>&1 &&
 	grep -q "artifacts/linux-v6.18-abcdef1234567-kernel-debs/bzImage" \
@@ -188,6 +188,23 @@ test_expect_success 'make kernel builds a tagged third-party Linux source' '
 		../contrib/build-kernel-deb.sh >"$WORK/invalid-kernel-commit.out" 2>&1 &&
 	grep -q "KERNEL_COMMIT must contain 7 to 40 hexadecimal characters" \
 		"$WORK/invalid-kernel-commit.out"
+'
+	test_expect_success 'kernel VM artifacts provide networking modules' '
+	grep -q "scripts/config --module VETH" ../contrib/build-kernel-deb.sh &&
+	grep -q "scripts/config --module BRIDGE" ../contrib/build-kernel-deb.sh &&
+	grep -q "scripts/config --module VLAN_8021Q" ../contrib/build-kernel-deb.sh &&
+	grep -q "scripts/config --module BRIDGE_NETFILTER" ../contrib/build-kernel-deb.sh &&
+	grep -q "scripts/config --module NF_FLOW_TABLE" ../contrib/build-kernel-deb.sh &&
+	grep -q "scripts/config --module NF_FLOW_TABLE_INET" ../contrib/build-kernel-deb.sh &&
+	grep -q "scripts/config --enable NF_FLOW_TABLE_PROCFS" ../contrib/build-kernel-deb.sh &&
+	grep -q "dpkg-deb -x" ../contrib/build-kernel-deb.sh &&
+	grep -q "depmod -b" ../contrib/build-kernel-deb.sh &&
+	grep -q "TEST_VM_KERNEL_ARTIFACT_DIR" ../Makefile &&
+	grep -q "mount_tag=shirudo-kernel" ../contrib/test-vm.sh &&
+	grep -q "TEST_VM_KERNEL_MODULES" ../contrib/test-vm.sh &&
+	grep -q "install_kernel_modules" ../contrib/test-vm-guest.sh &&
+	grep -q "modprobe \"\$module\"" ../contrib/test-vm-guest.sh &&
+	grep -q "nf_flow_table_procfs" ../contrib/test-vm-guest.sh
 '
 
 test_expect_success 'named VM console and SSH access helpers are wired up' '
