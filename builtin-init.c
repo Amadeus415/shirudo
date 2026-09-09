@@ -388,7 +388,8 @@ static int attach_seal(struct bpf_object **obj_out, struct bpf_link **links)
 	return 0;
 }
 
-static int init_lsm(enum shirudo_mode mode, bool native_signing)
+static int init_lsm(enum shirudo_mode mode, bool native_signing,
+		    bool attach_filesystem_seal)
 {
 	/* Must match struct shirudo_sb_id in bpf/bpf2.c byte-for-byte. */
 	struct shirudo_sb_id {
@@ -573,9 +574,11 @@ static int init_lsm(enum shirudo_mode mode, bool native_signing)
 		}
 	}
 
-	err = attach_seal(&seal_obj, seal_links);
-	if (err)
-		goto out;
+	if (attach_filesystem_seal) {
+		err = attach_seal(&seal_obj, seal_links);
+		if (err)
+			goto out;
+	}
 
 	if (native_signing) {
 		err = attach_pin(p_pload, SHIRUDO_LSM_PROG_LOAD_LINK_PIN,
@@ -592,9 +595,11 @@ static int init_lsm(enum shirudo_mode mode, bool native_signing)
 		goto out;
 	}
 
-	pr_info("bpf2 + seal attached: lsm/bpf gate live (%s), bpffs and "
-		"/var/lib/shirudo sealed",
-		native_signing ? "kernel signatures" : "trusted root fallback");
+	pr_info("bpf2%s attached: lsm/bpf gate live (%s)%s",
+		attach_filesystem_seal ? " + seal" : "",
+		native_signing ? "kernel signatures" : "trusted root fallback",
+		attach_filesystem_seal ? ", bpffs and /var/lib/shirudo sealed" :
+		", filesystem seal unavailable on this kernel");
 	err = 0;
 out:
 	for (i = 0; i < (int)ARRAY_SIZE(seal_links); i++)
@@ -904,6 +909,7 @@ static const struct shirudo_help_item init_options[] = {
 	{ "--check-only", "run the pre-flight only; never touch kernel state" },
 	{ "--no-tpm",     "proceed without TPM (degraded mode)" },
 	{ "--trusted-root", "commit userspace signature verification fallback" },
+	{ "--no-seal",    "skip filesystem sealing when target LSM hooks are not sleepable" },
 };
 
 static const struct shirudo_help_section init_help_sections[] = {
@@ -912,7 +918,7 @@ static const struct shirudo_help_section init_help_sections[] = {
 };
 
 static const struct shirudo_help init_help = {
-	.usage      = "shirudo init [--check-only] [--no-tpm] [--trusted-root]",
+	.usage      = "shirudo init [--check-only] [--no-tpm] [--trusted-root] [--no-seal]",
 	.summary    = "Bootstrap the BPF LSM on this target. Idempotent; safe "
 		      "to re-run.\nThe pinned link survives the process exit.",
 	.sections   = init_help_sections,
@@ -933,7 +939,7 @@ int cmd_init(int argc, const char **argv)
 	uint8_t cert_sha256[32];
 	enum shirudo_mode mode = SHIRUDO_MODE_UNTRUSTED_ROOT;
 	bool mode_committed = false, native_signing = true;
-	bool check_only = false;
+	bool check_only = false, no_seal = false;
 	int i, rc;
 
 	for (i = 1; i < argc; i++) {
@@ -945,6 +951,8 @@ int cmd_init(int argc, const char **argv)
 			opts.allow_no_tpm = true;
 		} else if (strcmp(a, "--trusted-root") == 0) {
 			mode = SHIRUDO_MODE_TRUSTED_ROOT;
+		} else if (strcmp(a, "--no-seal") == 0) {
+			no_seal = true;
 		} else if (shirudo_is_help(a)) {
 			shirudo_print_help(&init_help);
 			return 0;
@@ -1022,7 +1030,7 @@ int cmd_init(int argc, const char **argv)
 		pr_warn("init: seal label-walk incomplete: %s "
 			"(some files may be unsealed)", strerror(-rc));
 
-	rc = init_lsm(mode, native_signing);
+	rc = init_lsm(mode, native_signing, !no_seal);
 	if (rc)
 		return 1;
 
@@ -1048,6 +1056,8 @@ int cmd_init(int argc, const char **argv)
 		}
 	}
 
-	pr_info("init: complete (LSM active, bpffs sealed against VFS unlink)");
+	pr_info("init: complete (LSM active%s)",
+		no_seal ? ", filesystem seal skipped" :
+		", bpffs sealed against VFS unlink");
 	return 0;
 }

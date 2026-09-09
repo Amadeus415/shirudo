@@ -176,6 +176,12 @@ if ! git -C "$KERNEL_SOURCE_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1
   echo "kernel source directory is not a git checkout: ${KERNEL_SOURCE_DIR}" >&2
   exit 1
 fi
+# An exact-commit clone is intentionally created with --no-checkout. Select
+# the requested commit before checking cleanliness; otherwise Git reports the
+# intentionally absent worktree files as staged deletions.
+if [[ -n "$KERNEL_COMMIT" && -z "$KERNEL_SOURCE_DIR_INPUT" ]]; then
+  git -C "$KERNEL_SOURCE_DIR" checkout --detach "$KERNEL_COMMIT"
+fi
 if [[ -n "$(git -C "$KERNEL_SOURCE_DIR" status --porcelain)" ]]; then
   echo "kernel source checkout is dirty: ${KERNEL_SOURCE_DIR}" >&2
   echo "commit or stash its changes before running make kernel" >&2
@@ -336,7 +342,10 @@ scripts/config --module ENA_ETHERNET
 scripts/config --module VETH
 scripts/config --module BRIDGE
 scripts/config --module VLAN_8021Q
+scripts/config --module BTRFS_FS
+scripts/config --enable NETFILTER_ADVANCED
 scripts/config --module BRIDGE_NETFILTER
+scripts/config --module NF_TABLES
 scripts/config --module NF_FLOW_TABLE
 scripts/config --module NF_FLOW_TABLE_INET
 scripts/config --enable NF_FLOW_TABLE_PROCFS
@@ -380,6 +389,7 @@ require_config CONFIG_ENA_ETHERNET '[ym]'
 require_config CONFIG_VETH m
 require_config CONFIG_BRIDGE m
 require_config CONFIG_VLAN_8021Q m
+require_config CONFIG_BTRFS_FS m
 require_config CONFIG_BRIDGE_NETFILTER m
 require_config CONFIG_NF_FLOW_TABLE m
 require_config CONFIG_NF_FLOW_TABLE_INET m
@@ -405,10 +415,20 @@ require_config CONFIG_ISO9660_FS y
 require_config CONFIG_SERIAL_8250 y
 require_config CONFIG_SERIAL_8250_CONSOLE y
 
-kernel_release="$(make -s kernelrelease)"
+# Refresh the generated release after the config edits above.  kernelrelease
+# reads include/config/kernel.release, which may still contain the pre-config
+# value until its FORCE target has run; the Debian package uses the refreshed
+# value when it stages /lib/modules.
+make -s include/config/kernel.release
+kernel_release="$(<include/config/kernel.release)"
 package_version="1+$(date -u +%Y%m%d%H%M%S)+g${kernel_commit:0:12}"
 if [[ "$PACKAGE_FORMAT" == deb ]]; then
-  make -j "$(nproc)" bindeb-pkg KDEB_PKGVERSION="$package_version"
+  # Older stable snapshots can trigger discarded-qualifier warnings in the
+  # bundled host-side libbpf when built with newer GCC. Keep the exact kernel
+  # sources unchanged while allowing that compatibility warning in host tools.
+  make -j "$(nproc)" bindeb-pkg KDEB_PKGVERSION="$package_version" \
+  HOSTCFLAGS="${HOSTCFLAGS:-} -Wno-error=discarded-qualifiers" \
+  KCFLAGS="${KCFLAGS:-} -Wno-error=unterminated-string-initialization"
 
   find "$WORK_DIR" -maxdepth 1 -type f -name '*.deb' ! -name '*-dbg*.deb' -exec cp {} "$OUTPUT_DIR/" \;
 
@@ -480,8 +500,10 @@ fi
 # the kernel. The VM runner consumes these artifacts instead of rebuilding
 # libbpf and bpftool for every fresh guest.
 echo "Building Shirudo BPF dependency artifacts"
-make -C "$SOURCE_DIR/tools/lib/bpf" CC="${CC:-cc}"
-make -C "$SOURCE_DIR/tools/bpf/bpftool" CC="${CC:-cc}"
+make -C "$SOURCE_DIR/tools/lib/bpf" CC="${CC:-cc}" \
+  EXTRA_CFLAGS="-g -O2 -Wno-error=discarded-qualifiers"
+make -C "$SOURCE_DIR/tools/bpf/bpftool" CC="${CC:-cc}" \
+  EXTRA_CFLAGS="-g -O2 -Wno-error=discarded-qualifiers"
 mkdir -p "$BPF_DEPS_LIBBPF_DIR"
 cp "$SOURCE_DIR/tools/lib/bpf/libbpf.a" "$BPF_DEPS_LIBBPF_DIR/"
 cp "$SOURCE_DIR/tools/lib/bpf"/*.h "$BPF_DEPS_LIBBPF_DIR/"

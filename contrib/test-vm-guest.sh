@@ -18,6 +18,7 @@ OVERLAY_WORK=/var/tmp/shirudo-overlay-work
 WORKSPACE=/workspace/shirudo
 VM_MODE="${VM_MODE:-test}"
 TRUSTED_ROOT="${TEST_VM_TRUSTED_ROOT:-0}"
+SKIP_SEAL="${TEST_VM_SKIP_SEAL:-0}"
 
 log()
 {
@@ -48,7 +49,10 @@ install_kernel_modules()
 	for module in veth bridge 8021q br_netfilter nf_flow_table nf_flow_table_inet; do
 		lsmod | awk -v module="$module" '$1 == module { found = 1 } END { exit !found }'
 	done
-	test -d /sys/module/nf_flow_table_procfs
+	# NF_FLOW_TABLE_PROCFS is built into nf_flow_table.ko when enabled; it
+	# therefore does not have a separate /sys/module entry. Validate the
+	# procfs interface exposed by the feature instead.
+	test -r /proc/net/stat/nf_flowtable
 }
 
 configure_oci_ca()
@@ -297,6 +301,11 @@ rm -f /var/lib/shirudo/keys/signing_key.pem
 init_args=()
 if [[ "$TRUSTED_ROOT" == 1 ]]; then
 	init_args+=(--trusted-root)
+fi
+
+if [[ "$SKIP_SEAL" == 1 ]]; then
+	log "filesystem sealing disabled: target LSM hooks are not sleepable"
+	init_args+=(--no-seal)
 fi
 /usr/local/bin/shirudo init "${init_args[@]}"
 test -e /var/lib/shirudo/bpffs/lsm_link
