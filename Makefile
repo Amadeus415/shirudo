@@ -147,12 +147,14 @@ shirudo make targets (run from the repo root):
     make shirudo-build     build the operator-only artifact builder
                            (compile + sign .upatch; ships in the operator
                            package, never to a target)
-    make kernel KERNEL_TAG=v6.18
-                           build a tagged third-party Linux kernel package/BTF
-                           bundle (KERNEL_CONFIG=path overrides defconfig)
+    make kernel KERNEL_TAG=v6.18 [KERNEL_COMMIT=sha]
+                           build a tagged or exact-commit third-party Linux
+                           kernel DEB/BTF bundle (KERNEL_CONFIG=path overrides
+                           defconfig)
     make bpf-next          build bpf-next kernel packages, BTF, and BPF tools
                            (default: DEBs; set PACKAGE_FORMAT=rpm for RPMs)
     make vm KERNEL=6.18   boot a VM using a locally built stable kernel;
+                           KERNEL_COMMIT selects an exact stable commit
                            supported selections: 7.2, 6.18, 6.12, 6.6, 6.1
     make clean             remove build artifacts
     make distclean         clean and drop the cached config.mk
@@ -227,6 +229,7 @@ shirudo make targets (run from the repo root):
              VM_NAME (optional unique VM name), VM_TENANT (OTEL tenant),
              KERNEL (VM kernel: bpf-next, 7.2, 6.18, 6.12, 6.6, or 6.1),
              KERNEL_TAG (kernel target tag, e.g. v6.18; TAG is an alias),
+             KERNEL_COMMIT (optional 7-40 hex stable-kernel commit),
              KERNEL_REPOSITORY (third-party Linux git repository),
              KERNEL_SOURCE_DIR (existing clean Linux checkout),
              KERNEL_CONFIG (optional kernel config),
@@ -313,7 +316,12 @@ TEST_VM_BUNDLE_INPUTS := $(sort \
 VM_KERNEL ?= $(if $(strip $(KERNEL)),$(KERNEL),bpf-next)
 VM_KERNEL_VERSION := $(patsubst v%,%,$(VM_KERNEL))
 VM_KERNEL_STABLE_VERSIONS := 7.2 6.18 6.12 6.6 6.1
+KERNEL_COMMIT ?=
+KERNEL_COMMIT_SUFFIX := $(if $(strip $(KERNEL_COMMIT)),-$(KERNEL_COMMIT),)
 ifeq ($(VM_KERNEL),bpf-next)
+ifneq ($(strip $(KERNEL_COMMIT)),)
+  $(error KERNEL_COMMIT is supported only for stable/LTS VM kernels)
+endif
   VM_KERNEL_TAG := bpf-next
   VM_KERNEL_ARTIFACT_DIR := artifacts/bpf-next-kernel-debs
   VM_KERNEL_IMAGE :=
@@ -321,7 +329,7 @@ ifeq ($(VM_KERNEL),bpf-next)
   VM_KERNEL_DEP :=
 else ifneq ($(filter $(VM_KERNEL_VERSION),$(VM_KERNEL_STABLE_VERSIONS)),)
   VM_KERNEL_TAG := v$(VM_KERNEL_VERSION)
-  VM_KERNEL_ARTIFACT_DIR := artifacts/linux-$(VM_KERNEL_TAG)-kernel-debs
+  VM_KERNEL_ARTIFACT_DIR := artifacts/linux-$(VM_KERNEL_TAG)$(KERNEL_COMMIT_SUFFIX)-kernel-debs
   VM_KERNEL_IMAGE := $(VM_KERNEL_ARTIFACT_DIR)/bzImage
   VM_KERNEL_STAMP := $(VM_KERNEL_ARTIFACT_DIR)/bzImage.sha256sum
   VM_KERNEL_DEP := $(VM_KERNEL_STAMP)
@@ -340,11 +348,16 @@ KERNEL_REPOSITORY ?= https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/li
 KERNEL_SOURCE_DIR ?=
 KERNEL_CONFIG ?=
 ifeq ($(KERNEL_TAG),bpf-next)
+ifneq ($(filter kernel bpf-next,$(MAKECMDGOALS)),)
+ifneq ($(strip $(KERNEL_COMMIT)),)
+  $(error KERNEL_COMMIT is supported only for stable/LTS kernel tags)
+endif
+endif
   KERNEL_TAG_NORMALIZED := bpf-next
   KERNEL_BUILD_ARTIFACT_DIR := artifacts/bpf-next-kernel-debs
 else
   KERNEL_TAG_NORMALIZED := v$(KERNEL_TAG_VERSION)
-  KERNEL_BUILD_ARTIFACT_DIR := artifacts/linux-$(KERNEL_TAG_NORMALIZED)-kernel-debs
+  KERNEL_BUILD_ARTIFACT_DIR := artifacts/linux-$(KERNEL_TAG_NORMALIZED)$(KERNEL_COMMIT_SUFFIX)-kernel-debs
 endif
 KERNEL_BUILD_STAMP := $(KERNEL_BUILD_ARTIFACT_DIR)/bzImage.sha256sum
 
@@ -371,6 +384,7 @@ bpf-next:
 
 $(KERNEL_BUILD_STAMP):
 	$(Q)KERNEL_TAG='$(KERNEL_TAG_NORMALIZED)' \
+		KERNEL_COMMIT='$(KERNEL_COMMIT)' \
 		KERNEL_PATCHES='$(KERNEL_PATCHES)' \
 		KERNEL_REPOSITORY='$(KERNEL_REPOSITORY)' \
 		KERNEL_SOURCE_DIR='$(KERNEL_SOURCE_DIR)' \
@@ -384,7 +398,7 @@ $(KERNEL_BUILD_STAMP):
 ifneq ($(VM_KERNEL_DEP),)
 ifneq ($(VM_KERNEL_TAG),$(KERNEL_TAG_NORMALIZED))
 $(VM_KERNEL_STAMP):
-	+$(Q)$(MAKE) kernel KERNEL_TAG='$(VM_KERNEL_TAG)'
+	+$(Q)$(MAKE) kernel KERNEL_TAG='$(VM_KERNEL_TAG)' KERNEL_COMMIT='$(KERNEL_COMMIT)'
 endif
 endif
 

@@ -35,6 +35,19 @@ kernel with:
 make kernel KERNEL_TAG=v6.18
 ```
 
+Select an exact stable-kernel commit by pairing the release tag with a
+7-to-40-character hexadecimal commit selector:
+
+```sh
+make kernel KERNEL_TAG=v6.18 KERNEL_COMMIT=<commit-sha>
+```
+
+Commit-specific artifacts are isolated under a path such as
+`artifacts/linux-v6.18-<commit-sha>-kernel-debs/`. The builder records the
+resolved full commit in the `linux-*-kernel-build` metadata. A supplied
+`KERNEL_SOURCE_DIR` must contain the requested commit; the input checkout is
+never modified.
+
 `TAG=v6.18` is accepted as an alias. `make` does not accept
 `make kernel --tag=v6.18`; use the Make variable form. The builder clones the
 tag from the upstream Linux repository, applies any requested
@@ -61,6 +74,13 @@ kernel, use:
 make vm KERNEL=6.18 VM_NAME=kernel-6.18
 ```
 
+Use the same commit selector for an interactive or target-test VM:
+
+```sh
+make vm KERNEL=6.18 KERNEL_COMMIT=<commit-sha> VM_NAME=kernel-6.18
+make test-tgt KERNEL=6.18 KERNEL_COMMIT=<commit-sha>
+```
+
 Stable-kernel VM preparation automatically initializes Shirudo with
 ``--trusted-root`` because those third-party kernels do not carry the native
 Shirudo signing ABI. The mode is committed in the guest and the status and
@@ -77,7 +97,8 @@ Production systemd provisioning follows the same rule explicitly: put
 first boot on a legacy kernel. Do not copy ``signing_key.pem`` to the guest;
 trusted-root userspace verification needs only the public ``cert.der``.
 
-`KERNEL=v6.18` is also accepted. The selected kernel artifact is built first
+`KERNEL=v6.18` is also accepted. `KERNEL_COMMIT` is supported for stable/LTS
+selectors and is not valid with `bpf-next`. The selected kernel artifact is built first
 when absent, then the normal host bundle and prepared runtime QCOW2 are built
 or reused. The same selector is supported by `make test-tgt`,
 `make test-tgt-obs`, `make test-tgt-obs-fuzz`, and `make bench`.
@@ -172,7 +193,8 @@ Test-mode VMs are stopped after the suite and retained for inspection.
 The default kernel is
 `artifacts/bpf-next-kernel-debs/bzImage`, produced by `make bpf-next`. A
 stable `KERNEL=6.18` selection uses
-`artifacts/linux-v6.18-kernel-debs/bzImage`. A local raw kernel can be selected
+`artifacts/linux-v6.18-kernel-debs/bzImage`, or a commit-keyed path when
+`KERNEL_COMMIT` is set. A local raw kernel can be selected
 with `TEST_VM_KERNEL=/path/to/bzImage`; a remote kernel requires both
 `TEST_VM_KERNEL_URL` and its 64-hex-digit `TEST_VM_KERNEL_SHA256`. Resource and
 location overrides include

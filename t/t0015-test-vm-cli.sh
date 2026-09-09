@@ -142,7 +142,7 @@ test_expect_success 'make vm and test-vm share named mode support' '
 test_expect_success 'make vm selects supported stable kernel artifacts' '
 	grep -q "VM_KERNEL_STABLE_VERSIONS := 7.2 6.18 6.12 6.6 6.1" ../Makefile &&
 	grep -q "make vm KERNEL=6.18" ../Makefile &&
-	grep -q "VM_KERNEL_ARTIFACT_DIR := artifacts/linux-\$(VM_KERNEL_TAG)-kernel-debs" ../Makefile &&
+	grep -q "VM_KERNEL_ARTIFACT_DIR := artifacts/linux-\$(VM_KERNEL_TAG)\$(KERNEL_COMMIT_SUFFIX)-kernel-debs" ../Makefile &&
 	grep -q "TEST_VM_KERNEL=\"\$(abspath \$(VM_KERNEL_IMAGE))\"" ../Makefile &&
 	make -n -C .. vm KERNEL=6.18 TEST_VM_WORK_DIR="$WORK/stable-vm" \
 		>"$WORK/stable-vm-make.out" 2>&1 &&
@@ -172,6 +172,22 @@ test_expect_success 'make kernel builds a tagged third-party Linux source' '
 		>"$WORK/invalid-kernel-tag.out" 2>&1 &&
 	grep -q "KERNEL_TAG must be bpf-next or a Linux release tag" \
 		"$WORK/invalid-kernel-tag.out"
+'
+	test_expect_success 'make vm and kernel select an exact stable commit' '
+	make -n -C .. vm KERNEL=6.18 KERNEL_COMMIT=abcdef1234567 \
+		TEST_VM_WORK_DIR="$WORK/commit-vm" >"$WORK/commit-vm-make.out" 2>&1 &&
+	grep -q "artifacts/linux-v6.18-abcdef1234567-kernel-debs/bzImage" \
+		"$WORK/commit-vm-make.out" &&
+	grep -q "KERNEL_COMMIT=" "$WORK/commit-vm-make.out" &&
+	grep -q "KERNEL_COMMIT (optional 7-40 hex stable-kernel commit)" ../Makefile &&
+	! make -n -C .. vm KERNEL=bpf-next KERNEL_COMMIT=abcdef1234567 \
+		>"$WORK/commit-bpf-next.out" 2>&1 &&
+	grep -q "KERNEL_COMMIT is supported only for stable/LTS VM kernels" \
+		"$WORK/commit-bpf-next.out" &&
+	! KERNEL_TAG=v6.18 KERNEL_COMMIT=not-a-sha \
+		../contrib/build-kernel-deb.sh >"$WORK/invalid-kernel-commit.out" 2>&1 &&
+	grep -q "KERNEL_COMMIT must contain 7 to 40 hexadecimal characters" \
+		"$WORK/invalid-kernel-commit.out"
 '
 
 test_expect_success 'named VM console and SSH access helpers are wired up' '

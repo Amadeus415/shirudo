@@ -2,6 +2,7 @@
 set -euo pipefail
 
 KERNEL_TAG="${KERNEL_TAG:-bpf-next}"
+KERNEL_COMMIT="${KERNEL_COMMIT:-}"
 KERNEL_REPOSITORY="${KERNEL_REPOSITORY:-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git}"
 KERNEL_PATCHES="${KERNEL_PATCHES:-}"
 KERNEL_CONFIG="${KERNEL_CONFIG:-}"
@@ -15,9 +16,23 @@ if [[ "$KERNEL_TAG" != "bpf-next" &&
   echo "KERNEL_TAG must be bpf-next or a Linux release tag such as v6.18" >&2
   exit 1
 fi
+if [[ -n "$KERNEL_COMMIT" ]]; then
+  if [[ "$KERNEL_TAG" == "bpf-next" ]]; then
+    echo "KERNEL_COMMIT is supported only for stable/LTS kernel tags" >&2
+    exit 1
+  fi
+  if [[ ! "$KERNEL_COMMIT" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+    echo "KERNEL_COMMIT must contain 7 to 40 hexadecimal characters" >&2
+    exit 1
+  fi
+  KERNEL_COMMIT="${KERNEL_COMMIT,,}"
+fi
 KERNEL_ARTIFACT_NAME="bpf-next"
 if [[ "$KERNEL_TAG" != "bpf-next" ]]; then
   KERNEL_ARTIFACT_NAME="linux-${KERNEL_TAG}"
+fi
+if [[ -n "$KERNEL_COMMIT" ]]; then
+  KERNEL_ARTIFACT_NAME="${KERNEL_ARTIFACT_NAME}-${KERNEL_COMMIT}"
 fi
 if [[ -z "${KERNEL_LOCALVERSION:-}" ]]; then
   if [[ "$KERNEL_TAG" == "bpf-next" ]]; then
@@ -145,8 +160,13 @@ mkdir -p "$WORK_DIR" "$OUTPUT_DIR"
 
 if [[ "$KERNEL_TAG" != "bpf-next" && -z "$KERNEL_SOURCE_DIR_INPUT" ]]; then
   echo "Fetching third-party Linux kernel ${KERNEL_TAG}"
-  git clone --depth 1 --branch "$KERNEL_TAG" \
-    "$KERNEL_REPOSITORY" "$KERNEL_SOURCE_DIR"
+  if [[ -n "$KERNEL_COMMIT" ]]; then
+    git clone --filter=blob:none --no-checkout \
+      "$KERNEL_REPOSITORY" "$KERNEL_SOURCE_DIR"
+  else
+    git clone --depth 1 --branch "$KERNEL_TAG" \
+      "$KERNEL_REPOSITORY" "$KERNEL_SOURCE_DIR"
+  fi
 fi
 if [[ ! -d "$KERNEL_SOURCE_DIR" ]]; then
   echo "kernel source directory not found: ${KERNEL_SOURCE_DIR}" >&2
@@ -168,7 +188,23 @@ else
   submodule_commit="$(git -C "$KERNEL_SOURCE_DIR" rev-parse HEAD)"
   git clone --no-checkout "$KERNEL_SOURCE_DIR" "$SOURCE_DIR"
   cd "$SOURCE_DIR"
-  git checkout --detach "$submodule_commit"
+  if [[ -n "$KERNEL_COMMIT" ]]; then
+    git rev-parse --verify "$KERNEL_COMMIT^{commit}" >/dev/null 2>&1 || {
+      echo "KERNEL_COMMIT is not available in KERNEL_SOURCE_DIR: ${KERNEL_COMMIT}" >&2
+      exit 1
+    }
+    git checkout --detach "$KERNEL_COMMIT"
+  else
+    git checkout --detach "$submodule_commit"
+  fi
+fi
+
+if [[ -n "$KERNEL_COMMIT" ]]; then
+  git rev-parse --verify "$KERNEL_COMMIT^{commit}" >/dev/null 2>&1 || {
+    echo "kernel commit not found in ${KERNEL_REPOSITORY}: ${KERNEL_COMMIT}" >&2
+    exit 1
+  }
+  git checkout --detach "$KERNEL_COMMIT"
 fi
 
 upstream_commit="$(git rev-parse HEAD)"
@@ -425,6 +461,7 @@ cat > "${OUTPUT_DIR}/${KERNEL_ARTIFACT_NAME}-kernel-build" <<EOF
 source_dir=${KERNEL_SOURCE_DIR}
 source_repository=${KERNEL_REPOSITORY}
 tag=${KERNEL_TAG}
+requested_commit=${KERNEL_COMMIT}
 upstream_commit=${upstream_commit}
 commit=${kernel_commit}
 package_format=${PACKAGE_FORMAT}
