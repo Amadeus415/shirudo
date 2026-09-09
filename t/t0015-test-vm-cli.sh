@@ -90,7 +90,7 @@ test_expect_success 'test-vm imports the host-built payload' '
 	grep -Fq "\$(LIBBPF_A)" ../Makefile.shirudo &&
 	grep -q "shirudo-bpf-deps" ../Makefile.shirudo &&
 	grep -q "Building Shirudo BPF dependency artifacts" \
-		../contrib/build-kernel-deb.sh
+		../contrib/build-kernel-package.sh
 '
 	test_expect_success 'test-vm bundle stamp controls incremental rebuilds' '
 	grep -q "TEST_VM_BUNDLE_STAMP" ../Makefile &&
@@ -163,12 +163,12 @@ test_expect_success 'stable VM selection enables trusted-root bootstrap' '
 test_expect_success 'make kernel builds a tagged third-party Linux source' '
 	grep -q "^kernel: \$(KERNEL_BUILD_STAMP)" ../Makefile &&
 	grep -q "KERNEL_TAG=\"\${KERNEL_TAG:-bpf-next}\"" \
-		../contrib/build-kernel-deb.sh &&
+		../contrib/build-kernel-package.sh &&
 	grep -q "KERNEL_REPOSITORY=\"\${KERNEL_REPOSITORY:-https://git.kernel.org" \
-		../contrib/build-kernel-deb.sh &&
-	grep -q "git clone --depth 1 --branch" ../contrib/build-kernel-deb.sh &&
+		../contrib/build-kernel-package.sh &&
+	grep -q "git clone --depth 1 --branch" ../contrib/build-kernel-package.sh &&
 	grep -q "make kernel KERNEL_TAG=v6.18" ../Makefile &&
-	! KERNEL_TAG=not-a-kernel-tag ../contrib/build-kernel-deb.sh \
+	! KERNEL_TAG=not-a-kernel-tag ../contrib/build-kernel-package.sh \
 		>"$WORK/invalid-kernel-tag.out" 2>&1 &&
 	grep -q "KERNEL_TAG must be bpf-next or a Linux release tag" \
 		"$WORK/invalid-kernel-tag.out"

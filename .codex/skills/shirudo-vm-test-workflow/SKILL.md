@@ -51,7 +51,7 @@ make kernel KERNEL_TAG=v6.18 \
 ```
 
 Kernel builds require the host packages checked by
-`contrib/build-kernel-deb.sh`; if any are missing, the command prints an
+`contrib/build-kernel-package.sh`; if any are missing, the command prints an
 install command. Do not install host packages without authorization.
 
 To build or reuse the image and boot an interactive VM on a selected stable

@@ -60,6 +60,7 @@ export VM_SSH_COMMAND
         distclean test examples config
 
 KERNEL_PATCHES ?= $(if $(wildcard kernel/*.patch),kernel/,)
+PACKAGE_FORMAT  ?= deb
 
 INSTALLER_TARBALL    ?= shirudo.tar.gz
 INSTALLER_STAGE      ?= build/shirudo-installer
@@ -147,9 +148,10 @@ shirudo make targets (run from the repo root):
                            (compile + sign .upatch; ships in the operator
                            package, never to a target)
     make kernel KERNEL_TAG=v6.18
-                           build a tagged third-party Linux kernel DEB/BTF
+                           build a tagged third-party Linux kernel package/BTF
                            bundle (KERNEL_CONFIG=path overrides defconfig)
-    make bpf-next          compatibility alias for make kernel
+    make bpf-next          build bpf-next kernel packages, BTF, and BPF tools
+                           (default: DEBs; set PACKAGE_FORMAT=rpm for RPMs)
     make vm KERNEL=6.18   boot a VM using a locally built stable kernel;
                            supported selections: 7.2, 6.18, 6.12, 6.6, 6.1
     make clean             remove build artifacts
@@ -363,7 +365,9 @@ $(TEST_VM_BUNDLE_STAMP): $(TEST_VM_BUNDLE_INPUTS)
 
 kernel: $(KERNEL_BUILD_STAMP)
 
-bpf-next: artifacts/bpf-next-kernel-debs/bzImage.sha256sum
+bpf-next:
+	$(Q)PACKAGE_FORMAT='$(PACKAGE_FORMAT)' KERNEL_PATCHES='$(KERNEL_PATCHES)' \
+		contrib/build-kernel-package.sh
 
 $(KERNEL_BUILD_STAMP):
 	$(Q)KERNEL_TAG='$(KERNEL_TAG_NORMALIZED)' \
@@ -371,8 +375,9 @@ $(KERNEL_BUILD_STAMP):
 		KERNEL_REPOSITORY='$(KERNEL_REPOSITORY)' \
 		KERNEL_SOURCE_DIR='$(KERNEL_SOURCE_DIR)' \
 		KERNEL_CONFIG='$(KERNEL_CONFIG)' \
+		PACKAGE_FORMAT='$(PACKAGE_FORMAT)' \
 		OUTPUT_DIR="$(abspath $(KERNEL_BUILD_ARTIFACT_DIR))" \
-		contrib/build-kernel-deb.sh
+		contrib/build-kernel-package.sh
 
 # A VM selection owns its kernel artifact independently of the generic
 # KERNEL_TAG selection used by `make kernel`.

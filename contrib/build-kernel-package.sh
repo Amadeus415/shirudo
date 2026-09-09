@@ -26,6 +26,19 @@ if [[ -z "${KERNEL_LOCALVERSION:-}" ]]; then
     KERNEL_LOCALVERSION="-shirudo-${KERNEL_TAG#v}"
   fi
 fi
+PACKAGE_FORMAT="${PACKAGE_FORMAT:-deb}"
+case "$PACKAGE_FORMAT" in
+  deb)
+    PACKAGE_SUFFIX="debs"
+    ;;
+  rpm)
+    PACKAGE_SUFFIX="rpms"
+    ;;
+  *)
+    echo "unsupported PACKAGE_FORMAT: ${PACKAGE_FORMAT} (expected deb or rpm)" >&2
+    exit 1
+    ;;
+esac
 WORK_DIR="${WORK_DIR:-${RUNNER_TEMP:-/tmp}/${KERNEL_ARTIFACT_NAME}-kernel-build}"
 SOURCE_DIR="${WORK_DIR}/linux"
 if [[ -n "$KERNEL_SOURCE_DIR_INPUT" ]]; then
@@ -35,73 +48,97 @@ elif [[ "$KERNEL_TAG" == "bpf-next" ]]; then
 else
   KERNEL_SOURCE_DIR="$SOURCE_DIR"
 fi
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/artifacts/${KERNEL_ARTIFACT_NAME}-kernel-debs}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/artifacts/${KERNEL_ARTIFACT_NAME}-kernel-${PACKAGE_SUFFIX}}"
 BUNDLE_PATH="${BUNDLE_PATH:-${OUTPUT_DIR}.tar.gz}"
 VMLINUX_PATH="${OUTPUT_DIR}/bzImage"
 VMLINUX_BTF_PATH="${OUTPUT_DIR}/vmlinux.btf"
 BPF_DEPS_DIR="${OUTPUT_DIR}/shirudo-bpf-deps"
 BPF_DEPS_LIBBPF_DIR="${BPF_DEPS_DIR}/bpf"
 
-BUILD_DEPENDENCIES=(
-  bc
-  bison
-  build-essential
-  ca-certificates
-  cpio
-  debhelper
-  dpkg-dev
-  dwarves
-  fakeroot
-  flex
-  git
-  kmod
-  libdw-dev
-  libelf-dev
-  libncurses-dev
-  libssl-dev
-  openssl
-  pahole
-  python3
-  rsync
-  xz-utils
-  zstd
-)
+if [[ "$PACKAGE_FORMAT" == deb ]]; then
+  BUILD_DEPENDENCIES=(
+    bc
+    bison
+    build-essential
+    ca-certificates
+    cpio
+    debhelper
+    dpkg-dev
+    dwarves
+    fakeroot
+    flex
+    git
+    kmod
+    libdw-dev
+    libelf-dev
+    libncurses-dev
+    libssl-dev
+    llvm
+    openssl
+    pahole
+    python3
+    rsync
+    xz-utils
+    zstd
+  )
+else
+  BUILD_DEPENDENCIES=(
+    bc
+    bison
+    ca-certificates
+    cpio
+    dwarves
+    elfutils-devel
+    elfutils-libelf-devel
+    flex
+    gcc
+    git
+    gzip
+    hostname
+    kmod
+    make
+    ncurses-devel
+    openssl
+    openssl-devel
+    perl
+    python3
+    rpm-build
+    rsync
+    tar
+    xz
+    zstd
+  )
+fi
 
-print_dependency_install_command() {
-  printf '  sudo apt-get install -y --no-install-recommends'
-  printf ' %q' "$@"
-  printf '\n'
-}
-
-check_build_dependencies() {
-  local package
-  local package_status
-  local -a missing_packages=()
-
-  if ! command -v dpkg-query >/dev/null 2>&1; then
-    echo "cannot check kernel build dependencies: dpkg-query is not installed" >&2
-    echo "make kernel currently supports Debian and Ubuntu build hosts" >&2
-    echo "Install the required packages with:" >&2
-    print_dependency_install_command "${BUILD_DEPENDENCIES[@]}" >&2
+run_as_root() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    echo "installing kernel build dependencies requires root or sudo" >&2
     exit 1
   fi
+}
 
-  for package in "${BUILD_DEPENDENCIES[@]}"; do
-    package_status="$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)"
-    if [[ "$package_status" != "install ok installed" ]]; then
-      missing_packages+=("$package")
+install_build_dependencies() {
+  if [[ "$PACKAGE_FORMAT" == deb ]]; then
+    if ! command -v apt-get >/dev/null 2>&1; then
+      echo "cannot install Debian kernel build dependencies: apt-get is not installed" >&2
+      exit 1
     fi
-  done
-
-  if (( ${#missing_packages[@]} != 0 )); then
-    echo "missing kernel build dependencies: ${missing_packages[*]}" >&2
-    echo "Install them with:" >&2
-    print_dependency_install_command "${missing_packages[@]}" >&2
-    exit 1
+    run_as_root apt-get update
+    run_as_root apt-get install -y --no-install-recommends "${BUILD_DEPENDENCIES[@]}"
+  else
+    if ! command -v dnf >/dev/null 2>&1; then
+      echo "cannot install RPM kernel build dependencies: dnf is not installed" >&2
+      exit 1
+    fi
+    run_as_root dnf install -y "${BUILD_DEPENDENCIES[@]}"
   fi
 }
 
-check_build_dependencies
+install_build_dependencies
 
 rm -rf "$WORK_DIR" "$OUTPUT_DIR" "$BUNDLE_PATH" "${BUNDLE_PATH}.sha256sum"
 mkdir -p "$WORK_DIR" "$OUTPUT_DIR"
@@ -320,13 +357,25 @@ require_config CONFIG_SERIAL_8250_CONSOLE y
 
 kernel_release="$(make -s kernelrelease)"
 package_version="1+$(date -u +%Y%m%d%H%M%S)+g${kernel_commit:0:12}"
-make -j "$(nproc)" bindeb-pkg KDEB_PKGVERSION="$package_version"
+if [[ "$PACKAGE_FORMAT" == deb ]]; then
+  make -j "$(nproc)" bindeb-pkg KDEB_PKGVERSION="$package_version"
 
-find "$WORK_DIR" -maxdepth 1 -type f -name '*.deb' ! -name '*-dbg*.deb' -exec cp {} "$OUTPUT_DIR/" \;
+  find "$WORK_DIR" -maxdepth 1 -type f -name '*.deb' ! -name '*-dbg*.deb' -exec cp {} "$OUTPUT_DIR/" \;
 
-if ! find "$OUTPUT_DIR" -type f -name 'linux-image-[0-9]*.deb' ! -name '*-dbg*' | grep -q .; then
-  echo "kernel image deb was not produced" >&2
-  exit 1
+  if ! find "$OUTPUT_DIR" -type f -name 'linux-image-[0-9]*.deb' ! -name '*-dbg*' | grep -q .; then
+    echo "kernel image deb was not produced" >&2
+    exit 1
+  fi
+else
+  make -j "$(nproc)" binrpm-pkg
+
+  find "$SOURCE_DIR/rpmbuild/RPMS" -type f -name '*.rpm' \
+    ! -name '*debug*' ! -name '*debuginfo*' -exec cp {} "$OUTPUT_DIR/" \;
+
+  if ! find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*.rpm' | grep -q .; then
+    echo "kernel RPM was not produced" >&2
+    exit 1
+  fi
 fi
 
 if [[ ! -s "arch/x86/boot/bzImage" ]]; then
@@ -378,6 +427,7 @@ source_repository=${KERNEL_REPOSITORY}
 tag=${KERNEL_TAG}
 upstream_commit=${upstream_commit}
 commit=${kernel_commit}
+package_format=${PACKAGE_FORMAT}
 patches_requested=${KERNEL_PATCHES}
 patches_applied=${applied_patches[*]}
 config_source=${config_source}
@@ -404,4 +454,4 @@ tar -C "$OUTPUT_DIR" -czf "$BUNDLE_PATH" .
 echo "Built ${KERNEL_TAG} kernel bzImage: ${VMLINUX_PATH}"
 echo "Built kernel BTF: ${VMLINUX_BTF_PATH}"
 echo "Built Shirudo BPF dependency artifacts: ${BPF_DEPS_DIR}"
-echo "Built kernel deb bundle: ${BUNDLE_PATH}"
+echo "Built kernel ${PACKAGE_FORMAT} bundle: ${BUNDLE_PATH}"

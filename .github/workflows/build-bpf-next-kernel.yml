@@ -22,34 +22,6 @@ jobs:
           sudo rm -rf /opt/ghc /usr/local/lib/android /usr/share/dotnet || true
           sudo apt-get clean
 
-      - name: Install kernel build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            bc \
-            bison \
-            build-essential \
-            ca-certificates \
-            cpio \
-            debhelper \
-            dpkg-dev \
-            dwarves \
-            fakeroot \
-            flex \
-            git \
-            kmod \
-            libdw-dev \
-            libelf-dev \
-            libncurses-dev \
-            libssl-dev \
-            llvm \
-            openssl \
-            pahole \
-            python3 \
-            rsync \
-            xz-utils \
-            zstd
-
       - name: Build bpf-next kernel artifacts
         run: make bpf-next
 
@@ -66,3 +38,35 @@ jobs:
             artifacts/bpf-next-kernel-debs/vmlinux.btf
             artifacts/bpf-next-kernel-debs/vmlinux.btf.sha256sum
             artifacts/bpf-next-kernel-debs/bpf-next-kernel-build
+
+  build-amazon-linux-rpm:
+    runs-on: ubuntu-latest-4cores-16gb
+    container: amazonlinux:2023
+    timeout-minutes: 120
+
+    steps:
+      - name: Install checkout dependencies
+        run: dnf install -y git gzip make tar
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Build Amazon Linux kernel RPM artifacts
+        run: make bpf-next PACKAGE_FORMAT=rpm
+
+      - name: Upload Amazon Linux kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bpf-next-kernel-rpms-x86_64
+          retention-days: 14
+          path: |
+            artifacts/bpf-next-kernel-rpms.tar.gz
+            artifacts/bpf-next-kernel-rpms.tar.gz.sha256sum
+            artifacts/bpf-next-kernel-rpms/*.rpm
+            artifacts/bpf-next-kernel-rpms/bzImage
+            artifacts/bpf-next-kernel-rpms/bzImage.sha256sum
+            artifacts/bpf-next-kernel-rpms/vmlinux.btf
+            artifacts/bpf-next-kernel-rpms/vmlinux.btf.sha256sum
+            artifacts/bpf-next-kernel-rpms/bpf-next-kernel-build
