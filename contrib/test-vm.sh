@@ -1081,7 +1081,7 @@ write_files:
     content: |
       #!/usr/bin/env bash
       set -uo pipefail
-	      mkdir -p /mnt/shirudo-src /mnt/shirudo-bundle /mnt/shirudo-out /mnt/shirudo-kernel
+      mkdir -p /mnt/shirudo-src /mnt/shirudo-bundle /mnt/shirudo-out /mnt/shirudo-kernel
       if ! mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600 shirudo-out /mnt/shirudo-out; then
         echo "test-vm: could not mount result share" >/dev/ttyS0
         poweroff -f

@@ -189,7 +189,7 @@ test_expect_success 'make vm and kernel select an exact stable commit' '
 	grep -q "KERNEL_COMMIT must contain 7 to 40 hexadecimal characters" \
 		"$WORK/invalid-kernel-commit.out"
 '
-	test_expect_success 'kernel VM artifacts provide networking modules' '
+test_expect_success 'kernel VM artifacts provide networking modules' '
 	grep -q "scripts/config --module VETH" ../contrib/build-kernel-deb.sh &&
 	grep -q "scripts/config --module BRIDGE" ../contrib/build-kernel-deb.sh &&
 	grep -q "scripts/config --module VLAN_8021Q" ../contrib/build-kernel-deb.sh &&
@@ -205,6 +205,10 @@ test_expect_success 'make vm and kernel select an exact stable commit' '
 	grep -q "install_kernel_modules" ../contrib/test-vm-guest.sh &&
 	grep -q "modprobe \"\$module\"" ../contrib/test-vm-guest.sh &&
 	grep -q "nf_flow_table_procfs" ../contrib/test-vm-guest.sh
+'
+test_expect_success 'prepared VM runtime includes ripgrep' '
+	grep -qx "ripgrep" ../contrib/test-vm-runtime-packages &&
+	grep -q "package_digest" ../contrib/build-test-vm-bundle.sh
 '
 
 test_expect_success 'named VM console and SSH access helpers are wired up' '
