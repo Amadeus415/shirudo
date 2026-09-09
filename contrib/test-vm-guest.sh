@@ -49,8 +49,9 @@ install_kernel_modules()
 	for module in veth bridge 8021q br_netfilter nf_flow_table nf_flow_table_inet; do
 		lsmod | awk -v module="$module" '$1 == module { found = 1 } END { exit !found }'
 	done
-	# NF_FLOW_TABLE_PROCFS is built into nf_flow_table.ko when enabled; it
-	# therefore does not have a separate /sys/module entry. Validate the
+	# nf_flow_table_procfs (CONFIG_NF_FLOW_TABLE_PROCFS) is built into
+	# nf_flow_table.ko when enabled; it therefore does not have a separate
+	# /sys/module entry. Validate the
 	# procfs interface exposed by the feature instead.
 	test -r /proc/net/stat/nf_flowtable
 }
