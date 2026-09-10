@@ -379,9 +379,39 @@ scripts/config --module BRIDGE
 scripts/config --module VLAN_8021Q
 scripts/config --module BTRFS_FS
 scripts/config --enable NETFILTER_ADVANCED
-scripts/config --enable NETFILTER_XTABLES_LEGACY
-scripts/config --module IP_NF_IPTABLES_LEGACY
-scripts/config --module IP6_NF_IPTABLES_LEGACY
+# NETFILTER_XTABLES_LEGACY was introduced after the older stable branches
+# supported by this workflow.  Those branches include legacy table support
+# in NETFILTER_XTABLES itself, so do not ask scripts/config to set a symbol
+# that their Kconfig does not define.
+netfilter_xtables_legacy_available=0
+if grep -RqsE '^[[:space:]]*config NETFILTER_XTABLES_LEGACY([[:space:]]|$)' \
+  net include; then
+  scripts/config --enable NETFILTER_XTABLES_LEGACY
+  netfilter_xtables_legacy_available=1
+fi
+if grep -RqsE '^[[:space:]]*config IP_NF_IPTABLES_LEGACY([[:space:]]|$)' \
+  net include; then
+  scripts/config --module IP_NF_IPTABLES_LEGACY
+  scripts/config --module IP6_NF_IPTABLES_LEGACY
+  if (( ! netfilter_xtables_legacy_available )); then
+    # In this intermediate Kconfig model, the table modules select the
+    # legacy base symbols. Keep every selector modular so the base symbols
+    # cannot be promoted back to y during olddefconfig.
+    for legacy_selector in \
+      IP_NF_FILTER IP_NF_MANGLE IP_NF_NAT IP_NF_SECURITY \
+      IP6_NF_FILTER IP6_NF_MANGLE IP6_NF_NAT IP6_NF_SECURITY; do
+      if grep -RqsE "^[[:space:]]*config ${legacy_selector}([[:space:]]|$)" \
+        net include; then
+        scripts/config --module "$legacy_selector"
+      fi
+    done
+  fi
+else
+  # Before the legacy selector split, these symbols also selected the
+  # legacy iptables implementations.
+  scripts/config --module IP_NF_IPTABLES
+  scripts/config --module IP6_NF_IPTABLES
+fi
 scripts/config --module IP_NF_RAW
 scripts/config --module IP6_NF_RAW
 scripts/config --module NETFILTER_XT_MATCH_LENGTH
@@ -438,9 +468,17 @@ require_config CONFIG_FARSYNC m
 require_config CONFIG_HFS_FS m
 require_config CONFIG_MVPP2 m
 require_config CONFIG_NF_CONNTRACK y
-require_config CONFIG_NETFILTER_XTABLES_LEGACY y
-require_config CONFIG_IP_NF_IPTABLES_LEGACY m
-require_config CONFIG_IP6_NF_IPTABLES_LEGACY m
+if (( netfilter_xtables_legacy_available )); then
+  require_config CONFIG_NETFILTER_XTABLES_LEGACY y
+fi
+if grep -RqsE '^[[:space:]]*config IP_NF_IPTABLES_LEGACY([[:space:]]|$)' \
+  net include; then
+  require_config CONFIG_IP_NF_IPTABLES_LEGACY m
+  require_config CONFIG_IP6_NF_IPTABLES_LEGACY m
+else
+  require_config CONFIG_IP_NF_IPTABLES m
+  require_config CONFIG_IP6_NF_IPTABLES m
+fi
 require_config CONFIG_IP_NF_RAW m
 require_config CONFIG_IP6_NF_RAW m
 require_config CONFIG_NETFILTER_XT_MATCH_LENGTH m
@@ -497,13 +535,20 @@ require_config CONFIG_SERIAL_8250_CONSOLE y
 make -s include/config/kernel.release
 kernel_release="$(<include/config/kernel.release)"
 package_version="1+$(date -u +%Y%m%d%H%M%S)+g${kernel_commit:0:12}"
+# GCC 15 defaults to GNU C23, while older stable snapshots still use `bool`
+# and `false` as identifiers. KCFLAGS covers normal Kbuild CFLAGS, but x86
+# EFI and realmode Makefiles replace KBUILD_CFLAGS for their special builds.
+# Put GNU11 on the compiler command itself so those paths receive it too.
+# Older stable snapshots can also trigger discarded-qualifier warnings in the
+# bundled host-side libbpf, so keep that compatibility warning in host tools.
+kernel_cc="${CC:-cc} -std=gnu11"
+kernel_hostcflags="${HOSTCFLAGS:-} -std=gnu11 -Wno-error=discarded-qualifiers"
+kernel_kcflags="${KCFLAGS:-} -Wno-error=unterminated-string-initialization -std=gnu11"
 if [[ "$PACKAGE_FORMAT" == deb ]]; then
-  # Older stable snapshots can trigger discarded-qualifier warnings in the
-  # bundled host-side libbpf when built with newer GCC. Keep the exact kernel
-  # sources unchanged while allowing that compatibility warning in host tools.
   make -j "$(nproc)" bindeb-pkg KDEB_PKGVERSION="$package_version" \
-  HOSTCFLAGS="${HOSTCFLAGS:-} -Wno-error=discarded-qualifiers" \
-  KCFLAGS="${KCFLAGS:-} -Wno-error=unterminated-string-initialization"
+    CC="$kernel_cc" \
+    HOSTCFLAGS="$kernel_hostcflags" \
+    KCFLAGS="$kernel_kcflags"
 
   find "$WORK_DIR" -maxdepth 1 -type f -name '*.deb' ! -name '*-dbg*.deb' -exec cp {} "$OUTPUT_DIR/" \;
 
