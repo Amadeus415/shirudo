@@ -141,6 +141,7 @@ int shirudo_verify_detached(const uint8_t *payload, size_t payload_len,
 {
 	BIO *sig = NULL, *data = NULL, *out = NULL;
 	CMS_ContentInfo *cms = NULL;
+	STACK_OF(X509) *signers = NULL;
 	X509_STORE *store = NULL;
 	int rc = -EINVAL;
 
@@ -151,16 +152,21 @@ int shirudo_verify_detached(const uint8_t *payload, size_t payload_len,
 	data = BIO_new_mem_buf(payload, (int)payload_len);
 	out = BIO_new(BIO_s_null());
 	store = X509_STORE_new();
-	if (!sig || !data || !out || !store || X509_STORE_add_cert(store, cert->impl) != 1)
+	if (!sig || !data || !out || !store ||
+	    X509_STORE_add_cert(store, cert->impl) != 1)
+		goto done;
+	signers = sk_X509_new_null();
+	if (!signers || !sk_X509_push(signers, cert->impl))
 		goto done;
 	cms = d2i_CMS_bio(sig, NULL);
-	if (cms && CMS_verify(cms, NULL, store, data, out,
+	if (cms && CMS_verify(cms, signers, store, data, out,
 				     CMS_BINARY | CMS_DETACHED) == 1)
 		rc = 0;
 done:
 	if (rc)
 		ERR_clear_error();
 	CMS_ContentInfo_free(cms);
+	sk_X509_free(signers);
 	X509_STORE_free(store);
 	BIO_free(out);
 	BIO_free(data);

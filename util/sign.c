@@ -159,7 +159,7 @@ int shirudo_cms_sign(struct shirudo_sign_io *io,
 
 	cms = CMS_sign(NULL, NULL, NULL, NULL,
 		       CMS_NOCERTS | CMS_PARTIAL | CMS_BINARY | CMS_DETACHED |
-			       CMS_STREAM);
+		       CMS_STREAM);
 	if (!cms) {
 		err = -EINVAL;
 		goto cleanup;
@@ -167,7 +167,10 @@ int shirudo_cms_sign(struct shirudo_sign_io *io,
 
 	if (!CMS_add1_signer(cms, x509, private_key, EVP_sha256(),
 			     CMS_NOCERTS | CMS_BINARY | CMS_NOSMIMECAP |
-			     CMS_USE_KEYID | CMS_NOATTR)) {
+			     /* TODO: Add an issuerAndSerialNumber signing mode so signed
+			      * BPF upatches can exercise both kernel-supported CMS forms. */
+			     CMS_USE_KEYID |
+			     CMS_NOATTR)) {
 		err = -EINVAL;
 		goto cleanup;
 	}

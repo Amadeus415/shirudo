@@ -7,7 +7,9 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <mbedtls/asn1.h>
 #include <mbedtls/base64.h>
+#include <mbedtls/oid.h>
 #include <mbedtls/pkcs7.h>
 #include <mbedtls/sha256.h>
 #include <mbedtls/ssl.h>
@@ -15,6 +17,119 @@
 
 #include "crypto.h"
 #include "malloc.h"
+
+/*
+ * mbedTLS 3.6's PKCS#7 parser does not accept the subjectKeyIdentifier
+ * SignerIdentifier emitted by the kernel-compatible CMS_USE_KEYID form.
+ * Keep that wire format unchanged for the kernel and verify Shirudo's
+ * detached, no-attributes form directly with the operator certificate.
+ */
+static int asn1_skip(unsigned char **p, const unsigned char *end)
+{
+	size_t len;
+	int tag;
+
+	if (!p || !*p || *p >= end)
+		return MBEDTLS_ERR_ASN1_OUT_OF_DATA;
+	tag = **p;
+	if ((tag & MBEDTLS_ASN1_TAG_VALUE_MASK) == 0x1f)
+		return MBEDTLS_ERR_ASN1_INVALID_DATA;
+	if (mbedtls_asn1_get_tag(p, end, &len, tag) != 0 ||
+		len > (size_t)(end - *p))
+		return MBEDTLS_ERR_ASN1_INVALID_LENGTH;
+	*p += len;
+	return 0;
+}
+
+static int verify_detached_keyid_cms(const uint8_t *payload,
+					 size_t payload_len,
+					 const uint8_t *signature,
+					 size_t signature_len,
+					 const mbedtls_x509_crt *cert)
+{
+	unsigned char *p = (unsigned char *)signature;
+	const unsigned char *end = signature + signature_len;
+	const unsigned char *section_end;
+	mbedtls_asn1_buf oid = {}, params = {};
+	mbedtls_md_type_t md_alg;
+	uint8_t digest[SHIRUDO_CRYPTO_SHA256_LEN];
+	const unsigned char *sig;
+	size_t len;
+	int rc;
+
+	/* ContentInfo ::= SEQUENCE { contentType, [0] SignedData } */
+	rc = mbedtls_asn1_get_tag(&p, end, &len,
+				  MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SEQUENCE);
+	if (rc)
+		return rc;
+	section_end = p + len;
+	if (section_end > end ||
+		mbedtls_asn1_get_tag(&p, section_end, &len, MBEDTLS_ASN1_OID))
+		return MBEDTLS_ERR_PKCS7_INVALID_FORMAT;
+	if (len != sizeof(MBEDTLS_OID_PKCS7_SIGNED_DATA) - 1 ||
+		memcmp(p, MBEDTLS_OID_PKCS7_SIGNED_DATA, len) != 0)
+		return MBEDTLS_ERR_PKCS7_INVALID_FORMAT;
+	p += len;
+	if (mbedtls_asn1_get_tag(&p, section_end, &len,
+					 MBEDTLS_ASN1_CONTEXT_SPECIFIC |
+					 MBEDTLS_ASN1_CONSTRUCTED | 0))
+		return MBEDTLS_ERR_PKCS7_INVALID_FORMAT;
+	section_end = p + len;
+	if (section_end > end ||
+		mbedtls_asn1_get_tag(&p, section_end, &len,
+					 MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SEQUENCE))
+		return MBEDTLS_ERR_PKCS7_INVALID_FORMAT;
+	section_end = p + len;
+
+	/* SignedData.version, digestAlgorithms, encapContentInfo. */
+	if (asn1_skip(&p, section_end) || asn1_skip(&p, section_end) ||
+		asn1_skip(&p, section_end))
+		return MBEDTLS_ERR_PKCS7_INVALID_FORMAT;
+
+	/* Optional certificates and CRLs precede signerInfos. */
+	while (p < section_end && (*p == (MBEDTLS_ASN1_CONTEXT_SPECIFIC |
+						 MBEDTLS_ASN1_CONSTRUCTED | 0) ||
+				   *p == (MBEDTLS_ASN1_CONTEXT_SPECIFIC |
+						 MBEDTLS_ASN1_CONSTRUCTED | 1))) {
+		if (asn1_skip(&p, section_end))
+			return MBEDTLS_ERR_PKCS7_INVALID_FORMAT;
+	}
+
+	/* signerInfos SET OF SignerInfo; this format carries one signer. */
+	if (mbedtls_asn1_get_tag(&p, section_end, &len,
+					 MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SET))
+		return MBEDTLS_ERR_PKCS7_INVALID_FORMAT;
+	section_end = p + len;
+	if (section_end > end ||
+		mbedtls_asn1_get_tag(&p, section_end, &len,
+					 MBEDTLS_ASN1_CONSTRUCTED | MBEDTLS_ASN1_SEQUENCE))
+		return MBEDTLS_ERR_PKCS7_INVALID_FORMAT;
+	section_end = p + len;
+
+	/* SignerInfo.version and the key-id SignerIdentifier. */
+	if (asn1_skip(&p, section_end) || asn1_skip(&p, section_end))
+		return MBEDTLS_ERR_PKCS7_INVALID_FORMAT;
+
+	/* digestAlgorithm must be SHA-256. */
+	if (mbedtls_asn1_get_alg(&p, section_end, &oid, &params) ||
+		mbedtls_oid_get_md_alg(&oid, &md_alg) ||
+		md_alg != MBEDTLS_MD_SHA256)
+		return MBEDTLS_ERR_PKCS7_INVALID_FORMAT;
+
+	/* CMS_NOATTR means signatureAlgorithm follows immediately. */
+	if (mbedtls_asn1_get_alg(&p, section_end, &oid, &params) ||
+		mbedtls_asn1_get_tag(&p, section_end, &len,
+					 MBEDTLS_ASN1_OCTET_STRING) ||
+		len > (size_t)(section_end - p))
+		return MBEDTLS_ERR_PKCS7_INVALID_FORMAT;
+	sig = p;
+
+	rc = shirudo_sha256_buffer(payload, payload_len, digest);
+	if (rc)
+		return rc;
+	return mbedtls_pk_verify((mbedtls_pk_context *)&cert->pk, md_alg,
+				 digest, sizeof(digest), sig, len);
+}
 
 int shirudo_sha256_init(struct shirudo_sha256_ctx *ctx)
 {
@@ -166,6 +281,9 @@ int shirudo_verify_detached(const uint8_t *payload, size_t payload_len,
 		rc = mbedtls_pkcs7_signed_data_verify(&pkcs7, cert->impl,
 						      payload, payload_len);
 	mbedtls_pkcs7_free(&pkcs7);
+	if (rc != 0)
+		rc = verify_detached_keyid_cms(payload, payload_len, signature,
+						 signature_len, cert->impl);
 	return rc == 0 ? 0 : -EINVAL;
 }
 
