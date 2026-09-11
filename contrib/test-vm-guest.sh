@@ -290,9 +290,9 @@ install -d -m 0700 /var/lib/shirudo/keys
 
 package_cert="${TEST_VM_PACKAGE_CERT:-$BUNDLE/fixtures/cert.der}"
 if [[ -n "${TEST_VM_PACKAGE_CERT:-}" ]]; then
-	[[ "$package_cert" == /mnt/shirudo-bundle/fixtures/package-cert.der &&
+	[[ "$package_cert" == /mnt/shirudo-package-cert/package-cert.der &&
 	   -s "$package_cert" ]] || {
-		log "package certificate is missing from the host bundle"
+		log "package certificate is missing from the package certificate share"
 		exit 1
 	}
 fi

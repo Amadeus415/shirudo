@@ -74,7 +74,8 @@ This mode is irreversible through Shirudo: subsequent boots reuse the
 committed mode, and ``shirudo status`` (including the systemd keepalive
 payload) reports ``trusted-root`` or ``untrusted-root``. In
 ``trusted-root`` mode Shirudo verifies each upatch signature in target
-userspace before loading an unsigned outer loader. The target stores only
+userspace before loading an unsigned outer loader, even when the kernel
+also exposes the native signature ABI. The target stores only
 the public ``cert.der`` and parsed public-key state; the private
 ``signing_key.pem`` remains on the operator/build host.
 

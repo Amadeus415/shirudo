@@ -31,9 +31,7 @@ const char *shirudo_mode_authorization(enum shirudo_mode mode,
 					bool native_kernel_signing)
 {
 	if (mode == SHIRUDO_MODE_TRUSTED_ROOT) {
-		return native_kernel_signing ?
-			"userspace-and-kernel-signature" :
-			"userspace-signature-then-unsigned-loader";
+		return "userspace-signature-then-unsigned-loader";
 	}
 	return "kernel-signature";
 }

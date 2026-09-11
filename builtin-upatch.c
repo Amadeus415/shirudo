@@ -2006,7 +2006,8 @@ static int upatch_apply(const char *path, bool verify_only,
 		rc = 1;
 		goto out;
 	}
-	if (shirudo_kernel_abi_check(NULL, 0) != 0)
+	if (mode_state.mode == SHIRUDO_MODE_TRUSTED_ROOT ||
+		shirudo_kernel_abi_check(NULL, 0) != 0)
 		native_signing = false;
 	if (mode_state.mode == SHIRUDO_MODE_UNTRUSTED_ROOT &&
 	    !native_signing) {

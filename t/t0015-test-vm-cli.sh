@@ -419,13 +419,13 @@ test_expect_success 'test-vm validates a custom OCI CA file before boot' '
 		"$WORK/missing-oci-ca.out"
 '
 
-test_expect_success 'test-vm passes a public package certificate into the guest bundle' '
+	test_expect_success 'test-vm passes a public package certificate into the guest' '
 	grep -q "TEST_VM_PACKAGE_CERT" ../Makefile &&
 	grep -q "TEST_VM_BUNDLE_INPUTS" ../Makefile &&
 	grep -q "PACKAGE_CERT=\"\${TEST_VM_PACKAGE_CERT:-}\"" \
 		../contrib/build-test-vm-bundle.sh &&
 	grep -q "package-cert.der" ../contrib/build-test-vm-bundle.sh &&
-	grep -q "export TEST_VM_PACKAGE_CERT=/mnt/shirudo-bundle/fixtures/package-cert.der" \
+	grep -q "export TEST_VM_PACKAGE_CERT=/mnt/shirudo-package-cert/package-cert.der" \
 		"$RUNNER" &&
 	grep -q "supported only for interactive make vm" "$RUNNER" &&
 	grep -q "TEST_VM_PACKAGE_CERT" ../contrib/test-vm-guest.sh &&

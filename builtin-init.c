@@ -1017,7 +1017,8 @@ int cmd_init(int argc, const char **argv)
 	if (rc)
 		return 1;
 
-	if (shirudo_kernel_abi_check(NULL, 0) != 0)
+	if (mode == SHIRUDO_MODE_TRUSTED_ROOT ||
+		shirudo_kernel_abi_check(NULL, 0) != 0)
 		native_signing = false;
 
 	/*

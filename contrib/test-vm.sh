@@ -1023,6 +1023,7 @@ SWTPM_SOCKET="${RUN_DIR}/tpm/swtpm-sock"
 SWTPM_PIDFILE="${RUN_DIR}/tpm/swtpm.pid"
 OTEL_CA_DIR=""
 OCI_CA_DIR=""
+PACKAGE_CERT_DIR=""
 BPM_OCI_DIR=""
 
 if [[ "$MAP_EXPORT_ENABLED" -eq 1 && -n "$MAP_EXPORT_CA" ]]; then
@@ -1038,8 +1039,9 @@ if [[ -n "$OCI_CA" ]]; then
 fi
 
 if [[ -n "$PACKAGE_CERT" ]]; then
-	[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/package-cert.der" ]] ||
-		die "host VM bundle has no package certificate; run 'make test-vm-bundle' first"
+	PACKAGE_CERT_DIR="${RUN_DIR}/package-cert"
+	mkdir -p "$PACKAGE_CERT_DIR"
+	install -m 0644 "$PACKAGE_CERT" "$PACKAGE_CERT_DIR/package-cert.der"
 fi
 
 if [[ -n "$BPM_OCI_ENDPOINT" ]]; then
@@ -1086,7 +1088,7 @@ write_files:
     content: |
       #!/usr/bin/env bash
       set -uo pipefail
-      mkdir -p /mnt/shirudo-src /mnt/shirudo-bundle /mnt/shirudo-out /mnt/shirudo-kernel
+      mkdir -p /mnt/shirudo-src /mnt/shirudo-bundle /mnt/shirudo-out /mnt/shirudo-kernel /mnt/shirudo-package-cert
       if ! mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600 shirudo-out /mnt/shirudo-out; then
         echo "test-vm: could not mount result share" >/dev/ttyS0
         poweroff -f
@@ -1100,6 +1102,15 @@ write_files:
       exec > >(tee -a /dev/ttyS0 /mnt/shirudo-out/guest.log) 2>&1
       rc=0
 EOF
+if [[ -n "$PACKAGE_CERT" ]]; then
+cat >>"$USER_DATA" <<'EOF'
+      if ! mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,ro shirudo-package-cert /mnt/shirudo-package-cert; then
+        echo "test-vm: could not mount package certificate share" >/dev/ttyS0
+        poweroff -f
+        exit 1
+      fi
+EOF
+fi
 if [[ -n "$KERNEL_ARTIFACT_DIR" ]]; then
 	cat >>"$USER_DATA" <<'EOF'
       if ! mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,ro shirudo-kernel /mnt/shirudo-kernel; then
@@ -1128,7 +1139,7 @@ if [[ -n "$OCI_CA_DIR" ]]; then
 	printf '      export TEST_VM_OCI_CA=/mnt/shirudo-oci/ca.crt\n' >>"$USER_DATA"
 fi
 if [[ -n "$PACKAGE_CERT" ]]; then
-	printf '      export TEST_VM_PACKAGE_CERT=/mnt/shirudo-bundle/fixtures/package-cert.der\n' \
+	printf '      export TEST_VM_PACKAGE_CERT=/mnt/shirudo-package-cert/package-cert.der\n' \
 		>>"$USER_DATA"
 fi
 if [[ -n "$BPM_OCI_ENDPOINT" ]]; then
@@ -1246,6 +1257,12 @@ fi
 if [[ -n "$BPM_OCI_DIR" ]]; then
 	QEMU_ARGS+=(
 		-virtfs "local,id=shirudo-bpm-oci,path=${BPM_OCI_DIR},mount_tag=shirudo-bpm-oci,security_model=none,readonly=on"
+	)
+fi
+
+if [[ -n "$PACKAGE_CERT_DIR" ]]; then
+	QEMU_ARGS+=(
+		-virtfs "local,id=shirudo-package-cert,path=${PACKAGE_CERT_DIR},mount_tag=shirudo-package-cert,security_model=none,readonly=on"
 	)
 fi
 

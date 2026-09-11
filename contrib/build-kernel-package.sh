@@ -6,6 +6,7 @@ KERNEL_COMMIT="${KERNEL_COMMIT:-}"
 KERNEL_REPOSITORY="${KERNEL_REPOSITORY:-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git}"
 KERNEL_PATCHES="${KERNEL_PATCHES:-}"
 KERNEL_CONFIG="${KERNEL_CONFIG:-}"
+KERNEL_BUILD_JOBS="${KERNEL_BUILD_JOBS:-$(nproc)}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KERNEL_SOURCE_DIR_INPUT="${KERNEL_SOURCE_DIR:-}"
 if [[ "$KERNEL_TAG" =~ ^[0-9]+\.[0-9]+([.][0-9]+)?$ ]]; then
@@ -65,6 +66,7 @@ else
 fi
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/artifacts/${KERNEL_ARTIFACT_NAME}-kernel-${PACKAGE_SUFFIX}}"
 BUNDLE_PATH="${BUNDLE_PATH:-${OUTPUT_DIR}.tar.gz}"
+KERNEL_OBSERVABILITY_CONFIGS_FILE="${KERNEL_OBSERVABILITY_CONFIGS_FILE:-${REPO_ROOT}/contrib/kernel-observability-configs.txt}"
 VMLINUX_PATH="${OUTPUT_DIR}/bzImage"
 VMLINUX_BTF_PATH="${OUTPUT_DIR}/vmlinux.btf"
 BPF_DEPS_DIR="${OUTPUT_DIR}/shirudo-bpf-deps"
@@ -426,7 +428,96 @@ scripts/config --enable NVME_MULTIPATH
 scripts/config --set-str SYSTEM_TRUSTED_KEYS ""
 scripts/config --set-str SYSTEM_REVOCATION_KEYS ""
 
+# Enable the CVE load-repair Kconfig set when the selected kernel defines it.
+# Tristate drivers are requested as modules so the VM can load them on demand;
+# existing y/m values are preserved. Kconfig dependency resolution remains the
+# kernel's authority, and the post-olddefconfig report records symbols that
+# could not be selected on this architecture or branch.
+kernel_config_value() {
+  local symbol="$1"
+  local value
+
+  value="$(awk -F= -v want="${symbol}" '$1 == want { print $2; exit }' .config)"
+  if [[ -n "$value" ]]; then
+    printf '%s\n' "$value"
+  elif grep -q "^# ${symbol} is not set$" .config; then
+    printf 'n\n'
+  else
+    printf 'unknown\n'
+  fi
+}
+
+declare -A KCONFIG_DEFINITION_CACHE=()
+
+kconfig_definition_file() {
+  local symbol="$1"
+  if [[ ${KCONFIG_DEFINITION_CACHE[$symbol]+present} ]]; then
+    printf '%s\n' "${KCONFIG_DEFINITION_CACHE[$symbol]}"
+    return
+  fi
+  local definition_file
+  definition_file="$(grep -Rls --include='Kconfig*' \
+    -E "^[[:space:]]*(config|menuconfig)[[:space:]]+${symbol}([[:space:]]|$)" \
+    . 2>/dev/null | head -n 1 || true)"
+  KCONFIG_DEFINITION_CACHE[$symbol]="$definition_file"
+  printf '%s\n' "$definition_file"
+}
+
+kconfig_symbol_kind() {
+  local symbol="$1"
+  local file="$2"
+  awk -v want="$symbol" '
+    /^[[:space:]]*(config|menuconfig)[[:space:]]+/ {
+      active = ($2 == want)
+      next
+    }
+    active && /^[[:space:]]*tristate([[:space:]]|$)/ { print "tristate"; exit }
+    active && /^[[:space:]]*bool([[:space:]]|$)/ { print "bool"; exit }
+  ' "$file"
+}
+
+if [[ -f "$KERNEL_OBSERVABILITY_CONFIGS_FILE" ]]; then
+  while IFS= read -r requested_symbol; do
+    requested_symbol="${requested_symbol%%#*}"
+    requested_symbol="${requested_symbol//[[:space:]]/}"
+    [[ -n "$requested_symbol" ]] || continue
+    symbol="${requested_symbol#CONFIG_}"
+    definition_file="$(kconfig_definition_file "$symbol")"
+    [[ -n "$definition_file" ]] || continue
+    current="$(kernel_config_value "CONFIG_${symbol}")"
+    [[ "$current" == y || "$current" == m ]] && continue
+    kind="$(kconfig_symbol_kind "$symbol" "$definition_file")"
+    if [[ "$kind" == tristate ]]; then
+      scripts/config --module "$symbol"
+    else
+      scripts/config --enable "$symbol"
+    fi
+  done < "$KERNEL_OBSERVABILITY_CONFIGS_FILE"
+else
+  echo "kernel observability Kconfig list not found: ${KERNEL_OBSERVABILITY_CONFIGS_FILE}" >&2
+fi
+
 make olddefconfig
+
+KERNEL_OBSERVABILITY_CONFIG_REPORT="${OUTPUT_DIR}/kernel-observability-configs.txt"
+{
+  printf '# Kernel observability Kconfig results for %s\n' "$kernel_commit"
+  printf '# symbol\tvalue\tdefinition\n'
+  if [[ -f "$KERNEL_OBSERVABILITY_CONFIGS_FILE" ]]; then
+    while IFS= read -r requested_symbol; do
+      requested_symbol="${requested_symbol%%#*}"
+      requested_symbol="${requested_symbol//[[:space:]]/}"
+      [[ -n "$requested_symbol" ]] || continue
+      symbol="${requested_symbol#CONFIG_}"
+      definition_file="$(kconfig_definition_file "$symbol")"
+      value="$(kernel_config_value "CONFIG_${symbol}")"
+      printf '%s\t%s\t%s\n' "$requested_symbol" "$value" "${definition_file:-not-defined}"
+    done < "$KERNEL_OBSERVABILITY_CONFIGS_FILE"
+  fi
+} > "$KERNEL_OBSERVABILITY_CONFIG_REPORT"
+enabled_count="$(awk -F '\t' '$2 == "y" || $2 == "m" { count++ } END { print count + 0 }' "$KERNEL_OBSERVABILITY_CONFIG_REPORT")"
+unmet_count="$(awk -F '\t' '$2 == "n" || $2 == "unknown" { count++ } END { print count + 0 }' "$KERNEL_OBSERVABILITY_CONFIG_REPORT")"
+echo "Kernel observability Kconfig results: enabled=${enabled_count} unmet_or_unknown=${unmet_count}"
 
 require_config() {
   local symbol="$1"
@@ -545,7 +636,7 @@ kernel_cc="${CC:-cc} -std=gnu11"
 kernel_hostcflags="${HOSTCFLAGS:-} -std=gnu11 -Wno-error=discarded-qualifiers"
 kernel_kcflags="${KCFLAGS:-} -Wno-error=unterminated-string-initialization -std=gnu11"
 if [[ "$PACKAGE_FORMAT" == deb ]]; then
-  make -j "$(nproc)" bindeb-pkg KDEB_PKGVERSION="$package_version" \
+  make -j "$KERNEL_BUILD_JOBS" bindeb-pkg KDEB_PKGVERSION="$package_version" \
     CC="$kernel_cc" \
     HOSTCFLAGS="$kernel_hostcflags" \
     KCFLAGS="$kernel_kcflags"
@@ -557,7 +648,7 @@ if [[ "$PACKAGE_FORMAT" == deb ]]; then
     exit 1
   fi
 else
-  make -j "$(nproc)" binrpm-pkg
+  make -j "$KERNEL_BUILD_JOBS" binrpm-pkg
 
   find "$SOURCE_DIR/rpmbuild/RPMS" -type f -name '*.rpm' \
     ! -name '*debug*' ! -name '*debuginfo*' -exec cp {} "$OUTPUT_DIR/" \;

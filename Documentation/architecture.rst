@@ -28,16 +28,16 @@ Initialization commits one immutable root mode in
 native kernel signature ABI: the kernel verifies the CMS signature and
 the BPF LSM admission hook checks the resulting ``bpf_prog_aux.sig``
 verdict. ``shirudo init --trusted-root`` commits the alternate
-``trusted-root`` mode for kernels that do not provide that ABI. A later
+``trusted-root`` mode for userspace-authorized loading. A later
 ``init`` cannot change the committed mode or certificate digest.
 
-When native signing is available, trusted-root still uses the native
-kernel verification path in addition to userspace verification. When it
-is unavailable, the target reads the public certificate from
+Trusted-root always reads the public certificate from
 ``/var/lib/shirudo/keys/cert.der``, verifies the detached CMS signature
 over ``loader_insns || data`` in userspace, and sends an unsigned outer
 ``BPF_PROG_TYPE_SYSCALL`` loader to the kernel. There is no literal
 userspace access to ``bpf_prog_aux.sig``; that is kernel-private state.
+The native kernel signature path remains available only in
+``untrusted-root`` mode.
 The legacy embedded BPF-LSM object has no signature-field references and
 does not attach ``lsm/bpf_prog_load``. Its ``lsm/bpf`` hook permits an
 unsigned outer loader only when its caller's executable ``(device,inode)``
