@@ -185,20 +185,20 @@ test_expect_success 'make vm and kernel select an exact stable commit' '
 	grep -q "KERNEL_COMMIT is supported only for stable/LTS VM kernels" \
 		"$WORK/commit-bpf-next.out" &&
 	! KERNEL_TAG=v6.18 KERNEL_COMMIT=not-a-sha \
-		../contrib/build-kernel-deb.sh >"$WORK/invalid-kernel-commit.out" 2>&1 &&
+		../contrib/build-kernel-package.sh >"$WORK/invalid-kernel-commit.out" 2>&1 &&
 	grep -q "KERNEL_COMMIT must contain 7 to 40 hexadecimal characters" \
 		"$WORK/invalid-kernel-commit.out"
 '
 test_expect_success 'kernel VM artifacts provide networking modules' '
-	grep -q "scripts/config --module VETH" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module BRIDGE" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module VLAN_8021Q" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module BRIDGE_NETFILTER" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module NF_FLOW_TABLE" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module NF_FLOW_TABLE_INET" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --enable NF_FLOW_TABLE_PROCFS" ../contrib/build-kernel-deb.sh &&
-	grep -q "dpkg-deb -x" ../contrib/build-kernel-deb.sh &&
-	grep -q "depmod -b" ../contrib/build-kernel-deb.sh &&
+	grep -q "scripts/config --module VETH" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module BRIDGE" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module VLAN_8021Q" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module BRIDGE_NETFILTER" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module NF_FLOW_TABLE" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module NF_FLOW_TABLE_INET" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --enable NF_FLOW_TABLE_PROCFS" ../contrib/build-kernel-package.sh &&
+	grep -q "dpkg-deb -x" ../contrib/build-kernel-package.sh &&
+	grep -q "depmod -b" ../contrib/build-kernel-package.sh &&
 	grep -q "TEST_VM_KERNEL_ARTIFACT_DIR" ../Makefile &&
 	grep -q "mount_tag=shirudo-kernel" ../contrib/test-vm.sh &&
 	grep -q "TEST_VM_KERNEL_MODULES" ../contrib/test-vm.sh &&
@@ -207,38 +207,38 @@ test_expect_success 'kernel VM artifacts provide networking modules' '
 	grep -q "nf_flow_table_procfs" ../contrib/test-vm-guest.sh
 '
 test_expect_success 'kernel VM artifacts provide additional requested modules' '
-	grep -q "scripts/config --enable NET_9P" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --enable 9P_FS" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module BATMAN_ADV" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module BCMGENET" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module CEPH_FS" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module DM_CACHE" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module FARSYNC" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module HFS_FS" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module MVPP2" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module NETFILTER_CONNCOUNT" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module NETFILTER_NETLINK_OSF" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module NFSD" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module OPENVSWITCH" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module CRYPTO_PCRYPT" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module QEDE" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module SCSI_QLA_FC" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module RDS" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module SND_PCM" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module TUN" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module UDF_FS" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module VIRTIO_FS" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --enable COMPILE_TEST" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --enable WAN" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module NFT_CONNLIMIT" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module QED" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module SCSI_FC_ATTRS" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module SND" ../contrib/build-kernel-deb.sh &&
-	grep -q "scripts/config --module FUSE_FS" ../contrib/build-kernel-deb.sh &&
-	grep -q "require_config CONFIG_BATMAN_ADV m" ../contrib/build-kernel-deb.sh &&
-	grep -q "require_config CONFIG_NETFILTER_CONNCOUNT m" ../contrib/build-kernel-deb.sh &&
-	grep -q "upstream optee driver is ARM-only" ../contrib/build-kernel-deb.sh &&
-	grep -q "require_config CONFIG_VIRTIO_FS m" ../contrib/build-kernel-deb.sh
+	grep -q "scripts/config --enable NET_9P" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --enable 9P_FS" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module BATMAN_ADV" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module BCMGENET" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module CEPH_FS" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module DM_CACHE" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module FARSYNC" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module HFS_FS" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module MVPP2" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module NETFILTER_CONNCOUNT" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module NETFILTER_NETLINK_OSF" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module NFSD" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module OPENVSWITCH" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module CRYPTO_PCRYPT" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module QEDE" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module SCSI_QLA_FC" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module RDS" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module SND_PCM" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module TUN" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module UDF_FS" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module VIRTIO_FS" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --enable COMPILE_TEST" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --enable WAN" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module NFT_CONNLIMIT" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module QED" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module SCSI_FC_ATTRS" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module SND" ../contrib/build-kernel-package.sh &&
+	grep -q "scripts/config --module FUSE_FS" ../contrib/build-kernel-package.sh &&
+	grep -q "require_config CONFIG_BATMAN_ADV m" ../contrib/build-kernel-package.sh &&
+	grep -q "require_config CONFIG_NETFILTER_CONNCOUNT m" ../contrib/build-kernel-package.sh &&
+	grep -q "upstream optee driver is ARM-only" ../contrib/build-kernel-package.sh &&
+	grep -q "require_config CONFIG_VIRTIO_FS m" ../contrib/build-kernel-package.sh
 '
 
 test_expect_success 'prepared VM runtime includes ripgrep' '
