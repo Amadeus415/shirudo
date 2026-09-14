@@ -103,7 +103,9 @@ SSH_PORT=""
 SSH_PUBLIC_KEY=""
 SSH_PORT_LOCK_FD=""
 SWTPM_PIDFILE=""
+SWTPM_UNIT_FILE=""
 QEMU_PID=""
+QEMU_UNIT_FILE=""
 QEMU_STATUS=1
 PROGRESS_LINES=0
 GUEST_STATUS=""
@@ -388,6 +390,10 @@ stop_swtpm()
 {
 	local pid
 
+	if [[ -n "$SWTPM_UNIT_FILE" ]]; then
+		stop_user_unit_file "$SWTPM_UNIT_FILE"
+		SWTPM_UNIT_FILE=""
+	fi
 	[[ -n "$SWTPM_PIDFILE" && -s "$SWTPM_PIDFILE" ]] || return 0
 	pid="$(<"$SWTPM_PIDFILE")"
 	[[ "$pid" =~ ^[0-9]+$ ]] || { rm -f -- "$SWTPM_PIDFILE"; return 0; }
@@ -405,6 +411,10 @@ stop_swtpm()
 stop_qemu()
 {
 	[[ -n "$QEMU_PID" ]] || return 0
+	if [[ -n "$QEMU_UNIT_FILE" ]]; then
+		stop_user_unit_file "$QEMU_UNIT_FILE"
+		QEMU_UNIT_FILE=""
+	fi
 	if kill -0 "$QEMU_PID" 2>/dev/null; then
 		kill "$QEMU_PID" 2>/dev/null || true
 		for _ in {1..50}; do
@@ -417,6 +427,54 @@ stop_qemu()
 		rm -f -- "$RUN_DIR/qemu.pid"
 	fi
 	QEMU_PID=""
+}
+
+stop_user_unit_file()
+{
+	local unit_file="$1" unit
+
+	[[ -s "$unit_file" ]] || return 0
+	unit="$(<"$unit_file")"
+	if [[ "$unit" =~ ^[A-Za-z0-9_.@:-]+\.service$ ]]; then
+		systemctl --user stop "$unit" 2>/dev/null || true
+		systemctl --user reset-failed "$unit" 2>/dev/null || true
+	fi
+	rm -f -- "$unit_file"
+}
+
+user_systemd_available()
+{
+	command -v systemd-run >/dev/null 2>&1 &&
+		command -v systemctl >/dev/null 2>&1 &&
+		systemctl --user show-environment >/dev/null 2>&1
+}
+
+start_user_unit()
+{
+	local unit="$1" log_path="$2"
+	shift 2
+
+	systemctl --user stop "$unit" >/dev/null 2>&1 || true
+	systemctl --user reset-failed "$unit" >/dev/null 2>&1 || true
+	systemd-run --user --unit="$unit" --collect \
+		--property=KillMode=mixed \
+		--property="StandardOutput=append:$log_path" \
+		--property="StandardError=append:$log_path" \
+		-- "$@" >/dev/null
+}
+
+user_unit_pid()
+{
+	local unit="$1" pid
+	for _ in {1..50}; do
+		pid="$(systemctl --user show --value --property=MainPID "$unit" 2>/dev/null || true)"
+		if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then
+			printf '%s\n' "$pid"
+			return 0
+		fi
+		sleep 0.1
+	done
+	return 1
 }
 
 stop_pid_file()
@@ -542,7 +600,7 @@ run_ssh()
 
 stop_named_state()
 {
-	local pidfile vm_dir
+	local pidfile unit_file vm_dir
 
 	[[ -n "$VM_NAME_REQUEST" ]] ||
 		die "VM_NAME is required for named VM stop/cleanup"
@@ -551,6 +609,9 @@ stop_named_state()
 	vm_dir="${VMS_DIR}/${VM_NAME_REQUEST}"
 	[[ -d "$vm_dir" ]] ||
 		die "VM_NAME '$VM_NAME_REQUEST' has no state directory under $VMS_DIR"
+	while IFS= read -r -d '' unit_file; do
+		stop_user_unit_file "$unit_file"
+	done < <(find "$vm_dir" -type f \( -name qemu.unit -o -name swtpm.unit \) -print0)
 	while IFS= read -r -d '' pidfile; do
 		stop_pid_file "$pidfile"
 	done < <(find "$vm_dir" -type f \( -name qemu.pid -o -name swtpm.pid \) -print0)
@@ -558,9 +619,12 @@ stop_named_state()
 
 stop_all_state()
 {
-	local pidfile
+	local pidfile unit_file
 
 	if [[ -d "$VMS_DIR" ]]; then
+		while IFS= read -r -d '' unit_file; do
+			stop_user_unit_file "$unit_file"
+		done < <(find "$VMS_DIR" -type f \( -name qemu.unit -o -name swtpm.unit \) -print0)
 		while IFS= read -r -d '' pidfile; do
 			stop_pid_file "$pidfile"
 		done < <(find "$VMS_DIR" -type f \( -name qemu.pid -o -name swtpm.pid \) -print0)
@@ -1199,10 +1263,22 @@ EOF
 cloud-localds --network-config="$NETWORK_CONFIG" "$SEED" "$USER_DATA" "$META_DATA"
 
 chmod 0700 "$RUN_DIR/tpm"
-swtpm socket --tpmstate "dir=${RUN_DIR}/tpm,mode=0700" \
-	--ctrl "type=unixio,path=${SWTPM_SOCKET}" \
-	--tpm2 --log "file=${RUN_DIR}/swtpm.log,level=20" \
-	--pid "file=${SWTPM_PIDFILE}" --daemon
+if user_systemd_available; then
+	SWTPM_UNIT_FILE="${RUN_DIR}/swtpm.unit"
+	SWTPM_UNIT="shirudo-vm-${VM_NAME}-swtpm.service"
+	start_user_unit "$SWTPM_UNIT" "$RUN_DIR/swtpm.log" \
+		swtpm socket --tpmstate "dir=${RUN_DIR}/tpm,mode=0700" \
+			--ctrl "type=unixio,path=${SWTPM_SOCKET}" \
+			--tpm2 --log "file=${RUN_DIR}/swtpm.log,level=20"
+	printf '%s\n' "$SWTPM_UNIT" >"$SWTPM_UNIT_FILE"
+	SWTPM_PID="$(user_unit_pid "$SWTPM_UNIT")" || die "could not determine swtpm systemd PID"
+	printf '%s\n' "$SWTPM_PID" >"$SWTPM_PIDFILE"
+else
+	swtpm socket --tpmstate "dir=${RUN_DIR}/tpm,mode=0700" \
+		--ctrl "type=unixio,path=${SWTPM_SOCKET}" \
+		--tpm2 --log "file=${RUN_DIR}/swtpm.log,level=20" \
+		--pid "file=${SWTPM_PIDFILE}" --daemon
+fi
 for _ in {1..50}; do
 	[[ -S "$SWTPM_SOCKET" ]] && break
 	sleep 0.1
@@ -1293,9 +1369,18 @@ read_guest_status()
 }
 
 if [[ "$VM_MODE" == interactive ]]; then
-	nohup qemu-system-x86_64 "${QEMU_ARGS[@]}" \
-		>"$RUN_DIR/qemu.log" 2>&1 < /dev/null &
-	QEMU_PID=$!
+	if user_systemd_available; then
+		QEMU_UNIT_FILE="$RUN_DIR/qemu.unit"
+		QEMU_UNIT="shirudo-vm-$VM_NAME-qemu.service"
+		start_user_unit "$QEMU_UNIT" "$RUN_DIR/qemu.log" \
+			qemu-system-x86_64 "${QEMU_ARGS[@]}"
+		printf '%s\n' "$QEMU_UNIT" >"$QEMU_UNIT_FILE"
+		QEMU_PID="$(user_unit_pid "$QEMU_UNIT")" || die "could not determine QEMU systemd PID"
+	else
+		nohup qemu-system-x86_64 "${QEMU_ARGS[@]}" \
+			>"$RUN_DIR/qemu.log" 2>&1 < /dev/null &
+		QEMU_PID=$!
+	fi
 	printf '%s\n' "$QEMU_PID" >"$RUN_DIR/qemu.pid"
 	wait_for_ssh_listener
 	wait_for_guest_status
