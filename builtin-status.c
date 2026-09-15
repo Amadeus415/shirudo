@@ -30,6 +30,7 @@
 
 #include "builtin.h"
 #include "util/chain.h"
+#include "util/bpm_tree.h"
 #include "util/conditions.h"
 #include "util/config.h"
 #include "util/eventlog.h"
@@ -849,6 +850,7 @@ int cmd_status(int argc, const char **argv)
 				emit_eventlog_events(&e);
 			shirudo_json_obj_close(&e);
 			shirudo_json_obj_close(&e);
+			shirudo_tree_emit_status(&e);
 		}
 		if (include_kernel_log) {
 			size_t bytes = (size_t)kernel_log_lines *

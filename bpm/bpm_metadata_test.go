@@ -101,6 +101,65 @@ telemetry_upatch = "javaagent_metrics"
 	}
 }
 
+func TestParseBPMBuildSpecUpatchTreeMetadataKeepsMultipleEntries(t *testing.T) {
+	spec, err := parseBPMBuildSpec([]byte(`
+[package]
+name = "tree-package"
+
+[[upatches]]
+source = "block-afalg.bpf.c"
+
+[upatches.tree]
+id = "block-afalg"
+load_artifact = "upatches/block-afalg.upatch"
+unload_artifact = "upatches/block-afalg.unload.upatch"
+
+[upatches.tree.selector]
+kernel_release_prefix = ["6.16", "6.18"]
+architecture = ["x86_64", "aarch64"]
+
+[upatches.tree.selector.kconfig]
+CONFIG_BPF = ["y", "m"]
+
+[upatches.tree.selector.labels]
+env = ["prod", "staging"]
+
+[[upatches]]
+source = "second.bpf.c"
+
+[upatches.tree]
+id = "second"
+load_artifact = "upatches/second.upatch"
+unload_artifact = "upatches/second.unload.upatch"
+future_field = { enabled = true }
+`))
+	if err != nil {
+		t.Fatalf("parseBPMBuildSpec() error = %v", err)
+	}
+	if len(spec.Upatches) != 2 || spec.Upatches[0].Tree == nil || spec.Upatches[1].Tree == nil {
+		t.Fatalf("Upatches = %#v, want two tree-enabled entries", spec.Upatches)
+	}
+	first := spec.Upatches[0].Tree
+	if first.ID != "block-afalg" || first.LoadArtifact != "upatches/block-afalg.upatch" ||
+		len(first.Selector.KernelReleasePrefix) != 2 ||
+		first.Selector.KernelReleasePrefix[0] != "6.16" ||
+		first.Selector.KernelReleasePrefix[1] != "6.18" ||
+		len(first.Selector.Architecture) != 2 ||
+		first.Selector.Architecture[0] != "x86_64" ||
+		first.Selector.Architecture[1] != "aarch64" ||
+		len(first.Selector.Kconfig["CONFIG_BPF"]) != 2 ||
+		first.Selector.Kconfig["CONFIG_BPF"][0] != "y" ||
+		first.Selector.Kconfig["CONFIG_BPF"][1] != "m" ||
+		len(first.Selector.Labels["env"]) != 2 ||
+		first.Selector.Labels["env"][0] != "prod" ||
+		first.Selector.Labels["env"][1] != "staging" {
+		t.Fatalf("first tree metadata = %#v", first)
+	}
+	if spec.Upatches[1].Tree.ID != "second" {
+		t.Fatalf("second tree metadata = %#v", spec.Upatches[1].Tree)
+	}
+}
+
 func TestLoadBPMBuildSpecSetsScopeDir(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "Beefile")

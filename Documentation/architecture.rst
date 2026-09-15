@@ -176,6 +176,22 @@ Pull and load
 The target does not run ``gen_loader``.  It verifies and executes the loader
 already embedded in the signed ``.upatch`` produced during the build.
 
+Optional append-only upatch tree
+--------------------------------
+
+Targets may additionally consume a CMS-signed, globally ordered upatch tree
+from an OCI repository.  ``shirudo bpm tree sync`` evaluates each operation's
+kernel-release, architecture, Kconfig, and node-label selectors locally, then
+downloads and applies only matching immutable ``.upatch`` artifacts in
+sequence order.  Each node's selector-specific projection is reported from a
+dedicated TPM NV chain when available.
+Publications are authenticated by their CMS signature, OCI digests, operation
+digests, and sequence continuity; this version has no global tree-root value.
+The feature is enabled by
+``/etc/shirudo/bpm/upatch-tree.conf`` and its 60-second timer, while omitting
+that file preserves manual ``shirudo upatch`` loading.  The publication and
+Beefile metadata format is described in ``docs/upatch-tree.md``.
+
 Map export
 ----------
 

@@ -73,6 +73,10 @@ _shirudo()
 			COMPREPLY=( $(compgen -W "--key-file=" -- "$cur") )
 		elif [[ $sub == repo && cword -eq 3 ]]; then
 			COMPREPLY=( $(compgen -W "update" -- "$cur") )
+		elif [[ $sub == tree && cword -eq 3 ]]; then
+			COMPREPLY=( $(compgen -W "sync" -- "$cur") )
+		elif [[ $sub == tree && ${COMP_WORDS[3]} == sync && $cur == -* ]]; then
+			COMPREPLY=( $(compgen -W "--dry-run --report=" -- "$cur") )
 		elif [[ $sub == key && cword -eq 3 ]]; then
 			COMPREPLY=( $(compgen -W "add" -- "$cur") )
 		elif [[ $sub == key && ${COMP_WORDS[3]} == add ]]; then

@@ -284,6 +284,8 @@ TARGET_UNITS=(
 	shirudo-keepalive.timer
 	shirudo-bpm-repo-update.service
 	shirudo-bpm-repo-update.timer
+	shirudo-bpm-tree-sync.service
+	shirudo-bpm-tree-sync.timer
 )
 install -d /usr/lib/systemd/system
 for unit in "${TARGET_UNITS[@]}"; do
@@ -360,6 +362,7 @@ if [[ "$VM_MODE" == interactive ]]; then
 	systemctl enable --now shirudo-map-export.timer
 	systemctl enable --now shirudo-keepalive.timer
 	systemctl enable --now shirudo-bpm-repo-update.timer
+	systemctl enable --now shirudo-bpm-tree-sync.timer
 
 	log "guest prepared; interactive mode skipping integration tests"
 	exit 0

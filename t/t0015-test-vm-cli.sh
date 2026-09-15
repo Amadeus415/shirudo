@@ -312,12 +312,18 @@ test_expect_success 'VM bundle installs target units and interactive mode activa
 	grep -q "shirudo-keepalive.timer" ../contrib/test-vm-guest.sh &&
 	grep -q "shirudo-bpm-repo-update.service" ../contrib/test-vm-guest.sh &&
 	grep -q "shirudo-bpm-repo-update.timer" ../contrib/test-vm-guest.sh &&
+	grep -q "shirudo-bpm-tree-sync.service" ../contrib/test-vm-guest.sh &&
+	grep -q "shirudo-bpm-tree-sync.timer" ../contrib/test-vm-guest.sh &&
+	grep -q "OnUnitActiveSec=60s" ../systemd/shirudo-bpm-tree-sync.timer &&
+	grep -q "Persistent=true" ../systemd/shirudo-bpm-tree-sync.timer &&
 	grep -q "systemctl enable shirudo.service" ../contrib/test-vm-guest.sh &&
 	grep -q "systemctl enable --now shirudo-map-export.timer" \
 		../contrib/test-vm-guest.sh &&
 	grep -q "systemctl enable --now shirudo-keepalive.timer" \
 		../contrib/test-vm-guest.sh &&
 	grep -q "systemctl enable --now shirudo-bpm-repo-update.timer" \
+		../contrib/test-vm-guest.sh &&
+	grep -q "systemctl enable --now shirudo-bpm-tree-sync.timer" \
 		../contrib/test-vm-guest.sh &&
 	grep -Fq "if [[ \"\$VM_MODE\" == interactive ]]" \
 		../contrib/test-vm-guest.sh

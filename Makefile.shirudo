@@ -145,6 +145,7 @@ UTIL_SRCS := \
     util/io.c \
     util/tpm.c \
     util/chain.c \
+    util/bpm_tree.c \
     util/config.c \
     util/mode.c \
     util/bpm_source_config.c \
@@ -408,6 +409,12 @@ systemd/shirudo-bpm-repo-update.service: systemd/shirudo-bpm-repo-update.service
 	@printf '  GEN     $@\n'
 	$(Q)sed 's|@bindir@|$(bindir)|g' $< > $@
 
+# The optional signed upatch tree refresh is target-only and exits cleanly
+# when /etc/shirudo/bpm/upatch-tree.conf is absent.
+systemd/shirudo-bpm-tree-sync.service: systemd/shirudo-bpm-tree-sync.service.in
+	@printf '  GEN     $@\n'
+	$(Q)sed 's|@bindir@|$(bindir)|g' $< > $@
+
 install: shirudo install-common
 	@printf '  INSTALL $(DESTDIR)$(bindir)/shirudo\n'
 	$(Q)install -d $(DESTDIR)$(bindir)
@@ -428,7 +435,9 @@ install-target: shirudo-target install-common javaagent-bridge systemd/shirudo.s
 		systemd/shirudo-keepalive.service \
 		systemd/shirudo-keepalive.timer \
 		systemd/shirudo-bpm-repo-update.service \
-		systemd/shirudo-bpm-repo-update.timer
+		systemd/shirudo-bpm-repo-update.timer \
+		systemd/shirudo-bpm-tree-sync.service \
+		systemd/shirudo-bpm-tree-sync.timer
 	@printf '  INSTALL $(DESTDIR)$(bindir)/shirudo (static mbedTLS)\n'
 	$(Q)install -d $(DESTDIR)$(bindir)
 	$(Q)install -m 0755 shirudo-target $(DESTDIR)$(bindir)/shirudo
@@ -441,6 +450,8 @@ install-target: shirudo-target install-common javaagent-bridge systemd/shirudo.s
 	    systemd/shirudo-keepalive.timer \
 	    systemd/shirudo-bpm-repo-update.service \
 	    systemd/shirudo-bpm-repo-update.timer \
+	    systemd/shirudo-bpm-tree-sync.service \
+	    systemd/shirudo-bpm-tree-sync.timer \
 	    $(DESTDIR)$(systemdunitdir)/
 	@printf '  INSTALL $(DESTDIR)$(SHIRUDO_JAVAAGENT_LIBDIR)/libshirudo_javaagent.so\n'
 	$(Q)install -d $(DESTDIR)$(SHIRUDO_JAVAAGENT_LIBDIR)
@@ -580,7 +591,8 @@ clean:
 	$(Q)rm -f $(BPF_OBJS) bpf/vmlinux.h systemd/shirudo.service \
 	          systemd/shirudo-map-export.service \
 	          systemd/shirudo-keepalive.service \
-	          systemd/shirudo-bpm-repo-update.service
+	          systemd/shirudo-bpm-repo-update.service \
+	          systemd/shirudo-bpm-tree-sync.service
 	$(Q)rm -f $(JAVAAGENT_BRIDGE)
 	$(Q)rm -rf bpf/include
 

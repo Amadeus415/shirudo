@@ -31,6 +31,7 @@
 #include <openssl/x509.h>
 
 #include "builtin.h"
+#include "util/bpm_tree.h"
 #include "util/bpm_source_config.h"
 #include "util/crypto.h"
 #include "util/help.h"
@@ -39,6 +40,7 @@
 #include "util/log.h"
 #include "util/macros.h"
 #include "util/paths.h"
+#include "util/seal.h"
 #include "util/upatch.h"
 
 #ifndef SHIRUDO_LIBEXEC_DIR
@@ -63,6 +65,9 @@
 #define BPM_EMPTY_CONFIG_MEDIA "application/vnd.oci.empty.v1+json"
 #define BPM_PUBLIC_KEY_ARTIFACT "application/vnd.shirudo.bpm.public-key.v1+der"
 #define BPM_PUBLIC_KEY_MEDIA "application/pkix-cert"
+#define BPM_TREE_MEDIA "application/vnd.shirudo.upatch.tree.v2+json"
+#define BPM_TREE_SIG_MEDIA "application/vnd.shirudo.upatch.tree.signature.v2"
+#define BPM_UPATCH_MEDIA "application/vnd.shirudo.upatch.v1"
 
 struct bpm_source {
 	char name[BPM_MAX_NAME];
@@ -2378,9 +2383,768 @@ static int cmd_bpm_config(int argc, const char **argv)
 	return 2;
 }
 
+struct bpm_tree_config {
+	char endpoint[BPM_MAX_ENDPOINT];
+	char reference[BPM_MAX_DIGEST];
+};
+
+static int load_tree_config(struct bpm_tree_config *cfg)
+{
+	char line[PATH_MAX];
+	FILE *fp;
+
+	*cfg = (struct bpm_tree_config){};
+	fp = fopen(SHIRUDO_BPM_TREE_ETC_PATH, "r");
+	if (!fp)
+		return -errno;
+	while (fgets(line, sizeof(line), fp)) {
+		char key[64], value[PATH_MAX];
+		char *eq = strchr(line, '=');
+		if (!eq)
+			continue;
+		*eq++ = '\0';
+		trim_string(line, key, sizeof(key));
+		trim_string(eq, value, sizeof(value));
+		if (value[0] == '"') {
+			size_t len = strlen(value);
+			if (len < 2 || value[len - 1] != '"') {
+				fclose(fp);
+				return -EINVAL;
+			}
+			memmove(value, value + 1, len - 2);
+			value[len - 2] = '\0';
+		}
+		if (!strcmp(key, "endpoint"))
+			bpm_copy_string(cfg->endpoint, sizeof(cfg->endpoint), value);
+		else if (!strcmp(key, "reference"))
+			bpm_copy_string(cfg->reference, sizeof(cfg->reference), value);
+	}
+	fclose(fp);
+	if (!cfg->endpoint[0] || !cfg->reference[0])
+		return -EINVAL;
+	return 0;
+}
+
+static int parse_tree_repository(const char *raw, struct bpm_oci_client *c,
+					 char *repository, size_t repository_sz)
+{
+	const char *p, *slash;
+	char endpoint[BPM_MAX_ENDPOINT];
+
+	if (!raw || strncmp(raw, "oci://", 6))
+		return -EINVAL;
+	p = raw + 6;
+	slash = strchr(p, '/');
+	if (!slash || slash == p || !slash[1] || strchr(p, '?') ||
+	    strchr(p, '#') || strchr(p, '@'))
+		return -EINVAL;
+	if ((size_t)(slash - p) + 6 >= sizeof(endpoint) ||
+	    strlen(slash + 1) >= repository_sz)
+		return -ENAMETOOLONG;
+	memcpy(endpoint, "oci://", 6);
+	memcpy(endpoint + 6, p, (size_t)(slash - p));
+	endpoint[6 + (size_t)(slash - p)] = '\0';
+	bpm_copy_string(repository, repository_sz, slash + 1);
+	if (strstr(repository, "..") || strstr(repository, "//") ||
+	    strchr(repository, ':'))
+		return -EINVAL;
+	return parse_endpoint(endpoint, c);
+}
+
+static int tree_digest_hex(const char *digest, uint8_t out[32])
+{
+	if (!digest || strncmp(digest, "sha256:", 7))
+		return -EINVAL;
+	return shirudo_hex_decode(digest + 7, out, 32);
+}
+
+static int tree_selector_kv_compare(const void *left, const void *right)
+{
+	const struct shirudo_tree_selector_kv *a =
+		*(const struct shirudo_tree_selector_kv * const *)left;
+	const struct shirudo_tree_selector_kv *b =
+		*(const struct shirudo_tree_selector_kv * const *)right;
+	return strcmp(a->key, b->key);
+}
+
+/* This is the canonical operation representation used by the Go publisher.
+ * encoding/json emits struct fields in declaration order and sorts map keys;
+ * mirror both rules here before a target trusts an operation digest. */
+static int tree_operation_digest(const struct shirudo_tree_operation *op,
+					 char out[72])
+{
+	char *body, hex[65];
+	size_t body_cap = 1024u * 1024u;
+	struct shirudo_json_emit e;
+	const struct shirudo_tree_selector_kv *kconfig[SHIRUDO_TREE_MAX_KCONFIG];
+	const struct shirudo_tree_selector_kv *labels[SHIRUDO_TREE_MAX_LABELS];
+	uint8_t digest[32];
+
+	body = malloc(body_cap);
+	if (!body)
+		return -ENOMEM;
+	e = (struct shirudo_json_emit){ .buf = body, .cap = body_cap };
+
+	if (op->selector.n_kconfig > (int)ARRAY_SIZE(kconfig) ||
+	    op->selector.n_labels > (int)ARRAY_SIZE(labels)) {
+		free(body);
+		return -E2BIG;
+	}
+	for (int i = 0; i < op->selector.n_kconfig; i++)
+		kconfig[i] = &op->selector.kconfig[i];
+	for (int i = 0; i < op->selector.n_labels; i++)
+		labels[i] = &op->selector.labels[i];
+	qsort(kconfig, op->selector.n_kconfig, sizeof(kconfig[0]),
+	      tree_selector_kv_compare);
+	qsort(labels, op->selector.n_labels, sizeof(labels[0]),
+	      tree_selector_kv_compare);
+
+	shirudo_json_obj_open(&e);
+	shirudo_json_kv_int(&e, "seq", op->seq);
+	shirudo_json_kv_string(&e, "op", op->op);
+	shirudo_json_kv_string(&e, "id", op->id);
+	shirudo_json_obj_open_key(&e, "selector");
+	if (op->selector.n_kernel_release_prefix) {
+		shirudo_json_arr_open(&e, "kernel_release_prefix");
+		for (int i = 0; i < op->selector.n_kernel_release_prefix; i++)
+			shirudo_json_str(&e, op->selector.kernel_release_prefix[i]);
+		shirudo_json_arr_close(&e);
+	}
+	if (op->selector.n_architecture) {
+		shirudo_json_arr_open(&e, "architecture");
+		for (int i = 0; i < op->selector.n_architecture; i++)
+			shirudo_json_str(&e, op->selector.architecture[i]);
+		shirudo_json_arr_close(&e);
+	}
+	if (op->selector.n_kconfig) {
+		shirudo_json_obj_open_key(&e, "kconfig");
+		for (int i = 0; i < op->selector.n_kconfig; i++) {
+			shirudo_json_arr_open(&e, kconfig[i]->key);
+			for (int j = 0; j < kconfig[i]->n_values; j++)
+				shirudo_json_str(&e, kconfig[i]->values[j]);
+			shirudo_json_arr_close(&e);
+		}
+		shirudo_json_obj_close(&e);
+	}
+	if (op->selector.n_labels) {
+		shirudo_json_obj_open_key(&e, "labels");
+		for (int i = 0; i < op->selector.n_labels; i++) {
+			shirudo_json_arr_open(&e, labels[i]->key);
+			for (int j = 0; j < labels[i]->n_values; j++)
+				shirudo_json_str(&e, labels[i]->values[j]);
+			shirudo_json_arr_close(&e);
+		}
+		shirudo_json_obj_close(&e);
+	}
+	shirudo_json_obj_close(&e);
+	shirudo_json_obj_open_key(&e, "artifact");
+	shirudo_json_kv_string(&e, "repository", op->artifact.repository);
+	shirudo_json_kv_string(&e, "manifest_digest", op->artifact.manifest_digest);
+	shirudo_json_kv_string(&e, "layer_digest", op->artifact.layer_digest);
+	shirudo_json_kv_string(&e, "payload_sha256", op->artifact.payload_sha256);
+	shirudo_json_obj_close(&e);
+	shirudo_json_obj_close(&e);
+	if (e.err)
+		goto out;
+	shirudo_sha256(body, e.len, digest);
+	shirudo_hex_encode(digest, sizeof(digest), hex);
+	memcpy(out, "sha256:", 7);
+	memcpy(out + 7, hex, sizeof(hex));
+	free(body);
+	return 0;
+
+out:
+	free(body);
+	return e.err;
+}
+
+static int tree_fetch_publication(const struct bpm_tree_config *cfg,
+					 struct shirudo_tree_publication *pub,
+					 char *manifest_digest, size_t digest_sz)
+{
+	struct bpm_oci_client c = {};
+	struct bpm_descriptor layers[BPM_MAX_ENTRIES];
+	struct bpm_buffer manifest = {}, payload = {}, sig = {};
+	char repository[BPM_MAX_ENDPOINT], url[PATH_MAX], hex[65];
+	int nl = 0, payload_layers = 0, sig_layers = 0;
+	int rc = parse_tree_repository(cfg->endpoint, &c,
+						 repository, sizeof(repository));
+	if (rc)
+		return rc;
+	if (strchr(cfg->reference, '/') || strchr(cfg->reference, '?') ||
+	    strchr(cfg->reference, '#') || strstr(cfg->reference, ".."))
+		return -EINVAL;
+	rc = make_oci_url(&c, repository, "manifests", cfg->reference,
+				  url, sizeof(url));
+	if (rc)
+		return rc;
+	rc = oci_get_memory(&c, url,
+				"application/vnd.oci.image.manifest.v1+json", &manifest);
+	if (rc)
+		goto out;
+	if (sha256_buffer_hex(manifest.data, manifest.len, hex, sizeof(hex))) {
+		rc = -EKEYREJECTED;
+		goto out;
+	}
+	if (snprintf(manifest_digest, digest_sz, "sha256:%s", hex) >=
+	    (int)digest_sz) {
+		rc = -ENAMETOOLONG;
+		goto out;
+	}
+	if ((rc = parse_manifest(manifest.data, manifest.len, layers, &nl,
+				 NULL, 0)))
+		goto out;
+	for (int i = 0; i < nl; i++) {
+		if (!strcmp(layers[i].media, BPM_TREE_MEDIA)) {
+			if (++payload_layers > 1) {
+				rc = -EINVAL;
+				goto out;
+			}
+			if ((rc = make_oci_url(&c, repository, "blobs", layers[i].digest,
+					       url, sizeof(url))))
+				goto out;
+			if ((rc = oci_get_memory(&c, url, BPM_TREE_MEDIA, &payload)))
+				goto out;
+			if ((layers[i].size >= 0 && (int64_t)payload.len != layers[i].size) ||
+			    sha256_buffer_hex(payload.data, payload.len, hex,
+					       sizeof(hex)) ||
+			    !digest_matches(layers[i].digest, hex)) {
+				rc = -EKEYREJECTED;
+				goto out;
+			}
+		}
+		if (!strcmp(layers[i].media, BPM_TREE_SIG_MEDIA)) {
+			if (++sig_layers > 1) {
+				rc = -EINVAL;
+				goto out;
+			}
+			if ((rc = make_oci_url(&c, repository, "blobs", layers[i].digest,
+					       url, sizeof(url))))
+				goto out;
+			if ((rc = oci_get_memory(&c, url, BPM_TREE_SIG_MEDIA, &sig)))
+				goto out;
+			if ((layers[i].size >= 0 && (int64_t)sig.len != layers[i].size) ||
+			    sha256_buffer_hex(sig.data, sig.len, hex, sizeof(hex)) ||
+			    !digest_matches(layers[i].digest, hex)) {
+				rc = -EKEYREJECTED;
+				goto out;
+			}
+		}
+	}
+	if (payload_layers != 1 || sig_layers != 1 || !payload.data || !sig.data) {
+		rc = -EINVAL;
+		goto out;
+	}
+	if (verify_cms(payload.data, payload.len, sig.data, sig.len,
+			       SHIRUDO_CERT_PATH)) {
+		rc = -EKEYREJECTED;
+		goto out;
+	}
+	rc = shirudo_tree_parse((const char *)payload.data, payload.len, pub);
+out:
+	free(manifest.data);
+	free(payload.data);
+	free(sig.data);
+	return rc;
+}
+
+static int tree_verify_upatch(const char *path, const char *expected,
+				      const char *id, bool unload)
+{
+	struct shirudo_upatch u;
+	char name[SHIRUDO_UPATCH_NAME_MAX + 1];
+	char actual[65];
+	int rc = shirudo_upatch_open(path, &u);
+	if (rc)
+		return rc;
+	memcpy(name, u.hdr.name, SHIRUDO_UPATCH_NAME_MAX);
+	name[SHIRUDO_UPATCH_NAME_MAX] = '\0';
+	shirudo_hex_encode(u.hdr.payload_sha256, 32, actual);
+	if (!digest_matches(expected, actual) ||
+	    (id && strcmp(name, id)) ||
+	    shirudo_upatch_is_unload(&u) != unload)
+		rc = -EKEYREJECTED;
+	shirudo_upatch_close(&u);
+	return rc;
+}
+
+static int tree_pull_artifact(const struct shirudo_tree_operation *op,
+				      char *path, size_t path_sz)
+{
+	struct bpm_oci_client c = {};
+	struct bpm_descriptor layers[BPM_MAX_ENTRIES];
+	struct bpm_buffer manifest = {}, blob = {};
+	char repository[BPM_MAX_ENDPOINT], url[PATH_MAX], cache[PATH_MAX];
+	char hex[65];
+	int nl = 0, rc;
+
+	if (tree_digest_hex(op->artifact.payload_sha256, (uint8_t[32]){}))
+		return -EINVAL;
+	if (snprintf(cache, sizeof(cache), "%s/%s.upatch",
+		     SHIRUDO_BPM_TREE_ARTIFACTS_DIR,
+		     op->artifact.payload_sha256 +
+		     (!strncmp(op->artifact.payload_sha256, "sha256:", 7) ? 7 : 0)) >=
+	    (int)sizeof(cache))
+		return -ENAMETOOLONG;
+	if (!access(cache, R_OK)) {
+		bpm_copy_string(path, path_sz, cache);
+		return tree_verify_upatch(path, op->artifact.payload_sha256, op->id,
+					  !strcmp(op->op, "delete"));
+	}
+	rc = parse_tree_repository(op->artifact.repository, &c, repository,
+					   sizeof(repository));
+	if (rc)
+		return rc;
+	rc = make_oci_url(&c, repository, "manifests",
+				  op->artifact.manifest_digest, url, sizeof(url));
+	if (rc)
+		return rc;
+	rc = oci_get_memory(&c, url,
+				"application/vnd.oci.image.manifest.v1+json", &manifest);
+	if (rc)
+		goto out;
+	if (sha256_buffer_hex(manifest.data, manifest.len, hex, sizeof(hex)) ||
+	    !digest_matches(op->artifact.manifest_digest, hex)) {
+		rc = -EKEYREJECTED;
+		goto out;
+	}
+	rc = parse_manifest(manifest.data, manifest.len, layers, &nl, NULL, 0);
+	if (rc)
+		goto out;
+	for (int i = 0; i < nl; i++) {
+		if (strcmp(layers[i].digest, op->artifact.layer_digest) ||
+		    strcmp(layers[i].media, BPM_UPATCH_MEDIA))
+			continue;
+		rc = make_oci_url(&c, repository, "blobs", layers[i].digest,
+				   url, sizeof(url));
+		if (rc)
+			goto out;
+		rc = oci_get_memory(&c, url, layers[i].media, &blob);
+		if (rc)
+			goto out;
+		if (sha256_buffer_hex(blob.data, blob.len, hex, sizeof(hex)) ||
+		    !digest_matches(layers[i].digest, hex) ||
+		    (layers[i].size >= 0 && (int64_t)blob.len != layers[i].size))
+			rc = -EKEYREJECTED;
+		if (rc)
+			goto out;
+		if (path_mkdir_p(SHIRUDO_BPM_TREE_ARTIFACTS_DIR, 0700)) {
+			rc = -errno;
+			goto out;
+		}
+		rc = atomic_write(cache, blob.data, blob.len, 0600);
+		if (rc)
+			goto out;
+		(void)shirudo_seal_label(cache);
+		bpm_copy_string(path, path_sz, cache);
+		rc = tree_verify_upatch(path, op->artifact.payload_sha256, op->id,
+					 !strcmp(op->op, "delete"));
+		goto out;
+	}
+	rc = -ENOENT;
+out:
+	free(manifest.data);
+	free(blob.data);
+	return rc;
+}
+
+static int tree_write_report(const char *path, const struct shirudo_tree_state *s,
+				     int selected, int skipped, int applied,
+				     int dry_run, int tpm_available)
+{
+	char buf[4096];
+	struct shirudo_json_emit e = { .buf = buf, .cap = sizeof(buf) };
+	shirudo_json_obj_open(&e);
+	shirudo_json_kv_int(&e, "schema", 1);
+	shirudo_json_kv_bool(&e, "dry_run", dry_run);
+	shirudo_json_kv_int(&e, "selected", selected);
+	shirudo_json_kv_int(&e, "skipped", skipped);
+	shirudo_json_kv_int(&e, "applied", applied);
+	shirudo_json_kv_bool(&e, "tpm_available", tpm_available);
+	shirudo_json_kv_int(&e, "last_seq", s->last_seq);
+	if (tpm_available)
+		shirudo_json_kv_string(&e, "projection_root_tpm",
+				       s->projection_root_tpm);
+	else
+		shirudo_json_kv_null(&e, "projection_root_tpm");
+	shirudo_json_obj_close(&e);
+	if (e.err)
+		return e.err;
+	if (path)
+		return atomic_write(path, buf, e.len, 0600);
+	printf("%s\n", buf);
+	return 0;
+}
+
+static int tree_write_pending(const struct shirudo_tree_operation *op)
+{
+	char buf[1024];
+	struct shirudo_json_emit e = { .buf = buf, .cap = sizeof(buf) };
+	int rc;
+
+	shirudo_json_obj_open(&e);
+	shirudo_json_kv_int(&e, "schema", 1);
+	shirudo_json_kv_int(&e, "seq", op->seq);
+	shirudo_json_kv_string(&e, "id", op->id);
+	shirudo_json_kv_string(&e, "operation_digest", op->operation_digest);
+	shirudo_json_obj_close(&e);
+	if (e.err)
+		return e.err;
+	if (path_mkdir_p(SHIRUDO_BPM_TREE_VAR_DIR, 0700))
+		return -errno;
+	rc = atomic_write(SHIRUDO_BPM_TREE_PENDING_PATH, buf, e.len, 0600);
+	if (rc)
+		return rc;
+	(void)shirudo_seal_label(SHIRUDO_BPM_TREE_PENDING_PATH);
+	return 0;
+}
+
+struct bpm_tree_pending {
+	int64_t seq;
+	char id[SHIRUDO_TREE_STRING_MAX];
+	char operation_digest[65];
+};
+
+static int tree_read_pending(struct bpm_tree_pending *pending)
+{
+	unsigned char *body;
+	size_t len;
+	int64_t schema = 0;
+	struct shirudo_json_field fields[] = {
+		{ "schema", SHIRUDO_JSON_T_INT, &schema, 0, 0, NULL, 0 },
+		{ "seq", SHIRUDO_JSON_T_INT, &pending->seq, 0, 0, NULL, 0 },
+		{ "id", SHIRUDO_JSON_T_STRING, pending->id,
+		  sizeof(pending->id), 0, NULL, 0 },
+		{ "operation_digest", SHIRUDO_JSON_T_STRING,
+		  pending->operation_digest, sizeof(pending->operation_digest),
+		  0, NULL, 0 },
+	};
+	int rc = read_small_file(SHIRUDO_BPM_TREE_PENDING_PATH, &body, &len,
+					 64u * 1024u);
+	if (rc)
+		return rc;
+	rc = shirudo_json_parse((const char *)body, len, fields, ARRAY_SIZE(fields));
+	if (!rc && (schema != 1 || pending->seq <= 0 ||
+			!shirudo_upatch_name_valid(pending->id) ||
+			tree_digest_hex(pending->operation_digest, (uint8_t[32]){})))
+		rc = -EINVAL;
+	free(body);
+	return rc;
+}
+
+/* Complete the only non-idempotent window: the process may have extended
+ * TPM and/or appended the event before the sealed cursor was committed. */
+static int tree_recover_pending(const struct shirudo_tree_publication *pub,
+					struct shirudo_tree_state *state)
+{
+	struct bpm_tree_pending pending = {};
+	const struct shirudo_tree_operation *op = NULL;
+	uint8_t digest[32], previous[32], next[32], live[32], replay[32];
+	bool have_live = false, applied = false, event_present = false;
+	int rc;
+
+	rc = tree_read_pending(&pending);
+	if (rc == -ENOENT)
+		return 0;
+	if (rc)
+		return rc;
+	for (int i = 0; i < pub->n_operations; i++) {
+		if (pub->operations[i].seq == pending.seq &&
+		    !strcmp(pub->operations[i].id, pending.id) &&
+		    !strcmp(pub->operations[i].operation_digest,
+			    pending.operation_digest)) {
+			op = &pub->operations[i];
+			break;
+		}
+	}
+	if (!op)
+		return -ERANGE;
+	if (pending.seq <= state->last_seq) {
+		(void)unlink(SHIRUDO_BPM_TREE_PENDING_PATH);
+		return 0;
+	}
+	if (tree_digest_hex(pending.operation_digest, digest) ||
+	    shirudo_hex_decode(state->projection_root, previous, 32))
+		return -EINVAL;
+	shirudo_sha256_2(previous, sizeof(previous), digest, sizeof(digest), next);
+
+	rc = shirudo_tree_chain_read(live);
+	if (!rc) {
+		have_live = true;
+		if (shirudo_ct_eq(live, next, sizeof(live)))
+			applied = true;
+		else if (!shirudo_ct_eq(live, previous, sizeof(live)))
+			return -EKEYREJECTED;
+	} else if (rc != -ENODEV) {
+		return rc;
+	}
+	rc = shirudo_tree_event_replay(replay);
+	if (!rc) {
+		if (shirudo_ct_eq(replay, next, sizeof(replay))) {
+			if (have_live && !shirudo_ct_eq(live, next, sizeof(live)))
+				return -EKEYREJECTED;
+			applied = true;
+			event_present = true;
+		} else if (!shirudo_ct_eq(replay, previous, sizeof(replay))) {
+			return -EKEYREJECTED;
+		}
+	} else if (rc != -ENOENT) {
+		return -EKEYREJECTED;
+	}
+	if (!applied)
+		return 0; /* TPM/event state is still pre-operation; retry normally. */
+	if (!event_present) {
+		rc = shirudo_tree_event_append(op->seq, op->operation_digest, next);
+		if (rc)
+			return rc;
+	}
+	shirudo_hex_encode(next, sizeof(next), state->projection_root);
+	if (have_live)
+		shirudo_hex_encode(next, sizeof(next), state->projection_root_tpm);
+	state->last_seq = op->seq;
+	rc = shirudo_tree_state_write(state);
+	if (rc)
+		return rc;
+	(void)unlink(SHIRUDO_BPM_TREE_PENDING_PATH);
+	return 0;
+}
+
+static int tree_validate_operation(const struct shirudo_tree_operation *op)
+{
+	uint8_t digest[32];
+	char expected_digest[72];
+
+	if (!op || op->seq <= 0 || !shirudo_upatch_name_valid(op->id) ||
+	    (strcmp(op->op, "add") && strcmp(op->op, "delete")))
+		return -EINVAL;
+	if (tree_digest_hex(op->operation_digest, digest) ||
+	    tree_digest_hex(op->artifact.manifest_digest, digest) ||
+	    tree_digest_hex(op->artifact.layer_digest, digest) ||
+	    tree_digest_hex(op->artifact.payload_sha256, digest))
+		return -EINVAL;
+	if (tree_operation_digest(op, expected_digest))
+		return -EINVAL;
+	if (strcmp(op->operation_digest, expected_digest))
+		return -EKEYREJECTED;
+	if (op->expected_payload_sha256[0] &&
+	    tree_digest_hex(op->expected_payload_sha256, digest))
+		return -EINVAL;
+	return 0;
+}
+
+static int tree_check_live_projection(const struct shirudo_tree_state *state)
+{
+	uint8_t live[32], replay[32], expected[32] = {};
+	int rc;
+
+	rc = shirudo_tree_chain_read(live);
+	if (rc == -ENODEV)
+		return 0;
+	if (rc)
+		return rc;
+	if (state->last_seq) {
+		if (shirudo_hex_decode(state->projection_root_tpm, expected, 32) ||
+		    !shirudo_ct_eq(live, expected, 32))
+			return -EKEYREJECTED;
+	} else if (!shirudo_ct_eq(live, expected, 32)) {
+		return -EKEYREJECTED;
+	}
+	rc = shirudo_tree_event_replay(replay);
+	if (rc == 0 && !shirudo_ct_eq(live, replay, 32))
+		return -EKEYREJECTED;
+	if (rc == -ENOENT && state->last_seq)
+		return -EKEYREJECTED;
+	if (rc != 0 && rc != -ENOENT)
+		return -EKEYREJECTED;
+	return 1;
+}
+
+static int cmd_bpm_tree_sync(int argc, const char **argv)
+{
+	struct bpm_tree_config cfg;
+	struct shirudo_tree_publication pub = {};
+	struct shirudo_tree_state state = {};
+	char manifest_digest[BPM_MAX_DIGEST];
+	char report[PATH_MAX] = {};
+	bool dry_run = false, have_state = false;
+	bool same_manifest;
+	int selected = 0, skipped = 0, applied = 0, tpm_available = 0;
+	int rc;
+	#define TREE_SYNC_RETURN(value) do { \
+		shirudo_tree_publication_free(&pub); \
+		return (value); \
+	} while (0)
+
+	if (argc < 2 || strcmp(argv[1], "sync"))
+		TREE_SYNC_RETURN(-EINVAL);
+	for (int i = 2; i < argc; i++) {
+		if (!strcmp(argv[i], "--dry-run"))
+			dry_run = true;
+		else if (!strncmp(argv[i], "--report=", 9))
+			bpm_copy_string(report, sizeof(report), argv[i] + 9);
+		else if (!strcmp(argv[i], "--report") && i + 1 < argc)
+			bpm_copy_string(report, sizeof(report), argv[++i]);
+		else if (shirudo_is_help(argv[i])) {
+			printf("usage: shirudo bpm tree sync [--dry-run] [--report=<path>]\n");
+			TREE_SYNC_RETURN(0);
+		} else {
+			TREE_SYNC_RETURN(-EINVAL);
+		}
+	}
+	rc = load_tree_config(&cfg);
+	if (rc == -ENOENT)
+		TREE_SYNC_RETURN(0); /* Optional integration: manual `shirudo upatch` remains valid. */
+	if (rc)
+		TREE_SYNC_RETURN(rc);
+	rc = shirudo_tree_state_read(&state);
+	if (!rc) {
+		have_state = true;
+	} else if (rc != -ENOENT) {
+		TREE_SYNC_RETURN(rc);
+	}
+	rc = tree_fetch_publication(&cfg, &pub, manifest_digest,
+					 sizeof(manifest_digest));
+	if (rc)
+		TREE_SYNC_RETURN(rc);
+	if (pub.parent_manifest_digest[0] &&
+	    tree_digest_hex(pub.parent_manifest_digest, (uint8_t[32]){}))
+		TREE_SYNC_RETURN(-EINVAL);
+	if (pub.base_seq != 0)
+		TREE_SYNC_RETURN(-ENOTSUP); /* snapshot compaction belongs to a later schema */
+	if (pub.n_operations && pub.operations[0].seq != pub.base_seq + 1)
+		TREE_SYNC_RETURN(-EINVAL);
+	if (pub.n_operations && pub.head_seq != pub.operations[pub.n_operations - 1].seq)
+		TREE_SYNC_RETURN(-EINVAL);
+	if (!pub.n_operations && pub.head_seq != pub.base_seq)
+		TREE_SYNC_RETURN(-EINVAL);
+	for (int i = 0; i < pub.n_operations; i++) {
+		rc = tree_validate_operation(&pub.operations[i]);
+		if (rc)
+			TREE_SYNC_RETURN(rc);
+	}
+	same_manifest = have_state && !strcmp(state.manifest_digest, manifest_digest);
+	if (have_state && strcmp(state.tree_id, pub.tree_id))
+		TREE_SYNC_RETURN(-EINVAL);
+	if (have_state && !same_manifest && pub.generation <= state.generation)
+		TREE_SYNC_RETURN(-ERANGE);
+	if (have_state && !same_manifest && pub.parent_manifest_digest[0] &&
+	    strcmp(pub.parent_manifest_digest, state.manifest_digest))
+		TREE_SYNC_RETURN(-ERANGE);
+	if (have_state && pub.head_seq < state.last_seq)
+		TREE_SYNC_RETURN(-ERANGE);
+	if (have_state && pub.base_seq > state.last_seq)
+		TREE_SYNC_RETURN(-ERANGE); /* The publication must contain the cursor base. */
+	if (!have_state && pub.base_seq != 0)
+		TREE_SYNC_RETURN(-ERANGE);
+	if (!have_state) {
+		state.schema = 1;
+		bpm_copy_string(state.tree_id, sizeof(state.tree_id), pub.tree_id);
+		memset(state.projection_root, '0', 64);
+		state.projection_root[64] = '\0';
+		memset(state.projection_root_tpm, '0', 64);
+		state.projection_root_tpm[64] = '\0';
+	}
+	rc = tree_recover_pending(&pub, &state);
+	if (rc)
+		TREE_SYNC_RETURN(rc);
+	rc = shirudo_tree_chain_ensure();
+	if (rc == -ENODEV) {
+		tpm_available = 0;
+	} else if (rc) {
+		TREE_SYNC_RETURN(rc);
+	} else {
+		tpm_available = tree_check_live_projection(&state);
+		if (tpm_available < 0)
+			TREE_SYNC_RETURN(tpm_available);
+		if (tpm_available) {
+			uint8_t live[32];
+			char live_hex[65];
+			if (shirudo_tree_chain_read(live))
+				TREE_SYNC_RETURN(-ENODEV);
+			shirudo_hex_encode(live, 32, live_hex);
+			bpm_copy_string(state.projection_root_tpm,
+					 sizeof(state.projection_root_tpm), live_hex);
+		}
+	}
+	for (int i = 0; i < pub.n_operations; i++) {
+		struct shirudo_tree_operation *op = &pub.operations[i];
+		uint8_t digest[32], previous[32], next[32];
+		char artifact[PATH_MAX];
+		bool match;
+
+		if (op->seq <= state.last_seq)
+			continue;
+		match = shirudo_tree_selector_matches(&op->selector);
+		if (!match) {
+			skipped++;
+			if (!dry_run) state.last_seq = op->seq;
+			continue;
+		}
+		selected++;
+		if (dry_run)
+			continue;
+		if (tree_digest_hex(op->operation_digest, digest))
+			TREE_SYNC_RETURN(-EINVAL);
+		if (op->expected_payload_sha256[0] &&
+		    strcmp(op->expected_payload_sha256, op->artifact.payload_sha256))
+			TREE_SYNC_RETURN(-EKEYREJECTED);
+		rc = tree_write_pending(op);
+		if (rc)
+			TREE_SYNC_RETURN(rc);
+		rc = tree_pull_artifact(op, artifact, sizeof(artifact));
+		if (rc)
+			TREE_SYNC_RETURN(rc);
+		if (!strcmp(op->op, "add"))
+			rc = shirudo_upatch_install(artifact);
+		else if (!strcmp(op->op, "delete"))
+			rc = shirudo_upatch_remove(artifact);
+		else
+			TREE_SYNC_RETURN(-EINVAL);
+		if (rc)
+			TREE_SYNC_RETURN(rc);
+		if (shirudo_hex_decode(state.projection_root, previous, 32))
+			TREE_SYNC_RETURN(-EINVAL);
+		if (tpm_available) {
+			rc = shirudo_tree_chain_extend(digest, next);
+			if (rc)
+				TREE_SYNC_RETURN(rc);
+		} else {
+			shirudo_sha256_2(previous, 32, digest, 32, next);
+		}
+		shirudo_hex_encode(next, 32, state.projection_root);
+		if (tpm_available)
+			shirudo_hex_encode(next, 32, state.projection_root_tpm);
+		rc = shirudo_tree_event_append(op->seq, op->operation_digest, next);
+		if (rc)
+			TREE_SYNC_RETURN(rc);
+		state.last_seq = op->seq;
+		applied++;
+		rc = shirudo_tree_state_write(&state);
+		if (rc)
+			TREE_SYNC_RETURN(rc);
+		(void)unlink(SHIRUDO_BPM_TREE_PENDING_PATH);
+	}
+	if (!dry_run) {
+		state.generation = pub.generation;
+		bpm_copy_string(state.manifest_digest, sizeof(state.manifest_digest),
+				manifest_digest);
+		if (!state.tree_id[0])
+			bpm_copy_string(state.tree_id, sizeof(state.tree_id), pub.tree_id);
+		rc = shirudo_tree_state_write(&state);
+		if (rc)
+			TREE_SYNC_RETURN(rc);
+	}
+	rc = tree_write_report(report[0] ? report : NULL, &state, selected,
+				       skipped, applied, dry_run, tpm_available);
+	shirudo_tree_publication_free(&pub);
+	#undef TREE_SYNC_RETURN
+	return rc;
+}
+
 static const struct shirudo_help_item bpm_subcmds[] = {
 	{ "config", "register and manage OCI repositories" },
 	{ "repo", "refresh signed repository indexes" },
+	{ "tree", "synchronize the optional signed upatch tree" },
 	{ "key", "add a trusted package certificate" },
 	{ "pull", "download an OCI package into the current directory" },
 	{ "push", "publish an OCI package from the operator" },
@@ -2391,6 +3155,7 @@ static const struct shirudo_help_item bpm_subcmds[] = {
 static const struct shirudo_help_item bpm_target_subcmds[] = {
 	{ "config", "register and manage OCI repositories" },
 	{ "repo", "refresh signed repository indexes" },
+	{ "tree", "synchronize the optional signed upatch tree" },
 	{ "key", "add a trusted package certificate" },
 	{ "pull", "download an OCI package into the current directory" },
 	{ "install", "download and activate a repository or OCI package" },
@@ -2403,7 +3168,7 @@ static bool bpm_operator_available(void)
 }
 
 static const struct shirudo_help bpm_target_help = {
-	.usage = "shirudo bpm <config|repo|key|pull|install|upgrade>",
+	.usage = "shirudo bpm <config|repo|tree|key|pull|install|upgrade>",
 	.summary = "Manage signed target-local BPM packages backed by OCI repositories.",
 	.sections = (const struct shirudo_help_section[]) {
 		{ "subcommands:", bpm_target_subcmds, ARRAY_SIZE(bpm_target_subcmds) },
@@ -2472,6 +3237,10 @@ int cmd_bpm(int argc, const char **argv)
 		return 2;
 	if (!strcmp(sub, "config"))
 		return cmd_bpm_config(argc - 1, argv + 1);
+	if (!strcmp(sub, "tree") && (argc < 3 || shirudo_is_help(argv[2]))) {
+		fprintf(stderr, "usage: shirudo bpm tree sync [--dry-run] [--report=<path>]\n");
+		return argc < 3 ? 2 : 0;
+	}
 	if (!strcmp(sub, "pull")) {
 		int rc;
 
@@ -2545,6 +3314,27 @@ int cmd_bpm(int argc, const char **argv)
 			rc = repo_update_one(argv[3]);
 		}
 		return bpm_finish(lock, rc, "repo update");
+	}
+	if (!strcmp(sub, "tree") && argc >= 3 && !strcmp(argv[2], "sync")) {
+		int lock, rc;
+
+		if (argc > 6)
+			return 2;
+		if (argc == 4 && shirudo_is_help(argv[3])) {
+			printf("usage: shirudo bpm tree sync [--dry-run] [--report=<path>]\n");
+			return 0;
+		}
+		/* The tree is optional. Avoid taking the BPM lock (and avoid
+		 * requiring writable state directories) when it is not configured. */
+		if (access(SHIRUDO_BPM_TREE_ETC_PATH, F_OK) != 0 && errno == ENOENT)
+			return 0;
+		if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
+			return bpm_fail("initialize curl", -EIO);
+		lock = with_bpm_lock();
+		if (lock < 0)
+			return bpm_finish(-1, lock, "lock");
+		rc = cmd_bpm_tree_sync(argc - 1, argv + 1);
+		return bpm_finish(lock, rc, "tree sync");
 	}
 	if (!strcmp(sub, "key") && argc == 4 && !strcmp(argv[2], "add")) {
 		char temp[PATH_MAX] = {};

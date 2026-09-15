@@ -32,6 +32,7 @@ func NewBPMCommand() *cobra.Command {
 		newStandaloneBPMUninstallCommand(),
 		newStandaloneBPMVersionCommand(),
 		newStandaloneBPMBuildCommand(&buildFile, &buildVersion, &buildKeysDir),
+		newStandaloneBPMTreeCommand(),
 	)
 
 	return cmd

@@ -40,6 +40,25 @@ type bpmBuildUpatchEntry struct {
 	TelemetryUpatch string
 	LoadTarget      string
 	UnloadTarget    string
+	Tree            *bpmBuildTreeMetadata
+}
+
+// bpmBuildTreeMetadata is optional build-time publication metadata.  It is
+// kept on each existing [[upatches]] entry so a Beefile can continue to
+// describe multiple upatches in declaration order.  The target agent never
+// reads this structure: it consumes the signed tree publication instead.
+type bpmBuildTreeMetadata struct {
+	ID             string
+	LoadArtifact   string
+	UnloadArtifact string
+	Selector       bpmBuildTreeSelector
+}
+
+type bpmBuildTreeSelector struct {
+	KernelReleasePrefix []string
+	Architecture        []string
+	Kconfig             map[string][]string
+	Labels              map[string][]string
 }
 
 func loadBPMBuildMetadata(path string) (bpmPackageMetadata, error) {
@@ -255,6 +274,24 @@ func parseBPMBuildUpatches(body []byte) ([]bpmBuildUpatchEntry, error) {
 		if current.UnloadTarget == "" {
 			current.UnloadTarget = defaultBPMBuildUpatchUnloadTarget(current.Source)
 		}
+		if current.Tree != nil {
+			current.Tree.ID = strings.TrimSpace(current.Tree.ID)
+			current.Tree.LoadArtifact = strings.TrimSpace(current.Tree.LoadArtifact)
+			current.Tree.UnloadArtifact = strings.TrimSpace(current.Tree.UnloadArtifact)
+			if current.Tree.ID == "" || current.Tree.LoadArtifact == "" ||
+				current.Tree.UnloadArtifact == "" {
+				return fmt.Errorf("parse upatches line %d: upatches.tree requires id, load_artifact, and unload_artifact", lineNumber)
+			}
+			if !bpmPackageNamePattern.MatchString(current.Tree.ID) {
+				return fmt.Errorf("parse upatches line %d: upatches.tree.id is not a valid upatch id", lineNumber)
+			}
+			for _, artifact := range []string{current.Tree.LoadArtifact, current.Tree.UnloadArtifact} {
+				clean := path.Clean(strings.ReplaceAll(artifact, "\\", "/"))
+				if path.IsAbs(artifact) || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+					return fmt.Errorf("parse upatches line %d: upatches.tree artifact path %q escapes the package", lineNumber, artifact)
+				}
+			}
+		}
 		entries = append(entries, *current)
 		current = nil
 		seenKeys = map[string]struct{}{}
@@ -280,10 +317,21 @@ func parseBPMBuildUpatches(body []byte) ([]bpmBuildUpatchEntry, error) {
 			continue
 		}
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			if err := finishCurrent(lineNumber); err != nil {
-				return nil, err
+			candidate := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "["), "]"))
+			if candidate != "upatches.tree" && candidate != "upatches.tree.selector" &&
+				candidate != "upatches.tree.selector.kconfig" && candidate != "upatches.tree.selector.labels" {
+				if err := finishCurrent(lineNumber); err != nil {
+					return nil, err
+				}
 			}
-			section = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "["), "]"))
+			if current == nil && strings.HasPrefix(candidate, "upatches.tree") {
+				return nil, fmt.Errorf("parse upatches line %d: %s requires a preceding [[upatches]] entry", lineNumber, candidate)
+			}
+			if strings.HasPrefix(candidate, "upatches.tree") && current.Tree == nil {
+				current.Tree = &bpmBuildTreeMetadata{}
+			}
+			section = candidate
+			seenKeys = map[string]struct{}{}
 			continue
 		}
 
@@ -296,33 +344,108 @@ func parseBPMBuildUpatches(body []byte) ([]bpmBuildUpatchEntry, error) {
 			}
 			continue
 		}
-		if section != "upatches" || current == nil {
+		if current == nil || (section != "upatches" &&
+			section != "upatches.tree" && section != "upatches.tree.selector" &&
+			section != "upatches.tree.selector.kconfig" &&
+			section != "upatches.tree.selector.labels") {
 			continue
 		}
 
 		key = strings.TrimSpace(key)
+		knownTreeKey := false
+		if section == "upatches.tree" {
+			knownTreeKey = key == "id" || key == "load_artifact" || key == "unload_artifact"
+		} else if section == "upatches.tree.selector" {
+			knownTreeKey = key == "kernel_release_prefix" || key == "architecture"
+		} else if section == "upatches.tree.selector.kconfig" || section == "upatches.tree.selector.labels" {
+			knownTreeKey = true
+		}
+		// Tree metadata is additive. An older/newer publisher may put fields in
+		// these tables that this builder does not understand; preserve the
+		// existing Beefile compatibility rule and skip those fields.
+		if section != "upatches" && !knownTreeKey {
+			continue
+		}
 		if _, ok := seenKeys[key]; ok {
-			return nil, fmt.Errorf("parse upatches line %d: duplicate upatches field %q", lineNumber, key)
+			return nil, fmt.Errorf("parse upatches line %d: duplicate %s field %q", lineNumber, section, key)
 		}
 		seenKeys[key] = struct{}{}
 
+		if section == "upatches.tree.selector" {
+			values, err := parseBPMTOMLStringArray(value)
+			if err != nil || len(values) == 0 {
+				if err == nil {
+					err = fmt.Errorf("must contain at least one string")
+				}
+				return nil, fmt.Errorf("parse upatches line %d: upatches.%s: %w", lineNumber, key, err)
+			}
+			if key == "kernel_release_prefix" {
+				current.Tree.Selector.KernelReleasePrefix = values
+			} else {
+				current.Tree.Selector.Architecture = values
+			}
+			continue
+		}
+		if section == "upatches.tree.selector.kconfig" || section == "upatches.tree.selector.labels" {
+			values, err := parseBPMTOMLStringArray(value)
+			if err != nil || len(values) == 0 {
+				if err == nil {
+					err = fmt.Errorf("must contain at least one string")
+				}
+				return nil, fmt.Errorf("parse upatches line %d: upatches.%s.%s: %w", lineNumber, section, key, err)
+			}
+			if section == "upatches.tree.selector.kconfig" {
+				if current.Tree.Selector.Kconfig == nil {
+					current.Tree.Selector.Kconfig = map[string][]string{}
+				}
+				current.Tree.Selector.Kconfig[key] = values
+			} else {
+				if current.Tree.Selector.Labels == nil {
+					current.Tree.Selector.Labels = map[string][]string{}
+				}
+				current.Tree.Selector.Labels[key] = values
+			}
+			continue
+		}
 		parsed, err := parseBPMTOMLString(value)
 		if err != nil {
 			return nil, fmt.Errorf("parse upatches line %d: upatches.%s: %w", lineNumber, key, err)
 		}
-		switch key {
-		case "source":
-			current.Source = parsed
-		case "type":
-			current.Type = parsed
-		case "telemetry_upatch":
-			current.TelemetryUpatch = parsed
-		case "load_target":
-			current.LoadTarget = parsed
-		case "unload_target":
-			current.UnloadTarget = parsed
-		default:
-			return nil, fmt.Errorf("parse upatches line %d: unknown upatches field %q", lineNumber, key)
+		if section == "upatches" {
+			switch key {
+			case "source":
+				current.Source = parsed
+			case "type":
+				current.Type = parsed
+			case "telemetry_upatch":
+				current.TelemetryUpatch = parsed
+			case "load_target":
+				current.LoadTarget = parsed
+			case "unload_target":
+				current.UnloadTarget = parsed
+			default:
+				return nil, fmt.Errorf("parse upatches line %d: unknown upatches field %q", lineNumber, key)
+			}
+			continue
+		}
+		if current.Tree == nil {
+			return nil, fmt.Errorf("parse upatches line %d: tree metadata is not initialized", lineNumber)
+		}
+		switch section {
+		case "upatches.tree":
+			switch key {
+			case "id":
+				current.Tree.ID = parsed
+			case "load_artifact":
+				current.Tree.LoadArtifact = parsed
+			case "unload_artifact":
+				current.Tree.UnloadArtifact = parsed
+				// Unknown tree metadata is ignored for forward compatibility.
+			}
+		case "upatches.tree.selector":
+			// Selector arrays are parsed and assigned above.
+		case "upatches.tree.selector.kconfig", "upatches.tree.selector.labels":
+			// Selector arrays are parsed and assigned above.
 		}
 	}
 	if err := scanner.Err(); err != nil {
