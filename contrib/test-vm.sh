@@ -58,6 +58,7 @@ MEMORY="${TEST_VM_MEMORY:-4G}"
 DISK_SIZE="${TEST_VM_DISK_SIZE:-30G}"
 VM_TIMEOUT="${TEST_VM_TIMEOUT:-3600}"
 VM_MODE="${VM_MODE:-test}"
+KERNEL_PROFILE="${TEST_VM_KERNEL_PROFILE:-full}"
 VM_SUITE="${TEST_VM_SUITE:-all}"
 TRUSTED_ROOT="${TEST_VM_TRUSTED_ROOT:-0}"
 SKIP_SEAL="${TEST_VM_SKIP_SEAL:-0}"
@@ -109,6 +110,8 @@ QEMU_UNIT_FILE=""
 QEMU_STATUS=1
 PROGRESS_LINES=0
 GUEST_STATUS=""
+GUEST_MEMORY_REPORT=""
+HOST_MEMORY_REPORT=""
 FAILURE_LOG_DIR=""
 FINAL_STATUS=1
 LEAVE_RUNNING=0
@@ -179,6 +182,10 @@ validate_mode()
 	case "$SKIP_SEAL" in
 	0|1) ;;
 	*) die "TEST_VM_SKIP_SEAL must be '0' or '1'" ;;
+	esac
+	case "$KERNEL_PROFILE" in
+	full|small) ;;
+	*) die "TEST_VM_KERNEL_PROFILE must be 'full' or 'small'" ;;
 	esac
 	[[ "$DNS_FUZZ_SEED" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]] ||
 		die "TEST_VM_DNS_FUZZ_SEED must be a decimal or hexadecimal integer"
@@ -379,7 +386,7 @@ validate_host_bundle()
 	[[ -s "$TEST_VM_HOST_BUNDLE/runtime-image-key" ]] ||
 		die "host VM bundle has no prepared runtime image; run 'make bundle'"
 	runtime_key="$(<"$TEST_VM_HOST_BUNDLE/runtime-image-key")"
-	[[ "$runtime_key" =~ ^rootfs-[0-9a-f]{64}-packages-[0-9a-f]{64}-v[0-9]+$ ]] ||
+	[[ "$runtime_key" =~ ^rootfs-[0-9a-f]{64}-packages-[0-9a-f]{64}(-disk-[A-Za-z0-9_]+)?-v[0-9]+$ ]] ||
 		die "host VM bundle has an invalid prepared runtime image key"
 	runtime_image="$RUNTIME_CACHE_DIR/$runtime_key.qcow2"
 	[[ -s "$runtime_image" ]] ||
@@ -742,6 +749,7 @@ print_test_summary()
 	summary_log "vm: $VM_NAME"
 	summary_log "elapsed: $(format_elapsed "$SECONDS")"
 	summary_log "bpf-next dependencies: ${COLOR_CYAN}${build_mode}${COLOR_RESET}"
+	print_memory_summary
 
 	if [[ "$FINAL_STATUS" -ne 0 ]]; then
 		if [[ -s "$failed_tests" ]]; then
@@ -1287,6 +1295,12 @@ done
 
 log "booting $(basename "$KERNEL") with ${CPUS} CPUs and ${MEMORY} memory"
 
+KERNEL_LSM_ARGS="lsm=landlock,lockdown,yama,integrity,apparmor,bpf"
+KERNEL_NET_DEVICE="virtio-net-pci,netdev=net0"
+if [[ "$KERNEL_PROFILE" == small ]]; then
+	KERNEL_LSM_ARGS="lsm=bpf"
+fi
+
 QEMU_ARGS=(
 	-enable-kvm \
 	-cpu host \
@@ -1296,9 +1310,9 @@ QEMU_ARGS=(
 	-drive "file=${OVERLAY},if=virtio,format=qcow2" \
 	-drive "file=${SEED},if=virtio,format=raw,readonly=on" \
 	-kernel "$KERNEL" \
-	-append "root=/dev/vda1 rootwait rw console=ttyS0,115200n8 loglevel=7 net.ifnames=0 lsm=landlock,lockdown,yama,integrity,apparmor,bpf" \
+	-append "root=/dev/vda1 rootwait rw console=ttyS0,115200n8 loglevel=7 net.ifnames=0 ${KERNEL_LSM_ARGS}" \
 	-netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22" \
-	-device virtio-net-pci,netdev=net0 \
+	-device "$KERNEL_NET_DEVICE" \
 	-virtfs "local,id=shirudo-src,path=${REPO_ROOT},mount_tag=shirudo-src,security_model=none,readonly=on" \
 	-virtfs "local,id=shirudo-bundle,path=${TEST_VM_HOST_BUNDLE},mount_tag=shirudo-bundle,security_model=none,readonly=on" \
 	-virtfs "local,id=shirudo-out,path=${RUN_DIR}/result,mount_tag=shirudo-out,security_model=none" \
@@ -1368,6 +1382,68 @@ read_guest_status()
 		die "guest preparation/test failed with status $GUEST_STATUS"
 }
 
+host_memory_pid()
+{
+	local child_pid cmdline
+
+	[[ -n "$QEMU_PID" ]] || return 0
+	cmdline="$(tr '\0' ' ' <"/proc/$QEMU_PID/cmdline" 2>/dev/null || true)"
+	if [[ "$cmdline" == *qemu-system-x86_64* ]]; then
+		printf '%s\n' "$QEMU_PID"
+		return 0
+	fi
+	if [[ -r "/proc/$QEMU_PID/task/$QEMU_PID/children" ]]; then
+		while read -r child_pid; do
+			[[ "$child_pid" =~ ^[1-9][0-9]*$ ]] || continue
+			cmdline="$(tr '\0' ' ' <"/proc/$child_pid/cmdline" 2>/dev/null || true)"
+			if [[ "$cmdline" == *qemu-system-x86_64* ]]; then
+				printf '%s\n' "$child_pid"
+				return 0
+			fi
+		done <"/proc/$QEMU_PID/task/$QEMU_PID/children"
+	fi
+	printf '%s\n' "$QEMU_PID"
+}
+
+capture_host_memory_report()
+{
+	local report="$RUN_DIR/result/host-memory" memory_pid
+
+	memory_pid="$(host_memory_pid)"
+
+	{
+		printf 'configured_memory=%s\n' "$MEMORY"
+		printf 'qemu_pid=%s\n' "${memory_pid:-unavailable}"
+		if [[ -n "$memory_pid" && -r "/proc/$memory_pid/status" ]]; then
+			awk '/^VmRSS:/ { printf "qemu_vmrss_kb=%s\n", $2 }
+			     /^VmSize:/ { printf "qemu_vmsize_kb=%s\n", $2 }' \
+				"/proc/$memory_pid/status"
+			if [[ -r "/proc/$memory_pid/smaps_rollup" ]]; then
+				awk '/^Pss:/ { printf "qemu_pss_kb=%s\n", $2 }' \
+					"/proc/$memory_pid/smaps_rollup"
+			fi
+		else
+			printf 'qemu_vmrss_kb=unavailable\nqemu_vmsize_kb=unavailable\n'
+			printf 'qemu_pss_kb=unavailable\n'
+		fi
+	} >"$report"
+	HOST_MEMORY_REPORT="$report"
+}
+
+print_memory_summary()
+{
+	local report
+
+	if [[ -s "$RUN_DIR/result/boot-memory" ]]; then
+		report="$(tr '\n' ' ' <"$RUN_DIR/result/boot-memory")"
+		summary_log "guest memory: ${report% }"
+	fi
+	if [[ -s "$HOST_MEMORY_REPORT" ]]; then
+		report="$(tr '\n' ' ' <"$HOST_MEMORY_REPORT")"
+		summary_log "host QEMU memory: ${report% }"
+	fi
+}
+
 if [[ "$VM_MODE" == interactive ]]; then
 	if user_systemd_available; then
 		QEMU_UNIT_FILE="$RUN_DIR/qemu.unit"
@@ -1384,9 +1460,11 @@ if [[ "$VM_MODE" == interactive ]]; then
 	printf '%s\n' "$QEMU_PID" >"$RUN_DIR/qemu.pid"
 	wait_for_ssh_listener
 	wait_for_guest_status
+	capture_host_memory_report
 	LEAVE_RUNNING=1
 	FINAL_STATUS=0
 	log "VM ready: name=$VM_NAME state=$RUN_DIR qemu_pid=$QEMU_PID swtpm_pid=$(<"$SWTPM_PIDFILE")"
+	print_memory_summary
 	log "console log: $RUN_DIR/console.log"
 	log "console: make vm-console VM_NAME=$VM_NAME"
 	log "ssh: make vm-ssh VM_NAME=$VM_NAME"
@@ -1407,6 +1485,7 @@ else
 		kill -0 "$QEMU_PID" 2>/dev/null || break
 		sleep 0.2
 	done
+	capture_host_memory_report
 	wait "$QEMU_PID"
 	QEMU_STATUS=$?
 	for _ in {1..5}; do

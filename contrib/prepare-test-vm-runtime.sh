@@ -21,6 +21,7 @@ while [[ $# -gt 0 ]]; do
 	--cache-dir) CACHE_DIR=$2; shift 2 ;;
 	--package-file) PACKAGE_FILE=$2; shift 2 ;;
 	--runtime-key) RUNTIME_KEY=$2; shift 2 ;;
+	--runtime-disk-size) RUNTIME_DISK_SIZE=$2; shift 2 ;;
 	--key-output) KEY_OUTPUT=$2; shift 2 ;;
 	*) die "unknown argument '$1'" ;;
 	esac
@@ -30,6 +31,8 @@ done
 [[ -s "$PACKAGE_FILE" ]] || die "runtime package manifest is missing: $PACKAGE_FILE"
 [[ -n "$CACHE_DIR" && -n "$RUNTIME_KEY" && -n "$KEY_OUTPUT" ]] ||
 	die "rootfs, cache directory, runtime key, and key output are required"
+[[ "$RUNTIME_DISK_SIZE" =~ ^[1-9][0-9]*(K|M|G|T)$ ]] ||
+	die "runtime disk size must be a positive QEMU size such as 4G or 512M"
 
 command -v qemu-img >/dev/null 2>&1 ||
 	die "qemu-img is required; install it with: sudo apt-get install -y qemu-utils"

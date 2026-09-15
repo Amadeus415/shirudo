@@ -11,7 +11,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUNDLE_DIR="${TEST_VM_HOST_BUNDLE:-${REPO_ROOT}/build/test-vm/host-bundle}"
 WORK_DIR="${TEST_VM_WORK_DIR:-${REPO_ROOT}/build/test-vm}"
 RUNTIME_CACHE_DIR="${TEST_VM_RUNTIME_CACHE_DIR:-${WORK_DIR}/cache/runtime}"
-BPF_DEPS_DIR="${REPO_ROOT}/artifacts/bpf-next-kernel-debs/shirudo-bpf-deps"
+BPF_DEPS_DIR="${TEST_VM_BPF_DEPS_DIR:-${REPO_ROOT}/artifacts/bpf-next-kernel-debs/shirudo-bpf-deps}"
 LIBGUESTFS_KERNEL_CACHE="${WORK_DIR}/cache/libguestfs/ubuntu"
 UBUNTU_CODENAME="${TEST_VM_UBUNTU_CODENAME:-resolute}"
 PACKAGE_FILE="$REPO_ROOT/contrib/test-vm-runtime-packages"
@@ -24,7 +24,8 @@ LOCK_FILE="${BUNDLE_DIR}.lock"
 STAMP_FILE="${TEST_VM_BUNDLE_STAMP:-${BUNDLE_DIR}/.stamp}"
 STAMP_INPUTS="${TEST_VM_BUNDLE_INPUTS:-}"
 PACKAGE_CERT="${TEST_VM_PACKAGE_CERT:-}"
-RUNTIME_PREP_VERSION=3
+RUNTIME_PREP_VERSION=4
+RUNTIME_DISK_SIZE="${TEST_VM_RUNTIME_DISK_SIZE:-8G}"
 
 log()
 {
@@ -231,9 +232,10 @@ resolve_rootfs()
 
 prepare_runtime_image()
 {
-	local package_digest
+	local package_digest disk_size_key
 	package_digest="$(sha256sum "$PACKAGE_FILE" | awk '{print $1}')"
-	RUNTIME_KEY="rootfs-${ROOTFS_DIGEST}-packages-${package_digest}-v${RUNTIME_PREP_VERSION}"
+	disk_size_key="${RUNTIME_DISK_SIZE//[^A-Za-z0-9]/_}"
+	RUNTIME_KEY="rootfs-${ROOTFS_DIGEST}-packages-${package_digest}-disk-${disk_size_key}-v${RUNTIME_PREP_VERSION}"
 	RUNTIME_IMAGE="$RUNTIME_CACHE_DIR/$RUNTIME_KEY.qcow2"
 	if [[ ! -s "$RUNTIME_IMAGE" ]]; then
 		"$REPO_ROOT/contrib/prepare-test-vm-runtime.sh" \
@@ -241,6 +243,7 @@ prepare_runtime_image()
 			--cache-dir "$RUNTIME_CACHE_DIR" \
 			--package-file "$PACKAGE_FILE" \
 			--runtime-key "$RUNTIME_KEY" \
+			--runtime-disk-size "$RUNTIME_DISK_SIZE" \
 			--key-output "$RUNTIME_CACHE_DIR/.${RUNTIME_KEY}.key"
 	fi
 }

@@ -158,6 +158,38 @@ test_expect_success 'stable VM selection enables trusted-root bootstrap' '
 		>"$WORK/next-mode-make.out" 2>&1 &&
 	grep -q "TEST_VM_TRUSTED_ROOT=\"0\"" "$WORK/next-mode-make.out" &&
 	grep -q -- "--trusted-root" ../contrib/test-vm-guest.sh
+	'
+
+test_expect_success 'make vm-small selects an isolated minimal VM profile' '
+	grep -q "^vm-small: kernel-small test-vm-small-bundle" ../Makefile &&
+	grep -q "^kernel-small:" ../Makefile &&
+	grep -q "KERNEL_PROFILE=.small." ../Makefile &&
+	grep -q "TEST_VM_CPUS=.1." ../Makefile &&
+	grep -q "TEST_VM_MEMORY=.512M." ../Makefile &&
+	grep -q "TEST_VM_DISK_SIZE=.4G." ../Makefile &&
+	grep -q "TEST_VM_SMALL_KERNEL_ARTIFACT_DIR" ../Makefile &&
+	grep -q "KERNEL_PROFILE=\"" ../contrib/build-kernel-package.sh &&
+	grep -q "KERNEL_PROFILE:-full" ../contrib/build-kernel-package.sh &&
+	grep -q "kernel-small.config" ../contrib/build-kernel-package.sh &&
+	grep -q "RUNTIME_DISK_SIZE" ../contrib/build-test-vm-bundle.sh &&
+	grep -q -- "--runtime-disk-size" ../contrib/build-test-vm-bundle.sh &&
+	make -n -C .. vm-small VM_NAME=small-cli-vm \
+		TEST_VM_SMALL_WORK_DIR="$WORK/small-vm" >"$WORK/small-vm-make.out" 2>&1 &&
+	grep -q "artifacts/bpf-next-small-kernel-debs/bzImage" \
+		"$WORK/small-vm-make.out" &&
+	grep -q "TEST_VM_MEMORY=.512M." "$WORK/small-vm-make.out" &&
+	grep -q "TEST_VM_DISK_SIZE=.4G." "$WORK/small-vm-make.out"
+'
+
+test_expect_success 'vm-small reports guest and host memory usage' '
+	grep -q "report_boot_memory" ../contrib/test-vm-guest.sh &&
+	grep -q "guest_mem_total_kb" ../contrib/test-vm-guest.sh &&
+	grep -q "guest_mem_available_kb" ../contrib/test-vm-guest.sh &&
+	grep -q "guest_mem_used_percent" ../contrib/test-vm-guest.sh &&
+	grep -q "capture_host_memory_report" ../contrib/test-vm.sh &&
+	grep -q "qemu_vmrss_kb" ../contrib/test-vm.sh &&
+	grep -q "qemu_pss_kb" ../contrib/test-vm.sh &&
+	grep -q "print_memory_summary" ../contrib/test-vm.sh
 '
 
 test_expect_success 'make kernel builds a tagged third-party Linux source' '

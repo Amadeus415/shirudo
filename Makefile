@@ -55,7 +55,7 @@ export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdi
        SHIRUDO_TARGET_STATIC_LIBDIR
 export VM_SSH_COMMAND
 
-.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build test-helpers linux-obs-ipv4-shields bundle test-vm-bundle kernel bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz bench test-vm test-vm-clean install \
+.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build test-helpers linux-obs-ipv4-shields bundle test-vm-bundle kernel bpf-next kernel-small vm vm-small test-vm-small-bundle vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz bench test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
         distclean test examples config
 
@@ -153,6 +153,7 @@ shirudo make targets (run from the repo root):
                            defconfig)
     make bpf-next          build bpf-next kernel packages, BTF, and BPF tools
                            (default: DEBs; set PACKAGE_FORMAT=rpm for RPMs)
+    make kernel-small      build the minimal bpf-next kernel used by vm-small
     make vm KERNEL=6.18   boot a VM using a locally built stable kernel;
                            KERNEL_COMMIT selects an exact stable commit
                            supported selections: 7.2, 6.18, 6.12, 6.6, 6.1
@@ -170,6 +171,8 @@ shirudo make targets (run from the repo root):
                            uprobe, and OTEL map-export coverage
     make vm                boot a uniquely named persistent vTPM VM, prepare
                            Shirudo, and return without running the test suite
+    make vm-small          boot the minimal persistent vTPM VM (1 CPU, 512 MiB,
+                           4 GiB), prepare Shirudo, and report memory usage
     make vm-console        attach to the serial console of a named running VM
     make vm-ssh             open an SSH shell to a named running VM
     make test-tgt          boot a uniquely named vTPM VM with QEMU + swtpm,
@@ -248,6 +251,7 @@ shirudo make targets (run from the repo root):
              TEST_VM_UBUNTU_CODENAME (kernel archive codename; default resolute),
              TEST_VM_BUNDLE_DIR (host VM payload cache),
              TEST_VM_RUNTIME_CACHE_DIR (prepared runtime image cache),
+             TEST_VM_CPUS/MEMORY/DISK_SIZE (VM resource overrides),
              TEST_VM_VERBOSE=1 (stream test VM QEMU output; otherwise show TAP progress),
              DNS_OBS_FUZZ_SEED / DNS_OBS_FUZZ_CASES (override the optional DNS
              mutation run),
@@ -273,11 +277,15 @@ test-helpers: config
 TEST_VM_WORK_DIR ?= build/test-vm
 TEST_VM_BUNDLE_DIR ?= $(TEST_VM_WORK_DIR)/host-bundle
 TEST_VM_RUNTIME_CACHE_DIR ?= $(TEST_VM_WORK_DIR)/cache/runtime
+TEST_VM_CPUS ?= 4
+TEST_VM_MEMORY ?= 4G
+TEST_VM_DISK_SIZE ?= 30G
 TEST_VM_UBUNTU_CODENAME ?= resolute
 TEST_VM_VERBOSE ?= 0
 DNS_OBS_FUZZ_SEED ?= 0x53484952
 DNS_OBS_FUZZ_CASES ?= 5000
 TEST_VM_BUNDLE_STAMP := $(TEST_VM_BUNDLE_DIR)/.stamp
+TEST_VM_BUNDLE_KERNEL_ARTIFACT_DIR ?= artifacts/bpf-next-kernel-debs
 TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
 	*.c *.h include/*.h util/*.c util/*.h \
 	bpf/*.c bpf/lib/*.h \
@@ -309,6 +317,29 @@ TEST_VM_BUNDLE_INPUTS := $(sort \
 	contrib/prepare-test-vm-runtime.sh contrib/test-vm-runtime-packages \
 	$(TEST_VM_BUNDLE_SOURCES) $(TEST_VM_BUNDLE_ARTIFACTS) \
 	$(if $(strip $(TEST_VM_PACKAGE_CERT)),$(TEST_VM_PACKAGE_CERT)))
+
+TEST_VM_SMALL_WORK_DIR ?= build/test-vm-small
+TEST_VM_SMALL_BUNDLE_DIR ?= $(TEST_VM_SMALL_WORK_DIR)/host-bundle
+TEST_VM_SMALL_RUNTIME_CACHE_DIR ?= $(TEST_VM_SMALL_WORK_DIR)/cache/runtime
+TEST_VM_SMALL_RUNTIME_DISK_SIZE ?= 4G
+TEST_VM_SMALL_KERNEL_ARTIFACT_DIR ?= artifacts/bpf-next-small-kernel-debs
+TEST_VM_SMALL_KERNEL_IMAGE := $(TEST_VM_SMALL_KERNEL_ARTIFACT_DIR)/bzImage
+TEST_VM_SMALL_KERNEL_STAMP := $(TEST_VM_SMALL_KERNEL_ARTIFACT_DIR)/bzImage.sha256sum
+TEST_VM_SMALL_BUNDLE_STAMP := $(TEST_VM_SMALL_BUNDLE_DIR)/.stamp
+TEST_VM_SMALL_BUNDLE_ARTIFACTS := $(sort $(wildcard \
+	$(TEST_VM_SMALL_KERNEL_ARTIFACT_DIR) \
+	$(TEST_VM_SMALL_KERNEL_ARTIFACT_DIR)/* \
+	$(TEST_VM_SMALL_KERNEL_ARTIFACT_DIR)/shirudo-bpf-deps \
+	$(TEST_VM_SMALL_KERNEL_ARTIFACT_DIR)/shirudo-bpf-deps/* \
+	$(TEST_VM_SMALL_KERNEL_ARTIFACT_DIR)/shirudo-bpf-deps/bpf/*))
+TEST_VM_BUNDLE_COMMON_INPUTS := $(sort \
+	Makefile Makefile.config Makefile.shirudo Makefile.version config.mk \
+	contrib/build-test-vm-bundle.sh contrib/test-vm-guest.sh \
+	contrib/prepare-test-vm-runtime.sh contrib/test-vm-runtime-packages \
+	contrib/kernel-small.config $(TEST_VM_BUNDLE_SOURCES) \
+	$(if $(strip $(TEST_VM_PACKAGE_CERT)),$(TEST_VM_PACKAGE_CERT)))
+TEST_VM_SMALL_BUNDLE_INPUTS := $(sort \
+	$(TEST_VM_BUNDLE_COMMON_INPUTS) $(TEST_VM_SMALL_BUNDLE_ARTIFACTS))
 
 # `make vm` keeps bpf-next as its default, but can select a stable kernel
 # built from an upstream Linux tag. The stable list is intentionally explicit
@@ -376,6 +407,37 @@ $(TEST_VM_BUNDLE_STAMP): $(TEST_VM_BUNDLE_INPUTS)
 		TEST_VM_PACKAGE_CERT="$(TEST_VM_PACKAGE_CERT)" \
 		TEST_VM_BUNDLE_STAMP="$(abspath $(TEST_VM_BUNDLE_STAMP))" \
 		TEST_VM_BUNDLE_INPUTS="$(abspath $(TEST_VM_BUNDLE_INPUTS))" \
+		TEST_VM_BPF_DEPS_DIR="$(abspath $(TEST_VM_BUNDLE_KERNEL_ARTIFACT_DIR))/shirudo-bpf-deps" \
+		contrib/build-test-vm-bundle.sh
+
+kernel-small: $(TEST_VM_SMALL_KERNEL_STAMP)
+
+$(TEST_VM_SMALL_KERNEL_STAMP): contrib/build-kernel-package.sh contrib/kernel-small.config
+	$(Q)KERNEL_TAG='bpf-next' \
+		KERNEL_PROFILE='small' \
+		KERNEL_SMALL_CONFIG='$(abspath contrib/kernel-small.config)' \
+		PACKAGE_FORMAT='$(PACKAGE_FORMAT)' \
+		KERNEL_PATCHES='$(KERNEL_PATCHES)' \
+		KERNEL_BUILD_JOBS='$(KERNEL_BUILD_JOBS)' \
+		KERNEL_REPOSITORY='$(KERNEL_REPOSITORY)' \
+		KERNEL_SOURCE_DIR='$(KERNEL_SOURCE_DIR)' \
+		OUTPUT_DIR="$(abspath $(TEST_VM_SMALL_KERNEL_ARTIFACT_DIR))" \
+		contrib/build-kernel-package.sh
+
+test-vm-small-bundle: $(TEST_VM_SMALL_KERNEL_STAMP) $(TEST_VM_SMALL_BUNDLE_STAMP)
+
+$(TEST_VM_SMALL_BUNDLE_STAMP): $(TEST_VM_SMALL_BUNDLE_INPUTS)
+	$(Q)TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_SMALL_BUNDLE_DIR))" \
+		TEST_VM_WORK_DIR="$(abspath $(TEST_VM_SMALL_WORK_DIR))" \
+		TEST_VM_RUNTIME_CACHE_DIR="$(abspath $(TEST_VM_SMALL_RUNTIME_CACHE_DIR))" \
+		TEST_VM_RUNTIME_DISK_SIZE="$(TEST_VM_SMALL_RUNTIME_DISK_SIZE)" \
+		TEST_VM_BPF_DEPS_DIR="$(abspath $(TEST_VM_SMALL_KERNEL_ARTIFACT_DIR))/shirudo-bpf-deps" \
+		TEST_VM_UBUNTU_CODENAME="$(TEST_VM_UBUNTU_CODENAME)" \
+		TEST_VM_ROOTFS_URL="$(TEST_VM_ROOTFS_URL)" \
+		TEST_VM_ROOTFS_SHA256="$(TEST_VM_ROOTFS_SHA256)" \
+		TEST_VM_PACKAGE_CERT="$(TEST_VM_PACKAGE_CERT)" \
+		TEST_VM_BUNDLE_STAMP="$(abspath $(TEST_VM_SMALL_BUNDLE_STAMP))" \
+		TEST_VM_BUNDLE_INPUTS="$(abspath $(TEST_VM_SMALL_BUNDLE_INPUTS))" \
 		contrib/build-test-vm-bundle.sh
 
 kernel: $(KERNEL_BUILD_STAMP)
@@ -411,10 +473,14 @@ endif
 
 vm: $(VM_KERNEL_DEP) test-vm-bundle
 	$(Q)VM_MODE=interactive VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_KERNEL_PROFILE="full" \
 		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
 		TEST_VM_KERNEL_ARTIFACT_DIR="$(abspath $(VM_KERNEL_ARTIFACT_DIR))" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
 		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
+		TEST_VM_CPUS="$(TEST_VM_CPUS)" \
+		TEST_VM_MEMORY="$(TEST_VM_MEMORY)" \
+		TEST_VM_DISK_SIZE="$(TEST_VM_DISK_SIZE)" \
 		TEST_VM_SSH_PORT="$(TEST_VM_SSH_PORT)" \
 		TEST_VM_TRUSTED_ROOT="$(TEST_VM_TRUSTED_ROOT)" \
 		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
@@ -426,6 +492,29 @@ vm: $(VM_KERNEL_DEP) test-vm-bundle
 		TEST_VM_BPM_OCI_REPOSITORY="$(TEST_VM_BPM_OCI_REPOSITORY)" \
 		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
+		contrib/test-vm.sh
+
+vm-small: kernel-small test-vm-small-bundle
+	$(Q)VM_MODE=interactive VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_KERNEL_PROFILE="small" \
+		TEST_VM_KERNEL="$(abspath $(TEST_VM_SMALL_KERNEL_IMAGE))" \
+		TEST_VM_KERNEL_ARTIFACT_DIR="" \
+		TEST_VM_WORK_DIR="$(TEST_VM_SMALL_WORK_DIR)" \
+		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_SMALL_RUNTIME_CACHE_DIR)" \
+		TEST_VM_CPUS="1" \
+		TEST_VM_MEMORY="512M" \
+		TEST_VM_DISK_SIZE="4G" \
+		TEST_VM_SSH_PORT="$(TEST_VM_SSH_PORT)" \
+		TEST_VM_TRUSTED_ROOT="0" \
+		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
+		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
+		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
+		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
+		TEST_VM_OCI_CA="$(TEST_VM_OCI_CA)" \
+		TEST_VM_PACKAGE_CERT="$(TEST_VM_PACKAGE_CERT)" \
+		TEST_VM_BPM_OCI_REPOSITORY="$(TEST_VM_BPM_OCI_REPOSITORY)" \
+		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
+		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_SMALL_BUNDLE_DIR))" \
 		contrib/test-vm.sh
 
 vm-console:

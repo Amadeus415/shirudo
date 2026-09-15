@@ -6,6 +6,7 @@ KERNEL_COMMIT="${KERNEL_COMMIT:-}"
 KERNEL_REPOSITORY="${KERNEL_REPOSITORY:-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git}"
 KERNEL_PATCHES="${KERNEL_PATCHES:-}"
 KERNEL_CONFIG="${KERNEL_CONFIG:-}"
+KERNEL_PROFILE="${KERNEL_PROFILE:-full}"
 KERNEL_BUILD_JOBS="${KERNEL_BUILD_JOBS:-$(nproc)}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KERNEL_SOURCE_DIR_INPUT="${KERNEL_SOURCE_DIR:-}"
@@ -15,6 +16,18 @@ fi
 if [[ "$KERNEL_TAG" != "bpf-next" &&
       ! "$KERNEL_TAG" =~ ^v[0-9]+\.[0-9]+([.][0-9]+)?$ ]]; then
   echo "KERNEL_TAG must be bpf-next or a Linux release tag such as v6.18" >&2
+  exit 1
+fi
+case "$KERNEL_PROFILE" in
+  full|small)
+    ;;
+  *)
+    echo "KERNEL_PROFILE must be full or small" >&2
+    exit 1
+    ;;
+esac
+if [[ "$KERNEL_PROFILE" == small && "$KERNEL_TAG" != bpf-next ]]; then
+  echo "KERNEL_PROFILE=small is supported only for bpf-next" >&2
   exit 1
 fi
 if [[ -n "$KERNEL_COMMIT" ]]; then
@@ -29,6 +42,9 @@ if [[ -n "$KERNEL_COMMIT" ]]; then
   KERNEL_COMMIT="${KERNEL_COMMIT,,}"
 fi
 KERNEL_ARTIFACT_NAME="bpf-next"
+if [[ "$KERNEL_PROFILE" == small ]]; then
+  KERNEL_ARTIFACT_NAME="bpf-next-small"
+fi
 if [[ "$KERNEL_TAG" != "bpf-next" ]]; then
   KERNEL_ARTIFACT_NAME="linux-${KERNEL_TAG}"
 fi
@@ -36,7 +52,9 @@ if [[ -n "$KERNEL_COMMIT" ]]; then
   KERNEL_ARTIFACT_NAME="${KERNEL_ARTIFACT_NAME}-${KERNEL_COMMIT}"
 fi
 if [[ -z "${KERNEL_LOCALVERSION:-}" ]]; then
-  if [[ "$KERNEL_TAG" == "bpf-next" ]]; then
+  if [[ "$KERNEL_PROFILE" == small ]]; then
+    KERNEL_LOCALVERSION="-bpf-next-small"
+  elif [[ "$KERNEL_TAG" == "bpf-next" ]]; then
     KERNEL_LOCALVERSION="-bpf-next"
   else
     KERNEL_LOCALVERSION="-shirudo-${KERNEL_TAG#v}"
@@ -67,6 +85,7 @@ fi
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/artifacts/${KERNEL_ARTIFACT_NAME}-kernel-${PACKAGE_SUFFIX}}"
 BUNDLE_PATH="${BUNDLE_PATH:-${OUTPUT_DIR}.tar.gz}"
 KERNEL_OBSERVABILITY_CONFIGS_FILE="${KERNEL_OBSERVABILITY_CONFIGS_FILE:-${REPO_ROOT}/contrib/kernel-observability-configs.txt}"
+KERNEL_SMALL_CONFIG="${KERNEL_SMALL_CONFIG:-${REPO_ROOT}/contrib/kernel-small.config}"
 VMLINUX_PATH="${OUTPUT_DIR}/bzImage"
 VMLINUX_BTF_PATH="${OUTPUT_DIR}/vmlinux.btf"
 BPF_DEPS_DIR="${OUTPUT_DIR}/shirudo-bpf-deps"
@@ -139,19 +158,46 @@ run_as_root() {
 }
 
 install_build_dependencies() {
+  local missing_dependencies=()
   if [[ "$PACKAGE_FORMAT" == deb ]]; then
     if ! command -v apt-get >/dev/null 2>&1; then
       echo "cannot install Debian kernel build dependencies: apt-get is not installed" >&2
       exit 1
     fi
+    if command -v dpkg-query >/dev/null 2>&1; then
+      for dependency in "${BUILD_DEPENDENCIES[@]}"; do
+        if ! dpkg-query -W -f='${Status}\n' "$dependency" 2>/dev/null |
+          grep -q 'install ok installed'; then
+          missing_dependencies+=("$dependency")
+        fi
+      done
+    else
+      missing_dependencies=("${BUILD_DEPENDENCIES[@]}")
+    fi
+    if [[ ${#missing_dependencies[@]} -eq 0 ]]; then
+      echo "All kernel build dependencies are already installed"
+      return
+    fi
     run_as_root apt-get update
-    run_as_root apt-get install -y --no-install-recommends "${BUILD_DEPENDENCIES[@]}"
+    run_as_root apt-get install -y --no-install-recommends "${missing_dependencies[@]}"
   else
     if ! command -v dnf >/dev/null 2>&1; then
       echo "cannot install RPM kernel build dependencies: dnf is not installed" >&2
       exit 1
     fi
-    run_as_root dnf install -y "${BUILD_DEPENDENCIES[@]}"
+    if command -v rpm >/dev/null 2>&1; then
+      for dependency in "${BUILD_DEPENDENCIES[@]}"; do
+        rpm -q "$dependency" >/dev/null 2>&1 ||
+          missing_dependencies+=("$dependency")
+      done
+    else
+      missing_dependencies=("${BUILD_DEPENDENCIES[@]}")
+    fi
+    if [[ ${#missing_dependencies[@]} -eq 0 ]]; then
+      echo "All kernel build dependencies are already installed"
+      return
+    fi
+    run_as_root dnf install -y "${missing_dependencies[@]}"
   fi
 }
 
@@ -279,22 +325,39 @@ for patch_entry in $KERNEL_PATCHES; do
 done
 
 kernel_commit="$(git rev-parse HEAD)"
-if [[ -n "$KERNEL_CONFIG" ]]; then
-  if [[ "$KERNEL_CONFIG" != /* ]]; then
-    KERNEL_CONFIG="${REPO_ROOT}/${KERNEL_CONFIG}"
+if [[ "$KERNEL_PROFILE" == small ]]; then
+  small_config="$KERNEL_SMALL_CONFIG"
+  if [[ -n "$KERNEL_CONFIG" ]]; then
+    small_config="$KERNEL_CONFIG"
   fi
-  if [[ ! -f "$KERNEL_CONFIG" ]]; then
-    echo "kernel config not found: ${KERNEL_CONFIG}" >&2
+  if [[ "$small_config" != /* ]]; then
+    small_config="${REPO_ROOT}/${small_config}"
+  fi
+  if [[ ! -f "$small_config" ]]; then
+    echo "small kernel config fragment not found: ${small_config}" >&2
     exit 1
   fi
-  cp "$KERNEL_CONFIG" .config
-  config_source="$KERNEL_CONFIG"
+  make KCONFIG_ALLCONFIG="$small_config" allnoconfig
+  config_source="${small_config} (KCONFIG_ALLCONFIG)"
 else
-  make x86_64_defconfig
-  config_source="x86_64_defconfig"
+  if [[ -n "$KERNEL_CONFIG" ]]; then
+    if [[ "$KERNEL_CONFIG" != /* ]]; then
+      KERNEL_CONFIG="${REPO_ROOT}/${KERNEL_CONFIG}"
+    fi
+    if [[ ! -f "$KERNEL_CONFIG" ]]; then
+      echo "kernel config not found: ${KERNEL_CONFIG}" >&2
+      exit 1
+    fi
+    cp "$KERNEL_CONFIG" .config
+    config_source="$KERNEL_CONFIG"
+  else
+    make x86_64_defconfig
+    config_source="x86_64_defconfig"
+  fi
 fi
 
 scripts/config --set-str LOCALVERSION "$KERNEL_LOCALVERSION"
+if [[ "$KERNEL_PROFILE" != small ]]; then
 scripts/config --enable BPF
 scripts/config --enable BPF_SYSCALL
 scripts/config --enable BPF_JIT
@@ -427,6 +490,7 @@ scripts/config --enable BLK_DEV_NVME
 scripts/config --enable NVME_MULTIPATH
 scripts/config --set-str SYSTEM_TRUSTED_KEYS ""
 scripts/config --set-str SYSTEM_REVOCATION_KEYS ""
+fi
 
 # Enable the CVE load-repair Kconfig set when the selected kernel defines it.
 # Tristate drivers are requested as modules so the VM can load them on demand;
@@ -476,7 +540,7 @@ kconfig_symbol_kind() {
   ' "$file"
 }
 
-if [[ -f "$KERNEL_OBSERVABILITY_CONFIGS_FILE" ]]; then
+if [[ "$KERNEL_PROFILE" != small && -f "$KERNEL_OBSERVABILITY_CONFIGS_FILE" ]]; then
   while IFS= read -r requested_symbol; do
     requested_symbol="${requested_symbol%%#*}"
     requested_symbol="${requested_symbol//[[:space:]]/}"
@@ -493,7 +557,7 @@ if [[ -f "$KERNEL_OBSERVABILITY_CONFIGS_FILE" ]]; then
       scripts/config --enable "$symbol"
     fi
   done < "$KERNEL_OBSERVABILITY_CONFIGS_FILE"
-else
+elif [[ "$KERNEL_PROFILE" != small ]]; then
   echo "kernel observability Kconfig list not found: ${KERNEL_OBSERVABILITY_CONFIGS_FILE}" >&2
 fi
 
@@ -501,9 +565,10 @@ make olddefconfig
 
 KERNEL_OBSERVABILITY_CONFIG_REPORT="${OUTPUT_DIR}/kernel-observability-configs.txt"
 {
+  printf '# Kernel profile: %s\n' "$KERNEL_PROFILE"
   printf '# Kernel observability Kconfig results for %s\n' "$kernel_commit"
   printf '# symbol\tvalue\tdefinition\n'
-  if [[ -f "$KERNEL_OBSERVABILITY_CONFIGS_FILE" ]]; then
+  if [[ "$KERNEL_PROFILE" != small && -f "$KERNEL_OBSERVABILITY_CONFIGS_FILE" ]]; then
     while IFS= read -r requested_symbol; do
       requested_symbol="${requested_symbol%%#*}"
       requested_symbol="${requested_symbol//[[:space:]]/}"
@@ -530,6 +595,58 @@ require_config() {
   fi
 }
 
+require_config_disabled() {
+  local symbol="$1"
+
+  if ! grep -Eq "^${symbol}=n$|^# ${symbol} is not set$" .config; then
+    echo "required kernel config ${symbol} is not disabled" >&2
+    grep -E "^${symbol}=|^# ${symbol} is not set" .config >&2 || true
+    exit 1
+  fi
+}
+
+if [[ "$KERNEL_PROFILE" == small ]]; then
+require_config CONFIG_BPF_LSM y
+require_config CONFIG_CGROUP_BPF y
+require_config CONFIG_FUNCTION_TRACER y
+require_config CONFIG_DYNAMIC_FTRACE y
+require_config CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS y
+require_config CONFIG_DEBUG_INFO_BTF y
+require_config CONFIG_TCG_TPM y
+require_config CONFIG_TCG_TIS_CORE y
+require_config CONFIG_TCG_TIS y
+require_config CONFIG_UPROBES y
+require_config CONFIG_SECURITY y
+require_config CONFIG_SECURITYFS y
+require_config CONFIG_PCI y
+require_config CONFIG_PCI_MSI y
+require_config CONFIG_PCIEPORTBUS y
+require_config CONFIG_NETDEVICES y
+require_config CONFIG_ETHERNET y
+require_config CONFIG_PACKET y
+require_config CONFIG_ISO9660_FS y
+require_config CONFIG_DEVTMPFS y
+require_config CONFIG_DEVTMPFS_MOUNT y
+require_config CONFIG_VIRTIO y
+require_config CONFIG_VIRTIO_PCI y
+require_config CONFIG_VIRTIO_BLK y
+require_config CONFIG_VIRTIO_NET y
+require_config CONFIG_NET_9P y
+require_config CONFIG_NET_9P_VIRTIO y
+require_config CONFIG_9P_FS y
+require_config CONFIG_OVERLAY_FS y
+require_config CONFIG_EXT4_FS y
+require_config CONFIG_TMPFS y
+require_config CONFIG_EFI_PARTITION y
+require_config CONFIG_SERIAL_8250 y
+require_config CONFIG_SERIAL_8250_CONSOLE y
+require_config CONFIG_ACPI y
+require_config CONFIG_PNP y
+require_config CONFIG_PNPACPI y
+require_config CONFIG_CC_OPTIMIZE_FOR_SIZE y
+require_config CONFIG_KERNEL_XZ y
+require_config_disabled CONFIG_MODULES
+else
 require_config CONFIG_BPF_LSM y
 require_config CONFIG_CGROUP_BPF y
 require_config CONFIG_FUNCTION_TRACER y
@@ -618,6 +735,7 @@ require_config CONFIG_EFI_PARTITION y
 require_config CONFIG_ISO9660_FS y
 require_config CONFIG_SERIAL_8250 y
 require_config CONFIG_SERIAL_8250_CONSOLE y
+fi
 
 # Refresh the generated release after the config edits above.  kernelrelease
 # reads include/config/kernel.release, which may still contain the pre-config
@@ -677,12 +795,18 @@ for candidate in \
   fi
 done
 if [[ -z "$MODULES_SOURCE_DIR" ]]; then
-  echo "kernel image deb has no modules for ${kernel_release}" >&2
-  exit 1
+  if [[ "$KERNEL_PROFILE" == small ]]; then
+    echo "Small kernel has no loadable modules; continuing without a module tree"
+    mkdir -p "$OUTPUT_DIR/lib/modules/$kernel_release"
+  else
+    echo "kernel image deb has no modules for ${kernel_release}" >&2
+    exit 1
+  fi
+else
+  mkdir -p "$OUTPUT_DIR/lib/modules"
+  cp -a "$MODULES_SOURCE_DIR" "$OUTPUT_DIR/lib/modules/"
+  depmod -b "$OUTPUT_DIR" "$kernel_release"
 fi
-mkdir -p "$OUTPUT_DIR/lib/modules"
-cp -a "$MODULES_SOURCE_DIR" "$OUTPUT_DIR/lib/modules/"
-depmod -b "$OUTPUT_DIR" "$kernel_release"
 
 if [[ ! -s "arch/x86/boot/bzImage" ]]; then
   echo "kernel bzImage was not produced" >&2
@@ -739,6 +863,7 @@ commit=${kernel_commit}
 package_format=${PACKAGE_FORMAT}
 patches_requested=${KERNEL_PATCHES}
 patches_applied=${applied_patches[*]}
+profile=${KERNEL_PROFILE}
 config_source=${config_source}
 kernel_release=${kernel_release}
 package_version=${package_version}

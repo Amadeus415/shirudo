@@ -25,6 +25,28 @@ log()
 	printf '[test-vm guest] %s\n' "$*"
 }
 
+report_boot_memory()
+{
+	local total available used percent
+
+	total="$(awk '$1 == "MemTotal:" { print $2; exit }' /proc/meminfo)"
+	available="$(awk '$1 == "MemAvailable:" { print $2; exit }' /proc/meminfo)"
+	[[ "$total" =~ ^[0-9]+$ && "$available" =~ ^[0-9]+$ ]] || {
+		log "could not read guest memory totals"
+		return 1
+	}
+	used=$((total - available))
+	percent="$(awk -v used="$used" -v total="$total" \
+		'BEGIN { printf "%.2f", (used * 100) / total }')"
+	{
+		printf 'guest_mem_total_kb=%s\n' "$total"
+		printf 'guest_mem_available_kb=%s\n' "$available"
+		printf 'guest_mem_used_kb=%s\n' "$used"
+		printf 'guest_mem_used_percent=%s\n' "$percent"
+	} > /mnt/shirudo-out/boot-memory
+	log "guest memory: total=${total}KiB available=${available}KiB used=${used}KiB (${percent}%)"
+}
+
 install_kernel_modules()
 {
 	local module_root="${TEST_VM_KERNEL_MODULES:-}"
@@ -327,6 +349,8 @@ expected_mode = "trusted-root" if os.environ.get("TEST_VM_TRUSTED_ROOT") == "1" 
 if status.get("mode") != expected_mode:
     raise SystemExit(f"expected mode {expected_mode}, got {status.get('mode')}")
 PY
+
+report_boot_memory
 
 if [[ "$VM_MODE" == interactive ]]; then
 	# init above was deliberately run directly so the current boot gets one
