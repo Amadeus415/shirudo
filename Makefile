@@ -244,6 +244,8 @@ shirudo make targets (run from the repo root):
              TEST_VM_MAP_EXPORT_CA (optional PEM CA file),
              TEST_VM_MAP_EXPORT_INSECURE=true (explicit HTTP only),
              TEST_VM_OCI_CA (optional PEM CA file for guest OCI trust),
+             TEST_VM_BPM_TREE_CONFIG (optional upatch tree config for interactive
+             VM),
              TEST_VM_PACKAGE_CERT (optional public package cert.der),
              TEST_VM_BPM_OCI_REPOSITORY (optional name=oci://endpoint),
              TEST_VM_BPM_OCI_INDEX_CERT (repository index certificate),
@@ -488,6 +490,7 @@ vm: $(VM_KERNEL_DEP) test-vm-bundle
 		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
 		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
 		TEST_VM_OCI_CA="$(TEST_VM_OCI_CA)" \
+		TEST_VM_BPM_TREE_CONFIG="$(TEST_VM_BPM_TREE_CONFIG)" \
 		TEST_VM_PACKAGE_CERT="$(TEST_VM_PACKAGE_CERT)" \
 		TEST_VM_BPM_OCI_REPOSITORY="$(TEST_VM_BPM_OCI_REPOSITORY)" \
 		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
@@ -511,6 +514,7 @@ vm-small: kernel-small test-vm-small-bundle
 		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
 		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
 		TEST_VM_OCI_CA="$(TEST_VM_OCI_CA)" \
+		TEST_VM_BPM_TREE_CONFIG="$(TEST_VM_BPM_TREE_CONFIG)" \
 		TEST_VM_PACKAGE_CERT="$(TEST_VM_PACKAGE_CERT)" \
 		TEST_VM_BPM_OCI_REPOSITORY="$(TEST_VM_BPM_OCI_REPOSITORY)" \
 		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \

@@ -457,6 +457,54 @@ test_expect_success 'test-vm validates a custom OCI CA file before boot' '
 		"$WORK/missing-oci-ca.out"
 '
 
+test_expect_success 'test-vm hands off an interactive BPM tree configuration' '
+	grep -q "TEST_VM_BPM_TREE_CONFIG" ../Makefile &&
+	grep -q "TEST_VM_BPM_TREE_CONFIG=\"\$(TEST_VM_BPM_TREE_CONFIG)\"" ../Makefile &&
+	grep -q "BPM_TREE_CONFIG=\"\${TEST_VM_BPM_TREE_CONFIG:-}\"" "$RUNNER" &&
+	grep -q "validate_bpm_tree_config" "$RUNNER" &&
+	grep -q "BPM_TREE_DIR=\"\${RUN_DIR}/bpm-tree\"" "$RUNNER" &&
+	grep -q "install -m 0644 \"\$BPM_TREE_CONFIG\" \"\$BPM_TREE_DIR/upatch-tree.conf\"" "$RUNNER" &&
+	grep -q "mount_tag=shirudo-bpm-tree" "$RUNNER" &&
+	grep -q "export TEST_VM_BPM_TREE_INPUT=/mnt/shirudo-bpm-tree" "$RUNNER" &&
+	grep -q "mount.*shirudo-bpm-tree /mnt/shirudo-bpm-tree" "$RUNNER" &&
+	grep -q "credentials and private signing" "$RUNNER" &&
+	grep -q "configure_bpm_tree" ../contrib/test-vm-guest.sh &&
+	grep -Fq "[[ -z \"\$tree_input\" ]] && return 0" ../contrib/test-vm-guest.sh &&
+	grep -q "local config_file=\"\${tree_input}/upatch-tree.conf\"" ../contrib/test-vm-guest.sh &&
+	grep -q "temporary=\"\${target}.tmp.\$\$\"" ../contrib/test-vm-guest.sh &&
+	grep -q "mv -f \"\$temporary\" \"\$target\"" ../contrib/test-vm-guest.sh &&
+	grep -q "systemctl start shirudo-bpm-tree-sync.service" ../contrib/test-vm-guest.sh &&
+	grep -q "systemctl enable --now shirudo-bpm-tree-sync.timer" ../contrib/test-vm-guest.sh &&
+	test "$(grep -n "/usr/local/bin/shirudo init" ../contrib/test-vm-guest.sh | cut -d: -f1)" -lt \
+		"$(grep -n "systemctl start shirudo-bpm-tree-sync.service" ../contrib/test-vm-guest.sh | cut -d: -f1)" &&
+	test "$(grep -n "systemctl start shirudo-bpm-tree-sync.service" ../contrib/test-vm-guest.sh | cut -d: -f1)" -lt \
+		"$(grep -n "systemctl enable --now shirudo-bpm-tree-sync.timer" ../contrib/test-vm-guest.sh | cut -d: -f1)"
+'
+
+test_expect_success 'test-vm validates BPM tree configuration mode and contents' '
+	printf kernel >"$WORK/bpm-tree-kernel" &&
+	! TEST_VM_WORK_DIR="$WORK/missing-bpm-tree" \
+		VM_MODE=interactive TEST_VM_KERNEL="$WORK/bpm-tree-kernel" \
+		TEST_VM_BPM_TREE_CONFIG="$WORK/no-bpm-tree.conf" "$RUNNER" \
+		>"$WORK/missing-bpm-tree.out" 2>&1 &&
+	grep -q "TEST_VM_BPM_TREE_CONFIG is not a readable, non-empty regular file" \
+		"$WORK/missing-bpm-tree.out" &&
+	: >"$WORK/empty-bpm-tree.conf" &&
+	! TEST_VM_WORK_DIR="$WORK/empty-bpm-tree" \
+		VM_MODE=interactive TEST_VM_KERNEL="$WORK/bpm-tree-kernel" \
+		TEST_VM_BPM_TREE_CONFIG="$WORK/empty-bpm-tree.conf" "$RUNNER" \
+		>"$WORK/empty-bpm-tree.out" 2>&1 &&
+	grep -q "TEST_VM_BPM_TREE_CONFIG is not a readable, non-empty regular file" \
+		"$WORK/empty-bpm-tree.out" &&
+	printf 'tree config\n' >"$WORK/bpm-tree.conf" &&
+	! TEST_VM_WORK_DIR="$WORK/test-bpm-tree" \
+		VM_MODE=test TEST_VM_KERNEL="$WORK/bpm-tree-kernel" \
+		TEST_VM_BPM_TREE_CONFIG="$WORK/bpm-tree.conf" "$RUNNER" \
+		>"$WORK/test-bpm-tree.out" 2>&1 &&
+	grep -q "TEST_VM_BPM_TREE_CONFIG is supported only for interactive make vm" \
+		"$WORK/test-bpm-tree.out"
+'
+
 	test_expect_success 'test-vm passes a public package certificate into the guest' '
 	grep -q "TEST_VM_PACKAGE_CERT" ../Makefile &&
 	grep -q "TEST_VM_BUNDLE_INPUTS" ../Makefile &&

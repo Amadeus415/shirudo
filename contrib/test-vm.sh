@@ -91,6 +91,7 @@ LEGACY_MAP_EXPORT_TENANT_ID="${TEST_VM_MAP_EXPORT_TENANT_ID:-}"
 MAP_EXPORT_INSECURE="${TEST_VM_MAP_EXPORT_INSECURE:-}"
 MAP_EXPORT_CA="${TEST_VM_MAP_EXPORT_CA:-}"
 OCI_CA="${TEST_VM_OCI_CA:-}"
+BPM_TREE_CONFIG="${TEST_VM_BPM_TREE_CONFIG:-}"
 PACKAGE_CERT="${TEST_VM_PACKAGE_CERT:-}"
 BPM_OCI_REPOSITORY_RAW="${TEST_VM_BPM_OCI_REPOSITORY:-}"
 BPM_OCI_INDEX_CERT="${TEST_VM_BPM_OCI_INDEX_CERT:-}"
@@ -265,6 +266,15 @@ validate_package_cert()
 		die "TEST_VM_PACKAGE_CERT is supported only for interactive make vm"
 	[[ -f "$PACKAGE_CERT" && -r "$PACKAGE_CERT" && -s "$PACKAGE_CERT" ]] ||
 		die "TEST_VM_PACKAGE_CERT is not a readable, non-empty regular file: $PACKAGE_CERT"
+}
+
+validate_bpm_tree_config()
+{
+	[[ -z "$BPM_TREE_CONFIG" ]] && return 0
+	[[ "$VM_MODE" == interactive ]] ||
+		die "TEST_VM_BPM_TREE_CONFIG is supported only for interactive make vm"
+	[[ -f "$BPM_TREE_CONFIG" && -r "$BPM_TREE_CONFIG" && -s "$BPM_TREE_CONFIG" ]] ||
+		die "TEST_VM_BPM_TREE_CONFIG is not a readable, non-empty regular file: $BPM_TREE_CONFIG"
 }
 
 validate_bpm_oci()
@@ -1070,6 +1080,7 @@ validate_kernel_artifact
 validate_map_export
 validate_oci_ca
 validate_package_cert
+validate_bpm_tree_config
 validate_bpm_oci
 check_host_dependencies
 validate_host_bundle
@@ -1095,6 +1106,7 @@ SWTPM_SOCKET="${RUN_DIR}/tpm/swtpm-sock"
 SWTPM_PIDFILE="${RUN_DIR}/tpm/swtpm.pid"
 OTEL_CA_DIR=""
 OCI_CA_DIR=""
+BPM_TREE_DIR=""
 PACKAGE_CERT_DIR=""
 BPM_OCI_DIR=""
 
@@ -1108,6 +1120,14 @@ if [[ -n "$OCI_CA" ]]; then
 	OCI_CA_DIR="${RUN_DIR}/oci-ca"
 	mkdir -p "$OCI_CA_DIR"
 	install -m 0644 "$OCI_CA" "$OCI_CA_DIR/ca.crt"
+fi
+
+if [[ -n "$BPM_TREE_CONFIG" ]]; then
+	BPM_TREE_DIR="${RUN_DIR}/bpm-tree"
+	mkdir -p "$BPM_TREE_DIR"
+	# This share contains configuration only; credentials and private signing
+	# keys remain outside the VM tree-configuration handoff.
+	install -m 0644 "$BPM_TREE_CONFIG" "$BPM_TREE_DIR/upatch-tree.conf"
 fi
 
 if [[ -n "$PACKAGE_CERT" ]]; then
@@ -1160,7 +1180,7 @@ write_files:
     content: |
       #!/usr/bin/env bash
       set -uo pipefail
-      mkdir -p /mnt/shirudo-src /mnt/shirudo-bundle /mnt/shirudo-out /mnt/shirudo-kernel /mnt/shirudo-package-cert
+      mkdir -p /mnt/shirudo-src /mnt/shirudo-bundle /mnt/shirudo-out /mnt/shirudo-kernel /mnt/shirudo-package-cert /mnt/shirudo-bpm-tree
       if ! mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600 shirudo-out /mnt/shirudo-out; then
         echo "test-vm: could not mount result share" >/dev/ttyS0
         poweroff -f
@@ -1182,6 +1202,9 @@ cat >>"$USER_DATA" <<'EOF'
         exit 1
       fi
 EOF
+fi
+if [[ -n "$BPM_TREE_CONFIG" ]]; then
+	printf '      export TEST_VM_BPM_TREE_INPUT=/mnt/shirudo-bpm-tree\n' >>"$USER_DATA"
 fi
 if [[ -n "$KERNEL_ARTIFACT_DIR" ]]; then
 	cat >>"$USER_DATA" <<'EOF'
@@ -1233,6 +1256,11 @@ if [[ "$MAP_EXPORT_ENABLED" -eq 1 ]]; then
 		fi
 	} >>"$USER_DATA"
 fi
+cat >>"$USER_DATA" <<'EOF'
+      if [ -n "${TEST_VM_BPM_TREE_INPUT:-}" ]; then
+        mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,ro shirudo-bpm-tree /mnt/shirudo-bpm-tree || rc=$?
+      fi
+EOF
 cat >>"$USER_DATA" <<'EOF'
       if [ -n "${TEST_VM_OCI_CA:-}" ]; then
         mkdir -p /mnt/shirudo-oci
@@ -1353,6 +1381,12 @@ fi
 if [[ -n "$PACKAGE_CERT_DIR" ]]; then
 	QEMU_ARGS+=(
 		-virtfs "local,id=shirudo-package-cert,path=${PACKAGE_CERT_DIR},mount_tag=shirudo-package-cert,security_model=none,readonly=on"
+	)
+fi
+
+if [[ -n "$BPM_TREE_DIR" ]]; then
+	QEMU_ARGS+=(
+		-virtfs "local,id=shirudo-bpm-tree,path=${BPM_TREE_DIR},mount_tag=shirudo-bpm-tree,security_model=none,readonly=on"
 	)
 fi
 

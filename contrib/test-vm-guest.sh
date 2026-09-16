@@ -141,6 +141,23 @@ configure_bpm_oci_repository()
 	mv -f "${repository_env}.tmp" "$repository_env"
 }
 
+configure_bpm_tree()
+{
+	local tree_input="${TEST_VM_BPM_TREE_INPUT:-}"
+	local config_file="${tree_input}/upatch-tree.conf"
+	local target=/etc/shirudo/bpm/upatch-tree.conf
+	local temporary="${target}.tmp.$$"
+
+	[[ -z "$tree_input" ]] && return 0
+	[[ -f "$config_file" && -s "$config_file" ]] || {
+		log "BPM tree configuration is missing or empty"
+		return 1
+	}
+	install -d -m 0755 /etc/shirudo/bpm
+	install -m 0644 "$config_file" "$temporary"
+	mv -f "$temporary" "$target"
+}
+
 configure_map_export()
 {
 	local endpoint="${TEST_VM_MAP_EXPORT_ENDPOINT:-}"
@@ -332,6 +349,7 @@ if [[ "$SKIP_SEAL" == 1 ]]; then
 	log "filesystem sealing disabled: target LSM hooks are not sleepable"
 	init_args+=(--no-seal)
 fi
+configure_bpm_tree
 /usr/local/bin/shirudo init "${init_args[@]}"
 test -e /var/lib/shirudo/bpffs/lsm_link
 /usr/local/bin/shirudo status --json --include-tpm >/tmp/shirudo-status.json
@@ -351,6 +369,14 @@ expected_mode = "trusted-root" if os.environ.get("TEST_VM_TRUSTED_ROOT") == "1" 
 if status.get("mode") != expected_mode:
     raise SystemExit(f"expected mode {expected_mode}, got {status.get('mode')}")
 PY
+
+if [[ -n "${TEST_VM_BPM_TREE_INPUT:-}" ]]; then
+	log "performing initial BPM tree sync"
+	if ! systemctl start shirudo-bpm-tree-sync.service; then
+		log "initial BPM tree sync failed"
+		exit 1
+	fi
+fi
 
 report_boot_memory
 
