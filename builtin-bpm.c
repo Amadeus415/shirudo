@@ -548,8 +548,8 @@ static int curl_once_ex(struct bpm_oci_client *c, const char *method,
 }
 
 static int curl_once(struct bpm_oci_client *c, const char *method,
-		     const char *url, const char *accept, const char *auth,
-		     struct bpm_http_response *r, FILE *file)
+			     const char *url, const char *accept, const char *auth,
+			     struct bpm_http_response *r, FILE *file)
 {
 	return curl_once_ex(c, method, url, accept, NULL, NULL, 0, auth, r, file);
 }
@@ -967,6 +967,64 @@ static int parse_push_repo(const char *raw, struct bpm_oci_client *c,
 
 static int make_oci_url(const struct bpm_oci_client *c, const char *repo,
 			const char *kind, const char *ref, char *out, size_t sz);
+
+static int prepare_direct_install(const char *raw, struct bpm_source *source,
+					  struct bpm_index_entry *entry)
+{
+	struct bpm_oci_client c = {};
+	struct bpm_descriptor layers[8];
+	struct bpm_buffer manifest = {};
+	char repository[BPM_MAX_ENDPOINT], tag[BPM_MAX_NAME];
+	char package_name[BPM_MAX_NAME] = {};
+	char endpoint[BPM_MAX_ENDPOINT];
+	char url[PATH_MAX];
+	int n_layers, rc;
+
+	rc = parse_pull_ref(raw, &c, repository, sizeof(repository), tag,
+			    sizeof(tag));
+	if (rc)
+		return rc;
+	if ((rc = make_oci_url(&c, repository, "manifests", tag, url,
+				       sizeof(url))))
+		return rc;
+	if ((rc = oci_get_memory(&c, url,
+				 "application/vnd.oci.image.manifest.v1+json",
+				 &manifest)))
+		goto out;
+	if ((rc = parse_manifest(manifest.data, manifest.len, layers, &n_layers,
+				 package_name, sizeof(package_name))))
+		goto out;
+	if (!package_name[0]) {
+		const char *base = strrchr(repository, '/');
+
+		bpm_copy_string(package_name, sizeof(package_name),
+				base ? base + 1 : repository);
+	}
+	if (!bpm_package_name_ok(package_name)) {
+		rc = -EINVAL;
+		goto out;
+	}
+	if (snprintf(endpoint, sizeof(endpoint), "oci://%s", c.registry) >=
+	    (int)sizeof(endpoint)) {
+		rc = -ENAMETOOLONG;
+		goto out;
+	}
+	memset(source, 0, sizeof(*source));
+	bpm_copy_string(source->name, sizeof(source->name), "direct");
+	bpm_copy_string(source->endpoint, sizeof(source->endpoint), endpoint);
+	memset(entry, 0, sizeof(*entry));
+	bpm_copy_string(entry->name, sizeof(entry->name), package_name);
+	bpm_copy_string(entry->version, sizeof(entry->version), tag);
+	bpm_copy_string(entry->repository, sizeof(entry->repository), repository);
+	/* package_install treats a non-digest reference as a tag. */
+	bpm_copy_string(entry->manifest_digest, sizeof(entry->manifest_digest), tag);
+	entry->package_size = -1;
+	rc = 0;
+out:
+	free(manifest.data);
+	return rc;
+}
+
 static int sha256_file_hex(const char *path, char *hex, size_t hex_sz);
 static bool digest_matches(const char *want, const char *hex);
 
@@ -2128,7 +2186,9 @@ static int package_install(const struct bpm_source *s, const struct bpm_index_en
 	if ((rc = parse_endpoint(s->endpoint, &c))) return rc;
 	if ((rc = make_oci_url(&c, entry->repository[0] ? entry->repository : entry->name, "manifests", entry->manifest_digest, url, sizeof(url)))) return rc;
 	if ((rc = oci_get_memory(&c, url, "application/vnd.oci.image.manifest.v1+json", &manifest))) goto out;
-	if (entry->manifest_digest[0]) {
+	/* Repository indexes carry a sha256 manifest digest; direct OCI
+	 * references carry the tag in this field and cannot be digest-checked. */
+	if (!strncmp(entry->manifest_digest, "sha256:", 7)) {
 		char manifest_hex[65];
 		if (sha256_buffer_hex(manifest.data, manifest.len, manifest_hex, sizeof(manifest_hex)) ||
 		    !digest_matches(entry->manifest_digest, manifest_hex)) {
@@ -2324,7 +2384,7 @@ static const struct shirudo_help_item bpm_subcmds[] = {
 	{ "key", "add a trusted package certificate" },
 	{ "pull", "download an OCI package into the current directory" },
 	{ "push", "publish an OCI package from the operator" },
-	{ "install", "download and activate a package" },
+	{ "install", "download and activate a repository or OCI package" },
 	{ "upgrade", "activate newer cached package versions" },
 };
 
@@ -2333,7 +2393,7 @@ static const struct shirudo_help_item bpm_target_subcmds[] = {
 	{ "repo", "refresh signed repository indexes" },
 	{ "key", "add a trusted package certificate" },
 	{ "pull", "download an OCI package into the current directory" },
-	{ "install", "download and activate a package" },
+	{ "install", "download and activate a repository or OCI package" },
 	{ "upgrade", "activate newer cached package versions" },
 };
 
@@ -2508,6 +2568,7 @@ int cmd_bpm(int argc, const char **argv)
 		struct bpm_index_entry entries[BPM_MAX_ENTRIES];
 		struct bpm_state_entry state[BPM_MAX_STATE];
 		struct bpm_index_entry selected;
+		bool direct = !strncmp(argv[2], "oci://", 6);
 		int n_entries, n_state, lock, rc, i;
 
 		if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
@@ -2515,26 +2576,31 @@ int cmd_bpm(int argc, const char **argv)
 		lock = with_bpm_lock();
 		if (lock < 0)
 			return bpm_finish(-1, lock, "lock");
-		rc = parse_package_ref(argv[2], source, sizeof(source), name,
+		if (direct) {
+			rc = prepare_direct_install(argv[2], &source_cfg, &selected);
+		} else {
+			rc = parse_package_ref(argv[2], source, sizeof(source), name,
 					 sizeof(name), version, sizeof(version));
+		}
 		if (!rc)
 			rc = state_read(state, &n_state);
 		if (rc)
 			return bpm_finish(lock, rc, "install");
 		for (i = 0; i < n_state; i++) {
-			if (!strcmp(state[i].name, name))
+			if (!strcmp(state[i].name, direct ? selected.name : name))
 				/* Installation is idempotent by package name.  This also
 				 * avoids contacting the repository for a package that is
 				 * already active.  Use `bpm upgrade` to change versions. */
 				return bpm_finish(lock, 0, "install");
 		}
-		if (!rc)
+		if (!direct) {
 			rc = load_source(source, &source_cfg);
-		if (!rc)
-			rc = load_cached_index(source, entries, &n_entries);
-		if (!rc)
-			rc = find_entry(entries, n_entries, name,
+			if (!rc)
+				rc = load_cached_index(source, entries, &n_entries);
+			if (!rc)
+				rc = find_entry(entries, n_entries, name,
 					version[0] ? version : NULL, &selected);
+		}
 		if (rc)
 			return bpm_finish(lock, rc, "install");
 		if (n_state >= BPM_MAX_STATE)
@@ -2542,13 +2608,15 @@ int cmd_bpm(int argc, const char **argv)
 		rc = package_install(&source_cfg, &selected, NULL, NULL);
 		if (rc)
 			return bpm_finish(lock, rc, "install");
-		bpm_copy_string(state[n_state].name, sizeof(state[n_state].name), name);
+		bpm_copy_string(state[n_state].name, sizeof(state[n_state].name),
+				direct ? selected.name : name);
 		bpm_copy_string(state[n_state].version, sizeof(state[n_state].version),
 				selected.version);
 		bpm_copy_string(state[n_state].source, sizeof(state[n_state].source),
-				source);
+				direct ? "direct" : source);
 		if (snprintf(state[n_state].path, sizeof(state[n_state].path),
-				"%s/%s/%s", SHIRUDO_BPM_PACKAGES_DIR, name,
+				"%s/%s/%s", SHIRUDO_BPM_PACKAGES_DIR,
+				direct ? selected.name : name,
 				selected.version) >= (int)sizeof(state[n_state].path))
 			return bpm_finish(lock, -ENAMETOOLONG, "install");
 		rc = state_write(state, n_state + 1);
@@ -2571,6 +2639,8 @@ int cmd_bpm(int argc, const char **argv)
 			struct bpm_index_entry entries[BPM_MAX_ENTRIES], selected;
 			int n_entries;
 
+			if (!strcmp(state[i].source, "direct"))
+				continue;
 			rc = load_source(state[i].source, &source_cfg);
 			if (!rc)
 				rc = load_cached_index(state[i].source, entries, &n_entries);
