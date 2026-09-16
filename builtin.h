@@ -16,6 +16,7 @@ int cmd_build(int argc, const char **argv);
 int cmd_init(int argc, const char **argv);
 int cmd_upatch(int argc, const char **argv);
 int cmd_bpm(int argc, const char **argv);
+int cmd_bpm_build(int argc, const char **argv);
 
 /*
  * Target-side shared op: load + attach + pin one signed LOAD upatch.

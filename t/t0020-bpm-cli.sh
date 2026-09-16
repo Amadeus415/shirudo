@@ -25,9 +25,11 @@ test_expect_success 'bpm help describes the target package workflow' '
 	echo "$out" | grep -q "download an OCI package"
 '
 
-test_expect_success 'target bpm does not expose operator-only push' '
+test_expect_success 'target bpm does not expose operator-only commands' '
 	! $SHIRUDO bpm --list-cmds | grep -qx push &&
-	! $SHIRUDO bpm push >/dev/null 2>&1
+	! $SHIRUDO bpm --list-cmds | grep -qx build &&
+	! $SHIRUDO bpm push >/dev/null 2>&1 &&
+	! $SHIRUDO bpm build >/dev/null 2>&1
 '
 
 test_expect_success 'bpm pull validates package references before network access' '

@@ -127,12 +127,33 @@ void shirudo_cert_free(struct shirudo_cert *cert)
 int shirudo_cert_pubkey_digest(const struct shirudo_cert *cert,
 			       uint8_t out[SHIRUDO_CRYPTO_SHA256_LEN])
 {
+	X509_PUBKEY *spki;
+	unsigned char *der = NULL, *p;
 	unsigned int len = 0;
+	int der_len, encoded_len, rc = -EINVAL;
 
-	if (!cert || !cert->impl || !out ||
-	    X509_pubkey_digest(cert->impl, EVP_sha256(), out, &len) != 1 || len != 32)
+	if (!cert || !cert->impl || !out)
 		return -EINVAL;
-	return 0;
+	spki = X509_get_X509_PUBKEY(cert->impl);
+	if (!spki)
+		return -EINVAL;
+	der_len = i2d_X509_PUBKEY(spki, NULL);
+	if (der_len <= 0)
+		return -EINVAL;
+	der = malloc((size_t)der_len);
+	if (!der)
+		return -ENOMEM;
+	p = der;
+	encoded_len = i2d_X509_PUBKEY(spki, &p);
+	if (encoded_len != der_len)
+		goto out;
+	if (!EVP_Digest(der, (size_t)der_len, out, &len,
+			EVP_sha256(), NULL) || len != SHIRUDO_CRYPTO_SHA256_LEN)
+		goto out;
+	rc = 0;
+out:
+	free(der);
+	return rc;
 }
 
 int shirudo_verify_detached(const uint8_t *payload, size_t payload_len,

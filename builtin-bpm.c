@@ -3266,6 +3266,7 @@ static const struct shirudo_help_item bpm_subcmds[] = {
 	{ "key", "add a trusted package certificate" },
 	{ "pull", "download an OCI package into the current directory" },
 	{ "push", "publish an OCI package from the operator" },
+	{ "build", "build a signed OCI package from a Beefile" },
 	{ "install", "download and activate a repository or OCI package" },
 	{ "upgrade", "activate newer cached package versions" },
 };
@@ -3295,7 +3296,7 @@ static const struct shirudo_help bpm_target_help = {
 };
 
 static const struct shirudo_help bpm_operator_help = {
-	.usage = "shirudo bpm <config|repo|key|pull|push|install|upgrade>",
+	.usage = "shirudo bpm <config|repo|key|pull|push|build|install|upgrade>",
 	.summary = "Manage signed OCI packages and publish packages from the operator.",
 	.sections = (const struct shirudo_help_section[]) {
 		{ "subcommands:", bpm_subcmds, ARRAY_SIZE(bpm_subcmds) },
@@ -3319,6 +3320,16 @@ static void bpm_push_usage(void)
 		"The repository must start with oci:// and must not include a tag.\n"
 		"Example:\n"
 		"  shirudo bpm push ./package.bee oci://quay.io/namespace/package\n");
+}
+
+static void bpm_build_usage(void)
+{
+	fprintf(stderr,
+		"usage: shirudo bpm build [context] --version <version>\n"
+		"       shirudo bpm build [context] -f <Beefile> --version <version>\n"
+		"                              [--keys-dir <dir>]\n\n"
+		"Builds a signed .bee package from a Beefile. The build command\n"
+		"is available only in shirudo-operator and requires signing keys.\n");
 }
 
 static int bpm_finish(int lock, int rc, const char *action)
@@ -3358,6 +3369,16 @@ int cmd_bpm(int argc, const char **argv)
 	if (!strcmp(sub, "tree") && (argc < 3 || shirudo_is_help(argv[2]))) {
 		fprintf(stderr, "usage: shirudo bpm tree sync [--dry-run] [--report=<path>]\n");
 		return argc < 3 ? 2 : 0;
+	}
+	if (!strcmp(sub, "build")) {
+		int rc;
+
+		if (argc == 3 && shirudo_is_help(argv[2])) {
+			bpm_build_usage();
+			return 0;
+		}
+		rc = cmd_bpm_build(argc - 1, argv + 1);
+		return rc ? bpm_fail("build", rc) : 0;
 	}
 	if (!strcmp(sub, "pull")) {
 		int rc;

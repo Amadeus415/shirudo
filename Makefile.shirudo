@@ -186,6 +186,7 @@ BUILTIN_SRCS := \
     builtin-config.c \
     builtin-upatch.c \
     builtin-bpm.c \
+    builtin-bpm-build.c \
     builtin-build.c \
     builtin-version.c
 
