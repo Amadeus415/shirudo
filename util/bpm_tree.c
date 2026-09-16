@@ -506,9 +506,8 @@ int shirudo_tree_parse(const char *body, size_t len,
 			}
 		} else if (tp_skip(&p)) TREE_PARSE_FAIL(-EINVAL);
 		tp_ws(&p);
-		if (p.p < p.end && *p.p == ',') { p.p++; continue; }
 		if (p.p < p.end && *p.p == '}') { p.p++; break; }
-		TREE_PARSE_FAIL(-EINVAL);
+		if (p.p >= p.end) TREE_PARSE_FAIL(-EINVAL);
 	}
 	tp_ws(&p);
 	if (p.p != p.end || !seen_schema || !seen_generation || !seen_base ||
@@ -745,9 +744,12 @@ static int tree_atomic_write(const char *path, const void *data, size_t len)
 	memcpy(dir, path, slash - path); dir[slash - path] = '\0';
 	{
 		int mkdir_rc = tree_mkdir_p(dir, 0700);
-		if (mkdir_rc) return mkdir_rc;
+		if (mkdir_rc) {
+			pr_err("tree state mkdir %s rc=%d errno=%d", dir, mkdir_rc, errno);
+			return mkdir_rc;
+		}
 	}
-	if (snprintf(tmp, sizeof(tmp), "%s/.tmp.%ld", path, (long)getpid()) >= (int)sizeof(tmp)) return -ENAMETOOLONG;
+	if (snprintf(tmp, sizeof(tmp), "%s/.tmp.%ld", dir, (long)getpid()) >= (int)sizeof(tmp)) return -ENAMETOOLONG;
 	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
 	if (fd < 0) return -errno;
 	rc = shirudo_write_all(fd, data, len);

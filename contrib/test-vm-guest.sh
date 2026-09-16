@@ -131,6 +131,7 @@ configure_bpm_oci_repository()
 	key_file="/etc/shirudo/bpm/keys/${source}.pem"
 	conf_file="/etc/shirudo/bpm/registries.d/${source}.conf"
 	repository_env="/etc/shirudo/bpm/repository.env"
+	environment_file="/etc/shirudo/bpm/environment"
 	install -d -m 0755 /etc/shirudo/bpm/keys /etc/shirudo/bpm/registries.d
 	install -m 0644 "$cert_file" "${key_file}.tmp"
 	mv -f "${key_file}.tmp" "$key_file"
@@ -139,6 +140,16 @@ configure_bpm_oci_repository()
 	install -d -m 0755 /etc/shirudo/bpm
 	install -m 0644 "$staged_env" "${repository_env}.tmp"
 	mv -f "${repository_env}.tmp" "$repository_env"
+	# The BPM tree and individual upatches are signed by the active package
+	# certificate.  The repository certificate above is for OCI admission.
+	if [[ -s /usr/local/share/ca-certificates/shirudo-oci-ca.crt ]]; then
+		printf '%s\n' 'BPM_OCI_CA_FILE=/usr/local/share/ca-certificates/shirudo-oci-ca.crt' \
+			>"${environment_file}.tmp"
+		chmod 0644 "${environment_file}.tmp"
+		mv -f "${environment_file}.tmp" "$environment_file"
+	else
+		rm -f "$environment_file"
+	fi
 }
 
 configure_bpm_tree()
@@ -372,8 +383,19 @@ PY
 
 if [[ -n "${TEST_VM_BPM_TREE_INPUT:-}" ]]; then
 	log "performing initial BPM tree sync"
-	if ! systemctl start shirudo-bpm-tree-sync.service; then
-		log "initial BPM tree sync failed"
+	tree_sync_ok=0
+	for tree_sync_attempt in 1 2 3; do
+		if systemctl start shirudo-bpm-tree-sync.service; then
+			tree_sync_ok=1
+			break
+		fi
+		log "initial BPM tree sync attempt ${tree_sync_attempt} failed"
+		systemctl status shirudo-bpm-tree-sync.service --no-pager || true
+		journalctl -u shirudo-bpm-tree-sync.service -n 40 --no-pager || true
+		[[ "$tree_sync_attempt" -lt 3 ]] && sleep 3
+	done
+	if [[ "$tree_sync_ok" -ne 1 ]]; then
+		log "initial BPM tree sync failed after retries"
 		exit 1
 	fi
 fi
