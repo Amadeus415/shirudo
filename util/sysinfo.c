@@ -5,7 +5,9 @@
  * Host system overview from /proc, /etc and uname(2). No subprocess.
  */
 
+#include <ctype.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +16,7 @@
 #include <unistd.h>
 
 #include "json.h"
+#include "malloc.h"
 #include "sysinfo.h"
 
 /* Read the first line of a file into buf, trimming the trailing newline. */
@@ -138,6 +141,145 @@ static void read_root_disk(long *total_kb, long *used_kb)
 	*used_kb  = (long)((tot_b - free_b) / 1024);
 }
 
+static char *trim_config_text(char *text)
+{
+	char *end;
+
+	while (*text && isspace((unsigned char)*text))
+		text++;
+	end = text + strlen(text);
+	while (end > text && isspace((unsigned char)end[-1]))
+		*--end = '\0';
+	return text;
+}
+
+struct kernel_config_entry {
+	char *key;
+	char *value;
+};
+
+static int kernel_config_entry_cmp(const void *a, const void *b)
+{
+	const struct kernel_config_entry *ea = a;
+	const struct kernel_config_entry *eb = b;
+
+	return strcmp(ea->key, eb->key);
+}
+
+static void kernel_config_entries_free(struct kernel_config_entry *entries,
+					       size_t n)
+{
+	size_t i;
+
+	for (i = 0; i < n; i++) {
+		xstrfree(entries[i].key);
+		xstrfree(entries[i].value);
+	}
+	xfree(entries, n * sizeof(*entries));
+}
+
+int shirudo_sysinfo_kernel_config_foreach(const char *kernel_release,
+						  shirudo_kernel_config_cb cb,
+						  void *ctx)
+{
+	char path[PATH_MAX];
+	char line[8192];
+	struct kernel_config_entry *entries = NULL;
+	FILE *f;
+	size_t n = 0;
+	size_t i;
+
+	if (!kernel_release || !kernel_release[0] || !cb ||
+	    snprintf(path, sizeof(path), "/boot/config-%s", kernel_release) >=
+		(int)sizeof(path))
+		return -1;
+	f = fopen(path, "re");
+	if (!f)
+		return -1;
+	while (fgets(line, sizeof(line), f)) {
+		char *key, *value, *eq, *not_set;
+
+		line[strcspn(line, "\r\n")] = '\0';
+		key = trim_config_text(line);
+		if (!*key)
+			continue;
+
+		if (strncmp(key, "# CONFIG_", 9) == 0) {
+			key += 2;
+			not_set = strstr(key, " is not set");
+			if (!not_set || trim_config_text(not_set + 11)[0] != '\0')
+				continue;
+			*not_set = '\0';
+			value = "n";
+		} else {
+			eq = strchr(key, '=');
+			if (!eq)
+				continue;
+			*eq = '\0';
+			key = trim_config_text(key);
+			if (strncmp(key, "CONFIG_", 7) != 0 || !key[7])
+				continue;
+			value = trim_config_text(eq + 1);
+			{
+				size_t len = strlen(value);
+
+				if (len >= 2 && value[0] == '"' && value[len - 1] == '"') {
+					value[len - 1] = '\0';
+					value++;
+				}
+			}
+		}
+		if (strncmp(key, "CONFIG_", 7) != 0 || !key[7])
+			continue;
+		{
+			struct kernel_config_entry *next;
+
+			next = xreallocarray(entries, n, n + 1,
+					      sizeof(*entries));
+			if (!next) {
+				fclose(f);
+				kernel_config_entries_free(entries, n);
+				return -1;
+			}
+			entries = next;
+			entries[n].key = xstrdup(key);
+			entries[n].value = xstrdup(value);
+			if (!entries[n].key || !entries[n].value) {
+				xstrfree(entries[n].key);
+				xstrfree(entries[n].value);
+				fclose(f);
+				kernel_config_entries_free(entries, n);
+				return -1;
+			}
+		}
+		n++;
+	}
+	fclose(f);
+
+	qsort(entries, n, sizeof(*entries), kernel_config_entry_cmp);
+	for (i = 0; i < n; i++)
+		cb(ctx, entries[i].key, entries[i].value);
+	kernel_config_entries_free(entries, n);
+	return (int)n;
+}
+
+static void emit_kernel_config_entry(void *ctx, const char *key,
+					      const char *value)
+{
+	shirudo_json_kv_string(ctx, key, value);
+}
+
+/* Emit set entries from /boot/config-<uname -r> as a JSON object. */
+static void emit_kernel_config(struct shirudo_json_emit *e,
+				       const char *kernel_release)
+{
+	shirudo_json_obj_open_key(e, "kernel_config");
+	shirudo_sysinfo_kernel_config_foreach(kernel_release,
+						      emit_kernel_config_entry, e);
+
+	shirudo_json_obj_close(e);
+}
+
 void shirudo_sysinfo_gather(struct shirudo_sysinfo *si)
 {
 	struct utsname u;
@@ -185,6 +327,7 @@ void shirudo_sysinfo_emit_json(struct shirudo_json_emit *e,
 	shirudo_json_kv_string(e, "os", si->os_pretty);
 	shirudo_json_kv_string(e, "kernel_release", si->kernel_release);
 	shirudo_json_kv_string(e, "kernel_version", si->kernel_version);
+	emit_kernel_config(e, si->kernel_release);
 	shirudo_json_kv_string(e, "architecture", si->machine);
 	shirudo_json_kv_string(e, "machine_id", si->machine_id);
 	shirudo_json_kv_string(e, "boot_id", si->boot_id);

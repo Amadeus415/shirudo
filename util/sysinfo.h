@@ -36,9 +36,18 @@ void shirudo_sysinfo_gather(struct shirudo_sysinfo *si);
 
 struct shirudo_json_emit;
 
+typedef void (*shirudo_kernel_config_cb)(void *ctx, const char *key,
+						 const char *value);
+
+/* Visit each CONFIG_* entry ... in lexical key order. */
+int shirudo_sysinfo_kernel_config_foreach(const char *kernel_release,
+						  shirudo_kernel_config_cb cb,
+						  void *ctx);
+
 /*
- * Emit *si as a JSON "system":{...} object. The single source of truth
- * for the `shirudo status --include-system` JSON shape.
+ * Emit *si as a JSON "system":{...} object, including the string-valued
+ * kernel_config map loaded from /boot/config-<uname -r>. The single source
+ * of truth for the `shirudo status --include-system` JSON shape.
  */
 void shirudo_sysinfo_emit_json(struct shirudo_json_emit *e,
 			       const struct shirudo_sysinfo *si);

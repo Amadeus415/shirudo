@@ -364,6 +364,21 @@ static void print_system_human(const struct shirudo_sysinfo *si)
 		printf("  %-16s %s\n", "Boot ID:", si->boot_id);
 }
 
+static void print_kernel_config_entry(void *ctx, const char *key,
+					      const char *value)
+{
+	(void)ctx;
+	printf("    %s=%s\n", key, value);
+}
+
+static void print_kernel_config_human(const struct shirudo_sysinfo *si)
+{
+	printf("  Kernel Config:\n");
+	if (shirudo_sysinfo_kernel_config_foreach(
+			si->kernel_release, print_kernel_config_entry, NULL) < 0)
+		printf("    (unavailable)\n");
+}
+
 static const struct shirudo_help_item status_options[] = {
 	{ "--json",                 "machine-readable JSON output" },
 	{ "--otel",                 "export the status report as an OTLP log" },
@@ -700,7 +715,9 @@ int cmd_status(int argc, const char **argv)
 		 * size the buffer to the on-disk log plus headroom for the
 		 * fixed fields; 16 KiB covers the no-eventlog case.
 		 * --include-modules pads ~250 B per module; --include-kernellog
-		 * pads up to 8 KiB total (15 lines * ~500 B). Eyeball-padded,
+		 * pads up to 8 KiB total (15 lines * ~500 B); --include-system
+		 * includes the kernel config, which is typically hundreds of KiB.
+		 * Eyeball-padded,
 		 * the cap-clamp at the bottom keeps us under SHIRUDO_JSON_MAX_BYTES.
 		 */
 		json_cap = 16384;
@@ -710,6 +727,8 @@ int cmd_status(int argc, const char **argv)
 			json_cap += (size_t)kernel_log_lines * 1024 + 4096;
 		if (include_modules)
 			json_cap += 64 * 1024;
+		if (include_system)
+			json_cap += 1024 * 1024;
 		if (json_cap > SHIRUDO_JSON_MAX_BYTES)
 			json_cap = SHIRUDO_JSON_MAX_BYTES;
 		json_buf = xmalloc(json_cap);
@@ -1014,8 +1033,10 @@ int cmd_status(int argc, const char **argv)
 				       "  (matches)" :
 				       "  (MISMATCH -- swapped?)");
 
-		if (include_system)
+		if (include_system) {
 			print_system_human(&sysi);
+			print_kernel_config_human(&sysi);
+		}
 
 		shirudo_upatch_table_print(rows, n_rows);
 		xfree(rows, n_rows * sizeof(*rows));

@@ -100,4 +100,47 @@ PY
 	rm -rf "$work"
 '
 
+test_expect_success 'status --json --include-system includes kernel config' '
+	work=$(mktemp -d) &&
+	"$S" status --json --include-system >"$work/status.json" 2>"$work/stderr" &&
+	python3 - "$work/status.json" <<'PY'
+import json
+import os
+import sys
+
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+system = doc["system"]
+config = system["kernel_config"]
+assert isinstance(config, dict)
+assert all(key.startswith("CONFIG_") for key in config)
+assert list(config) == sorted(config)
+
+path = "/boot/config-" + system["kernel_release"]
+if os.path.isfile(path):
+for line in open(path, encoding="utf-8", errors="replace"):
+    line = line.rstrip("\r\n")
+    if line.startswith("# CONFIG_") and line.endswith(" is not set"):
+        key = line[2:].split(" is not set", 1)[0]
+        assert config[key] == "n"
+        continue
+    if line.startswith("CONFIG_") and "=" in line:
+        key, value = line.split("=", 1)
+            if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+                value = value[1:-1]
+            assert config[key] == value
+            break
+    else:
+        raise AssertionError("kernel config has no CONFIG_ entries")
+PY
+	rm -rf "$work"
+'
+
+test_expect_success 'status --include-system prints kernel config' '
+	work=$(mktemp -d) &&
+	"$S" status --include-system >"$work/status" 2>"$work/stderr" &&
+	grep -q "^  Kernel Config:$" "$work/status" &&
+	grep -Eq "^    (CONFIG_[^=]+=.*|\\(unavailable\\))$" "$work/status" &&
+	rm -rf "$work"
+'
+
 test_done
