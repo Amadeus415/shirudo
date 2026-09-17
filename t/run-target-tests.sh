@@ -15,6 +15,8 @@ fail=0
 for t in \
 	t1200-target-fixtures.sh \
 	t1118-bpm-tree.sh \
+	t1119-bpm-tree-sequential.sh \
+	t1120-bpm-tree-delete.sh \
 	t1201-java-sql-inj.sh \
 	t1101-seal.sh \
 	t1102-eventlog-full.sh \

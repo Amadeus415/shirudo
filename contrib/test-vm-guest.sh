@@ -436,7 +436,7 @@ log "running target test suite: ${TEST_VM_SUITE:-all}"
 				SHIRUDO_TEST_FIXTURES_DIR="$BUNDLE/fixtures" \
 				SHIRUDO_TEST_FAILURES_FILE=/mnt/shirudo-out/failed-tests \
 				SHIRUDO_TEST_SUITE_FAILURES_FILE=/mnt/shirudo-out/failed-suites \
-				./t1118-bpm-tree.sh
+				./run-target-tree-tests.sh
 		else
 			SHIRUDO_BIN=/usr/local/bin/shirudo \
 				SHIRUDO_TEST_FIXTURES_DIR="$BUNDLE/fixtures" \

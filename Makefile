@@ -255,7 +255,7 @@ shirudo make targets (run from the repo root):
              TEST_VM_RUNTIME_CACHE_DIR (prepared runtime image cache),
              TEST_VM_CPUS/MEMORY/DISK_SIZE (VM resource overrides),
              TEST_VM_VERBOSE=1 (stream test VM QEMU output; otherwise show TAP progress),
-             TEST_VM_SUITE=tree (run only the tree-sync target test),
+             TEST_VM_SUITE=tree (run only the tree-sync target tests),
              DNS_OBS_FUZZ_SEED / DNS_OBS_FUZZ_CASES (override the optional DNS
              mutation run),
              DESTDIR (staged install), V=1 (echo full command lines).
