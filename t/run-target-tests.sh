@@ -14,6 +14,7 @@ fail=0
 : "${SHIRUDO_TEST_SUITE_FAILURES_FILE:=}"
 for t in \
 	t1200-target-fixtures.sh \
+	t1118-bpm-tree.sh \
 	t1201-java-sql-inj.sh \
 	t1101-seal.sh \
 	t1102-eventlog-full.sh \

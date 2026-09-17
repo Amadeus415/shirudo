@@ -255,6 +255,7 @@ shirudo make targets (run from the repo root):
              TEST_VM_RUNTIME_CACHE_DIR (prepared runtime image cache),
              TEST_VM_CPUS/MEMORY/DISK_SIZE (VM resource overrides),
              TEST_VM_VERBOSE=1 (stream test VM QEMU output; otherwise show TAP progress),
+             TEST_VM_SUITE=tree (run only the tree-sync target test),
              DNS_OBS_FUZZ_SEED / DNS_OBS_FUZZ_CASES (override the optional DNS
              mutation run),
              DESTDIR (staged install), V=1 (echo full command lines).
@@ -530,7 +531,7 @@ vm-ssh:
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" contrib/test-vm.sh --ssh
 
 test-tgt: $(VM_KERNEL_DEP) test-vm-bundle
-	$(Q)VM_MODE=test VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+	$(Q)VM_MODE=test TEST_VM_SUITE="$(TEST_VM_SUITE)" VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
 		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
 		TEST_VM_KERNEL_ARTIFACT_DIR="$(abspath $(VM_KERNEL_ARTIFACT_DIR))" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \

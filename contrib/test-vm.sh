@@ -162,6 +162,9 @@ validate_mode()
 	esac
 	case "$VM_SUITE" in
 	all|obs) ;;
+	tree)
+		[[ "$VM_MODE" == test ]] || die "tree suite requires VM_MODE=test"
+		;;
 	bench)
 		[[ "$VM_MODE" == test ]] || die "benchmark suite requires VM_MODE=test"
 		case "$VM_BENCH_VARIANT" in
@@ -392,6 +395,11 @@ validate_host_bundle()
 		[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/benchmark/empty/linux-observability.upatch" &&
 		   -s "$TEST_VM_HOST_BUNDLE/fixtures/benchmark/firewall/linux-observability.upatch" ]] ||
 			die "host VM bundle has no benchmark observability fixtures: $TEST_VM_HOST_BUNDLE"
+	elif [[ "$VM_SUITE" == tree ]]; then
+		[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/tree-oci/shirudo/upatch-tree/manifests/stable" &&
+		   -s "$TEST_VM_HOST_BUNDLE/fixtures/shirudo-test-tree-match.upatch" &&
+		   -s "$TEST_VM_HOST_BUNDLE/fixtures/shirudo-test-tree-skip.upatch" ]] ||
+			die "host VM bundle has no BPM tree fixtures: $TEST_VM_HOST_BUNDLE"
 	fi
 	[[ -s "$TEST_VM_HOST_BUNDLE/runtime-image-key" ]] ||
 		die "host VM bundle has no prepared runtime image; run 'make bundle'"

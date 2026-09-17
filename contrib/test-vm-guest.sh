@@ -421,7 +421,7 @@ log "running target test suite: ${TEST_VM_SUITE:-all}"
 : >/mnt/shirudo-out/failed-suites
 (
 	cd t
-		if [[ "${TEST_VM_SUITE:-all}" == bench ]]; then
+	if [[ "${TEST_VM_SUITE:-all}" == bench ]]; then
 			python3 linux_obs_benchmark.py run \
 				--variant "${TEST_VM_BENCH_VARIANT:?benchmark variant is required}" \
 				--output /mnt/shirudo-out/benchmark.csv
@@ -431,6 +431,12 @@ log "running target test suite: ${TEST_VM_SUITE:-all}"
 				SHIRUDO_TEST_FAILURES_FILE=/mnt/shirudo-out/failed-tests \
 				SHIRUDO_TEST_SUITE_FAILURES_FILE=/mnt/shirudo-out/failed-suites \
 				./run-target-obs-tests.sh
+		elif [[ "${TEST_VM_SUITE:-all}" == tree ]]; then
+			SHIRUDO_BIN=/usr/local/bin/shirudo \
+				SHIRUDO_TEST_FIXTURES_DIR="$BUNDLE/fixtures" \
+				SHIRUDO_TEST_FAILURES_FILE=/mnt/shirudo-out/failed-tests \
+				SHIRUDO_TEST_SUITE_FAILURES_FILE=/mnt/shirudo-out/failed-suites \
+				./t1118-bpm-tree.sh
 		else
 			SHIRUDO_BIN=/usr/local/bin/shirudo \
 				SHIRUDO_TEST_FIXTURES_DIR="$BUNDLE/fixtures" \

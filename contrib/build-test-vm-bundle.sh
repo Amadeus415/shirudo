@@ -343,6 +343,144 @@ build_fixture()
 	)
 }
 
+build_tree_test_registry()
+{
+	local registry_dir="$TMP_DIR/fixtures/tree-oci"
+	local tree_payload="$FIXTURE_WORK/tree-payload.json"
+	local tree_signature="$FIXTURE_WORK/tree-payload.sig"
+
+	python3 - "$registry_dir" \
+		"$TMP_DIR/fixtures/shirudo-test-tree-match.upatch" \
+		"$TMP_DIR/fixtures/shirudo-test-tree-skip.upatch" \
+		"$tree_payload" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+registry, match_path, skip_path, tree_payload = map(pathlib.Path, sys.argv[1:])
+tree_endpoint = "oci://127.0.0.1:5443/shirudo/upatch-tree"
+
+
+def digest(body):
+    return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+def write(path, body):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+
+
+def artifact(repository, path, title):
+    body = path.read_bytes()
+    layer_digest = digest(body)
+    manifest = {
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "layers": [{
+            "mediaType": "application/vnd.shirudo.upatch.v1",
+            "digest": layer_digest,
+            "size": len(body),
+            "annotations": {"org.opencontainers.image.title": title},
+        }],
+    }
+    manifest_body = json.dumps(manifest, separators=(",", ":")).encode()
+    manifest_digest = digest(manifest_body)
+    repo_root = registry.joinpath(*repository.split("/"))
+    write(repo_root / "manifests" / manifest_digest, manifest_body)
+    write(repo_root / "blobs" / layer_digest, body)
+    return {
+        "repository": "oci://127.0.0.1:5443/" + repository,
+        "manifest_digest": manifest_digest,
+        "layer_digest": layer_digest,
+        "payload_sha256": digest(body),
+    }
+
+
+match_artifact = artifact("shirudo/tree-match", match_path,
+                         "shirudo-test-tree-match.upatch")
+skip_artifact = artifact("shirudo/tree-skip", skip_path,
+                        "shirudo-test-tree-skip.upatch")
+
+
+def operation(seq, name, selector, artifact_info):
+    unsigned = {
+        "seq": seq,
+        "op": "add",
+        "id": name,
+        "selector": selector,
+        "artifact": artifact_info,
+    }
+    operation_digest = digest(json.dumps(unsigned, separators=(",", ":"))
+                              .encode())
+    return dict(unsigned, operation_digest=operation_digest)
+
+
+publication = {
+    "schema": 2,
+    "tree_id": "shirudo-test-tree",
+    "generation": 1,
+    "base": {"seq": 0},
+    "operations": [
+        operation(1, "shirudo-test-tree-match",
+                  {"architecture": ["x86_64"],
+                   "labels": {"env": ["tree-test"]}}, match_artifact),
+        operation(2, "shirudo-test-tree-skip",
+                  {"architecture": ["x86_64"],
+                   "labels": {"env": ["not-this-node"]}}, skip_artifact),
+    ],
+    "head": {"seq": 2},
+}
+tree_payload.write_bytes(json.dumps(publication, separators=(",", ":"))
+                         .encode())
+PY
+
+	openssl cms -sign -binary -in "$tree_payload" \
+		-signer "$FIXTURE_WORK/trusted/cert.der" \
+		-inkey "$FIXTURE_WORK/trusted/signing_key.pem" \
+		-outform DER -out "$tree_signature" -nosmimecap \
+		-nocerts -noattr -keyid
+
+	python3 - "$registry_dir" "$tree_payload" "$tree_signature" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+registry, payload_path, signature_path = map(pathlib.Path, sys.argv[1:])
+
+
+def digest(body):
+    return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+def write(path, body):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+
+
+payload = payload_path.read_bytes()
+signature = signature_path.read_bytes()
+payload_digest = digest(payload)
+signature_digest = digest(signature)
+repo = registry / "shirudo" / "upatch-tree"
+write(repo / "blobs" / payload_digest, payload)
+write(repo / "blobs" / signature_digest, signature)
+manifest = {
+    "schemaVersion": 2,
+    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+    "layers": [
+        {"mediaType": "application/vnd.shirudo.upatch.tree.v2+json",
+         "digest": payload_digest, "size": len(payload)},
+        {"mediaType": "application/vnd.shirudo.upatch.tree.signature.v2",
+         "digest": signature_digest, "size": len(signature)},
+    ],
+}
+write(repo / "manifests" / "stable",
+      json.dumps(manifest, separators=(",", ":")).encode())
+PY
+}
+
 build_obs_fixture()
 {
 	local keys_dir="$1"
@@ -425,6 +563,8 @@ mkdir -p "$TMP_DIR/fixtures/decoders" "$FIXTURE_WORK/trusted" \
 
 build_fixture basic.bpf.c shirudo-test-basic "$FIXTURE_WORK/trusted"
 build_fixture basic.bpf.c shirudo-test-lifecycle "$FIXTURE_WORK/trusted"
+build_fixture basic.bpf.c shirudo-test-tree-match "$FIXTURE_WORK/trusted"
+build_fixture basic.bpf.c shirudo-test-tree-skip "$FIXTURE_WORK/trusted"
 build_fixture marker.bpf.c shirudo-test-marker "$FIXTURE_WORK/trusted"
 build_fixture map-export.bpf.c shirudo-test-map-export "$FIXTURE_WORK/trusted"
 build_fixture otel-backend.bpf.c shirudo-test-otel-backend "$FIXTURE_WORK/trusted"
@@ -456,6 +596,7 @@ otel_backend_payload="$($REPO_ROOT/shirudo upatch info \
 serialized_metric_payload="$($REPO_ROOT/shirudo upatch info \
 	"$TMP_DIR/fixtures/shirudo-test-serialized-metric.upatch" --json |
 	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
+build_tree_test_registry
 observability_payload="$($REPO_ROOT/shirudo upatch info \
 	"$TMP_DIR/fixtures/linux-observability.upatch" --json |
 	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
