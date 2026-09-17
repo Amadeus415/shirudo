@@ -323,6 +323,7 @@ t/helper/test-upatch-serializer-pages
 t/helper/test-signed-load
 t/helper/test-exec-churn
 t/helper/otel-mock.py
+t/helper/test-oci-registry.py
 EOF
 
 build_fixture()
