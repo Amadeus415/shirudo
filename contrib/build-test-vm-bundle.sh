@@ -188,7 +188,7 @@ prepare_ubuntu_libguestfs_kernel()
 for dependency in \
 	"flock:util-linux" "curl:curl" "sha256sum:coreutils" "awk:gawk" \
 	"qemu-img:qemu-utils" "virt-customize:libguestfs-tools" \
-	"dpkg-deb:dpkg" \
+	"dpkg-deb:dpkg" "openssl:openssl" \
 	"gzip:gzip" "depmod:kmod"; do
 	IFS=: read -r command_name package_name <<<"$dependency"
 	require_command "$command_name" "$package_name"
@@ -268,6 +268,22 @@ command -v flock >/dev/null 2>&1 ||
 	die "flock is required; install it with: sudo apt-get install -y util-linux"
 
 validate_package_cert
+
+make_mbedtls_test_cert()
+{
+	local keys_dir="$1"
+
+	# The OpenSSL-generated certificate from `shirudo genkey` contains an
+	# empty authorityKeyIdentifier extension.  mbedTLS rejects that extension
+	# while parsing the target's cert.der, so use a minimal equivalent test
+	# certificate for target-side CMS verification.
+	openssl req -new -x509 -key "$keys_dir/signing_key.pem" \
+		-outform DER -out "$keys_dir/cert.der" -days 3650 \
+		-subj /CN=shirudo \
+		-addext 'basicConstraints=critical,CA:FALSE' \
+		-addext 'keyUsage=digitalSignature' \
+		-addext 'subjectKeyIdentifier=hash'
+}
 
 mkdir -p "$(dirname "$BUNDLE_DIR")"
 exec 9>"$LOCK_FILE"
@@ -556,6 +572,7 @@ mkdir -p "$TMP_DIR/fixtures/decoders" "$FIXTURE_WORK/trusted" \
 "$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/trusted" >/dev/null
 "$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/foreign" >/dev/null
 "$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/own" >/dev/null
+make_mbedtls_test_cert "$FIXTURE_WORK/trusted"
 
 "${CC:-cc}" -O0 -g -Wl,--build-id=sha1 \
 	-o /tmp/shirudo-test-uprobe-target \

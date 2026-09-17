@@ -2641,7 +2641,7 @@ static int tree_fetch_publication(const struct bpm_tree_config *cfg,
 		goto out;
 	}
 	rc = shirudo_tree_parse((const char *)payload.data, payload.len, pub);
-out:
+	out:
 	free(manifest.data);
 	free(payload.data);
 	free(sig.data);
