@@ -5,21 +5,16 @@
  * The central "BPF on BPF" LSM enforcement program.
  *
  * Hooks:
- *   lsm/bpf          -- gates the bpf() syscall. PLAN.md "LSM
- *                       enforcement policy": kernel-context (signed
- *                       loader) calls return immediately; userspace
- *                       BPF_PROG_LOAD must be prog_type=SYSCALL AND
- *                       have a non-zero signature in native mode (a cheap
- *                       pre-filter; the authoritative verdict is enforced
- *                       by lsm/bpf_prog_load below, after the kernel has
- *                       verified the signature). In legacy trusted-root
- *                       mode, permit only an unsigned SYSCALL loader from
- *                       the frozen Shirudo executable identity; a fixed
- *                       denylist of
- *                       mutating cmds is denied with -EPERM; everything
- *                       else (readonly ops, BPF_PROG_TEST_RUN,
- *                       BPF_MAP_FREEZE, BPF_OBJ_PIN transitionally,
- *                       plus any future readonly cmd) is allowed.
+ *   lsm/bpf          -- gates the bpf() syscall in native-signing mode.
+ *                       It is omitted by the trusted-root compatibility
+ *                       object, where userspace verifies the loader before
+ *                       issuing the legacy load. In native mode,
+ *                       kernel-context (signed loader) calls return
+ *                       immediately; userspace BPF_PROG_LOAD must be
+ *                       prog_type=SYSCALL and have a non-zero signature in
+ *                       this cheap pre-filter. The authoritative verdict
+ *                       is enforced by lsm/bpf_prog_load below, after the
+ *                       kernel has verified the signature.
  *   lsm/bpf_prog_load -- the native-mode admission gate that runs INSIDE the
  *                       verifier, after signature verification, so the
  *                       kernel-recorded verdict is final here. A
@@ -106,7 +101,7 @@ struct {
 	__type(value, struct shirudo_sb_id);
 } shirudo_bpffs_sb SEC(".maps");
 
-#ifdef SHIRUDO_BPF2_LEGACY
+#if defined(SHIRUDO_BPF2_LEGACY) && !defined(SHIRUDO_BPF2_NO_ADMISSION)
 static __always_inline bool shirudo_current_exe_matches(void)
 {
 	struct shirudo_sb_id *id;
@@ -128,6 +123,7 @@ static __always_inline bool shirudo_current_exe_matches(void)
 }
 #endif
 
+#ifndef SHIRUDO_BPF2_NO_ADMISSION
 SEC("lsm/bpf")
 int BPF_PROG(shirudo_lsm_bpf, int cmd, union bpf_attr *attr,
 	     unsigned int size, bool kernel)
@@ -233,6 +229,7 @@ int BPF_PROG(shirudo_lsm_bpf, int cmd, union bpf_attr *attr,
 		return -EACCES;
 	}
 }
+#endif /* !SHIRUDO_BPF2_NO_ADMISSION */
 
 /*
  * Admission gate. Fires from a single call site inside the verifier
@@ -247,6 +244,7 @@ int BPF_PROG(shirudo_lsm_bpf, int cmd, union bpf_attr *attr,
  * (the loader itself passed this gate when it was loaded from userspace).
  */
 #ifndef SHIRUDO_BPF2_LEGACY
+#ifndef SHIRUDO_BPF2_NO_ADMISSION
 SEC("lsm/bpf_prog_load")
 int BPF_PROG(shirudo_lsm_bpf_prog_load, struct bpf_prog *prog,
 	     union bpf_attr *attr, struct bpf_token *token, bool kernel)
@@ -280,6 +278,7 @@ int BPF_PROG(shirudo_lsm_bpf_prog_load, struct bpf_prog *prog,
 
 	return 0;
 }
+#endif /* !SHIRUDO_BPF2_NO_ADMISSION */
 #endif
 
 /*

@@ -416,7 +416,8 @@ static int init_lsm(enum shirudo_mode mode, bool native_signing,
 	struct bpf_link *mount_links[ARRAY_SIZE(mount_hooks)] = {};
 	const struct shirudo_embedded_bpf *blob = native_signing ?
 		shirudo_bpf2_blob() : shirudo_bpf2_trusted_root_blob();
-	struct bpf_program *p_bpf, *p_unlink, *p_setx, *p_rmx, *p_pload = NULL;
+	struct bpf_program *p_bpf = NULL, *p_unlink, *p_setx, *p_rmx;
+	struct bpf_program *p_pload = NULL;
 	struct bpf_object *obj = NULL, *seal_obj = NULL;
 	struct bpf_link *link_bpf = NULL, *link_unlink = NULL;
 	struct bpf_link *link_setx = NULL, *link_rmx = NULL, *link_pload = NULL;
@@ -515,9 +516,10 @@ static int init_lsm(enum shirudo_mode mode, bool native_signing,
 	if (native_signing)
 		p_pload = bpf_object__find_program_by_name(obj,
 						   "shirudo_lsm_bpf_prog_load");
-	p_bpf = bpf_object__find_program_by_name(obj, "shirudo_lsm_bpf");
-	if (!p_unlink || !p_setx || !p_rmx || !p_bpf ||
-	    (native_signing && !p_pload)) {
+	if (native_signing)
+		p_bpf = bpf_object__find_program_by_name(obj, "shirudo_lsm_bpf");
+	if (!p_unlink || !p_setx || !p_rmx ||
+	    (native_signing && (!p_bpf || !p_pload))) {
 		pr_err("expected programs missing in bpf2 object");
 		err = -ENOENT;
 		goto out;
@@ -525,13 +527,13 @@ static int init_lsm(enum shirudo_mode mode, bool native_signing,
 
 	/*
 	 * Order: the bpffs guards (inode_unlink/setxattr/removexattr), then
-	 * seal's five regular-fs hooks, then the two bpf() gates
+	 * seal's five regular-fs hooks, then the native-mode bpf() gates
 	 * (bpf_prog_load admission, then lsm/bpf) LAST. Pinning a link
 	 * creates a bpffs inode, gated by neither guard set; seal's unsigned
 	 * load and the identity-map freeze must both precede the load gates
-	 * going live. lsm/bpf is attached last because its pin is the
-	 * canonical "shirudo active" marker checked for idempotency and by
-	 * `shirudo status`.
+	 * going live. In trusted-root mode the admission hooks are absent and
+	 * the retained inode_unlink link is pinned as the canonical
+	 * "shirudo active" marker checked for idempotency and by `shirudo status`.
 	 */
 	err = attach_pin(p_unlink, SHIRUDO_INODE_UNLINK_LINK_PIN, &link_unlink);
 	if (err) {
@@ -589,15 +591,31 @@ static int init_lsm(enum shirudo_mode mode, bool native_signing,
 		}
 	}
 
-	err = attach_pin(p_bpf, SHIRUDO_LSM_LINK_PIN, &link_bpf);
-	if (err) {
-		pr_err("attach lsm/bpf: %s", strerror(-err));
-		goto out;
+	if (native_signing) {
+		err = attach_pin(p_bpf, SHIRUDO_LSM_LINK_PIN, &link_bpf);
+		if (err) {
+			pr_err("attach lsm/bpf: %s", strerror(-err));
+			goto out;
+		}
+	} else {
+		/* Keep the long-standing lsm_link marker, but make it a pin of
+		 * the retained inode_unlink guard when admission hooks are absent. */
+		/* bpf_link__pin() refuses a second pin for the same libbpf link
+		 * object, so use the raw object-pin helper for this marker alias. */
+		if (bpf_obj_pin(bpf_link__fd(link_unlink),
+				SHIRUDO_LSM_LINK_PIN) != 0) {
+			err = -errno;
+			pr_err("pin trusted-root LSM marker: %s", strerror(-err));
+			goto out;
+		}
 	}
 
-	pr_info("bpf2%s attached: lsm/bpf gate live (%s)%s",
+	pr_info("bpf2%s attached: %s (%s)%s",
 		attach_filesystem_seal ? " + seal" : "",
-		native_signing ? "kernel signatures" : "trusted root fallback",
+		native_signing ? "lsm/bpf gate live" :
+			"filesystem and mount LSM guards live",
+		native_signing ? "kernel signatures" :
+			"trusted-root userspace verification",
 		attach_filesystem_seal ? ", bpffs and /var/lib/shirudo sealed" :
 		", filesystem seal unavailable on this kernel");
 	err = 0;

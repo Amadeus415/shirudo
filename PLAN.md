@@ -255,41 +255,21 @@ coding style (`Documentation/process/coding-style.rst`).
   supply-chain cost is paid at every install of shirudo on
   every target; the in-tree code cost is paid once.
 
-- **Bleeding-edge kernel and toolchain assumed.** shirudo targets
-  the **current upstream Linux kernel** and the **current
-  upstream clang/LLVM** as hard prerequisites. There is no
-  legacy-kernel detection path, no graceful-degradation feature
-  probe at runtime, no `-E2BIG`-style "old kernel?" fallback in
-  the bootstrap sequence. If the kernel UAPI headers used at
-  build time don't expose `keyring_id` in `union bpf_attr`,
-  `BPF_PROG_TYPE_SYSCALL`, `BPF_LINK_CREATE` with
-  `BPF_LSM_MAC`, BPF LSM hooks, BPF token (when shirudo eventually
-  uses it), and signed-loader CMS verification in
-  `kernel/bpf/syscall.c`, the build fails closed with an
-  actionable error. Concretely, the floor is the bpf-next
-  **load-time signing** scheme — the kernel folding a frozen
-  exclusive metadata map into the `insns || metadata` signature at
-  `BPF_PROG_LOAD` (`Documentation/bpf/signing.rst`) rather than the
-  loader self-checking `map->sha` — together with bpffs
-  extended-attribute support (`9722955b5430 "bpf: Add simple xattr
-  support to bpffs"`), which the per-upatch payload xattr depends
-  on. Both landed in bpf-next for 7.2; shirudo carries no fallback
-  for kernels below that line. The build-time toolchain (clang for BPF,
-  libbpf, bpftool, tpm2-tss, libssh) is assumed to be current
-  enough to expose every API shirudo calls; minimum versions of
-  the userspace libraries listed in "Build system §"Linkage and
-  runtime dependencies"" are precise ABI markers, not graceful
-  upper bounds. The deployment story is **"shirudo runs on
-  modern kernels; vendors who can't ship recent kernels can't
-  use shirudo"**. This simplifies the code (no version-gated
-  branches), shrinks the test matrix (one supported kernel
-  generation), and lets shirudo lean on the latest verifier
-  capabilities for the signed-loader path without
-  reservations. The embedded-target value proposition (see
-  Documentation/threat-model.rst §"Embedded Linux at the edge")
-  is not "shirudo helps you keep an ancient kernel running" —
-  it is "shirudo lets you ship BPF mitigations to a modern
-  embedded kernel without rebooting the device."
+- **Current and stable kernel compatibility.** shirudo builds against the
+  current upstream clang/LLVM, libbpf, and bpftool, but targets may use the
+  current native signed-loader ABI or a stable kernel such as Linux 6.1 in
+  trusted-root mode. The latter already has `gen_loader`,
+  `BPF_PROG_TYPE_SYSCALL`, `bpf_sys_bpf()`, and the `fd_array` prefix needed
+  by the generated loader, but not `BPF_PROG_LOAD.fd_array_cnt`. Shirudo
+  probes that ABI boundary and sends the legacy outer-loader attribute layout
+  on those kernels. The CMS signature is verified in userspace before loading
+  in trusted-root mode; untrusted-root mode still requires the native
+  load-time signing contract. The trusted-root BPF object omits only the BPF
+  admission hooks on this fallback path; its bpffs inode/xattr and mount
+  lifecycle hooks remain active. Kernels lacking the other required features
+  — BPF LSM hooks, `BPF_LINK_CREATE` with `BPF_LSM_MAC`, and bpffs extended
+  attributes — fail closed with an actionable pre-flight error. The build-time
+  toolchain remains current enough to expose every userspace API shirudo calls.
 
 - **Target hardening, in two layers.** shirudo on the target
   treats every local attacker (including root) as potentially
@@ -876,7 +856,7 @@ creation, no LSM load, no chain extension.
 | # | Check | Hard? | How |
 |---|---|---|---|
 | 1 | Running as root | yes | `geteuid() == 0`; otherwise refuse — `bpf()`, `keyctl()`, bpffs mounts, and `/dev/tpmrm0` all require it. |
-| 2 | `/sys/kernel/security/lsm` contains `bpf` | yes | One open + read of the file; substring search. No legacy-kernel feature probing — shirudo requires current upstream (Goals §"Bleeding-edge kernel and toolchain assumed"); if `bpf` is missing, the actionable message is "rebuild your kernel with `lsm=…,bpf`". |
+| 2 | `/sys/kernel/security/lsm` contains `bpf` | yes | One open + read of the file; if `bpf` is missing, the actionable message is "rebuild your kernel with `lsm=…,bpf`". |
 | 3 | shirudo's **private bpffs** mounted (or mountable) at `/var/lib/shirudo/bpffs/` | yes | `statfs(2)` for `BPF_FS_MAGIC` at that path; if not present, `mkdir(2)` the parent and `mount(2)` with `-t bpf -o mode=0700,nosuid,nodev,noexec`. shirudo does **not** depend on the system-wide `/sys/fs/bpf` — it manages its own bpffs instance so pins live under `/var/lib/shirudo/` (covered by the filesystem-sealing LSM) rather than commingled with whatever else uses the system bpffs. |
 | 4 | `/var/lib/shirudo/keys/cert.der` present and readable | yes | `access(R_OK)` + parse with `d2i_X509()` to confirm it's a valid DER cert. shirudo cannot bootstrap without the cert. |
 | 5 | `/var/lib/shirudo/` writable, mode 0700 owned by root | yes | `stat(2)` + `mkdir(2)` for any missing subdirectory (`keys/`, `upatches/`, `incoming/`); enforce mode and owner. |
@@ -3501,14 +3481,11 @@ Hyper-V vTPM, AWS Nitro TPM, GCP vTPM, Azure vTPM) are TPM 2.0 and
 fully supported — the CI matrix exercises swtpm under QEMU on
 x86_64 and arm64 to keep the vTPM path green.
 
-The only **runtime** check at `shirudo init` is that
-`/sys/kernel/security/lsm` contains `bpf`. There is no feature
-probe for `keyring_id` in `union bpf_attr`, no `-E2BIG`-style
-old-kernel fallback, no graceful degradation for a kernel that
-lacks the signed-loader path. shirudo targets one kernel
-generation — the current upstream — and refuses to attempt to
-operate on anything older. Vendors who can't ship a current
-kernel are not in shirudo's user base.
+At `shirudo init`, the runtime checks include the native signed-loader ABI.
+When that ABI is unavailable, trusted-root mode remains usable through the
+userspace-verified legacy outer-loader path, including on Linux 6.1. The
+legacy path is deliberately unavailable to untrusted-root mode because the
+kernel cannot attest the loader metadata without the native signing contract.
 
 Build-time check: `Makefile.config` confirms that the kernel UAPI
 headers expose the structures shirudo references (`keyring_id` in

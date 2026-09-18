@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -752,6 +753,11 @@ struct shirudo_prog_desc {
 	int		prog_fd;
 };
 
+/* The legacy outer loader only needs the BPF_PROG_LOAD prefix through fd_array. */
+#define SHIRUDO_BPF_PROG_LOAD_LEGACY_ATTR_SIZE \
+	(offsetof(union bpf_attr, fd_array) + \
+	 sizeof(((union bpf_attr *)0)->fd_array))
+
 static int loader_map_create(const char *name, uint32_t value_size,
 			     const void *excl_prog_hash,
 			     uint32_t excl_prog_hash_sz)
@@ -837,6 +843,11 @@ static int prog_load_signed(const struct bpf_insn *insns, size_t insn_cnt,
  * Legacy-kernel loader path. The signature has already been verified by
  * userspace in trusted-root mode; deliberately leave the native signing
  * attributes out of the request so kernels without that ABI can load it.
+ *
+ * In particular, do not send fd_array_cnt. It is a trailing field added
+ * after Linux 6.1, and a non-zero value makes 6.1 reject the whole request
+ * with -E2BIG before it reaches the verifier. fd_array itself is part of
+ * the 6.1 ABI and is enough for gen_loader's map-index relocations.
  */
 static int prog_load_unsigned(const struct bpf_insn *insns, size_t insn_cnt,
 				      const char *prog_name, int loader_map_fd,
@@ -855,11 +866,11 @@ static int prog_load_unsigned(const struct bpf_insn *insns, size_t insn_cnt,
 	attr.log_size = (uint32_t)log_sz;
 	attr.log_buf = (uint64_t)(uintptr_t)log_buf;
 	attr.fd_array = (uint64_t)(uintptr_t)fd_array;
-	attr.fd_array_cnt = 1;
 	memcpy(attr.prog_name, prog_name,
 	       strnlen(prog_name, sizeof(attr.prog_name)));
 
-	fd = syscall(__NR_bpf, BPF_PROG_LOAD, &attr, sizeof(attr));
+	fd = syscall(__NR_bpf, BPF_PROG_LOAD, &attr,
+		     SHIRUDO_BPF_PROG_LOAD_LEGACY_ATTR_SIZE);
 	return (int)fd;
 }
 

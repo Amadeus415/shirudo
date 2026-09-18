@@ -10,10 +10,14 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
+#include <linux/bpf.h>
 #include <linux/btf.h>
 
 #include <bpf/btf.h>
@@ -23,6 +27,8 @@
 
 #define SHIRUDO_MAP_SHA_SIZE	32U
 #define SHIRUDO_BTF_MAX_UNWRAP	32
+#define SHIRUDO_OFFSETOFEND(type, member) \
+	(offsetof(type, member) + sizeof(((type *)0)->member))
 
 static int abi_fail(char *detail, size_t detail_sz, const char *fmt, ...)
 {
@@ -189,6 +195,35 @@ int shirudo_kernel_abi_validate_btf(const struct btf *btf,
 	return 0;
 }
 
+/*
+ * fd_array was already present in Linux 6.1, but fd_array_cnt was added
+ * later.  Sending a non-zero value for that trailing field to a 6.1 kernel
+ * makes its forward-compatibility check return -E2BIG.  BTF cannot describe
+ * this userspace union reliably, so probe the syscall ABI directly with an
+ * intentionally invalid program type.  A kernel which knows fd_array_cnt
+ * rejects the invalid type; an older kernel rejects the non-zero tail first.
+ */
+static int validate_fd_array_cnt(char *detail, size_t detail_sz)
+{
+	union bpf_attr attr = {};
+	long ret;
+
+	attr.prog_type = (enum bpf_prog_type)-1;
+	attr.fd_array_cnt = 1;
+	ret = syscall(__NR_bpf, BPF_PROG_LOAD, &attr,
+		      SHIRUDO_OFFSETOFEND(union bpf_attr, fd_array_cnt));
+	if (ret >= 0) {
+		close((int)ret);
+		return abi_fail(detail, detail_sz,
+				"BPF_PROG_LOAD accepted an invalid probe program");
+	}
+	if (errno == E2BIG)
+		return abi_fail(detail, detail_sz,
+				"kernel lacks BPF_PROG_LOAD.fd_array_cnt; "
+				"use the legacy outer-loader ABI");
+	return 0;
+}
+
 int shirudo_kernel_abi_check(char *detail, size_t detail_sz)
 {
 	struct btf *btf;
@@ -206,5 +241,7 @@ int shirudo_kernel_abi_check(char *detail, size_t detail_sz)
 
 	rc = shirudo_kernel_abi_validate_btf(btf, detail, detail_sz);
 	btf__free(btf);
-	return rc;
+	if (rc)
+		return rc;
+	return validate_fd_array_cnt(detail, detail_sz);
 }
