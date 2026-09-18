@@ -1,8 +1,8 @@
 {
   "artifacts": {
-    "builder_inputs_only": true,
+    "builder_inputs_only": false,
     "per_record_metadata_included": false,
-    "signing_certificates_included": false,
+    "signing_certificates_included": true,
     "upatches_included": false
   },
   "collateral": {
@@ -11,8 +11,8 @@
     "per_entry_source_dirs": "kernel-cve/sources/",
     "rebuild_notes": "kernel-cve/REBUILD.md"
   },
-  "count": 30,
-  "generated_at": "2026-09-17T04:18:34Z",
+  "count": 31,
+  "generated_at": "2026-09-18T20:24:50Z",
   "records": [
     {
       "archive_path": null,
@@ -823,6 +823,33 @@
       "trust_model": "trusted-root",
       "upatch_included": false,
       "upatch_name": "cve-2026-80725-obs"
+    },
+    {
+      "archive_path": "upatches/cve-2026-68118-tcp-challenge-ack-non-exact-rst-syn-received.upatch",
+      "archive_slug": "cve-2026-68118-tcp-challenge-ack-non-exact-rst-syn-received",
+      "artifact_sha256": "fac52e762fd78916efd8efd978ab6f980e5d176ee4ef0190739749989914c54f",
+      "cve": "CVE-2026-68118",
+      "health_status": "trusted_root",
+      "kernel_branch": "6.1",
+      "kernel_release": "6.1.0-shirudo-6.1",
+      "metadata_path": "metadata/cve-2026-68118-tcp-challenge-ack-non-exact-rst-syn-received.observability.json",
+      "metadata_upatch_sha256": "fac52e762fd78916efd8efd978ab6f980e5d176ee4ef0190739749989914c54f",
+      "payload_sha256": "821e269a5d7e80b3d72bf8d44c4de6d7ab5d3f88bb4ede93c32e7906692ea752",
+      "predicate_materialization_status": "deferred_predicate_context",
+      "predicate_status": "source_derived_unvalidated",
+      "rebuild_manifest": "sources/cve-2026-68118-tcp-challenge-ack-non-exact-rst-syn-received/rebuild.json",
+      "signer": {
+        "certificate_archive_path": null,
+        "certificate_sha256": null,
+        "certificate_source": null
+      },
+      "slug": "cve-2026-68118-tcp-challenge-ack-non-exact-rst-syn-received",
+      "source_archive_path": "sources/cve-2026-68118-tcp-challenge-ack-non-exact-rst-syn-received/observability/cve_2026_68118-6.1-offset-predicate.bpf.c",
+      "source_metadata": "2026-09-08-restart/cve-2026-68118-tcp-challenge-ack-non-exact-rst-syn-received/observability/observability.json",
+      "status": "loaded_health_trusted_root",
+      "trust_model": "trusted-root",
+      "upatch_included": false,
+      "upatch_name": "cve-2026-68118-6-1-offset-predicate"
     }
   ],
   "schema": 3,

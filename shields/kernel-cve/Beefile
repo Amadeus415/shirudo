@@ -486,3 +486,7 @@ architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
 CONFIG_NET = ["y", "m"]
+
+[[upatches]]
+source = "sources/cve-2026-68118-tcp-challenge-ack-non-exact-rst-syn-received/observability/cve_2026_68118-6.1-offset-predicate.bpf.c"
+load_target = "upatches/cve-2026-68118-tcp-challenge-ack-non-exact-rst-syn-received.upatch"
