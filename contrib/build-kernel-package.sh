@@ -782,9 +782,18 @@ fi
 MODULES_STAGE_DIR="${WORK_DIR}/modules"
 rm -rf "$MODULES_STAGE_DIR"
 mkdir -p "$MODULES_STAGE_DIR"
-IMAGE_DEB="$(find "$OUTPUT_DIR" -maxdepth 1 -type f \
-  -name 'linux-image-[0-9]*.deb' ! -name '*-dbg*.deb' -print -quit)"
-dpkg-deb -x "$IMAGE_DEB" "$MODULES_STAGE_DIR"
+if [[ "$PACKAGE_FORMAT" == deb ]]; then
+  IMAGE_DEB="$(find "$OUTPUT_DIR" -maxdepth 1 -type f \
+    -name 'linux-image-[0-9]*.deb' ! -name '*-dbg*.deb' -print -quit)"
+  dpkg-deb -x "$IMAGE_DEB" "$MODULES_STAGE_DIR"
+else
+  IMAGE_RPM="$(find "$OUTPUT_DIR" -maxdepth 1 -type f \
+    -name 'kernel-[0-9]*.rpm' \
+    ! -name '*debug*' ! -name '*debuginfo*' \
+    ! -name '*headers*' ! -name '*devel*' -print -quit)"
+  rpm2cpio "$IMAGE_RPM" |
+    (cd "$MODULES_STAGE_DIR" && cpio -idm --quiet)
+fi
 MODULES_SOURCE_DIR=""
 for candidate in \
   "$MODULES_STAGE_DIR/lib/modules/$kernel_release" \
