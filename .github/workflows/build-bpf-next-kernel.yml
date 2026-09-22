@@ -22,7 +22,21 @@ jobs:
           sudo rm -rf /opt/ghc /usr/local/lib/android /usr/share/dotnet || true
           sudo apt-get clean
 
+      - name: Install GCC 15
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y software-properties-common
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          sudo apt-get install -y gcc-15 g++-15
+          gcc-15 --version
+          g++-15 --version
+
       - name: Build bpf-next kernel artifacts
+        env:
+          CC: gcc-15
+          HOSTCC: gcc-15
+          HOSTCXX: g++-15
         run: make bpf-next
 
       - name: Upload kernel artifacts
