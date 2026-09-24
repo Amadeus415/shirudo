@@ -10,11 +10,14 @@
 #ifndef SHIRUDO_SYSINFO_H
 #define SHIRUDO_SYSINFO_H
 
+#include "kernel_build_id.h"
+
 struct shirudo_sysinfo {
 	char	hostname[256];
 	char	os_pretty[256];		/* /etc/os-release PRETTY_NAME */
 	char	kernel_release[96];	/* uname -r */
 	char	kernel_version[256];	/* uname -v */
+	char	kernel_build_id[SHIRUDO_KERNEL_BUILD_ID_STRING_MAX];
 	char	machine[96];		/* uname -m */
 	char	machine_id[64];		/* /etc/machine-id */
 	char	boot_id[64];		/* /proc boot_id */

@@ -326,6 +326,9 @@ static void print_system_human(const struct shirudo_sysinfo *si)
 	printf("  %-16s %s\n", "Kernel:", si->kernel_release);
 	if (si->kernel_version[0])
 		printf("  %-16s %s\n", "Kernel Version:", si->kernel_version);
+	if (si->kernel_build_id[0])
+		printf("  %-16s %s\n", "Kernel Build ID:",
+		       si->kernel_build_id);
 	printf("  %-16s %s\n", "Architecture:", si->machine);
 	if (si->nproc > 0)
 		printf("  %-16s %ld\n", "CPUs:", si->nproc);

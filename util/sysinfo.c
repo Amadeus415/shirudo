@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include "json.h"
+#include "kernel_build_id.h"
 #include "malloc.h"
 #include "sysinfo.h"
 
@@ -312,6 +313,7 @@ void shirudo_sysinfo_gather(struct shirudo_sysinfo *si)
 			sizeof(si->machine_id));
 	read_first_line("/proc/sys/kernel/random/boot_id", si->boot_id,
 			sizeof(si->boot_id));
+	(void)shirudo_kernel_build_id_read(si->kernel_build_id);
 
 	si->nproc = sysconf(_SC_NPROCESSORS_ONLN);
 	read_mem(&si->mem_total_kb, &si->mem_avail_kb);
@@ -327,6 +329,7 @@ void shirudo_sysinfo_emit_json(struct shirudo_json_emit *e,
 	shirudo_json_kv_string(e, "os", si->os_pretty);
 	shirudo_json_kv_string(e, "kernel_release", si->kernel_release);
 	shirudo_json_kv_string(e, "kernel_version", si->kernel_version);
+	shirudo_json_kv_string(e, "kernel_build_id", si->kernel_build_id);
 	emit_kernel_config(e, si->kernel_release);
 	shirudo_json_kv_string(e, "architecture", si->machine);
 	shirudo_json_kv_string(e, "machine_id", si->machine_id);

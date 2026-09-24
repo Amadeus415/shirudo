@@ -110,6 +110,8 @@ import sys
 
 doc = json.load(open(sys.argv[1], encoding="utf-8"))
 system = doc["system"]
+assert isinstance(system["kernel_build_id"], str)
+assert all(c in "0123456789abcdef" for c in system["kernel_build_id"])
 config = system["kernel_config"]
 assert isinstance(config, dict)
 assert all(key.startswith("CONFIG_") for key in config)
@@ -139,6 +141,7 @@ test_expect_success 'status --include-system prints kernel config' '
 	work=$(mktemp -d) &&
 	"$S" status --include-system >"$work/status" 2>"$work/stderr" &&
 	grep -q "^  Kernel Config:$" "$work/status" &&
+	grep -Eq "^  Kernel Build ID: ([0-9a-f]+)?$" "$work/status" &&
 	grep -Eq "^    (CONFIG_[^=]+=.*|\\(unavailable\\))$" "$work/status" &&
 	rm -rf "$work"
 '
