@@ -2467,9 +2467,9 @@ static int tree_selector_kv_compare(const void *left, const void *right)
 	return strcmp(a->key, b->key);
 }
 
-/* This is the canonical operation representation used by the Go publisher.
- * encoding/json emits struct fields in declaration order and sorts map keys;
- * mirror both rules here before a target trusts an operation digest. */
+/* This is the canonical operation representation used by the publishers.
+ * Selector object keys are emitted lexicographically, as in Jbrust's
+ * serde_json representation, before a target trusts an operation digest. */
 static int tree_operation_digest(const struct shirudo_tree_operation *op,
 					 char out[72])
 {
@@ -2519,6 +2519,12 @@ static int tree_operation_digest(const struct shirudo_tree_operation *op,
 			shirudo_json_arr_close(&e);
 		}
 		shirudo_json_obj_close(&e);
+	}
+	if (op->selector.n_kernel_build_id) {
+		shirudo_json_arr_open(&e, "kernel_build_id");
+		for (int i = 0; i < op->selector.n_kernel_build_id; i++)
+			shirudo_json_str(&e, op->selector.kernel_build_id[i]);
+		shirudo_json_arr_close(&e);
 	}
 	if (op->selector.n_kernel_release_prefix) {
 		shirudo_json_arr_open(&e, "kernel_release_prefix");

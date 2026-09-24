@@ -46,10 +46,13 @@ func TestBPMTreePublicationOmitsGlobalTreeRootFields(t *testing.T) {
 
 func TestBPMTreeOperationDigestIsStable(t *testing.T) {
 	op := bpmTreeOperation{
-		Seq:      7,
-		Op:       "delete",
-		ID:       "example",
-		Selector: bpmTreeSelector{KernelReleasePrefix: []string{"6.18"}},
+		Seq: 7,
+		Op:  "delete",
+		ID:  "example",
+		Selector: bpmTreeSelector{
+			KernelReleasePrefix: []string{"6.18"},
+			KernelBuildID:       []string{"deadbeef"},
+		},
 		Artifact: bpmTreeArtifact{
 			Repository:     "oci://registry.example/tree",
 			ManifestDigest: "sha256:" + strings.Repeat("a", 64),

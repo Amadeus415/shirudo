@@ -15,6 +15,7 @@ unload_artifact = "upatches/cve-2025-71093-e1000-oob-e1000-tbi-should-accept.unl
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -31,6 +32,7 @@ unload_artifact = "upatches/cve-2025-71116-libceph-make-decode-pool-more-resilie
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -47,6 +49,7 @@ unload_artifact = "upatches/cve-2026-23003-ip6-tunnel-skb-vlan-inet-prepare-ip6-
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -63,6 +66,7 @@ unload_artifact = "upatches/cve-2026-23315-wifi-mt76-oob-access-mt76-connac2-mac
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -79,6 +83,7 @@ unload_artifact = "upatches/cve-2026-31393-bluetooth-l2cap-validate-l2cap-info-r
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -95,6 +100,7 @@ unload_artifact = "upatches/cve-2026-31674-netfilter-ip6t-rt-reject-oversized-ad
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -111,6 +117,7 @@ unload_artifact = "upatches/cve-2026-31675-net-sched-sch-netem-oob-access-packet
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -127,6 +134,7 @@ unload_artifact = "upatches/cve-2026-31682-bridge-br-nd-send-linearize-skb-parsi
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -143,6 +151,7 @@ unload_artifact = "upatches/cve-2026-31685-netfilter-ip6t-eui64-reject-invalid-m
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -159,6 +168,7 @@ unload_artifact = "upatches/cve-2026-31694-fuse-reject-oversized-dirents-page-ca
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -175,6 +185,7 @@ unload_artifact = "upatches/cve-2026-43062-bluetooth-l2cap-type-confusion-l2cap-
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -191,6 +202,7 @@ unload_artifact = "upatches/cve-2026-43281-mailbox-oob-access-fw-mbox-index-xlat
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -207,6 +219,7 @@ unload_artifact = "upatches/cve-2026-52906-9p-access-mode-flags-being-ored-inste
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -223,6 +236,7 @@ unload_artifact = "upatches/cve-2026-52915-netfilter-ip6t-hbh-reject-oversized-o
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -239,6 +253,7 @@ unload_artifact = "upatches/cve-2026-52942-netfilter-nf-log-validate-mac-header-
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -255,6 +270,7 @@ unload_artifact = "upatches/cve-2026-52974-net-tls-strparser-anchor-skb-leak-off
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -271,6 +287,7 @@ unload_artifact = "upatches/cve-2026-53043-ocfs2-dlm-validate-qr-numregions-dlm-
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -287,6 +304,7 @@ unload_artifact = "upatches/cve-2026-53078-bpf-same-register-dst-src-oob-read-po
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -303,6 +321,7 @@ unload_artifact = "upatches/cve-2026-53092-bpf-linked-reg-delta-tracking-src-reg
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -319,6 +338,7 @@ unload_artifact = "upatches/cve-2026-53194-usb-serial-kl5kusb105-bulk-out-buffer
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -335,6 +355,7 @@ unload_artifact = "upatches/cve-2026-53255-bluetooth-mgmt-validate-advertising-t
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -351,6 +372,7 @@ unload_artifact = "upatches/cve-2026-63915-nfc-hci-oob-read-hcp-header-parsing.u
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -369,6 +391,7 @@ unload_artifact = "upatches/cve-2026-63947-bluetooth-hidp-missing-length-checks-
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -386,6 +409,7 @@ unload_artifact = "upatches/cve-2026-63976-bluetooth-l2cap-clear-chan-ident-ecre
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -402,6 +426,7 @@ unload_artifact = "upatches/cve-2026-63984-ipv6-rpl-hdrlen-overflow-ipv6-rpl-srh
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -418,6 +443,7 @@ unload_artifact = "upatches/cve-2026-63992-tunnels-not-assume-transport-header-i
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -434,6 +460,7 @@ unload_artifact = "upatches/cve-2026-64036-cgroup-rstat-validate-cpu-css-rstat-c
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -450,6 +477,7 @@ unload_artifact = "upatches/cve-2026-64116-ipv6-ioam-add-null-check-idev-ipv6-ho
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -466,6 +494,7 @@ unload_artifact = "upatches/cve-2026-64133-alsa-asihpi-oob-array-access-at-readi
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -482,6 +511,7 @@ unload_artifact = "upatches/cve-2026-80725-net-gro-properly-validate-big-tcp-agg
 
 [upatches.tree.selector]
 kernel_release_prefix = ["7.2"]
+kernel_build_id = ["534043106db415bc0a983a3393e06c81b431bd39"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]

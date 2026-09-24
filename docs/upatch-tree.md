@@ -33,6 +33,7 @@ assignment:
       "id": "block-afalg",
       "selector": {
         "kernel_release_prefix": ["6.16", "6.18"],
+        "kernel_build_id": ["<GNU-vmlinux-build-id>"],
         "architecture": ["x86_64"],
         "kconfig": {"CONFIG_BPF": ["y"]},
         "labels": {"env": ["prod"]}
@@ -52,7 +53,8 @@ assignment:
 
 `operation_digest` is the SHA-256 digest of the canonical operation fields:
 sequence, operation, ID, selector, and artifact metadata. It does not include
-the digest field itself. The signed publication and OCI manifest digest
+the digest field itself. Selector object keys are encoded in lexicographic
+order, including `kernel_build_id`. The signed publication and OCI manifest digest
 authenticate the ordered operation list; this version has no global tree-root
 field.
 
@@ -74,6 +76,7 @@ unload_artifact = "upatches/block-afalg.unload.upatch"
 
 [upatches.tree.selector]
 kernel_release_prefix = ["6.16", "6.18"]
+kernel_build_id = ["<GNU-vmlinux-build-id>"]
 architecture = ["x86_64"]
 
 [upatches.tree.selector.kconfig]
@@ -95,6 +98,7 @@ digests, and the `.upatch` payload hash. It evaluates selectors locally:
 | Selector | Target source of truth |
 | --- | --- |
 | `kernel_release_prefix` | `uname(2).release`; any listed complete release-component prefix may match (for example, `6.1` matches `6.1.0` but not `6.18`) |
+| `kernel_build_id` | GNU build ID from `/sys/kernel/notes`; any listed ID must match exactly; a missing ID never matches |
 | `architecture` | `uname(2).machine`; any listed architecture may match |
 | `kconfig` | `/proc/config.gz`, falling back to `/boot/config-<uname -r>`; any listed value for each key may match; `y`, `m`, and unset are normalized |
 | `labels` | `/etc/shirudo/node.labels`, one `key=value` per line; any listed value for each key may match |
@@ -102,6 +106,9 @@ digests, and the `.upatch` payload hash. It evaluates selectors locally:
 Lists use OR semantics within one selector dimension, while selector
 dimensions and distinct Kconfig/label keys use AND semantics. For example,
 `kernel_release_prefix = ["6.16", "6.18"]` matches either kernel family.
+When `kernel_build_id` is present, it is an additional exact-match
+requirement. This is intended for offset-sensitive upatches tied to one
+specific `vmlinux` build.
 
 Operations are considered in ascending `seq`. A nonmatching operation only
 advances the global cursor. A matching `add` or `delete` downloads its direct

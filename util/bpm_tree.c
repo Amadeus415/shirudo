@@ -19,6 +19,7 @@
 #include "config.h"
 #include "io.h"
 #include "json.h"
+#include "kernel_build_id.h"
 #include "kernel_release.h"
 #include "log.h"
 #include "macros.h"
@@ -294,6 +295,11 @@ static int tp_selector(struct tree_parser *p, struct shirudo_tree_selector *s)
 		if (!strcmp(key, "kernel_release_prefix")) {
 			if (tp_string_array(p, s->kernel_release_prefix,
 					    &s->n_kernel_release_prefix,
+					    SHIRUDO_TREE_MAX_SELECTOR_VALUES))
+				return -EINVAL;
+		} else if (!strcmp(key, "kernel_build_id")) {
+			if (tp_string_array(p, s->kernel_build_id,
+					    &s->n_kernel_build_id,
 					    SHIRUDO_TREE_MAX_SELECTOR_VALUES))
 				return -EINVAL;
 		} else if (!strcmp(key, "architecture")) {
@@ -765,7 +771,7 @@ int shirudo_tree_selector_matches(const struct shirudo_tree_selector *s)
 	 * still applicable if uname(2) is unavailable. */
 	if (!s)
 		return 0;
-	if (!s->n_kernel_release_prefix && !s->n_architecture &&
+	if (!s->n_kernel_release_prefix && !s->n_kernel_build_id && !s->n_architecture &&
 	    !s->n_kconfig && !s->n_labels)
 		return 1;
 	if (uname(&u) != 0)
@@ -775,6 +781,22 @@ int shirudo_tree_selector_matches(const struct shirudo_tree_selector *s)
 		for (int i = 0; i < s->n_kernel_release_prefix; i++)
 			if (shirudo_kernel_release_prefix_matches(u.release,
 							   s->kernel_release_prefix[i])) {
+				matched = true;
+				break;
+			}
+		if (!matched)
+			return 0;
+	}
+	if (s->n_kernel_build_id) {
+		char build_id[SHIRUDO_KERNEL_BUILD_ID_STRING_MAX];
+
+		/* A selector carrying a build ID is deliberately fail-closed when
+		 * the running kernel does not publish a GNU build ID. */
+		if (shirudo_kernel_build_id_read(build_id))
+			return 0;
+		matched = false;
+		for (int i = 0; i < s->n_kernel_build_id; i++)
+			if (!strcmp(build_id, s->kernel_build_id[i])) {
 				matched = true;
 				break;
 			}

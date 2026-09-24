@@ -26,9 +26,10 @@ const (
 )
 
 type bpmTreeSelector struct {
-	KernelReleasePrefix []string            `json:"kernel_release_prefix,omitempty"`
 	Architecture        []string            `json:"architecture,omitempty"`
 	Kconfig             map[string][]string `json:"kconfig,omitempty"`
+	KernelBuildID       []string            `json:"kernel_build_id,omitempty"`
+	KernelReleasePrefix []string            `json:"kernel_release_prefix,omitempty"`
 	Labels              map[string][]string `json:"labels,omitempty"`
 }
 
@@ -134,6 +135,7 @@ func upatchPayloadSHA256(body []byte) (string, error) {
 func treeSelectorFromBuild(selector bpmBuildTreeSelector) bpmTreeSelector {
 	result := bpmTreeSelector{
 		KernelReleasePrefix: append([]string(nil), selector.KernelReleasePrefix...),
+		KernelBuildID:       append([]string(nil), selector.KernelBuildID...),
 		Architecture:        append([]string(nil), selector.Architecture...),
 		Kconfig:             make(map[string][]string, len(selector.Kconfig)),
 		Labels:              make(map[string][]string, len(selector.Labels)),
@@ -147,6 +149,7 @@ func treeSelectorFromBuild(selector bpmBuildTreeSelector) bpmTreeSelector {
 	// Selector lists are sets for matching. Canonicalize their order before
 	// hashing so equivalent Beefiles produce the same operation digest.
 	sort.Strings(result.KernelReleasePrefix)
+	sort.Strings(result.KernelBuildID)
 	sort.Strings(result.Architecture)
 	for key := range result.Kconfig {
 		sort.Strings(result.Kconfig[key])

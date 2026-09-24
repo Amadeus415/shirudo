@@ -116,6 +116,7 @@ unload_artifact = "upatches/block-afalg.unload.upatch"
 
 [upatches.tree.selector]
 kernel_release_prefix = ["6.16", "6.18"]
+kernel_build_id = ["deadbeef"]
 architecture = ["x86_64", "aarch64"]
 
 [upatches.tree.selector.kconfig]
@@ -144,6 +145,8 @@ future_field = { enabled = true }
 		len(first.Selector.KernelReleasePrefix) != 2 ||
 		first.Selector.KernelReleasePrefix[0] != "6.16" ||
 		first.Selector.KernelReleasePrefix[1] != "6.18" ||
+		len(first.Selector.KernelBuildID) != 1 ||
+		first.Selector.KernelBuildID[0] != "deadbeef" ||
 		len(first.Selector.Architecture) != 2 ||
 		first.Selector.Architecture[0] != "x86_64" ||
 		first.Selector.Architecture[1] != "aarch64" ||

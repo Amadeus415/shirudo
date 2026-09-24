@@ -56,6 +56,7 @@ type bpmBuildTreeMetadata struct {
 
 type bpmBuildTreeSelector struct {
 	KernelReleasePrefix []string
+	KernelBuildID       []string
 	Architecture        []string
 	Kconfig             map[string][]string
 	Labels              map[string][]string
@@ -356,7 +357,7 @@ func parseBPMBuildUpatches(body []byte) ([]bpmBuildUpatchEntry, error) {
 		if section == "upatches.tree" {
 			knownTreeKey = key == "id" || key == "load_artifact" || key == "unload_artifact"
 		} else if section == "upatches.tree.selector" {
-			knownTreeKey = key == "kernel_release_prefix" || key == "architecture"
+			knownTreeKey = key == "kernel_release_prefix" || key == "kernel_build_id" || key == "architecture"
 		} else if section == "upatches.tree.selector.kconfig" || section == "upatches.tree.selector.labels" {
 			knownTreeKey = true
 		}
@@ -381,6 +382,8 @@ func parseBPMBuildUpatches(body []byte) ([]bpmBuildUpatchEntry, error) {
 			}
 			if key == "kernel_release_prefix" {
 				current.Tree.Selector.KernelReleasePrefix = values
+			} else if key == "kernel_build_id" {
+				current.Tree.Selector.KernelBuildID = values
 			} else {
 				current.Tree.Selector.Architecture = values
 			}

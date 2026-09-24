@@ -31,6 +31,8 @@ struct shirudo_tree_selector_kv {
 struct shirudo_tree_selector {
 	char kernel_release_prefix[SHIRUDO_TREE_MAX_SELECTOR_VALUES][SHIRUDO_TREE_STRING_MAX];
 	int n_kernel_release_prefix;
+	char kernel_build_id[SHIRUDO_TREE_MAX_SELECTOR_VALUES][SHIRUDO_TREE_STRING_MAX];
+	int n_kernel_build_id;
 	char architecture[SHIRUDO_TREE_MAX_SELECTOR_VALUES][SHIRUDO_TREE_STRING_MAX];
 	int n_architecture;
 	struct shirudo_tree_selector_kv kconfig[SHIRUDO_TREE_MAX_KCONFIG];
