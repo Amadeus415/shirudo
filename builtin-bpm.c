@@ -2682,14 +2682,20 @@ static int tree_pull_artifact(const struct shirudo_tree_operation *op,
 	struct bpm_buffer manifest = {}, blob = {};
 	char repository[BPM_MAX_ENDPOINT], url[PATH_MAX], cache[PATH_MAX];
 	char hex[65];
+	unsigned int expected_flags;
 	int nl = 0, rc;
 
 	if (tree_digest_hex(op->artifact.payload_sha256, (uint8_t[32]){}))
 		return -EINVAL;
-	if (snprintf(cache, sizeof(cache), "%s/%s.upatch",
+	/* Load and unload directives intentionally share payload_sha256.  Keep
+	 * both variants in the local cache by including the expected directive
+	 * flags in the cache key. */
+	expected_flags = !strcmp(op->op, "delete") ? SHIRUDO_DIRECTIVE_UNLOAD : 0;
+	if (snprintf(cache, sizeof(cache), "%s/%s-flags-%u.upatch",
 		     SHIRUDO_BPM_TREE_ARTIFACTS_DIR,
 		     op->artifact.payload_sha256 +
-		     (!strncmp(op->artifact.payload_sha256, "sha256:", 7) ? 7 : 0)) >=
+		     (!strncmp(op->artifact.payload_sha256, "sha256:", 7) ? 7 : 0),
+		     expected_flags) >=
 	    (int)sizeof(cache))
 		return -ENAMETOOLONG;
 	if (!access(cache, R_OK)) {
@@ -2997,7 +3003,19 @@ static int tree_check_live_projection(const struct shirudo_tree_state *state)
 static void tree_sync_report_error(const char *phase,
 				   const struct shirudo_tree_operation *op, int rc)
 {
-	int err = rc < 0 ? -rc : rc;
+	int err;
+
+	if (rc > 0) {
+		if (op)
+			pr_err("bpm tree sync: phase=%s seq=%lld id=%s rc=%d "
+			       "(command status)", phase, (long long)op->seq,
+			       op->id, rc);
+		else
+			pr_err("bpm tree sync: phase=%s rc=%d (command status)",
+			       phase, rc);
+		return;
+	}
+	err = rc < 0 ? -rc : 0;
 
 	if (op)
 		pr_err("bpm tree sync: phase=%s seq=%lld id=%s rc=%d (%s)",

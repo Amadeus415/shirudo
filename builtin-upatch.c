@@ -3548,6 +3548,15 @@ static int cmd_upatch_unload(int argc, const char **argv)
 	rep.tpm_present = rep.chain_after[0] != '\0';
 	ret = 0;
 done:
+	if (ret != 0)
+		pr_err("upatch unload failed: name=%s phase=%s category=%s "
+		       "err=%d (%s) message=%s",
+		       name[0] ? name : "(unknown)",
+		       rep.phase ? rep.phase : "(unknown)",
+		       rep.category ? rep.category : "(unknown)",
+		       rep.err,
+		       rep.err ? strerror(rep.err) : "none",
+		       rep.message[0] ? rep.message : "(none)");
 	if (report)
 		shirudo_report_emit(report, &rep);
 	shirudo_report_free(&rep);
