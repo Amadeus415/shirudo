@@ -2994,6 +2994,20 @@ static int tree_check_live_projection(const struct shirudo_tree_state *state)
 	return 1;
 }
 
+static void tree_sync_report_error(const char *phase,
+				   const struct shirudo_tree_operation *op, int rc)
+{
+	int err = rc < 0 ? -rc : rc;
+
+	if (op)
+		pr_err("bpm tree sync: phase=%s seq=%lld id=%s rc=%d (%s)",
+		       phase, (long long)op->seq, op->id, rc,
+		       err ? strerror(err) : "success");
+	else
+		pr_err("bpm tree sync: phase=%s rc=%d (%s)", phase, rc,
+		       err ? strerror(err) : "success");
+}
+
 static int cmd_bpm_tree_sync(int argc, const char **argv)
 {
 	struct bpm_tree_config cfg;
@@ -3055,8 +3069,10 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 		TREE_SYNC_RETURN(-EINVAL);
 	for (int i = 0; i < pub.n_operations; i++) {
 		rc = tree_validate_operation(&pub.operations[i]);
-		if (rc)
+		if (rc) {
+			tree_sync_report_error("operation_validate", &pub.operations[i], rc);
 			TREE_SYNC_RETURN(rc);
+		}
 	}
 	same_manifest = have_state && !strcmp(state.manifest_digest, manifest_digest);
 	if (have_state && strcmp(state.tree_id, pub.tree_id))
@@ -3081,22 +3097,31 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 		state.projection_root_tpm[64] = '\0';
 	}
 	rc = tree_recover_pending(&pub, &state);
-	if (rc)
+	if (rc) {
+		tree_sync_report_error("pending_recovery", NULL, rc);
 		TREE_SYNC_RETURN(rc);
+	}
 	rc = shirudo_tree_chain_ensure();
 	if (rc == -ENODEV) {
 		tpm_available = 0;
 	} else if (rc) {
+		tree_sync_report_error("tree_chain_ensure", NULL, rc);
 		TREE_SYNC_RETURN(rc);
 	} else {
 		tpm_available = tree_check_live_projection(&state);
-		if (tpm_available < 0)
+		if (tpm_available < 0) {
+			tree_sync_report_error("tree_projection_check", NULL,
+					       tpm_available);
 			TREE_SYNC_RETURN(tpm_available);
+		}
 		if (tpm_available) {
 			uint8_t live[32];
 			char live_hex[65];
-			if (shirudo_tree_chain_read(live))
+			rc = shirudo_tree_chain_read(live);
+			if (rc) {
+				tree_sync_report_error("tree_chain_read", NULL, rc);
 				TREE_SYNC_RETURN(-ENODEV);
+			}
 			shirudo_hex_encode(live, 32, live_hex);
 			bpm_copy_string(state.projection_root_tpm,
 					 sizeof(state.projection_root_tpm), live_hex);
@@ -3119,17 +3144,27 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 		selected++;
 		if (dry_run)
 			continue;
-		if (tree_digest_hex(op->operation_digest, digest))
+		rc = tree_digest_hex(op->operation_digest, digest);
+		if (rc) {
+			tree_sync_report_error("operation_digest_parse", op, rc);
 			TREE_SYNC_RETURN(-EINVAL);
+		}
 		if (op->expected_payload_sha256[0] &&
-		    strcmp(op->expected_payload_sha256, op->artifact.payload_sha256))
+		    strcmp(op->expected_payload_sha256, op->artifact.payload_sha256)) {
+			tree_sync_report_error("expected_payload_digest", op,
+					       -EKEYREJECTED);
 			TREE_SYNC_RETURN(-EKEYREJECTED);
+		}
 		rc = tree_write_pending(op);
-		if (rc)
+		if (rc) {
+			tree_sync_report_error("pending_write", op, rc);
 			TREE_SYNC_RETURN(rc);
+		}
 		rc = tree_pull_artifact(op, artifact, sizeof(artifact));
-		if (rc)
+		if (rc) {
+			tree_sync_report_error("artifact_fetch_or_verify", op, rc);
 			TREE_SYNC_RETURN(rc);
+		}
 		if (!strcmp(op->op, "add"))
 			rc = shirudo_upatch_install(artifact);
 		else if (!strcmp(op->op, "delete"))
@@ -3143,14 +3178,21 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 			module_skipped++;
 			pr_warn("bpm tree: skipped %s: module not loaded", op->id);
 		}
-		if (rc)
+		if (rc) {
+			tree_sync_report_error("upatch_install", op, rc);
 			TREE_SYNC_RETURN(rc);
+		}
 		if (shirudo_hex_decode(state.projection_root, previous, 32))
+		{
+			tree_sync_report_error("projection_root_decode", op, -EINVAL);
 			TREE_SYNC_RETURN(-EINVAL);
+		}
 		if (tpm_available) {
 			rc = shirudo_tree_chain_extend(digest, next);
-			if (rc)
+			if (rc) {
+				tree_sync_report_error("tree_projection_extend", op, rc);
 				TREE_SYNC_RETURN(rc);
+			}
 		} else {
 			shirudo_sha256_2(previous, 32, digest, 32, next);
 		}
@@ -3158,19 +3200,25 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 		if (tpm_available)
 			shirudo_hex_encode(next, 32, state.projection_root_tpm);
 		rc = shirudo_tree_event_append(op->seq, op->operation_digest, next);
-		if (rc)
+		if (rc) {
+			tree_sync_report_error("tree_event_append", op, rc);
 			TREE_SYNC_RETURN(rc);
+		}
 		state.last_seq = op->seq;
 		applied++;
 		rc = shirudo_tree_state_write(&state);
-		if (rc)
+		if (rc) {
+			tree_sync_report_error("tree_state_commit", op, rc);
 			TREE_SYNC_RETURN(rc);
+		}
 		if (skipped_module)
 			rc = tree_status_write(op->id, "skipped: module not loaded");
 		else
 			tree_status_clear(op->id);
-		if (rc)
+		if (rc) {
+			tree_sync_report_error("tree_status_write", op, rc);
 			TREE_SYNC_RETURN(rc);
+		}
 		(void)unlink(SHIRUDO_BPM_TREE_PENDING_PATH);
 	}
 	if (!dry_run) {
@@ -3180,8 +3228,10 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 		if (!state.tree_id[0])
 			bpm_copy_string(state.tree_id, sizeof(state.tree_id), pub.tree_id);
 		rc = shirudo_tree_state_write(&state);
-		if (rc)
+		if (rc) {
+			tree_sync_report_error("tree_state_commit_final", NULL, rc);
 			TREE_SYNC_RETURN(rc);
+		}
 	}
 	rc = tree_write_report(report[0] ? report : NULL, &state, selected,
 			       skipped, applied, module_skipped, dry_run,
