@@ -19,6 +19,7 @@
 #include "config.h"
 #include "io.h"
 #include "json.h"
+#include "kernel_release.h"
 #include "log.h"
 #include "macros.h"
 #include "malloc.h"
@@ -533,23 +534,14 @@ static const char *kv_value(const struct shirudo_tree_kv *v, int n,
 }
 
 static int selector_values_match(const struct shirudo_tree_selector_kv *v,
-					 const char *key, const char *want)
+					 const char *want)
 {
 	if (!v || !want)
 		return 0;
 	for (int i = 0; i < v->n_values; i++)
-		if (!strcmp(v->key, key) && !strcmp(v->values[i], want))
+		if (!strcmp(v->values[i], want))
 			return 1;
 	return 0;
-}
-
-static const struct shirudo_tree_selector_kv *selector_kv_find(
-		const struct shirudo_tree_selector_kv *v, int n, const char *key)
-{
-	for (int i = 0; i < n; i++)
-		if (!strcmp(v[i].key, key))
-			return &v[i];
-	return NULL;
 }
 
 static int read_config_file(const char *path, struct shirudo_tree_kv *out,
@@ -603,23 +595,186 @@ static int read_config_file(const char *path, struct shirudo_tree_kv *out,
 	return rc;
 }
 
+/* The kernel config can contain thousands of entries.  Index only the
+ * selector keys, then scan the complete config once and retain matching
+ * values.  This avoids both an arbitrary config-entry cap and an O(N*M)
+ * lookup for N config entries and M selector keys. */
+#define SHIRUDO_TREE_SELECTOR_HASH_SIZE 128
+
+static unsigned int selector_hash(const char *key)
+{
+	uint32_t hash = 2166136261u;
+
+	for (; *key; key++)
+		hash = (hash ^ (unsigned char)*key) * 16777619u;
+	return hash;
+}
+
+static void selector_hash_build(const struct shirudo_tree_selector *s,
+				       int slots[SHIRUDO_TREE_SELECTOR_HASH_SIZE])
+{
+	memset(slots, 0xff, sizeof(int) * SHIRUDO_TREE_SELECTOR_HASH_SIZE);
+	for (int i = 0; i < s->n_kconfig; i++) {
+		unsigned int slot = selector_hash(s->kconfig[i].key) &
+			(SHIRUDO_TREE_SELECTOR_HASH_SIZE - 1);
+
+		while (slots[slot] >= 0 &&
+		       strcmp(s->kconfig[slots[slot]].key, s->kconfig[i].key))
+			slot = (slot + 1) & (SHIRUDO_TREE_SELECTOR_HASH_SIZE - 1);
+		if (slots[slot] < 0)
+			slots[slot] = i;
+	}
+}
+
+static int selector_hash_find(const struct shirudo_tree_selector *s,
+				      const int slots[SHIRUDO_TREE_SELECTOR_HASH_SIZE],
+				      const char *key)
+{
+	unsigned int slot = selector_hash(key) &
+		(SHIRUDO_TREE_SELECTOR_HASH_SIZE - 1);
+
+	for (int probes = 0; probes < SHIRUDO_TREE_SELECTOR_HASH_SIZE;
+	     probes++, slot = (slot + 1) &
+			(SHIRUDO_TREE_SELECTOR_HASH_SIZE - 1)) {
+		if (slots[slot] < 0)
+			return -1;
+		if (!strcmp(s->kconfig[slots[slot]].key, key))
+			return slots[slot];
+	}
+	return -1;
+}
+
+static int selector_config_line(const char *line,
+				const struct shirudo_tree_selector *s,
+				const int slots[SHIRUDO_TREE_SELECTOR_HASH_SIZE],
+				char values[][SHIRUDO_TREE_STRING_MAX],
+				bool found[])
+{
+	char copy[1024], *start, *eq, *end, *value;
+	int index;
+
+	if (strlen(line) >= sizeof(copy))
+		return 0;
+	strcpy(copy, line);
+	start = copy;
+	while (*start && isspace((unsigned char)*start))
+		start++;
+	if (!*start)
+		return 0;
+
+	if (!strncmp(start, "# CONFIG_", 9)) {
+		start += 2;
+		eq = strstr(start, " is not set");
+		if (!eq)
+			return 0;
+		*eq = '\0';
+		value = "n";
+	} else {
+		if (*start == '#')
+			return 0;
+		eq = strchr(start, '=');
+		if (!eq)
+			return 0;
+		*eq++ = '\0';
+		end = start + strlen(start);
+		while (end > start && isspace((unsigned char)end[-1]))
+			*--end = '\0';
+		while (*eq && isspace((unsigned char)*eq))
+			eq++;
+		end = eq + strlen(eq);
+		while (end > eq && isspace((unsigned char)end[-1]))
+			*--end = '\0';
+		value = eq;
+		if (value[0] == '"') {
+			size_t len = strlen(value);
+
+			if (len > 1 && value[len - 1] == '"') {
+				value[len - 1] = '\0';
+				value++;
+			}
+		}
+	}
+
+	index = selector_hash_find(s, slots, start);
+	if (index < 0)
+		return 0;
+	if (strlen(value) >= SHIRUDO_TREE_STRING_MAX)
+		return -ENOSPC;
+	strcpy(values[index], value);
+	found[index] = true;
+	return 0;
+}
+
+static int read_selector_config_file(const char *path,
+					 const struct shirudo_tree_selector *s,
+					 const int slots[SHIRUDO_TREE_SELECTOR_HASH_SIZE],
+					 char values[][SHIRUDO_TREE_STRING_MAX],
+					 bool found[], bool gz)
+{
+	char line[1024];
+	int rc = 0;
+
+	if (gz) {
+		gzFile f = gzopen(path, "rb");
+
+		if (!f)
+			return -errno;
+		while (gzgets(f, line, sizeof(line))) {
+			rc = selector_config_line(line, s, slots, values, found);
+			if (rc)
+				break;
+		}
+		if (!rc && gzclose(f) != Z_OK)
+			rc = -EIO;
+		else if (rc)
+			gzclose(f);
+		return rc;
+	}
+
+	{
+		FILE *f = fopen(path, "r");
+
+		if (!f)
+			return -errno;
+		while (fgets(line, sizeof(line), f)) {
+			rc = selector_config_line(line, s, slots, values, found);
+			if (rc)
+				break;
+		}
+		if (!rc && ferror(f))
+			rc = errno ? -errno : -EIO;
+		fclose(f);
+	}
+	return rc;
+}
+
 int shirudo_tree_selector_matches(const struct shirudo_tree_selector *s)
 {
 	struct utsname u;
-	struct shirudo_tree_kv cfg[SHIRUDO_TREE_MAX_KCONFIG], labels[SHIRUDO_TREE_MAX_LABELS];
-	int nc = 0, nl = 0;
+	struct shirudo_tree_kv labels[SHIRUDO_TREE_MAX_LABELS];
+	char cfg_values[SHIRUDO_TREE_MAX_KCONFIG][SHIRUDO_TREE_STRING_MAX];
+	int cfg_slots[SHIRUDO_TREE_SELECTOR_HASH_SIZE];
+	bool cfg_found[SHIRUDO_TREE_MAX_KCONFIG] = {};
+	int nl = 0, config_rc;
 	const char *v;
-	const struct shirudo_tree_selector_kv *wanted;
 	char path[PATH_MAX];
-	bool matched;
+	bool matched, config_any;
 
-	if (!s || uname(&u) != 0)
+	/* An empty selector is the tree's explicit wildcard.  Evaluate this
+	 * before consulting node metadata so an unconstrained operation is
+	 * still applicable if uname(2) is unavailable. */
+	if (!s)
+		return 0;
+	if (!s->n_kernel_release_prefix && !s->n_architecture &&
+	    !s->n_kconfig && !s->n_labels)
+		return 1;
+	if (uname(&u) != 0)
 		return 0;
 	if (s->n_kernel_release_prefix) {
 		matched = false;
 		for (int i = 0; i < s->n_kernel_release_prefix; i++)
-			if (!strncmp(u.release, s->kernel_release_prefix[i],
-				    strlen(s->kernel_release_prefix[i]))) {
+			if (shirudo_kernel_release_prefix_matches(u.release,
+							   s->kernel_release_prefix[i])) {
 				matched = true;
 				break;
 			}
@@ -637,19 +792,24 @@ int shirudo_tree_selector_matches(const struct shirudo_tree_selector *s)
 			return 0;
 	}
 	if (s->n_kconfig) {
-		if (!read_config_file("/proc/config.gz", cfg, &nc,
-				      ARRAY_SIZE(cfg), true)) {
-			/* preferred source succeeded */
-		} else {
+		selector_hash_build(s, cfg_slots);
+		config_rc = read_selector_config_file("/proc/config.gz", s,
+						      cfg_slots, cfg_values, cfg_found,
+						      true);
+		config_any = false;
+		for (int i = 0; i < s->n_kconfig; i++)
+			if (cfg_found[i])
+				config_any = true;
+		if (config_rc || !config_any) {
+			memset(cfg_found, 0, sizeof(cfg_found));
 			snprintf(path, sizeof(path), "/boot/config-%s", u.release);
-			if (read_config_file(path, cfg, &nc, ARRAY_SIZE(cfg), false))
+			if (read_selector_config_file(path, s, cfg_slots, cfg_values,
+						       cfg_found, false))
 				return 0;
 		}
 		for (int i = 0; i < s->n_kconfig; i++) {
-			v = kv_value(cfg, nc, s->kconfig[i].key);
-			wanted = selector_kv_find(s->kconfig, s->n_kconfig,
-						  s->kconfig[i].key);
-			if (!v || !selector_values_match(wanted, s->kconfig[i].key, v))
+			if (!cfg_found[i] ||
+			    !selector_values_match(&s->kconfig[i], cfg_values[i]))
 				return 0;
 		}
 	}
@@ -659,9 +819,7 @@ int shirudo_tree_selector_matches(const struct shirudo_tree_selector *s)
 			return 0;
 		for (int i = 0; i < s->n_labels; i++) {
 			v = kv_value(labels, nl, s->labels[i].key);
-			wanted = selector_kv_find(s->labels, s->n_labels,
-						  s->labels[i].key);
-			if (!v || !selector_values_match(wanted, s->labels[i].key, v))
+			if (!v || !selector_values_match(&s->labels[i], v))
 				return 0;
 		}
 	}

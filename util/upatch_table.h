@@ -25,6 +25,7 @@ struct shirudo_upatch_table_row {
 	char		name[64];
 	char		location[SHIRUDO_UPATCH_LOCATION_MAX];	/* SEC()-style */
 	char		loaded_at[32];	/* ISO-8601 UTC, "" if unknown */
+	char		status[64];	/* success or a tree skip reason */
 	uint32_t	n_maps;
 	int64_t		age_sec;	/* derived from loaded_at; -1 if unknown */
 	char		payload_sha256[65];	/* "" if unavailable; JSON only */

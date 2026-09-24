@@ -43,7 +43,7 @@ struct shirudo_tree_artifact {
 	char repository[512];
 	char manifest_digest[128];
 	char layer_digest[128];
-	char payload_sha256[65];
+	char payload_sha256[128];
 };
 
 struct shirudo_tree_operation {
@@ -52,8 +52,8 @@ struct shirudo_tree_operation {
 	char id[SHIRUDO_TREE_STRING_MAX];
 	struct shirudo_tree_selector selector;
 	struct shirudo_tree_artifact artifact;
-	char expected_payload_sha256[65];
-	char operation_digest[65];
+	char expected_payload_sha256[128];
+	char operation_digest[128];
 };
 
 struct shirudo_tree_publication {
@@ -84,7 +84,8 @@ int shirudo_tree_parse(const char *body, size_t len,
 			       struct shirudo_tree_publication *out);
 void shirudo_tree_publication_free(struct shirudo_tree_publication *pub);
 
-/* Evaluate a publication selector against the running node. */
+/* Evaluate a publication selector against the running node.  An empty
+ * selector is an unconstrained wildcard and matches every node. */
 int shirudo_tree_selector_matches(const struct shirudo_tree_selector *selector);
 
 /* Persistent tree state and selected-operation eventlog. */

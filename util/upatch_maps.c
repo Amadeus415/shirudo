@@ -29,6 +29,8 @@
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 
+#include <shirudo/upatch.h>
+
 #include "json.h"
 #include "malloc.h"
 #include "paths.h"
@@ -684,11 +686,14 @@ static int open_map_pin(const char *upatch, const char *map_name,
 			int *fd_out, struct bpf_map_info *info_out)
 {
 	char path[PATH_MAX];
+	char bpffs_name[SHIRUDO_UPATCH_BPFFS_NAME_MAX + 1];
 	uint32_t info_len = sizeof(*info_out);
 	int fd;
 
+	if (shirudo_upatch_bpffs_name(bpffs_name, sizeof(bpffs_name), upatch))
+		return -ENAMETOOLONG;
 	if ((size_t)snprintf(path, sizeof(path), "%s/%s/maps/%s",
-			     SHIRUDO_BPFFS_UPATCHES_DIR, upatch, map_name)
+			     SHIRUDO_BPFFS_UPATCHES_DIR, bpffs_name, map_name)
 	    >= sizeof(path))
 		return -ENAMETOOLONG;
 	fd = bpf_obj_get(path);
@@ -715,11 +720,14 @@ static struct btf *try_load_btf(uint32_t btf_id)
 static int open_serializer_pin(const char *upatch, const char *map_name)
 {
 	char path[PATH_MAX];
+	char bpffs_name[SHIRUDO_UPATCH_BPFFS_NAME_MAX + 1];
 	int fd;
 
+	if (shirudo_upatch_bpffs_name(bpffs_name, sizeof(bpffs_name), upatch))
+		return -ENAMETOOLONG;
 	if ((size_t)snprintf(path, sizeof(path), "%s/%s/serializers/%s",
-			     SHIRUDO_BPFFS_UPATCHES_DIR, upatch, map_name) >=
-	    sizeof(path))
+			     SHIRUDO_BPFFS_UPATCHES_DIR, bpffs_name, map_name) >=
+		    sizeof(path))
 		return -ENAMETOOLONG;
 	fd = bpf_obj_get(path);
 	if (fd < 0)
@@ -1190,6 +1198,7 @@ int shirudo_upatch_maps_read(const char *upatch, const char *map,
 {
 	struct bpf_map_info info = {};
 	char upatch_dir[PATH_MAX];
+	char bpffs_name[SHIRUDO_UPATCH_BPFFS_NAME_MAX + 1];
 	struct stat upatch_st;
 	int fd = -1;
 	int rc;
@@ -1210,8 +1219,9 @@ int shirudo_upatch_maps_read(const char *upatch, const char *map,
 	out->n_cpus = shirudo_upatch_map_is_percpu(info.type) ?
 			(uint32_t)nproc_possible() : 1;
 	resolve_map_location(out);
-	if ((size_t)snprintf(upatch_dir, sizeof(upatch_dir), "%s/%s",
-			     SHIRUDO_BPFFS_UPATCHES_DIR, upatch) <
+	if (!shirudo_upatch_bpffs_name(bpffs_name, sizeof(bpffs_name), upatch) &&
+	    (size_t)snprintf(upatch_dir, sizeof(upatch_dir), "%s/%s",
+			     SHIRUDO_BPFFS_UPATCHES_DIR, bpffs_name) <
 	    sizeof(upatch_dir) && stat(upatch_dir, &upatch_st) == 0)
 		out->lifetime_start_ns =
 			(uint64_t)upatch_st.st_ctim.tv_sec * 1000000000ULL +
@@ -1285,11 +1295,14 @@ static void scan_upatch_maps(const char *upatch,
 			     size_t *cap)
 {
 	char dir[PATH_MAX];
+	char bpffs_name[SHIRUDO_UPATCH_BPFFS_NAME_MAX + 1];
 	struct dirent *e;
 	DIR *d;
 
+	if (shirudo_upatch_bpffs_name(bpffs_name, sizeof(bpffs_name), upatch))
+		return;
 	if ((size_t)snprintf(dir, sizeof(dir), "%s/%s/maps",
-			     SHIRUDO_BPFFS_UPATCHES_DIR, upatch) >=
+			     SHIRUDO_BPFFS_UPATCHES_DIR, bpffs_name) >=
 	    sizeof(dir))
 		return;
 	d = opendir(dir);
@@ -1349,9 +1362,14 @@ int shirudo_upatch_maps_list_all(struct shirudo_map_summary **out,
 		return 0;
 	}
 	while ((e = readdir(d))) {
+		char raw_name[SHIRUDO_UPATCH_NAME_MAX + 1];
+
 		if (e->d_name[0] == '.')
 			continue;
-		scan_upatch_maps(e->d_name, &list, &n, &cap);
+		if (shirudo_upatch_name_from_bpffs(raw_name, sizeof(raw_name),
+						   e->d_name))
+			continue;
+		scan_upatch_maps(raw_name, &list, &n, &cap);
 	}
 	closedir(d);
 	*out = list;

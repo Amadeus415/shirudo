@@ -32,7 +32,8 @@ void shirudo_upatch_table_print(const struct shirudo_upatch_table_row *rows,
 	printf("\nupatches loaded (%zu):\n", n);
 	if (n == 0)
 		return;
-	printf("  %-24s  %-28s  %5s  %s\n", "NAME", "LOCATION", "MAPS", "AGE");
+	printf("  %-24s  %-28s  %5s  %-28s  %s\n",
+	       "NAME", "LOCATION", "MAPS", "STATUS", "AGE");
 	for (i = 0; i < n; i++) {
 		const struct shirudo_upatch_table_row *r = &rows[i];
 		char age[16] = "?";
@@ -40,9 +41,9 @@ void shirudo_upatch_table_print(const struct shirudo_upatch_table_row *rows,
 		if (r->age_sec >= 0)
 			shirudo_format_duration((long)r->age_sec,
 						age, sizeof(age));
-		printf("  %-24s  %-28s  %5u  %s\n", r->name,
+		printf("  %-24s  %-28s  %5u  %-28s  %s\n", r->name,
 		       r->location[0] ? r->location : "-",
-		       r->n_maps, age);
+		       r->n_maps, r->status[0] ? r->status : "success", age);
 	}
 }
 
@@ -59,6 +60,8 @@ void shirudo_upatch_table_emit_json(struct shirudo_json_emit *e,
 		shirudo_json_obj_open(e);
 		shirudo_json_kv_string(e, "name", r->name);
 		shirudo_json_kv_string(e, "location", r->location);
+		shirudo_json_kv_string(e, "status",
+				       r->status[0] ? r->status : "success");
 		shirudo_json_kv_int(e, "n_maps", (int64_t)r->n_maps);
 		shirudo_json_kv_string(e, "loaded_at", r->loaded_at);
 		if (r->age_sec >= 0)

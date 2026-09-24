@@ -8,7 +8,9 @@
 #ifndef SHIRUDO_PATHS_H
 #define SHIRUDO_PATHS_H
 
+#include <errno.h>
 #include <stddef.h>
+#include <string.h>
 
 /* Target-side. */
 #define SHIRUDO_VAR_LIB			"/var/lib/shirudo"
@@ -41,6 +43,7 @@
 #define SHIRUDO_BPM_TREE_EVENTLOG_PATH SHIRUDO_BPM_TREE_VAR_DIR "/tree-eventlog"
 #define SHIRUDO_BPM_TREE_PENDING_PATH SHIRUDO_BPM_TREE_VAR_DIR "/pending.json"
 #define SHIRUDO_BPM_TREE_ARTIFACTS_DIR SHIRUDO_BPM_TREE_VAR_DIR "/artifacts"
+#define SHIRUDO_BPM_TREE_STATUS_DIR SHIRUDO_BPM_TREE_VAR_DIR "/status"
 #define SHIRUDO_BPM_LOCK_PATH	SHIRUDO_LOCKS_DIR "/bpm.lock"
 #define SHIRUDO_LSM_LINK_PIN		SHIRUDO_BPFFS_DIR "/lsm_link"
 #define SHIRUDO_LSM_PROG_LOAD_LINK_PIN	SHIRUDO_BPFFS_DIR "/bpf2_bpf_prog_load_link"
@@ -96,5 +99,60 @@ int shirudo_key_paths(const char *keys_dir,
 		      char *pkey_path, size_t pkey_sz,
 		      char *cert_path, size_t cert_sz);
 const char *shirudo_keys_dir_resolve(const char *keys_dir_arg);
+
+/* Convert a userspace upatch name to a bpffs path component.  bpffs
+ * reserves dots in path components, while the userspace/persisted name
+ * format permits them (for example, kernel-version-qualified patches).
+ * The returned component is intentionally only a path representation; the
+ * Dots are escaped as "~d"; '~' is not permitted by safe_upatch_name, so
+ * this representation cannot collide with a raw userspace name. The
+ * original name remains the identity used by the upatch format and eventlog.
+ */
+static inline int shirudo_upatch_bpffs_name(char *out, size_t out_sz,
+					    const char *name)
+{
+	size_t i, j, len;
+
+	if (!out || out_sz == 0 || !name)
+		return -EINVAL;
+	len = strlen(name);
+	if (len * 2 + 1 > out_sz)
+		return -ENAMETOOLONG;
+	for (i = 0, j = 0; i < len; i++) {
+		if (name[i] == '.') {
+			out[j++] = '~';
+			out[j++] = 'd';
+		} else {
+			out[j++] = name[i];
+		}
+	}
+	out[j] = '\0';
+	return 0;
+}
+
+/* Reverse shirudo_upatch_bpffs_name for names read back from bpffs. */
+static inline int shirudo_upatch_name_from_bpffs(char *out, size_t out_sz,
+						const char *name)
+{
+	size_t i, j;
+
+	if (!out || out_sz == 0 || !name)
+		return -EINVAL;
+	for (i = 0, j = 0; name[i]; i++) {
+		char c = name[i];
+
+		if (c == '~') {
+			if (name[i + 1] != 'd')
+				return -EINVAL;
+			i++;
+			c = '.';
+		}
+		if (j + 1 >= out_sz)
+			return -ENAMETOOLONG;
+		out[j++] = c;
+	}
+	out[j] = '\0';
+	return 0;
+}
 
 #endif /* SHIRUDO_PATHS_H */

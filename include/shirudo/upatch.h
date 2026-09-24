@@ -30,6 +30,7 @@ enum shirudo_upatch_type {
 };
 
 #define SHIRUDO_UPATCH_NAME_MAX		256
+#define SHIRUDO_UPATCH_BPFFS_NAME_MAX	(2 * SHIRUDO_UPATCH_NAME_MAX)
 #define SHIRUDO_UPATCH_PAYLOAD_HASH_LEN	32	/* SHA-256 */
 
 struct shirudo_upatch_header {

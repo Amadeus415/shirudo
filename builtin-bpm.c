@@ -2504,12 +2504,6 @@ static int tree_operation_digest(const struct shirudo_tree_operation *op,
 	shirudo_json_kv_string(&e, "op", op->op);
 	shirudo_json_kv_string(&e, "id", op->id);
 	shirudo_json_obj_open_key(&e, "selector");
-	if (op->selector.n_kernel_release_prefix) {
-		shirudo_json_arr_open(&e, "kernel_release_prefix");
-		for (int i = 0; i < op->selector.n_kernel_release_prefix; i++)
-			shirudo_json_str(&e, op->selector.kernel_release_prefix[i]);
-		shirudo_json_arr_close(&e);
-	}
 	if (op->selector.n_architecture) {
 		shirudo_json_arr_open(&e, "architecture");
 		for (int i = 0; i < op->selector.n_architecture; i++)
@@ -2525,6 +2519,12 @@ static int tree_operation_digest(const struct shirudo_tree_operation *op,
 			shirudo_json_arr_close(&e);
 		}
 		shirudo_json_obj_close(&e);
+	}
+	if (op->selector.n_kernel_release_prefix) {
+		shirudo_json_arr_open(&e, "kernel_release_prefix");
+		for (int i = 0; i < op->selector.n_kernel_release_prefix; i++)
+			shirudo_json_str(&e, op->selector.kernel_release_prefix[i]);
+		shirudo_json_arr_close(&e);
 	}
 	if (op->selector.n_labels) {
 		shirudo_json_obj_open_key(&e, "labels");
@@ -2750,7 +2750,8 @@ out:
 
 static int tree_write_report(const char *path, const struct shirudo_tree_state *s,
 				     int selected, int skipped, int applied,
-				     int dry_run, int tpm_available)
+				     int module_skipped, int dry_run,
+				     int tpm_available)
 {
 	char buf[4096];
 	struct shirudo_json_emit e = { .buf = buf, .cap = sizeof(buf) };
@@ -2760,6 +2761,7 @@ static int tree_write_report(const char *path, const struct shirudo_tree_state *
 	shirudo_json_kv_int(&e, "selected", selected);
 	shirudo_json_kv_int(&e, "skipped", skipped);
 	shirudo_json_kv_int(&e, "applied", applied);
+	shirudo_json_kv_int(&e, "module_skipped", module_skipped);
 	shirudo_json_kv_bool(&e, "tpm_available", tpm_available);
 	shirudo_json_kv_int(&e, "last_seq", s->last_seq);
 	if (tpm_available)
@@ -2799,10 +2801,37 @@ static int tree_write_pending(const struct shirudo_tree_operation *op)
 	return 0;
 }
 
+static int tree_status_write(const char *id, const char *status)
+{
+	char path[PATH_MAX];
+	int rc;
+
+	if (!id || !shirudo_upatch_name_valid(id) || !status || !status[0])
+		return -EINVAL;
+	rc = path_mkdir_p(SHIRUDO_BPM_TREE_STATUS_DIR, 0700);
+	if (rc)
+		return rc;
+	if (snprintf(path, sizeof(path), "%s/%s",
+		     SHIRUDO_BPM_TREE_STATUS_DIR, id) >= (int)sizeof(path))
+		return -ENAMETOOLONG;
+	return atomic_write(path, status, strlen(status), 0600);
+}
+
+static void tree_status_clear(const char *id)
+{
+	char path[PATH_MAX];
+
+	if (!id || !shirudo_upatch_name_valid(id) ||
+	    snprintf(path, sizeof(path), "%s/%s",
+		     SHIRUDO_BPM_TREE_STATUS_DIR, id) >= (int)sizeof(path))
+		return;
+	(void)unlink(path);
+}
+
 struct bpm_tree_pending {
 	int64_t seq;
 	char id[SHIRUDO_TREE_STRING_MAX];
-	char operation_digest[65];
+	char operation_digest[128];
 };
 
 static int tree_read_pending(struct bpm_tree_pending *pending)
@@ -2968,7 +2997,8 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 	char report[PATH_MAX] = {};
 	bool dry_run = false, have_state = false;
 	bool same_manifest;
-	int selected = 0, skipped = 0, applied = 0, tpm_available = 0;
+	int selected = 0, skipped = 0, applied = 0, module_skipped = 0;
+	int tpm_available = 0;
 	int rc;
 	#define TREE_SYNC_RETURN(value) do { \
 		shirudo_tree_publication_free(&pub); \
@@ -3070,7 +3100,7 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 		struct shirudo_tree_operation *op = &pub.operations[i];
 		uint8_t digest[32], previous[32], next[32];
 		char artifact[PATH_MAX];
-		bool match;
+		bool match, skipped_module = false;
 
 		if (op->seq <= state.last_seq)
 			continue;
@@ -3100,6 +3130,13 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 			rc = shirudo_upatch_remove(artifact);
 		else
 			TREE_SYNC_RETURN(-EINVAL);
+		if (rc == SHIRUDO_UPATCH_INSTALL_TARGET_MISSING &&
+		    !strcmp(op->op, "add")) {
+			skipped_module = true;
+			rc = 0;
+			module_skipped++;
+			pr_warn("bpm tree: skipped %s: module not loaded", op->id);
+		}
 		if (rc)
 			TREE_SYNC_RETURN(rc);
 		if (shirudo_hex_decode(state.projection_root, previous, 32))
@@ -3122,6 +3159,12 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 		rc = shirudo_tree_state_write(&state);
 		if (rc)
 			TREE_SYNC_RETURN(rc);
+		if (skipped_module)
+			rc = tree_status_write(op->id, "skipped: module not loaded");
+		else
+			tree_status_clear(op->id);
+		if (rc)
+			TREE_SYNC_RETURN(rc);
 		(void)unlink(SHIRUDO_BPM_TREE_PENDING_PATH);
 	}
 	if (!dry_run) {
@@ -3135,7 +3178,8 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 			TREE_SYNC_RETURN(rc);
 	}
 	rc = tree_write_report(report[0] ? report : NULL, &state, selected,
-				       skipped, applied, dry_run, tpm_available);
+			       skipped, applied, module_skipped, dry_run,
+			       tpm_available);
 	shirudo_tree_publication_free(&pub);
 	#undef TREE_SYNC_RETURN
 	return rc;

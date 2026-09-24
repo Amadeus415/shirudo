@@ -550,6 +550,7 @@ static int is_upatch_file(const struct dirent *e)
 static bool upatch_is_loaded(const char *name)
 {
 	char pin[PATH_MAX];
+	char bpffs_name[SHIRUDO_UPATCH_BPFFS_NAME_MAX + 1];
 	struct stat st;
 	int fd;
 
@@ -560,8 +561,10 @@ static bool upatch_is_loaded(const char *name)
 	return true;
 
 test_pin:
+	if (shirudo_upatch_bpffs_name(bpffs_name, sizeof(bpffs_name), name))
+		return false;
 	if (snprintf(pin, sizeof(pin), "%s/%s/test",
-		     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= (int)sizeof(pin))
+		     SHIRUDO_BPFFS_UPATCHES_DIR, bpffs_name) >= (int)sizeof(pin))
 		return false;
 	return stat(pin, &st) == 0;
 }
@@ -670,20 +673,23 @@ static int cmd_upatch_list(int argc, const char **argv)
 	/* Orphans: a live pin with no persisted .upatch behind it. */
 	for (i = 0; i < na; i++) {
 		char persist[1024];
+		char raw_name[SHIRUDO_UPATCH_NAME_MAX + 1];
 		const char *nm = active[i]->d_name;
 		struct stat st;
 
 		if (strcmp(nm, ".") == 0 || strcmp(nm, "..") == 0)
 			continue;
+		if (shirudo_upatch_name_from_bpffs(raw_name, sizeof(raw_name), nm))
+			continue;
 		if ((size_t)snprintf(persist, sizeof(persist), "%s/%s.upatch",
-				     SHIRUDO_UPATCHES_DIR, nm) >= sizeof(persist))
+				     SHIRUDO_UPATCHES_DIR, raw_name) >= sizeof(persist))
 			continue;
 		if (stat(persist, &st) == 0)
 			continue;	/* persisted -- already listed above */
 
 		if (json) {
 			shirudo_json_obj_open(&e);
-			shirudo_json_kv_string(&e, "name", nm);
+			shirudo_json_kv_string(&e, "name", raw_name);
 			shirudo_json_kv_null(&e, "type");
 			shirudo_json_kv_bool(&e, "loaded", 1);
 			shirudo_json_kv_bool(&e, "persisted", 0);
@@ -692,7 +698,7 @@ static int cmd_upatch_list(int argc, const char **argv)
 		} else {
 			printf("  %-6s  %-6s  %-18s  %s  (orphan: no persisted "
 			       ".upatch, will not survive reboot)\n",
-			       "yes", "?", "-", nm);
+			       "yes", "?", "-", raw_name);
 		}
 	}
 
@@ -1651,11 +1657,12 @@ static void count_attach_progs(const struct shirudo_prog_spec *specs,
  * pinned as programs and invoked later by `shirudo upatch map`.
  */
 static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
-				size_t prog_desc_off, uint32_t nr_progs,
-				const char *name,
-				const struct shirudo_prog_spec *specs)
+				 size_t prog_desc_off, uint32_t nr_progs,
+				 const char *name,
+				 const struct shirudo_prog_spec *specs)
 {
 	char dir[PATH_MAX], serializers_dir[PATH_MAX + 16];
+	char bpffs_name[SHIRUDO_UPATCH_BPFFS_NAME_MAX + 1];
 	char pin[PATH_MAX + 32];
 	uint32_t i, attach_count = 0, attach_seen = 0;
 	int test_fd = -1;
@@ -1665,6 +1672,8 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 		pr_warn("upatch carries no programs to attach");
 		return 0;
 	}
+	if (shirudo_upatch_bpffs_name(bpffs_name, sizeof(bpffs_name), name))
+		return -ENAMETOOLONG;
 
 	rc = mkdir_if_absent(SHIRUDO_BPFFS_UPATCHES_DIR, 0700);
 	if (rc) {
@@ -1673,7 +1682,7 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 		return rc;
 	}
 	if (snprintf(dir, sizeof(dir), "%s/%s",
-		     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= (int)sizeof(dir))
+		     SHIRUDO_BPFFS_UPATCHES_DIR, bpffs_name) >= (int)sizeof(dir))
 		return -ENAMETOOLONG;
 	rc = mkdir_if_absent(dir, 0700);
 	if (rc) {
@@ -1808,17 +1817,21 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
  *  - already-pinned maps_dir/name (idempotent on re-runs)
  */
 static int pin_upatch_maps(const struct shirudo_loader_ctx *cx,
-			   uint32_t nr_maps, const char *name)
+				   uint32_t nr_maps, const char *name)
 {
 	char dir[PATH_MAX], maps_dir[PATH_MAX + 8];
+	char bpffs_name[SHIRUDO_UPATCH_BPFFS_NAME_MAX + 1];
 	char pin[PATH_MAX + 32];
 	uint32_t i;
 	int rc;
 
 	if (nr_maps == 0)
 		return 0;
+	if (shirudo_upatch_bpffs_name(bpffs_name, sizeof(bpffs_name), name))
+		return 0;
 	if (snprintf(dir, sizeof(dir), "%s/%s",
-		     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= (int)sizeof(dir))
+		     SHIRUDO_BPFFS_UPATCHES_DIR, bpffs_name) >=
+		    (int)sizeof(dir))
 		return -ENAMETOOLONG;
 	if (snprintf(maps_dir, sizeof(maps_dir), "%s/maps", dir) >=
 	    (int)sizeof(maps_dir))
@@ -1883,9 +1896,12 @@ static int pin_upatch_maps(const struct shirudo_loader_ctx *cx,
 static void set_pin_payload(const char *name, const uint8_t payload[32])
 {
 	char dir[PATH_MAX];
+	char bpffs_name[SHIRUDO_UPATCH_BPFFS_NAME_MAX + 1];
 
+	if (shirudo_upatch_bpffs_name(bpffs_name, sizeof(bpffs_name), name))
+		return;
 	if (snprintf(dir, sizeof(dir), "%s/%s", SHIRUDO_BPFFS_UPATCHES_DIR,
-		     name) >= (int)sizeof(dir))
+		     bpffs_name) >= (int)sizeof(dir))
 		return;
 	if (setxattr(dir, SHIRUDO_XATTR_PAYLOAD, payload, 32, 0) != 0)
 		pr_err("upatch: cannot record payload xattr on %s: %s "
@@ -1901,10 +1917,13 @@ static void set_pin_payload(const char *name, const uint8_t payload[32])
 static int get_pin_payload(const char *name, uint8_t out[32])
 {
 	char dir[PATH_MAX];
+	char bpffs_name[SHIRUDO_UPATCH_BPFFS_NAME_MAX + 1];
 	ssize_t n;
 
+	if (shirudo_upatch_bpffs_name(bpffs_name, sizeof(bpffs_name), name))
+		return -ENAMETOOLONG;
 	if (snprintf(dir, sizeof(dir), "%s/%s", SHIRUDO_BPFFS_UPATCHES_DIR,
-		     name) >= (int)sizeof(dir))
+		     bpffs_name) >= (int)sizeof(dir))
 		return -ENAMETOOLONG;
 	n = getxattr(dir, SHIRUDO_XATTR_PAYLOAD, out, 32);
 	if (n < 0)
@@ -3109,11 +3128,14 @@ static int remove_pin_dir(const char *name)
 {
 	char dir[PATH_MAX], maps_dir[PATH_MAX + 8];
 	char serializers_dir[PATH_MAX + 16];
+	char bpffs_name[SHIRUDO_UPATCH_BPFFS_NAME_MAX + 1];
 	struct stat st;
 	int rc;
 
+	if (shirudo_upatch_bpffs_name(bpffs_name, sizeof(bpffs_name), name))
+		return -ENAMETOOLONG;
 	if (snprintf(dir, sizeof(dir), "%s/%s", SHIRUDO_BPFFS_UPATCHES_DIR,
-		     name) >= (int)sizeof(dir))
+		     bpffs_name) >= (int)sizeof(dir))
 		return -ENAMETOOLONG;
 	if (snprintf(maps_dir, sizeof(maps_dir), "%s/maps", dir) >=
 	    (int)sizeof(maps_dir))
@@ -3302,6 +3324,9 @@ static int cmd_upatch_load(int argc, const char **argv)
 	rep.tpm_present = rep.chain_after[0] != '\0';
 	ret = 0;
 done:
+	if (ret == 1 && rep.category &&
+	    !strcmp(rep.category, "attach_target_missing"))
+		ret = SHIRUDO_UPATCH_INSTALL_TARGET_MISSING;
 	if (report)
 		shirudo_report_emit(report, &rep);
 	shirudo_report_free(&rep);

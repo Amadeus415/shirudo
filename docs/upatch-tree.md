@@ -94,7 +94,7 @@ digests, and the `.upatch` payload hash. It evaluates selectors locally:
 
 | Selector | Target source of truth |
 | --- | --- |
-| `kernel_release_prefix` | `uname(2).release`; any listed prefix may match |
+| `kernel_release_prefix` | `uname(2).release`; any listed complete release-component prefix may match (for example, `6.1` matches `6.1.0` but not `6.18`) |
 | `architecture` | `uname(2).machine`; any listed architecture may match |
 | `kconfig` | `/proc/config.gz`, falling back to `/boot/config-<uname -r>`; any listed value for each key may match; `y`, `m`, and unset are normalized |
 | `labels` | `/etc/shirudo/node.labels`, one `key=value` per line; any listed value for each key may match |

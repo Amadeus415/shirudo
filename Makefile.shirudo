@@ -146,6 +146,7 @@ UTIL_SRCS := \
     util/tpm.c \
     util/chain.c \
     util/bpm_tree.c \
+    util/kernel_release.c \
     util/config.c \
     util/mode.c \
     util/bpm_source_config.c \
@@ -483,6 +484,7 @@ TEST_HELPERS := t/helper/test-json-parser \
 		 t/helper/test-mode \
 		t/helper/test-config \
 		t/helper/test-bpm-source \
+		t/helper/test-kernel-release \
                 t/helper/test-bpf-load \
 		t/helper/test-dns-prog-run \
                 t/helper/test-kernel-abi \
@@ -518,6 +520,10 @@ t/helper/test-config: t/helper/test-config.c util/config.o util/io.o util/log.o
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 t/helper/test-bpm-source: t/helper/test-bpm-source.c util/bpm_source_config.o
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+t/helper/test-kernel-release: t/helper/test-kernel-release.c util/kernel_release.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 

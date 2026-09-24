@@ -26,6 +26,8 @@
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 
+#include <shirudo/upatch.h>
+
 #include <time.h>
 
 #include "builtin.h"
@@ -445,19 +447,25 @@ static size_t build_upatches_table(struct dirent **ups, int n_ups,
 	for (i = 0; i < n_ups; i++) {
 		struct shirudo_upatch_table_row *r = &rows[i];
 		struct shirudo_map_summary *list = NULL;
+		char raw_name[SHIRUDO_UPATCH_NAME_MAX + 1];
 		size_t nm = 0;
+		const char *name = ups[i]->d_name;
+
+		if (shirudo_upatch_name_from_bpffs(raw_name, sizeof(raw_name),
+						   ups[i]->d_name) == 0)
+			name = raw_name;
 
 		snprintf(r->name, sizeof(r->name), "%.*s",
-			 (int)(sizeof(r->name) - 1), ups[i]->d_name);
-		shirudo_upatch_resolve_location(vbtf, ups[i]->d_name,
+			 (int)(sizeof(r->name) - 1), name);
+		shirudo_upatch_resolve_location(vbtf, name,
 						r->location,
 						sizeof(r->location));
-		shirudo_upatch_loaded_at(ups[i]->d_name, r->loaded_at,
-					 sizeof(r->loaded_at));
-		shirudo_upatch_payload_sha256(ups[i]->d_name,
+		shirudo_upatch_loaded_at(name, r->loaded_at,
+						sizeof(r->loaded_at));
+		shirudo_upatch_payload_sha256(name,
 					      r->payload_sha256,
 					      sizeof(r->payload_sha256));
-		shirudo_upatch_maps_list_one(ups[i]->d_name, &list, &nm);
+		shirudo_upatch_maps_list_one(name, &list, &nm);
 		r->n_maps = (uint32_t)nm;
 		shirudo_map_summary_free(list, nm);
 		r->age_sec = shirudo_upatch_age_sec(r->loaded_at);

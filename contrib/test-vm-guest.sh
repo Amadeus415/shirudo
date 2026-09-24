@@ -78,6 +78,18 @@ install_kernel_modules()
 	test -r /proc/net/stat/nf_flowtable
 }
 
+install_kernel_config()
+{
+	local source="/mnt/shirudo-kernel/kernel.config"
+	local release
+
+	[[ -r "$source" ]] || return 0
+	release="$(uname -r)"
+	install -d /boot
+	install -m 0644 "$source" "/boot/config-${release}"
+	log "installed kernel config for ${release}"
+}
+
 configure_oci_ca()
 {
 	local ca_file="${TEST_VM_OCI_CA:-}"
@@ -299,6 +311,7 @@ cd "$WORKSPACE"
 
 log "installing networking modules from the booted kernel artifact"
 install_kernel_modules
+install_kernel_config
 
 log "importing host-built Shirudo payload"
 log "host bundle dependency mode: $(<"$BUNDLE/dependency-mode")"

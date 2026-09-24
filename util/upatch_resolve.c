@@ -21,6 +21,8 @@
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 
+#include <shirudo/upatch.h>
+
 #include "malloc.h"
 #include "paths.h"
 #include "upatch_resolve.h"
@@ -38,10 +40,13 @@
 int shirudo_upatch_open_first_link(const char *name)
 {
 	char pin[PATH_MAX];
+	char bpffs_name[SHIRUDO_UPATCH_BPFFS_NAME_MAX + 1];
 	int fd, first_errno;
 
+	if (shirudo_upatch_bpffs_name(bpffs_name, sizeof(bpffs_name), name))
+		return -ENAMETOOLONG;
 	if ((size_t)snprintf(pin, sizeof(pin), "%s/%s/link",
-			     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= sizeof(pin))
+			     SHIRUDO_BPFFS_UPATCHES_DIR, bpffs_name) >= sizeof(pin))
 		return -ENAMETOOLONG;
 	fd = bpf_obj_get(pin);
 	if (fd >= 0)
@@ -49,7 +54,7 @@ int shirudo_upatch_open_first_link(const char *name)
 	first_errno = errno;
 
 	if ((size_t)snprintf(pin, sizeof(pin), "%s/%s/link_0",
-			     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= sizeof(pin))
+			     SHIRUDO_BPFFS_UPATCHES_DIR, bpffs_name) >= sizeof(pin))
 		return -ENAMETOOLONG;
 	fd = bpf_obj_get(pin);
 	if (fd >= 0)
@@ -180,12 +185,15 @@ int shirudo_upatch_resolve_location(struct btf *vbtf, const char *name,
 void shirudo_upatch_loaded_at(const char *name, char *out, size_t cap)
 {
 	char dir[PATH_MAX];
+	char bpffs_name[SHIRUDO_UPATCH_BPFFS_NAME_MAX + 1];
 	struct stat st;
 	struct tm tm;
 
 	out[0] = '\0';
+	if (shirudo_upatch_bpffs_name(bpffs_name, sizeof(bpffs_name), name))
+		return;
 	if ((size_t)snprintf(dir, sizeof(dir), "%s/%s",
-			     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= sizeof(dir))
+			     SHIRUDO_BPFFS_UPATCHES_DIR, bpffs_name) >= sizeof(dir))
 		return;
 	if (stat(dir, &st) != 0)
 		return;
@@ -197,6 +205,7 @@ void shirudo_upatch_loaded_at(const char *name, char *out, size_t cap)
 void shirudo_upatch_payload_sha256(const char *name, char *out, size_t cap)
 {
 	char dir[PATH_MAX];
+	char bpffs_name[SHIRUDO_UPATCH_BPFFS_NAME_MAX + 1];
 	uint8_t raw[32];
 	ssize_t n;
 	size_t i;
@@ -204,8 +213,10 @@ void shirudo_upatch_payload_sha256(const char *name, char *out, size_t cap)
 	out[0] = '\0';
 	if (cap < 65)
 		return;
+	if (shirudo_upatch_bpffs_name(bpffs_name, sizeof(bpffs_name), name))
+		return;
 	if ((size_t)snprintf(dir, sizeof(dir), "%s/%s",
-			     SHIRUDO_BPFFS_UPATCHES_DIR, name) >= sizeof(dir))
+			     SHIRUDO_BPFFS_UPATCHES_DIR, bpffs_name) >= sizeof(dir))
 		return;
 	n = getxattr(dir, SHIRUDO_XATTR_PAYLOAD, raw, sizeof(raw));
 	if (n != (ssize_t)sizeof(raw))

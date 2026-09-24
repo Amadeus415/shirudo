@@ -27,6 +27,8 @@
 #include <linux/bpf.h>
 #include <linux/btf.h>
 
+#include <shirudo/upatch.h>
+
 #include <bpf/btf.h>
 #include <curl/curl.h>
 #include <zlib.h>
@@ -909,14 +911,17 @@ static int metric_name(const struct otel_state *st,
 static int map_start_ns(const struct shirudo_map_view *v, uint64_t *out)
 {
 	char path[PATH_MAX];
+	char bpffs_name[SHIRUDO_UPATCH_BPFFS_NAME_MAX + 1];
 	struct stat st;
 
 	if (v->lifetime_start_ns) {
 		*out = v->lifetime_start_ns;
 		return 0;
 	}
+	if (shirudo_upatch_bpffs_name(bpffs_name, sizeof(bpffs_name), v->upatch))
+		return -ENAMETOOLONG;
 	if ((size_t)snprintf(path, sizeof(path), "%s/%s",
-			     SHIRUDO_BPFFS_UPATCHES_DIR, v->upatch) >=
+			     SHIRUDO_BPFFS_UPATCHES_DIR, bpffs_name) >=
 	    sizeof(path))
 		return -ENAMETOOLONG;
 	if (stat(path, &st) != 0)

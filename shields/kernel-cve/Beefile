@@ -490,3 +490,12 @@ CONFIG_NET = ["y", "m"]
 [[upatches]]
 source = "sources/cve-2026-68118-tcp-challenge-ack-non-exact-rst-syn-received/observability/cve_2026_68118-6.1-offset-predicate.bpf.c"
 load_target = "upatches/cve-2026-68118-tcp-challenge-ack-non-exact-rst-syn-received.upatch"
+
+[upatches.tree]
+id = "cve-2026-68118-tcp-challenge-ack-non-exact-rst-syn-received"
+load_artifact = "upatches/cve-2026-68118-tcp-challenge-ack-non-exact-rst-syn-received.upatch"
+unload_artifact = "upatches/cve-2026-68118-tcp-challenge-ack-non-exact-rst-syn-received.unload.upatch"
+
+[upatches.tree.selector]
+kernel_release_prefix = ["6.1"]
+architecture = ["x86_64"]

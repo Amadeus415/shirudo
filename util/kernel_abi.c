@@ -209,6 +209,7 @@ static int validate_fd_array_cnt(char *detail, size_t detail_sz)
 	long ret;
 
 	attr.prog_type = (enum bpf_prog_type)-1;
+	attr.insn_cnt = 1;
 	attr.fd_array_cnt = 1;
 	ret = syscall(__NR_bpf, BPF_PROG_LOAD, &attr,
 		      SHIRUDO_OFFSETOFEND(union bpf_attr, fd_array_cnt));

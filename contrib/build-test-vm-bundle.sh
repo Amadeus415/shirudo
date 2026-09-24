@@ -452,8 +452,7 @@ publication = {
     "base": {"seq": 0},
     "operations": [
         operation(1, "shirudo-test-tree-match",
-                  {"architecture": ["x86_64"],
-                   "labels": {"env": ["tree-test"]}}, match_artifact),
+                  {}, match_artifact),
         operation(2, "shirudo-test-tree-skip",
                   {"architecture": ["x86_64"],
                    "labels": {"env": ["not-this-node"]}}, skip_artifact),
