@@ -8,4 +8,4 @@ After=shirudo.service
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/shirudo/map-export.env
-ExecStart=@bindir@/shirudo status --otel --include-tpm
+ExecStart=@bindir@/shirudo status --otel --include-tpm --include-system
