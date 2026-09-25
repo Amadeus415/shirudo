@@ -1,0 +1,38 @@
+{
+  "base_seq": 0,
+  "generation": 11,
+  "head_seq": 41,
+  "manifest_digest": "sha256:9139799a2522c",
+  "operations": [
+    {
+      "artifact": {
+        "layer_digest": "sha256:53f212b273f02",
+        "manifest_digest": "sha256:f694e5b6ed6b",
+        "payload_sha256": "sha256:dcc4aebe4591e",
+        "repository": "oci://registry.test:5443/shirudo/upatch-tree"
+      },
+      "id": "linux-observability",
+      "op": "add",
+      "operation_digest": "sha256:d441109ef4e76",
+      "selector": {},
+      "seq": 40
+    },
+    {
+      "artifact": {
+        "layer_digest": "sha256:a3e2bb4cf12fb",
+        "manifest_digest": "sha256:59b425bee12cb",
+        "payload_sha256": "sha256:6d813513f4845",
+        "repository": "oci://registry.test:5443/shirudo/upatch-tree"
+      },
+      "id": "linux-observability",
+      "op": "delete",
+      "operation_digest": "sha256:8f94224b6e2d6",
+      "selector": {},
+      "seq": 41
+    }
+  ],
+  "project": "default",
+  "reference": "stable",
+  "tree_id": "default-upatches"
+}
+

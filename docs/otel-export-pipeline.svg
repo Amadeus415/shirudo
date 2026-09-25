@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="460" viewBox="0 0 1500 460" role="img" aria-labelledby="title desc">
+  <title id="title">OpenTelemetry export pipeline</title>
+  <desc id="desc">ArenaMap data flows through a serializer, LuaJIT decoder, and OTLP over HTTP to an OTEL Collector. The collector exports to ClickHouse, Splunk, and JDB.</desc>
+  <defs>
+    <style>
+      .stage { font: 700 18px system-ui, sans-serif; fill: #17263d; }
+      .sub { font: 14px system-ui, sans-serif; fill: #536278; }
+      .destination { font: 700 18px system-ui, sans-serif; fill: #17263d; }
+      .card { stroke-width: 1.5; }
+      .flow { fill: none; stroke: #687b93; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#687b93"/>
+    </marker>
+  </defs>
+
+  <rect width="1500" height="460" fill="#f5f7fb"/>
+
+  <!-- Main pipeline stages -->
+  <rect x="40" y="180" width="172" height="96" rx="12" fill="#e8eef8" stroke="#b9c8dc" class="card"/>
+  <text x="126" y="222" text-anchor="middle" class="stage">ArenaMap</text>
+  <text x="126" y="247" text-anchor="middle" class="sub">BPF map</text>
+
+  <rect x="250" y="180" width="172" height="96" rx="12" fill="#e7f0ff" stroke="#9bb9e8" class="card"/>
+  <text x="336" y="222" text-anchor="middle" class="stage">Serializer</text>
+  <text x="336" y="247" text-anchor="middle" class="sub">map reader</text>
+
+  <rect x="460" y="180" width="172" height="96" rx="12" fill="#f1eef8" stroke="#c9b9df" class="card"/>
+  <text x="546" y="222" text-anchor="middle" class="stage">LuaJIT</text>
+  <text x="546" y="247" text-anchor="middle" class="sub">decoder</text>
+
+  <rect x="670" y="180" width="172" height="96" rx="12" fill="#e5f5f2" stroke="#8fc8bd" class="card"/>
+  <text x="756" y="222" text-anchor="middle" class="stage">OTLP/HTTP</text>
+  <text x="756" y="247" text-anchor="middle" class="sub">export</text>
+
+  <rect x="880" y="180" width="172" height="96" rx="12" fill="#fff3df" stroke="#e5bd78" class="card"/>
+  <text x="966" y="222" text-anchor="middle" class="stage">OTEL Collector</text>
+  <text x="966" y="247" text-anchor="middle" class="sub">receive and route</text>
+
+  <!-- Sequential arrows -->
+  <path d="M 212 228 H 242" class="flow" marker-end="url(#arrow)"/>
+  <path d="M 422 228 H 452" class="flow" marker-end="url(#arrow)"/>
+  <path d="M 632 228 H 662" class="flow" marker-end="url(#arrow)"/>
+  <path d="M 842 228 H 872" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- Collector fan-out -->
+  <path d="M 1052 228 H 1148" class="flow"/>
+  <path d="M 1148 98 V 358" class="flow"/>
+  <path d="M 1148 98 H 1232" class="flow" marker-end="url(#arrow)"/>
+  <path d="M 1148 228 H 1232" class="flow" marker-end="url(#arrow)"/>
+  <path d="M 1148 358 H 1232" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- Destinations -->
+  <rect x="1240" y="54" width="220" height="88" rx="12" fill="#e8eef8" stroke="#b9c8dc" class="card"/>
+  <text x="1350" y="107" text-anchor="middle" class="destination">ClickHouse</text>
+
+  <rect x="1240" y="184" width="220" height="88" rx="12" fill="#e8eef8" stroke="#b9c8dc" class="card"/>
+  <text x="1350" y="237" text-anchor="middle" class="destination">Splunk</text>
+
+  <rect x="1240" y="314" width="220" height="88" rx="12" fill="#e8eef8" stroke="#b9c8dc" class="card"/>
+  <text x="1350" y="367" text-anchor="middle" class="destination">JDB</text>
+</svg>

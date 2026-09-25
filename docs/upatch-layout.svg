@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="730" viewBox="0 0 960 730" role="img" aria-labelledby="title desc">
+  <title id="title">Illustrative Shirudo upatch layout</title>
+  <desc id="desc">A vertical view of an upatch container: header, loader instructions, data, signature, optional metadata, and optional extras. The signature covers loader instructions and data.</desc>
+  <defs>
+    <style>
+      .title { font: 700 30px system-ui, sans-serif; fill: #142238; }
+      .subtitle { font: 15px system-ui, sans-serif; fill: #536278; }
+      .section-title { font: 700 18px system-ui, sans-serif; fill: #17263d; }
+      .body { font: 14px system-ui, sans-serif; fill: #34445b; }
+      .mono { font: 600 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #17263d; }
+      .badge { font: 700 11px system-ui, sans-serif; letter-spacing: .08em; }
+      .footer { font: 13px system-ui, sans-serif; fill: #536278; }
+      .card { stroke-width: 1.5; }
+    </style>
+  </defs>
+
+  <rect width="960" height="940" fill="#f5f7fb"/>
+  <!-- Header -->
+  <rect x="60" y="42" width="840" height="118" rx="12" fill="#e8eef8" stroke="#b9c8dc" class="card"/>
+  <text x="84" y="76" class="section-title">Header <tspan class="body">— 360 bytes</tspan></text>
+  <text x="84" y="104" class="body">magic, version, flags, name, payload SHA-256</text>
+  <text x="84" y="128" class="body">section offsets/lengths, map/program counts, artifact type</text>
+
+  <!-- Loader instructions -->
+  <rect x="60" y="168" width="840" height="94" rx="12" fill="#e7f0ff" stroke="#9bb9e8" class="card"/>
+  <text x="84" y="204" class="section-title">loader_insns <tspan class="badge" fill="#315f9e">SIGNED</tspan></text>
+  <text x="84" y="233" class="body">Generated BPF loader bytecode</text>
+
+  <!-- Data -->
+  <rect x="60" y="270" width="840" height="116" rx="12" fill="#e5f5f2" stroke="#8fc8bd" class="card"/>
+  <text x="84" y="306" class="section-title">data <tspan class="badge" fill="#267568">SIGNED</tspan></text>
+  <text x="84" y="334" class="body">Loader data: payload program instructions, BTF, map data, relocations</text>
+  <text x="84" y="358" class="body">May include the signed decoder data and trailer</text>
+
+  <!-- Signature -->
+  <rect x="60" y="394" width="840" height="94" rx="12" fill="#fff3df" stroke="#e5bd78" class="card"/>
+  <text x="84" y="430" class="section-title">signature</text>
+  <text x="84" y="459" class="body">Detached CMS signature over: <tspan class="mono">loader_insns || data</tspan></text>
+
+  <!-- Metadata -->
+  <rect x="60" y="496" width="840" height="94" rx="12" fill="#eef0f4" stroke="#c4cad4" class="card"/>
+  <text x="84" y="532" class="section-title">metadata <tspan class="badge" fill="#626f80">UNSIGNED</tspan></text>
+  <text x="84" y="561" class="body">Per-program roles and attach details (UPGM); unload target digest</text>
+
+  <!-- Extras -->
+  <rect x="60" y="598" width="840" height="94" rx="12" fill="#f1eef8" stroke="#c9b9df" class="card"/>
+  <text x="84" y="634" class="section-title">extras <tspan class="badge" fill="#70549b">UNSIGNED</tspan></text>
+  <text x="84" y="663" class="body">Embedded .bpf.c source path and text</text>
+
+</svg>
