@@ -8,6 +8,9 @@ on:
       - '*'
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   deb:
     runs-on: ubuntu-latest-4cores-16gb
@@ -22,6 +25,19 @@ jobs:
         run: |
           git submodule sync -- third_party/bpf-next
           git submodule update --init --force --depth 1 --single-branch -- third_party/bpf-next
+
+      - name: Determine build version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then
+            version=$REF_NAME
+          else
+            version=$(git describe --tags --always --dirty)
+          fi
+          mkdir -p build
+          printf '%s\n' "$version" > build/ci-version
 
       - name: Build deb package and run shirudo in LVH VM
         uses: cilium/little-vm-helper@v0.0.30
@@ -134,12 +150,17 @@ jobs:
 
             cd /host
 
-            # The LVH /host mount makes git dirty checks expensive. For CI,
-            # use a fixed package/runtime version instead of asking git.
+            # Read the workflow version through /host so it also reaches the VM.
+            # LVH expands cmd in a host-side heredoc; escape guest-side dollars.
+            export SHIRUDO_CI_VERSION="\$(cat build/ci-version)"
+            test -n "\$SHIRUDO_CI_VERSION"
+            deb_version=\$(printf '%s' "\$SHIRUDO_CI_VERSION" | \
+              sed 's/^v//; s/[^A-Za-z0-9.+:~-]/./g; /^[0-9]/!s/^/0~/')
+            test -n "\$deb_version"
             make bindeb-pkg \
-              DEB_RAW_VERSION=0.0.0-ci \
-              DEB_VERSION=0.0.0-ci \
-              SHIRUDO_GIT_DESCRIBE='printf 0.0.0-ci' \
+              DEB_RAW_VERSION="\$SHIRUDO_CI_VERSION" \
+              DEB_VERSION="\$deb_version" \
+              SHIRUDO_GIT_DESCRIBE='printenv SHIRUDO_CI_VERSION' \
               TARGET_DEPS_PREBUILT=1 \
               SHIRUDO_TARGET_PKG_CONFIG_PATH=/tmp/shirudo-mbedtls-curl/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig \
               SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR=/usr/include \
@@ -170,3 +191,29 @@ jobs:
           name: shirudo-deb
           path: shirudo-*.deb
           if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: deb
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download deb packages
+        uses: actions/download-artifact@v4
+        with:
+          name: shirudo-deb
+
+      - name: Upload packages to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" shirudo-*.deb --clobber
+          else
+            gh release create "$RELEASE_TAG" shirudo-*.deb \
+              --draft --verify-tag --title "$RELEASE_TAG" --generate-notes
+          fi
