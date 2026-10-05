@@ -1471,8 +1471,10 @@ static bool package_member_name_ok(const char *name, const char *member)
 		!strcmp(slash + 1, member);
 }
 
-static int read_package_member(const char *archive, const char *member,
-			       unsigned char **out, size_t *out_len, size_t max)
+static int read_package_member_in(const char *archive, const char *member,
+				 const char *package_dir, char *found_dir,
+				 size_t found_dir_sz, unsigned char **out,
+				 size_t *out_len, size_t max)
 {
 	gzFile gz = gzopen(archive, "rb");
 	unsigned char h[512];
@@ -1480,6 +1482,10 @@ static int read_package_member(const char *archive, const char *member,
 
 	if (!gz)
 		return -errno;
+	if (gzdirect(gz)) {
+		gzclose(gz);
+		return -EINVAL;
+	}
 	for (;;) {
 		int n = gzread(gz, h, sizeof(h));
 		uint64_t size, remain, pad;
@@ -1506,9 +1512,18 @@ static int read_package_member(const char *archive, const char *member,
 			break;
 		}
 		remain = size;
-		if (package_member_name_ok(name, member) && !h[345] &&
-		    (!h[156] || h[156] == '0')) {
+		if (package_member_name_ok(name, member) &&
+		    (!package_dir ||
+		     ((size_t)(strchr(name, '/') - name) == strlen(package_dir) &&
+		      !strncmp(name, package_dir, strlen(package_dir))))) {
+			size_t dir_len = (size_t)(strchr(name, '/') - name);
 			unsigned char *body;
+
+			if ((h[156] && h[156] != '0') || h[345] ||
+			    (found_dir && dir_len >= found_dir_sz)) {
+				rc = -EINVAL;
+				break;
+			}
 			if (size > max || size > SIZE_MAX - 1) {
 				rc = -E2BIG;
 				break;
@@ -1531,6 +1546,10 @@ static int read_package_member(const char *archive, const char *member,
 			body[size] = '\0';
 			*out = body;
 			*out_len = (size_t)size;
+			if (found_dir) {
+				memcpy(found_dir, name, dir_len);
+				found_dir[dir_len] = '\0';
+			}
 			rc = 0;
 			break;
 		}
@@ -1563,6 +1582,56 @@ done:
 		*out_len = 0;
 		rc = -EINVAL;
 	}
+	return rc;
+}
+
+static int read_package_member(const char *archive, const char *member,
+			       unsigned char **out, size_t *out_len, size_t max)
+{
+	return read_package_member_in(archive, member, NULL, NULL, 0,
+				      out, out_len, max);
+}
+
+static int print_package_readme(const char *source)
+{
+	char temporary[] = "/tmp/shirudo-bpm-info-XXXXXX";
+	unsigned char *beefile = NULL, *readme = NULL;
+	const char *archive = source;
+	char package_dir[101];
+	size_t len;
+	int fd, rc;
+
+	if (!strncmp(source, "oci://", 6)) {
+		fd = mkstemp(temporary);
+		if (fd < 0)
+			return -errno;
+		close(fd);
+		archive = temporary;
+		rc = download_package(source, archive);
+		if (rc)
+			goto out;
+	}
+	rc = read_package_member_in(archive, "Beefile", NULL, package_dir,
+				    sizeof(package_dir), &beefile, &len,
+				    4u * 1024u * 1024u);
+	if (rc) {
+		if (rc == -ENOENT)
+			pr_err("bpm info: package %s does not include Beefile", source);
+		goto out;
+	}
+	rc = read_package_member_in(archive, "README.md", package_dir, NULL, 0,
+				    &readme, &len, 4u * 1024u * 1024u);
+	if (rc) {
+		if (rc == -ENOENT)
+			pr_err("bpm info: package %s does not include README.md", source);
+		goto out;
+	}
+	rc = shirudo_write_all(STDOUT_FILENO, readme, len);
+out:
+	free(beefile);
+	free(readme);
+	if (archive == temporary)
+		unlink(temporary);
 	return rc;
 }
 
@@ -3395,6 +3464,7 @@ static const struct shirudo_help_item bpm_subcmds[] = {
 	{ "tree", "synchronize the optional signed upatch tree" },
 	{ "key", "add, fingerprint, and list package certificates" },
 	{ "pull", "download an OCI package into the current directory" },
+	{ "info", "print a local or OCI package README" },
 	{ "push", "publish an OCI package from the operator" },
 	{ "build", "build a signed OCI package from a Beefile" },
 	{ "install", "download and activate a repository or OCI package" },
@@ -3407,6 +3477,7 @@ static const struct shirudo_help_item bpm_target_subcmds[] = {
 	{ "tree", "synchronize the optional signed upatch tree" },
 	{ "key", "add, fingerprint, and list package certificates" },
 	{ "pull", "download an OCI package into the current directory" },
+	{ "info", "print a local or OCI package README" },
 	{ "install", "download and activate a repository or OCI package" },
 	{ "upgrade", "activate newer cached package versions" },
 };
@@ -3417,7 +3488,7 @@ static bool bpm_operator_available(void)
 }
 
 static const struct shirudo_help bpm_target_help = {
-	.usage = "shirudo bpm <config|repo|tree|key|pull|install|upgrade>",
+	.usage = "shirudo bpm <config|repo|tree|key|pull|info|install|upgrade>",
 	.summary = "Manage signed target-local BPM packages backed by OCI repositories.",
 	.sections = (const struct shirudo_help_section[]) {
 		{ "subcommands:", bpm_target_subcmds, ARRAY_SIZE(bpm_target_subcmds) },
@@ -3426,7 +3497,7 @@ static const struct shirudo_help bpm_target_help = {
 };
 
 static const struct shirudo_help bpm_operator_help = {
-	.usage = "shirudo bpm <config|repo|key|pull|push|build|install|upgrade>",
+	.usage = "shirudo bpm <config|repo|key|pull|info|push|build|install|upgrade>",
 	.summary = "Manage signed OCI packages and publish packages from the operator.",
 	.sections = (const struct shirudo_help_section[]) {
 		{ "subcommands:", bpm_subcmds, ARRAY_SIZE(bpm_subcmds) },
@@ -3441,6 +3512,16 @@ static void bpm_pull_usage(void)
 		"The package reference must start with oci://.\n"
 		"Example:\n"
 		"  shirudo bpm pull oci://quay.io/namespace/package:tag\n");
+}
+
+static void bpm_info_usage(void)
+{
+	fprintf(stderr,
+		"usage: shirudo bpm info <package-file|package-reference>\n\n"
+		"Prints README.md from a local .bee file or an OCI package.\n"
+		"Examples:\n"
+		"  shirudo bpm info ./package.bee\n"
+		"  shirudo bpm info oci://quay.io/namespace/package:tag\n");
 }
 
 static void bpm_push_usage(void)
@@ -3568,6 +3649,22 @@ int cmd_bpm(int argc, const char **argv)
 		return 2;
 	if (!strcmp(sub, "config"))
 		return cmd_bpm_config(argc - 1, argv + 1);
+	if (!strcmp(sub, "info")) {
+		int rc;
+
+		if (argc == 3 && shirudo_is_help(argv[2])) {
+			bpm_info_usage();
+			return 0;
+		}
+		if (argc != 3) {
+			bpm_info_usage();
+			return 2;
+		}
+		if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
+			return bpm_fail("initialize curl", -EIO);
+		rc = print_package_readme(argv[2]);
+		return bpm_finish(-1, rc, "info");
+	}
 	if (!strcmp(sub, "tree") && (argc < 3 || shirudo_is_help(argv[2]))) {
 		fprintf(stderr, "usage: shirudo bpm tree sync [--dry-run] [--report=<path>]\n");
 		return argc < 3 ? 2 : 0;

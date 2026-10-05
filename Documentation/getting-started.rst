@@ -38,6 +38,21 @@ the repository's packaging targets when producing installable
 packages. The operator-only ``shirudo-build`` helper and clang
 are not needed on a target.
 
+Inspect a BPM package
+=====================
+
+Print a package's README before installing it:
+
+::
+
+    shirudo bpm info ./package.bee
+    shirudo bpm info oci://quay.io/namespace/package:tag
+
+The command is available in both packages. It prints ``README.md`` from
+the package directory containing ``Beefile`` and fails if either file is
+missing. OCI downloads are checked against the manifest's digest and size
+and removed after inspection. The command does not install or load upatches.
+
 Initialize a target
 ===================
 

@@ -14,6 +14,7 @@ test_expect_success 'bpm exposes native subcommands to completion' '
 	echo "$out" | grep -qx repo &&
 	echo "$out" | grep -qx key &&
 	echo "$out" | grep -qx pull &&
+	echo "$out" | grep -qx info &&
 	echo "$out" | grep -qx install &&
 	echo "$out" | grep -qx upgrade
 '
