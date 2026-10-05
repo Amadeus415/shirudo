@@ -207,7 +207,7 @@ static int build_cert(X509 *c, EVP_PKEY *pkey)
 		return -1;
 	if (add_ext(c, NID_subject_key_identifier, "hash") != 0)
 		return -1;
-	if (add_ext(c, NID_authority_key_identifier, "keyid") != 0)
+	if (add_ext(c, NID_authority_key_identifier, "keyid:always") != 0)
 		return -1;
 
 	if (X509_sign(c, pkey, EVP_sha256()) == 0) {
