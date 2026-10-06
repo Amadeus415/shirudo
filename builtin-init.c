@@ -325,7 +325,7 @@ static int attach_pin(struct bpf_program *p, const char *pin,
 }
 
 /*
- * Load seal.bpf.o and attach + pin its five filesystem-sealing hooks.
+ * Load seal.bpf.o and attach + pin its filesystem-sealing and exec hooks.
  * Keeps the object open via *obj_out (the caller tears it and the links
  * down together). Must run BEFORE lsm/bpf is attached: seal is loaded
  * unsigned and is not prog_type SYSCALL, so once the bpf() gate is live
@@ -337,6 +337,11 @@ static int attach_seal(struct bpf_object **obj_out, struct bpf_link **links)
 		const char	*prog;
 		const char	*pin;
 	} hooks[] = {
+		{ "shirudo_seal_bprm_check_security",
+		  SHIRUDO_SEAL_BPRM_CHECK_PIN },
+		{ "shirudo_seal_bprm_committed_creds",
+		  SHIRUDO_SEAL_BPRM_COMMITTED_PIN },
+		{ "shirudo_seal_task_alloc",       SHIRUDO_SEAL_TASK_ALLOC_PIN },
 		{ "shirudo_seal_file_open",        SHIRUDO_SEAL_FILE_OPEN_PIN },
 		{ "shirudo_seal_inode_unlink",     SHIRUDO_SEAL_UNLINK_PIN },
 		{ "shirudo_seal_inode_rename",     SHIRUDO_SEAL_RENAME_PIN },
@@ -421,7 +426,7 @@ static int init_lsm(enum shirudo_mode mode, bool native_signing,
 	struct bpf_object *obj = NULL, *seal_obj = NULL;
 	struct bpf_link *link_bpf = NULL, *link_unlink = NULL;
 	struct bpf_link *link_setx = NULL, *link_rmx = NULL, *link_pload = NULL;
-	struct bpf_link *seal_links[5] = {};
+	struct bpf_link *seal_links[8] = {};
 	key_serial_t keyring;
 	struct bpf_map *m_sb;
 	struct stat st;
@@ -527,7 +532,8 @@ static int init_lsm(enum shirudo_mode mode, bool native_signing,
 
 	/*
 	 * Order: the bpffs guards (inode_unlink/setxattr/removexattr), then
-	 * seal's five regular-fs hooks, then the native-mode bpf() gates
+	 * seal's filesystem and exec-identity hooks, then the native-mode
+	 * bpf() gates
 	 * (bpf_prog_load admission, then lsm/bpf) LAST. Pinning a link
 	 * creates a bpffs inode, gated by neither guard set; seal's unsigned
 	 * load and the identity-map freeze must both precede the load gates

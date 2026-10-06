@@ -7,17 +7,20 @@
  * Every file/directory under /var/lib/shirudo/ (except the private
  * bpffs mount, which bpf/bpf2.c guards) is labelled with the inode
  * xattr security.bpf.shirudo whose value is the installed shirudo's
- * SHIRUDO_VERSION_ID; the shirudo binary carries the same label. These
- * five hooks read the target's label and, if present, require the
+ * SHIRUDO_VERSION_ID; the shirudo binary carries the same label. The
+ * filesystem hooks read the target's label and, if present, require the
  * calling task's executable to carry an equal label -- so only shirudo
- * may write, unlink, rename, or relabel its own on-disk state. An
- * unlabelled target is not ours and is allowed through untouched. No
- * bpf_d_path(), no path strings: the label rides the inode, immune to
- * bind-mount / namespace / TOCTOU games. Reads are not gated; only
- * write-mode opens and the mutating inode ops are.
+ * may write, unlink, rename, or relabel its own on-disk state. The exec
+ * hooks cache whether the successfully executed file carries a Shirudo
+ * label in task storage for later access-control decisions. An
+ * unlabelled filesystem target is not ours and is allowed through
+ * untouched. No bpf_d_path(), no path strings: the label rides the
+ * inode, immune to bind-mount / namespace / TOCTOU games. Reads are not
+ * gated; only write-mode opens and the mutating inode ops are.
  *
- * The hooks are sleepable (lsm.s/) because reading an xattr can sleep.
- * The xattr-reading kfuncs write into a bpf_dynptr over map memory
+ * The filesystem and exec xattr hooks are sleepable (lsm.s/) because
+ * reading an xattr can sleep. The xattr-reading kfuncs write into a
+ * bpf_dynptr over map memory
  * (the verifier rejects stack), so the two scratch buffers live in
  * per-task storage: a task is in only one of these syscalls at a time,
  * and its storage survives CPU migration across the sleeping read -- so
@@ -45,6 +48,9 @@ char _license[] SEC("license") = "Dual BSD/GPL";
 struct seal_scratch {
 	char	target[LABEL_LEN];
 	char	exe[LABEL_LEN];
+	__u8	exec_candidate_valid;
+	__u8	exec_candidate_labelled;
+	__u8	exe_is_shirudo;
 };
 
 struct {
@@ -96,6 +102,73 @@ static __always_inline struct seal_scratch *seal_scratch_get(
 {
 	return bpf_task_storage_get(&seal_scratch_map, task, NULL,
 				    BPF_LOCAL_STORAGE_GET_F_CREATE);
+}
+
+/*
+ * Stage the candidate executable's seal label during exec. A later LSM
+ * hook may still reject the exec, so the persistent task marker is only
+ * updated by bprm_committed_creds after a successful exec. This is because
+ * the task struct storage would be reused on the error case for some
+ * other task.
+ */
+SEC("lsm.s/bprm_check_security")
+int BPF_PROG(shirudo_seal_bprm_check_security,
+	     struct linux_binprm *bprm)
+{
+	struct task_struct *task = bpf_get_current_task_btf();
+	struct seal_scratch *s = seal_scratch_get(task);
+	struct file *file = BPF_CORE_READ(bprm, file);
+	struct bpf_dynptr dp;
+	int len = -1;
+
+	if (!s)
+		return 0;
+	if (file) {
+		bpf_dynptr_from_mem(s->target, LABEL_LEN, 0, &dp);
+		len = bpf_get_file_xattr(file, SHIRUDO_XATTR, &dp);
+	}
+	s->exec_candidate_labelled = len == LABEL_LEN;
+	s->exec_candidate_valid = 1;
+	return 0;
+}
+
+SEC("lsm.s/bprm_committed_creds")
+void BPF_PROG(shirudo_seal_bprm_committed_creds,
+	      const struct linux_binprm *bprm)
+{
+	struct task_struct *task = bpf_get_current_task_btf();
+	struct seal_scratch *s =
+		bpf_task_storage_get(&seal_scratch_map, task, NULL, 0);
+
+	(void)bprm;
+	if (!s || !s->exec_candidate_valid)
+		return;
+	if (!s->exec_candidate_labelled) {
+		/* Scratch is transient; unlabelled tasks need no persistent entry. */
+		bpf_task_storage_delete(&seal_scratch_map, task);
+		return;
+	}
+	s->exe_is_shirudo = 1;
+	s->exec_candidate_valid = 0;
+	s->exec_candidate_labelled = 0;
+}
+
+SEC("lsm/task_alloc")
+int BPF_PROG(shirudo_seal_task_alloc, struct task_struct *child,
+	     __u64 clone_flags)
+{
+	struct task_struct *parent = bpf_get_current_task_btf();
+	struct seal_scratch *parent_s;
+	struct seal_scratch *child_s;
+
+	(void)clone_flags;
+	parent_s = bpf_task_storage_get(&seal_scratch_map, parent, NULL, 0);
+	if (!parent_s || !parent_s->exe_is_shirudo)
+		return 0;
+	child_s = seal_scratch_get(child);
+	if (child_s)
+		child_s->exe_is_shirudo = 1;
+	return 0;
 }
 
 SEC("lsm.s/file_open")
