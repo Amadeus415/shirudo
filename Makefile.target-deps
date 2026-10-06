@@ -75,7 +75,7 @@ $(CURL_STAMP):
 			--enable-static \
 			--disable-shared
 	@$(MAKE) -C "$(CURL_SOURCE)" -j$$(nproc)
-	@$(MAKE) -C "$(CURL_SOURCE)" install
+	@$(MAKE) -C "$(CURL_SOURCE)" DESTDIR= install
 	@touch "$@"
 
 $(TSS_STAMP):
@@ -105,7 +105,7 @@ $(TSS_STAMP):
 			--disable-tcti-mssim \
 			--disable-tcti-swtpm
 	@$(MAKE) -C "$(TSS_SOURCE)" -j$$(nproc)
-	@$(MAKE) -C "$(TSS_SOURCE)" install
+	@$(MAKE) -C "$(TSS_SOURCE)" DESTDIR= install
 	@touch "$@"
 
 check-system-archives:
