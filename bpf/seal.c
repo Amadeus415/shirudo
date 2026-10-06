@@ -171,6 +171,28 @@ int BPF_PROG(shirudo_seal_task_alloc, struct task_struct *child,
 	return 0;
 }
 
+/* Do not create task-bound perf events for a committed Shirudo task. */
+SEC("lsm/perf_event_alloc")
+int BPF_PROG(shirudo_seal_perf_event_alloc,
+	     struct perf_event *event, int ret)
+{
+	struct task_struct *target;
+	struct seal_scratch *s;
+
+	if (ret)
+		return ret;
+
+	target = BPF_CORE_READ(event, hw.target);
+	if (!target)
+		return 0; /* CPU-wide events have no task target to inspect. */
+
+	s = bpf_task_storage_get(&seal_scratch_map, target, NULL, 0);
+	if (s && s->exe_is_shirudo)
+		return -EACCES;
+
+	return 0;
+}
+
 /* Do not allow ptrace access to tasks whose committed executable is Shirudo. */
 SEC("lsm.s/ptrace_access_check")
 int BPF_PROG(shirudo_seal_ptrace_access_check,
