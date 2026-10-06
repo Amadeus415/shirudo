@@ -78,8 +78,11 @@ _shirudo()
 		elif [[ $sub == tree && ${COMP_WORDS[3]} == sync && $cur == -* ]]; then
 			COMPREPLY=( $(compgen -W "--dry-run --report=" -- "$cur") )
 		elif [[ $sub == key && cword -eq 3 ]]; then
-			COMPREPLY=( $(compgen -W "add" -- "$cur") )
-		elif [[ $sub == key && ${COMP_WORDS[3]} == add ]]; then
+			local subs
+			subs=$("$bin" bpm key --list-cmds 2>/dev/null)
+			COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
+		elif [[ $sub == key && (${COMP_WORDS[3]} == add ||
+			${COMP_WORDS[3]} == fingerprint) ]]; then
 			COMPREPLY=( $(compgen -f -X '!*.bee' -- "$cur") $(compgen -f -- "$cur") )
 		elif [[ $sub == install && $cword -eq 3 ]]; then
 			COMPREPLY=( $(compgen -W "example/package" -- "$cur") )

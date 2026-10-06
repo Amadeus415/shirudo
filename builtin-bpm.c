@@ -1048,7 +1048,7 @@ static void trim_string(const char *in, char *out, size_t out_sz)
 	out[end - start] = '\0';
 }
 
-static int pull_package(const char *raw)
+static int download_package(const char *raw, const char *destination)
 {
 	struct bpm_oci_client c = {};
 	struct bpm_descriptor layers[8];
@@ -1079,7 +1079,9 @@ static int pull_package(const char *raw)
 				       url, sizeof(url))))
 			goto out;
 		trim_string(layers[i].title, title, sizeof(title));
-		if (title[0] && !strchr(title, '/') &&
+		if (destination) {
+			bpm_copy_string(filename, sizeof(filename), destination);
+		} else if (title[0] && !strchr(title, '/') &&
 		    strlen(title) >= strlen(".bee") &&
 		    !strcmp(title + strlen(title) - strlen(".bee"), ".bee")) {
 			bpm_copy_string(filename, sizeof(filename), title);
@@ -1122,6 +1124,11 @@ static int pull_package(const char *raw)
 out:
 	free(manifest.data);
 	return rc;
+}
+
+static int pull_package(const char *raw)
+{
+	return download_package(raw, NULL);
 }
 
 struct index_sink {
@@ -1187,7 +1194,8 @@ static int verify_cms(const unsigned char *payload, size_t payload_len,
 	return rc;
 }
 
-static int copy_file(const char *src, const char *dst, mode_t mode)
+static int copy_file_ex(const char *src, const char *dst, mode_t mode,
+			bool exclusive)
 {
 	unsigned char buf[65536];
 	ssize_t n;
@@ -1195,7 +1203,8 @@ static int copy_file(const char *src, const char *dst, mode_t mode)
 
 	in = open(src, O_RDONLY | O_CLOEXEC);
 	if (in < 0) return -errno;
-	out = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
+	out = open(dst, O_WRONLY | O_CREAT | O_CLOEXEC |
+		   (exclusive ? O_EXCL : O_TRUNC), mode);
 	if (out < 0) { rc = -errno; close(in); return rc; }
 	while ((n = read(in, buf, sizeof(buf))) > 0) {
 		rc = shirudo_write_all(out, buf, (size_t)n);
@@ -1207,6 +1216,11 @@ static int copy_file(const char *src, const char *dst, mode_t mode)
 	close(in); close(out);
 	if (rc) unlink(dst);
 	return rc;
+}
+
+static int copy_file(const char *src, const char *dst, mode_t mode)
+{
+	return copy_file_ex(src, dst, mode, false);
 }
 
 static int atomic_write(const char *path, const void *data, size_t len, mode_t mode)
@@ -1492,7 +1506,8 @@ static int read_package_member(const char *archive, const char *member,
 			break;
 		}
 		remain = size;
-		if (package_member_name_ok(name, member)) {
+		if (package_member_name_ok(name, member) && !h[345] &&
+		    (!h[156] || h[156] == '0')) {
 			unsigned char *body;
 			if (size > max || size > SIZE_MAX - 1) {
 				rc = -E2BIG;
@@ -1943,67 +1958,182 @@ static int cert_matches_active(const char *path)
 	return rc;
 }
 
+static int key_file_fingerprint(const char *path, char hex[65])
+{
+	struct shirudo_cert cert = {};
+	unsigned char digest[SHIRUDO_CRYPTO_SHA256_LEN];
+	int rc;
+
+	rc = shirudo_cert_read_file(path, &cert);
+	if (!rc)
+		rc = shirudo_cert_pubkey_digest(&cert, digest);
+	shirudo_cert_free(&cert);
+	if (rc)
+		return rc;
+	for (size_t i = 0; i < sizeof(digest); i++)
+		snprintf(hex + 2 * i, 3, "%02x", digest[i]);
+	return 0;
+}
+
 static int install_key_file(const char *src)
 {
-	struct shirudo_cert x = {};
-	unsigned char digest[SHIRUDO_CRYPTO_SHA256_LEN];
-	char hex[65], dst[PATH_MAX], linktmp[PATH_MAX];
+	char hex[65], dst[PATH_MAX];
 	struct stat st;
+	bool active;
 	int rc;
-	if (shirudo_cert_read_file(src, &x) || shirudo_cert_pubkey_digest(&x, digest)) { shirudo_cert_free(&x); return -EINVAL; }
-	for (unsigned int i = 0; i < sizeof(digest); i++)
-		snprintf(hex + 2*i, 3, "%02x", digest[i]);
-	hex[64] = 0;
-	shirudo_cert_free(&x);
-	rc = path_mkdir_p(SHIRUDO_KEYS_DIR, 0700); if (rc) return rc;
-	if (snprintf(dst, sizeof(dst), "%s/%s.der", SHIRUDO_KEYS_DIR, hex) >= (int)sizeof(dst)) return -ENAMETOOLONG;
-	if (copy_file(src, dst, 0644)) return -EIO;
-	if (stat(SHIRUDO_CERT_PATH, &st) == 0) {
-		if (cert_matches_active(dst) == 0) { unlink(dst); return 0; }
-		unlink(dst);
+
+	rc = key_file_fingerprint(src, hex);
+	if (rc)
+		return rc;
+	rc = path_mkdir_p(SHIRUDO_KEYS_DIR, 0700);
+	if (rc)
+		return rc;
+	active = lstat(SHIRUDO_CERT_PATH, &st) == 0;
+	if (!active && errno != ENOENT)
+		return -errno;
+	if (active && cert_matches_active(src))
 		return -EPERM;
+	if (snprintf(dst, sizeof(dst), "%s/%s.der", SHIRUDO_KEYS_DIR,
+		     hex) >= (int)sizeof(dst))
+		return -ENAMETOOLONG;
+	if (lstat(dst, &st) == 0) {
+		char existing[65];
+
+		if (!S_ISREG(st.st_mode) || key_file_fingerprint(dst, existing) ||
+		    strcmp(existing, hex))
+			return -EKEYREJECTED;
+	} else {
+		if (errno != ENOENT)
+			return -errno;
+		rc = copy_file_ex(src, dst, 0644, true);
+		if (rc)
+			return rc;
 	}
-	snprintf(linktmp, sizeof(linktmp), "%s.tmp.%ld", SHIRUDO_CERT_PATH, (long)getpid());
-	unlink(linktmp);
-	if (symlink(dst, linktmp) || rename(linktmp, SHIRUDO_CERT_PATH)) { unlink(linktmp); return -errno; }
+	if (!active && symlink(dst, SHIRUDO_CERT_PATH)) {
+		if (errno != EEXIST)
+			return -errno;
+		if (cert_matches_active(src))
+			return -EPERM;
+	}
 	return 0;
 }
 
 static int extract_package_cert(const char *archive, char *out, size_t out_sz)
 {
-	gzFile gz = gzopen(archive, "rb");
-	unsigned char h[512]; int fd = -1, rc = -ENOENT;
 	char tmp[] = "/tmp/shirudo-bpm-cert-XXXXXX";
-	if (!gz) return -errno;
-	for (;;) {
-		int n = gzread(gz, h, sizeof(h)); uint64_t size, remain, pad;
-		char name[PATH_MAX]; int type;
-		if (n == 0) break;
-		if (n != (int)sizeof(h)) { rc = -EINVAL; break; }
-		bool zero = true; for (size_t i = 0; i < sizeof(h); i++) if (h[i]) { zero = false; break; }
-		if (zero) break;
-		snprintf(name, sizeof(name), "%s", (char *)h);
-		if (tar_octal((char *)h + 124, 12, &size)) { rc = -EINVAL; break; }
-		type = h[156] ? h[156] : '0';
-		if (type == '0' && !strcmp(strrchr(name, '/') ? strrchr(name, '/') + 1 : name, "cert.der")) {
-			fd = mkstemp(tmp); if (fd < 0) { rc = -errno; break; }
-			remain = size;
-			while (remain) { unsigned char buf[65536]; size_t want = remain > sizeof(buf) ? sizeof(buf) : (size_t)remain; n = gzread(gz, buf, (unsigned)want); if (n <= 0) { rc = -EIO; break; } rc = shirudo_write_all(fd, buf, (size_t)n); if (rc) break; remain -= (size_t)n; }
-			if (!rc) { close(fd); fd = -1; if (strlen(tmp) >= out_sz) rc = -ENAMETOOLONG; else { snprintf(out, out_sz, "%s", tmp); rc = 0; } }
-			if (rc) { close(fd); fd = -1; unlink(tmp); }
-			if (!rc) break;
-		} else {
-			remain = size; while (remain) { unsigned char buf[65536]; size_t want = remain > sizeof(buf) ? sizeof(buf) : (size_t)remain; n = gzread(gz, buf, (unsigned)want); if (n <= 0) { rc = -EINVAL; break; } remain -= (size_t)n; }
-		}
-		pad = (512 - (size % 512)) % 512; while (pad) { unsigned char buf[512]; size_t want = pad > sizeof(buf) ? sizeof(buf) : (size_t)pad; n = gzread(gz, buf, (unsigned)want); if (n <= 0) { rc = -EINVAL; break; } pad -= (size_t)n; }
-		if (rc < 0 && rc != -ENOENT) break;
+	unsigned char *body = NULL;
+	size_t len = 0;
+	int fd, rc;
+
+	rc = read_package_member(archive, "cert.der", &body, &len, 1024 * 1024);
+	if (rc)
+		return rc;
+	if (sizeof(tmp) > out_sz) {
+		free(body);
+		return -ENAMETOOLONG;
 	}
-	if (fd >= 0)
+	fd = mkstemp(tmp);
+	if (fd < 0) {
+		free(body);
+		return -errno;
+	}
+	rc = shirudo_write_all(fd, body, len);
+	if (close(fd) && !rc)
+		rc = -errno;
+	free(body);
+	if (rc)
+		unlink(tmp);
+	else
+		bpm_copy_string(out, out_sz, tmp);
+	return rc;
+}
+
+static int key_source_file(const char *source, char *temp, size_t temp_sz)
+{
+	char archive[] = "/tmp/shirudo-bpm-key-XXXXXX";
+	size_t len = strlen(source);
+	int fd, rc;
+
+	if (!strncmp(source, "oci://", 6)) {
+		fd = mkstemp(archive);
+		if (fd < 0)
+			return -errno;
 		close(fd);
-	if (gzclose(gz) != Z_OK && rc == 0) {
-		unlink(out);
-		rc = -EINVAL;
+		rc = download_package(source, archive);
+		if (!rc)
+			rc = extract_package_cert(archive, temp, temp_sz);
+		unlink(archive);
+		return rc;
 	}
+	if (len >= 4 && !strcmp(source + len - 4, ".bee"))
+		return extract_package_cert(source, temp, temp_sz);
+	return 0;
+}
+
+static int key_fingerprint_compare(const void *a, const void *b)
+{
+	return strcmp(*(char * const *)a, *(char * const *)b);
+}
+
+static int list_keys(void)
+{
+	char **fingerprints = NULL;
+	struct dirent *entry;
+	size_t count = 0;
+	DIR *dir;
+	int rc = 0;
+
+	dir = opendir(SHIRUDO_KEYS_DIR);
+	if (!dir)
+		return errno == ENOENT ? 0 : -errno;
+	for (;;) {
+		char path[PATH_MAX], hex[65], **next;
+		struct stat st;
+		bool valid = true;
+
+		errno = 0;
+		entry = readdir(dir);
+		if (!entry) {
+			rc = -errno;
+			break;
+		}
+		if (strlen(entry->d_name) != 68 ||
+		    strcasecmp(entry->d_name + 64, ".der"))
+			continue;
+		for (size_t i = 0; i < 64; i++)
+			if (!isxdigit((unsigned char)entry->d_name[i]))
+				valid = false;
+		if (!valid || snprintf(path, sizeof(path), "%s/%s",
+				       SHIRUDO_KEYS_DIR, entry->d_name) >=
+				       (int)sizeof(path))
+			continue;
+		if (lstat(path, &st) || !S_ISREG(st.st_mode) ||
+		    key_file_fingerprint(path, hex) ||
+		    strncasecmp(entry->d_name, hex, 64))
+			continue;
+		next = realloc(fingerprints, (count + 1) * sizeof(*next));
+		if (!next) {
+			rc = -ENOMEM;
+			break;
+		}
+		fingerprints = next;
+		fingerprints[count] = strdup(hex);
+		if (!fingerprints[count]) {
+			rc = -ENOMEM;
+			break;
+		}
+		count++;
+	}
+	closedir(dir);
+	if (!rc && count) {
+		qsort(fingerprints, count, sizeof(*fingerprints),
+		      key_fingerprint_compare);
+		for (size_t i = 0; i < count; i++)
+			puts(fingerprints[i]);
+	}
+	for (size_t i = 0; i < count; i++)
+		free(fingerprints[i]);
+	free(fingerprints);
 	return rc;
 }
 
@@ -3263,7 +3393,7 @@ static const struct shirudo_help_item bpm_subcmds[] = {
 	{ "config", "register and manage OCI repositories" },
 	{ "repo", "refresh signed repository indexes" },
 	{ "tree", "synchronize the optional signed upatch tree" },
-	{ "key", "add a trusted package certificate" },
+	{ "key", "add, fingerprint, and list package certificates" },
 	{ "pull", "download an OCI package into the current directory" },
 	{ "push", "publish an OCI package from the operator" },
 	{ "build", "build a signed OCI package from a Beefile" },
@@ -3275,7 +3405,7 @@ static const struct shirudo_help_item bpm_target_subcmds[] = {
 	{ "config", "register and manage OCI repositories" },
 	{ "repo", "refresh signed repository indexes" },
 	{ "tree", "synchronize the optional signed upatch tree" },
-	{ "key", "add a trusted package certificate" },
+	{ "key", "add, fingerprint, and list package certificates" },
 	{ "pull", "download an OCI package into the current directory" },
 	{ "install", "download and activate a repository or OCI package" },
 	{ "upgrade", "activate newer cached package versions" },
@@ -3340,6 +3470,78 @@ static int bpm_finish(int lock, int rc, const char *action)
 	}
 	curl_global_cleanup();
 	return rc ? bpm_fail(action, rc) : 0;
+}
+
+static const struct shirudo_help_item bpm_key_subcmds[] = {
+	{ "add", "install a trusted package certificate and print its fingerprint" },
+	{ "fingerprint", "print the SHA-256 fingerprint of a certificate's SPKI" },
+	{ "list", "list installed certificate fingerprints" },
+};
+
+static const struct shirudo_help bpm_key_help = {
+	.usage = "shirudo bpm key <add|fingerprint|list>",
+	.summary = "Manage package signing certificates.",
+	.sections = (const struct shirudo_help_section[]) {
+		{ "subcommands:", bpm_key_subcmds, ARRAY_SIZE(bpm_key_subcmds) },
+	},
+	.n_sections = 1,
+	.footer = "add and fingerprint accept a certificate file, .bee package, or\n"
+		  "oci://registry/repository:tag. list reads /var/lib/shirudo/keys.\n"
+		  "Examples:\n"
+		  "  shirudo bpm key fingerprint ./package.bee\n"
+		  "  shirudo bpm key add oci://quay.io/namespace/package:tag\n"
+		  "  shirudo bpm key list",
+};
+
+static int cmd_bpm_key(int argc, const char **argv)
+{
+	char temp[PATH_MAX] = {}, hex[65];
+	const char *sub, *src;
+	int rc;
+
+	if (argc < 2 || shirudo_is_help(argv[1])) {
+		shirudo_print_help(&bpm_key_help);
+		return argc < 2 ? 2 : 0;
+	}
+	if (shirudo_is_list_cmds(argv[1])) {
+		shirudo_print_subcmd_list(bpm_key_subcmds,
+					ARRAY_SIZE(bpm_key_subcmds));
+		return 0;
+	}
+	sub = shirudo_resolve_subcommand("bpm key", argv[1], bpm_key_subcmds,
+					ARRAY_SIZE(bpm_key_subcmds));
+	if (!sub)
+		return 2;
+	if (argc == 3 && shirudo_is_help(argv[2])) {
+		shirudo_print_help(&bpm_key_help);
+		return 0;
+	}
+	if ((!strcmp(sub, "list") && argc != 2) ||
+	    (strcmp(sub, "list") && argc != 3)) {
+		shirudo_print_help(&bpm_key_help);
+		return 2;
+	}
+	if (!strcmp(sub, "list")) {
+		rc = list_keys();
+		return rc ? bpm_fail("key list", rc) : 0;
+	}
+	if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
+		return bpm_fail("initialize curl", -EIO);
+	src = argv[2];
+	rc = key_source_file(src, temp, sizeof(temp));
+	if (!rc) {
+		if (temp[0])
+			src = temp;
+		rc = key_file_fingerprint(src, hex);
+		if (!rc && !strcmp(sub, "add"))
+			rc = install_key_file(src);
+		if (!rc)
+			puts(hex);
+	}
+	if (temp[0])
+		unlink(temp);
+	return bpm_finish(-1, rc, !strcmp(sub, "add") ?
+			  "key add" : "key fingerprint");
 }
 
 int cmd_bpm(int argc, const char **argv)
@@ -3475,22 +3677,8 @@ int cmd_bpm(int argc, const char **argv)
 		rc = cmd_bpm_tree_sync(argc - 1, argv + 1);
 		return bpm_finish(lock, rc, "tree sync");
 	}
-	if (!strcmp(sub, "key") && argc == 4 && !strcmp(argv[2], "add")) {
-		char temp[PATH_MAX] = {};
-		const char *src = argv[3];
-		int rc;
-
-		if (strstr(src, ".bee")) {
-			rc = extract_package_cert(src, temp, sizeof(temp));
-			if (rc)
-				return bpm_fail("key add", rc);
-			src = temp;
-		}
-		rc = install_key_file(src);
-		if (temp[0])
-			unlink(temp);
-		return rc ? bpm_fail("key add", rc) : 0;
-	}
+	if (!strcmp(sub, "key"))
+		return cmd_bpm_key(argc - 1, argv + 1);
 	if (!strcmp(sub, "install") && argc == 3) {
 		char source[BPM_MAX_NAME], name[BPM_MAX_NAME], version[BPM_MAX_NAME];
 		struct bpm_source source_cfg;
