@@ -171,6 +171,24 @@ int BPF_PROG(shirudo_seal_task_alloc, struct task_struct *child,
 	return 0;
 }
 
+/* Do not allow ptrace access to tasks whose committed executable is Shirudo. */
+SEC("lsm.s/ptrace_access_check")
+int BPF_PROG(shirudo_seal_ptrace_access_check,
+	     struct task_struct *child, unsigned int mode, int ret)
+{
+	struct seal_scratch *s;
+
+	(void)mode;
+	if (ret)
+		return ret;
+
+	s = bpf_task_storage_get(&seal_scratch_map, child, NULL, 0);
+	if (s && s->exe_is_shirudo)
+		return -EACCES;
+
+	return 0;
+}
+
 SEC("lsm.s/file_open")
 int BPF_PROG(shirudo_seal_file_open, struct file *file)
 {
