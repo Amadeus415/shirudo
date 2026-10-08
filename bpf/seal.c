@@ -194,7 +194,7 @@ int BPF_PROG(shirudo_seal_perf_event_alloc,
 }
 
 /* Do not allow ptrace access to tasks whose committed executable is Shirudo. */
-SEC("lsm.s/ptrace_access_check")
+SEC("lsm/ptrace_access_check")
 int BPF_PROG(shirudo_seal_ptrace_access_check,
 	     struct task_struct *child, unsigned int mode, int ret)
 {
