@@ -117,7 +117,7 @@ int BPF_PROG(shirudo_seal_bprm_check_security,
 {
 	struct task_struct *task = bpf_get_current_task_btf();
 	struct seal_scratch *s = seal_scratch_get(task);
-	struct file *file = BPF_CORE_READ(bprm, file);
+	struct file *file = bprm->file;
 	struct bpf_dynptr dp;
 	int len = -1;
 
@@ -182,7 +182,7 @@ int BPF_PROG(shirudo_seal_perf_event_alloc,
 	if (ret)
 		return ret;
 
-	target = BPF_CORE_READ(event, hw.target);
+	target = event->hw.target;
 	if (!target)
 		return 0; /* CPU-wide events have no task target to inspect. */
 
