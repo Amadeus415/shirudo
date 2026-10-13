@@ -63,7 +63,6 @@ jobs:
             apt-get install -y --no-install-recommends \
               build-essential \
               ca-certificates \
-              default-jdk \
               clang \
               llvm \
               python3 \

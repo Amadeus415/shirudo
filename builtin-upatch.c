@@ -45,7 +45,6 @@
 #include "util/keyring.h"
 #include "util/log.h"
 #include "util/malloc.h"
-#include "util/mode.h"
 #include "util/paths.h"
 #include "util/report.h"
 #include "util/seal.h"
@@ -59,10 +58,6 @@
 extern const char shirudo_version_id[];
 
 static bool safe_upatch_name(const char *name);
-static bool java_agent_is_loaded(void);
-static int java_agent_payload(uint8_t out[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN]);
-static int java_agent_install(const struct shirudo_upatch *u);
-static int java_agent_clear(void);
 
 #ifndef NFPROTO_IPV6
 #define NFPROTO_IPV6			10
@@ -116,77 +111,6 @@ static const char *cat_from_load_errno(int e)
 	case EPERM:		return "lsm_denied";
 	default:		return "verifier_rejected";
 	}
-}
-
-/*
- * Verify the exact bytes signed by shirudo-build before using the loader.
- * The target holds only cert.der; no private key is read by this path.
- */
-static int verify_userspace_signature(const struct shirudo_upatch *u,
-				      const struct shirudo_mode_state *state,
-				      struct shirudo_op_report *rep)
-{
-	const void *insns, *data, *sig;
-	struct shirudo_cert cert = {};
-	uint8_t cert_sha[32];
-	unsigned char *payload = NULL;
-	size_t insns_len, data_len, total;
-	int rc;
-
-	if (!u || !state || u->hdr.signature_len == 0) {
-		rep_fail(rep, "userspace_signature_verify", "signature_rejected",
-			 EKEYREJECTED, "BPF upatch has no signature");
-		return -EKEYREJECTED;
-	}
-	rc = shirudo_chain_cert_sha256(cert_sha);
-	if (rc || !shirudo_ct_eq(cert_sha, state->cert_sha256,
-				 sizeof(cert_sha))) {
-		rep_fail(rep, "userspace_signature_verify", "tampered",
-			 rc ? -rc : EKEYREJECTED,
-			 "certificate differs from committed mode state");
-		return rc ? rc : -EKEYREJECTED;
-	}
-	rc = shirudo_cert_read_file(SHIRUDO_CERT_PATH, &cert);
-	if (rc) {
-		rep_fail(rep, "userspace_signature_verify", "signature_rejected",
-			 -rc, "cannot parse target certificate");
-		return rc;
-	}
-
-	insns = shirudo_upatch_loader(u);
-	data = shirudo_upatch_data(u);
-	sig = shirudo_upatch_signature(u);
-	insns_len = u->hdr.loader_insns_len;
-	data_len = u->hdr.data_len;
-	if (insns_len > SIZE_MAX - data_len) {
-		shirudo_cert_free(&cert);
-		rep_fail(rep, "userspace_signature_verify", "parser_rejected",
-			 EOVERFLOW, "signed payload is too large");
-		return -EOVERFLOW;
-	}
-	total = insns_len + data_len;
-	payload = xmalloc(total ? total : 1);
-	if (!payload) {
-		shirudo_cert_free(&cert);
-		rep_fail(rep, "userspace_signature_verify", "unknown", ENOMEM,
-			 "signed payload allocation failed");
-		return -ENOMEM;
-	}
-	memcpy(payload, insns, insns_len);
-	memcpy(payload + insns_len, data, data_len);
-	rc = shirudo_verify_detached(payload, total, sig,
-				     u->hdr.signature_len, &cert);
-	if (rc) {
-		pr_err("upatch: userspace CMS signature verification failed");
-		rep_fail(rep, "userspace_signature_verify", "signature_rejected",
-			 EKEYREJECTED, "CMS signature verification failed");
-		rc = -EKEYREJECTED;
-	} else {
-		pr_info("upatch: userspace CMS signature verified");
-	}
-	xfree(payload, total ? total : 1);
-	shirudo_cert_free(&cert);
-	return rc;
 }
 
 static const char *flag_str(const struct shirudo_upatch *u)
@@ -427,14 +351,6 @@ static int cmd_upatch_info(int argc, const char **argv)
 				    u.hdr.loader_insns_len);
 		shirudo_json_kv_int(&e, "signature_len", u.hdr.signature_len);
 		shirudo_json_kv_int(&e, "metadata_len", u.hdr.metadata_len);
-		if (u.hdr.type == SHIRUDO_UPATCH_TYPE_JAVA &&
-		    !shirudo_upatch_is_unload(&u)) {
-			struct shirudo_java_upatch_metadata java_metadata = {};
-
-			if (shirudo_java_upatch_metadata(&u, &java_metadata) == 0)
-				shirudo_json_kv_string(&e, "telemetry_upatch",
-						       java_metadata.telemetry_upatch);
-		}
 		shirudo_json_kv_int(&e, "data_len", u.hdr.data_len);
 		shirudo_json_kv_int(&e, "log_buf_sz", u.hdr.log_buf_sz);
 		shirudo_json_kv_int(&e, "file_size", (int64_t)u.map_size);
@@ -532,7 +448,7 @@ static int cmd_upatch_info(int argc, const char **argv)
 		dump_source(u.source_name, u.source_name_len,
 			    u.source, u.source_len);
 	else
-		printf("Source:                (none -- binary or Java payload)\n");
+		printf("Source:                (none -- binary input)\n");
 	ret = 0;
 out:
 	shirudo_upatch_close(&u);
@@ -647,8 +563,7 @@ static int cmd_upatch_list(int argc, const char **argv)
 		shirudo_hex_encode(u.hdr.payload_sha256, 32, payload_hex);
 		type = shirudo_upatch_is_unload(&u) ? "unload" : "load";
 		payload_type = shirudo_upatch_type_str(&u);
-		loaded = strcmp(payload_type, "java") == 0 ?
-			java_agent_is_loaded() : upatch_is_loaded(name);
+		loaded = upatch_is_loaded(name);
 		shirudo_upatch_close(&u);
 
 		if (json) {
@@ -759,11 +674,6 @@ struct shirudo_prog_desc {
 	int		prog_fd;
 };
 
-/* The legacy outer loader only needs the BPF_PROG_LOAD prefix through fd_array. */
-#define SHIRUDO_BPF_PROG_LOAD_LEGACY_ATTR_SIZE \
-	(offsetof(union bpf_attr, fd_array) + \
-	 sizeof(((union bpf_attr *)0)->fd_array))
-
 static int loader_map_create(const char *name, uint32_t value_size,
 			     const void *excl_prog_hash,
 			     uint32_t excl_prog_hash_sz)
@@ -842,41 +752,6 @@ static int prog_load_signed(const struct bpf_insn *insns, size_t insn_cnt,
 
 
 	fd = syscall(__NR_bpf, BPF_PROG_LOAD, &attr, sizeof(attr));
-	return (int)fd;
-}
-
-/*
- * Legacy-kernel loader path. The signature has already been verified by
- * userspace in trusted-root mode; deliberately leave the native signing
- * attributes out of the request so kernels without that ABI can load it.
- *
- * In particular, do not send fd_array_cnt. It is a trailing field added
- * after Linux 6.1, and a non-zero value makes 6.1 reject the whole request
- * with -E2BIG before it reaches the verifier. fd_array itself is part of
- * the 6.1 ABI and is enough for gen_loader's map-index relocations.
- */
-static int prog_load_unsigned(const struct bpf_insn *insns, size_t insn_cnt,
-				      const char *prog_name, int loader_map_fd,
-				      char *log_buf, size_t log_sz)
-{
-	union bpf_attr attr = {};
-	int fd_array[1] = { loader_map_fd };
-	long fd;
-
-	attr.prog_type = BPF_PROG_TYPE_SYSCALL;
-	attr.insn_cnt = (uint32_t)insn_cnt;
-	attr.insns = (uint64_t)(uintptr_t)insns;
-	attr.license = (uint64_t)(uintptr_t)"Dual BSD/GPL";
-	attr.prog_flags = BPF_F_SLEEPABLE;
-	attr.log_level = log_buf ? 1 : 0;
-	attr.log_size = (uint32_t)log_sz;
-	attr.log_buf = (uint64_t)(uintptr_t)log_buf;
-	attr.fd_array = (uint64_t)(uintptr_t)fd_array;
-	memcpy(attr.prog_name, prog_name,
-	       strnlen(prog_name, sizeof(attr.prog_name)));
-
-	fd = syscall(__NR_bpf, BPF_PROG_LOAD, &attr,
-		     SHIRUDO_BPF_PROG_LOAD_LEGACY_ATTR_SIZE);
 	return (int)fd;
 }
 
@@ -1943,7 +1818,6 @@ static int upatch_apply(const char *path, bool verify_only,
 			struct shirudo_op_report *rep)
 {
 	struct shirudo_upatch u;
-	struct shirudo_mode_state mode_state = {};
 	struct shirudo_prog_spec *prog_specs = NULL;
 	const struct bpf_insn *insns;
 	const void *sig, *data;
@@ -1955,7 +1829,6 @@ static int upatch_apply(const char *path, bool verify_only,
 	int prog_fd = -1, map_fd = -1, rc;
 	struct shirudo_loader_ctx *cx = NULL;
 	uint32_t retval = 0;
-	bool native_signing = true;
 
 	vlog = xmalloc(SHIRUDO_VERIFIER_LOG_MAX);
 	if (!vlog) {
@@ -1986,65 +1859,11 @@ static int upatch_apply(const char *path, bool verify_only,
 		rc = 1;
 		goto out;
 	}
-	if (u.hdr.type == SHIRUDO_UPATCH_TYPE_JAVA) {
-		if (verify_only) {
-			/* Java directives have no kernel signature to verify. */
-			rc = 0;
-			goto out;
-		}
-		{
-			uint8_t payload_digest[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN];
-
-			data = shirudo_upatch_data(&u);
-			shirudo_sha256(data, u.hdr.data_len, payload_digest);
-			if (!shirudo_ct_eq(payload_digest, u.hdr.payload_sha256,
-					   sizeof(payload_digest))) {
-				if (rep)
-					rep_fail(rep, "parse", "parser_rejected", 0,
-						 "Java payload_sha256 mismatch");
-				rc = 1;
-				goto out;
-			}
-		}
-		rc = java_agent_install(&u);
-		if (rc) {
-			pr_err("Java agent install failed: %s", strerror(-rc));
-			rep_fail(rep, "payload_load", "install_failed", -rc,
-				 "Java agent install failed");
-			rc = 1;
-			goto out;
-		}
-		if (rep)
-			rep->loader_return = 0;
-		rc = 0;
-		goto out;
-	}
 	if (u.hdr.loader_insns_len % sizeof(struct bpf_insn)) {
 		pr_err("upatch load: loader_insns_len=%u not a multiple of %zu",
 		       u.hdr.loader_insns_len, sizeof(struct bpf_insn));
 		rep_fail(rep, "parse", "parser_rejected", 0,
 			 "loader_insns_len misaligned");
-		rc = 1;
-		goto out;
-	}
-
-	rc = shirudo_mode_read(&mode_state);
-	if (rc) {
-		pr_err("upatch: mode state unavailable: %s", strerror(-rc));
-		rep_fail(rep, "pre_flight", "tampered", -rc,
-			 "trusted mode state unavailable");
-		rc = 1;
-		goto out;
-	}
-	if (mode_state.mode == SHIRUDO_MODE_TRUSTED_ROOT ||
-		shirudo_kernel_abi_check(NULL, 0) != 0)
-		native_signing = false;
-	if (mode_state.mode == SHIRUDO_MODE_UNTRUSTED_ROOT &&
-	    !native_signing) {
-		pr_err("upatch: kernel lacks native signing support; "
-		       "trusted-root mode is required");
-		rep_fail(rep, "pre_flight", "kernel_abi_unsupported",
-			 EOPNOTSUPP, "native kernel signing is unavailable");
 		rc = 1;
 		goto out;
 	}
@@ -2233,8 +2052,7 @@ static int upatch_apply(const char *path, bool verify_only,
 
 		shirudo_sha256(insns, u.hdr.loader_insns_len, loader_digest);
 		map_fd = loader_map_create("__loader.map", u.hdr.data_len,
-					   native_signing ? loader_digest : NULL,
-					   native_signing ? sizeof(loader_digest) : 0);
+					   loader_digest, sizeof(loader_digest));
 	}
 	if (map_fd < 0) {
 		pr_err("__loader.map create: %s", strerror(errno));
@@ -2270,10 +2088,7 @@ static int upatch_apply(const char *path, bool verify_only,
 	}
 
 	/*
-	 * 4. Verify the userspace signature in trusted-root mode, then issue
-	 *    BPF_PROG_LOAD. Native kernels receive the signature + keyring_id;
-	 *    legacy kernels receive an unsigned outer loader after userspace
-	 *    verification.
+	 * 4. BPF_PROG_LOAD with signature + keyring_id + fd_array_cnt=1.
 	 *    The kernel resolves the exclusive metadata map from fd_array,
 	 *    appends its frozen contents to the instructions, and verifies
 	 *    the CMS signature over insns || metadata against the keyring --
@@ -2282,39 +2097,26 @@ static int upatch_apply(const char *path, bool verify_only,
 	 *    the kernel attests the metadata directly (see
 	 *    Documentation/bpf/signing.rst, "Load-time verification").
 	 */
-	if (mode_state.mode == SHIRUDO_MODE_TRUSTED_ROOT) {
-		rc = verify_userspace_signature(&u, &mode_state, rep);
-		if (rc) {
-			rc = 1;
-			goto out;
-		}
-	}
 	vlog[0] = '\0';
-	if (native_signing)
-		prog_fd = prog_load_signed(insns, insn_cnt, prog_name,
-					   sig, u.hdr.signature_len,
-					   (int32_t)keyring, map_fd,
-					   vlog, SHIRUDO_VERIFIER_LOG_MAX);
-	else
-		prog_fd = prog_load_unsigned(insns, insn_cnt, prog_name,
-					     map_fd, vlog,
-					     SHIRUDO_VERIFIER_LOG_MAX);
+	prog_fd = prog_load_signed(insns, insn_cnt, prog_name,
+				   sig, u.hdr.signature_len,
+				   (int32_t)keyring, map_fd,
+				   vlog, SHIRUDO_VERIFIER_LOG_MAX);
 	if (prog_fd < 0) {
 		int e = errno;
 
-		pr_err("BPF_PROG_LOAD (outer loader): %s", strerror(e));
+		pr_err("BPF_PROG_LOAD (signed loader): %s", strerror(e));
 		if (vlog[0])
 			fprintf(stderr, "loader verifier log:\n%s\n", vlog);
 		rep_fail(rep, "signed_loader_load", cat_from_load_errno(e), e,
-			 "BPF_PROG_LOAD of outer loader failed");
+			 "BPF_PROG_LOAD of signed loader failed");
 		shirudo_report_set_log(rep, vlog);
 		rc = 1;
 		goto out;
 	}
 
-	pr_info("loaded %s loader: prog_fd=%d keyring=%d sig=%uB "
-		"insns=%zu data=%uB",
-		native_signing ? "signed" : "trusted-root unsigned",
+	pr_info("loaded signed loader: prog_fd=%d keyring=%d "
+		"sig=%uB insns=%zu data=%uB",
 		prog_fd, (int)keyring, u.hdr.signature_len, insn_cnt,
 		u.hdr.data_len);
 
@@ -2483,31 +2285,19 @@ int shirudo_upatch_apply(const char *path)
 static int upatch_preflight(const char *expect_chain,
 			    struct shirudo_op_report *rep)
 {
-	struct shirudo_mode_state mode_state = {};
 	uint8_t want[SHIRUDO_CHAIN_DIGEST_LEN], have[SHIRUDO_CHAIN_DIGEST_LEN];
 	char have_hex[2 * SHIRUDO_CHAIN_DIGEST_LEN + 1];
 	char abi_detail[SHIRUDO_KERNEL_ABI_DETAIL_MAX];
 	int fd, rc;
 
-	rc = shirudo_mode_read(&mode_state);
-	if (rc) {
-		pr_err("upatch: pre-flight refused (category: tampered, "
-		       "message: mode state unavailable)");
-		rep_fail(rep, "pre_flight", "tampered", -rc,
-			 "trusted mode state unavailable");
-		return rc;
-	}
 	rc = shirudo_kernel_abi_check(abi_detail, sizeof(abi_detail));
-	if (rc && mode_state.mode != SHIRUDO_MODE_TRUSTED_ROOT) {
+	if (rc) {
 		pr_err("upatch: pre-flight refused (category: "
 		       "kernel_abi_unsupported, message: %s)", abi_detail);
 		rep_fail(rep, "pre_flight", "kernel_abi_unsupported",
 			 EOPNOTSUPP, abi_detail);
 		return rc;
 	}
-	if (rc)
-		pr_warn("upatch: native signing unavailable; using trusted-root "
-			"userspace verification fallback");
 
 	if (shirudo_keyring_find(SHIRUDO_KEYRING_NAME) < 0) {
 		pr_err("upatch load: pre-flight refused (category: tampered, "
@@ -2715,192 +2505,6 @@ static bool safe_upatch_name(const char *name)
 			return false;
 	}
 	return true;
-}
-
-static int write_file_atomic(const char *path, const void *buf, size_t len,
-			     mode_t mode)
-{
-	char tmp[PATH_MAX + 8], dirpath[PATH_MAX];
-	const char *slash;
-	int fd, dirfd, rc = 0;
-
-	if (snprintf(tmp, sizeof(tmp), "%s.new", path) >= (int)sizeof(tmp))
-		return -ENAMETOOLONG;
-	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
-	if (fd < 0)
-		return -errno;
-	rc = shirudo_write_all(fd, buf, len);
-	if (!rc && fchmod(fd, mode) != 0)
-		rc = -errno;
-	if (!rc && fsync(fd) != 0)
-		rc = -errno;
-	if (close(fd) != 0 && !rc)
-		rc = -errno;
-	if (rc) {
-		unlink(tmp);
-		return rc;
-	}
-	if (rename(tmp, path) != 0) {
-		rc = -errno;
-		unlink(tmp);
-		return rc;
-	}
-
-	slash = strrchr(path, '/');
-	if (!slash || slash == path)
-		return 0;
-	if ((size_t)(slash - path) >= sizeof(dirpath))
-		return -ENAMETOOLONG;
-	memcpy(dirpath, path, (size_t)(slash - path));
-	dirpath[slash - path] = '\0';
-	dirfd = open(dirpath, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-	if (dirfd >= 0) {
-		if (fsync(dirfd) != 0)
-			rc = -errno;
-		close(dirfd);
-	}
-	return rc;
-}
-
-static int java_agent_lock(void)
-{
-	int fd, rc;
-
-	rc = mkdir_if_absent(SHIRUDO_LOCKS_DIR, 0700);
-	if (rc)
-		return rc;
-	fd = open(SHIRUDO_JAVAAGENT_LOCK_PATH,
-		  O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-	if (fd < 0)
-		return -errno;
-	while (flock(fd, LOCK_EX) != 0) {
-		if (errno != EINTR) {
-			rc = -errno;
-			close(fd);
-			return rc;
-		}
-	}
-	return fd;
-}
-
-static int java_agent_install(const struct shirudo_upatch *u)
-{
-	struct shirudo_java_upatch_metadata metadata = {};
-	char env[512];
-	uint64_t jar_id = 0;
-	int env_len;
-	bool had_env;
-	int lock, rc;
-
-	if (!shirudo_upatch_data(u) || u->hdr.data_len == 0)
-		return -EINVAL;
-	for (size_t i = 0; i < sizeof(u->hdr.payload_sha256) / sizeof(uint64_t); i++) {
-		uint64_t word;
-
-		memcpy(&word, u->hdr.payload_sha256 + i * sizeof(word),
-		       sizeof(word));
-		jar_id ^= le64toh(word);
-	}
-	rc = shirudo_java_upatch_metadata(u, &metadata);
-	if (rc && rc != -ENOENT)
-		return rc;
-	if (metadata.telemetry_upatch[0])
-		env_len = snprintf(env, sizeof(env),
-				   "JAVA_TOOL_OPTIONS=\"-javaagent:%s=jar_id=%016llx,telemetry_upatch=%s\"\n",
-				   SHIRUDO_JAVAAGENT_PATH,
-				   (unsigned long long)jar_id,
-				   metadata.telemetry_upatch);
-	else
-		env_len = snprintf(env, sizeof(env),
-				   "JAVA_TOOL_OPTIONS=\"-javaagent:%s\"\n",
-				   SHIRUDO_JAVAAGENT_PATH);
-	if (env_len < 0 || (size_t)env_len >= sizeof(env))
-		return -E2BIG;
-	rc = mkdir_if_absent(SHIRUDO_VAR_LIB, 0700);
-	if (rc)
-		return rc;
-	lock = java_agent_lock();
-	if (lock < 0)
-		return lock;
-	had_env = access(SHIRUDO_JAVAAGENT_ENV_PATH, F_OK) == 0;
-	/* Update the selector first. The old jar remains usable if writing
-	 * the replacement payload fails. */
-	rc = mkdir_if_absent(SHIRUDO_JAVAAGENT_ENV_DIR, 0755);
-	if (!rc)
-		rc = write_file_atomic(SHIRUDO_JAVAAGENT_ENV_PATH,
-					env, (size_t)env_len, 0644);
-	if (!rc)
-		rc = write_file_atomic(SHIRUDO_JAVAAGENT_PATH,
-				shirudo_upatch_data(u), u->hdr.data_len, 0644);
-	if (!rc)
-		(void)shirudo_seal_label(SHIRUDO_JAVAAGENT_PATH);
-	if (rc && !had_env)
-		(void)unlink(SHIRUDO_JAVAAGENT_ENV_PATH);
-	(void)flock(lock, LOCK_UN);
-	close(lock);
-	return rc;
-}
-
-static int java_agent_clear(void)
-{
-	int lock, rc = 0;
-
-	lock = java_agent_lock();
-	if (lock < 0)
-		return lock;
-	if (unlink(SHIRUDO_JAVAAGENT_ENV_PATH) != 0 && errno != ENOENT)
-		rc = -errno;
-	if (unlink(SHIRUDO_JAVAAGENT_PATH) != 0 && errno != ENOENT && !rc)
-		rc = -errno;
-	(void)flock(lock, LOCK_UN);
-	close(lock);
-	return rc;
-}
-
-static bool java_agent_is_loaded(void)
-{
-	struct stat jar, env;
-
-	return stat(SHIRUDO_JAVAAGENT_PATH, &jar) == 0 &&
-		S_ISREG(jar.st_mode) && stat(SHIRUDO_JAVAAGENT_ENV_PATH, &env) == 0 &&
-		S_ISREG(env.st_mode);
-}
-
-static int java_agent_payload(uint8_t out[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN])
-{
-	struct stat st;
-	unsigned char *buf;
-	ssize_t got;
-	int fd;
-
-	fd = open(SHIRUDO_JAVAAGENT_PATH, O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		return -errno;
-	if (fstat(fd, &st) != 0) {
-		int rc = -errno;
-
-		close(fd);
-		return rc;
-	}
-	if (!S_ISREG(st.st_mode) || st.st_size <= 0 ||
-	    st.st_size > 16 * 1024 * 1024) {
-		close(fd);
-		return -EINVAL;
-	}
-	buf = xmalloc((size_t)st.st_size);
-	if (!buf) {
-		close(fd);
-		return -ENOMEM;
-	}
-	got = read(fd, buf, (size_t)st.st_size);
-	close(fd);
-	if (got != st.st_size) {
-		xfree(buf, (size_t)st.st_size);
-		return got < 0 ? -errno : -EIO;
-	}
-	shirudo_sha256(buf, (size_t)st.st_size, out);
-	xfree(buf, (size_t)st.st_size);
-	return 0;
 }
 
 /* Append one complete JSON document as an NDJSON record. */
@@ -3169,8 +2773,7 @@ static int cmd_upatch_load(int argc, const char **argv)
 	uint8_t payload[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN];
 	struct shirudo_upatch u;
 	struct shirudo_op_report rep = { .op = "upatch_load", .phase = "done" };
-	bool no_precheck, no_version_check, have_id = false, is_java = false;
-	bool persisted_before = false;
+	bool no_precheck, no_version_check, have_id = false;
 	int rc, ret = 1;
 
 	for (int i = 1; i < argc; i++)
@@ -3201,92 +2804,25 @@ static int cmd_upatch_load(int argc, const char **argv)
 	memcpy(payload, u.hdr.payload_sha256, sizeof(payload));
 	shirudo_hex_encode(payload, sizeof(payload), rep.payload_hex);
 	rep.name = name;
-	is_java = u.hdr.type == SHIRUDO_UPATCH_TYPE_JAVA;
 	shirudo_upatch_close(&u);
 	have_id = true;
 
-	if (!is_java && no_precheck) {
+	if (no_precheck) {
 		pr_warn("upatch load: --no-precheck, pre-flight state check "
 			"skipped");
-	} else if (!is_java && upatch_preflight(expect_chain, &rep) != 0) {
+	} else if (upatch_preflight(expect_chain, &rep) != 0) {
 		if (!rep.category)
 			rep_fail(&rep, "pre_flight", "tampered", EPERM,
 				 "pre-flight check failed");
 		goto done;
 	}
 
-	if (!is_java && eventlog_room(&rep, "load") != 0)
+	if (eventlog_room(&rep, "load") != 0)
 		goto done;
 	if (have_id && !safe_upatch_name(name)) {
 		pr_err("upatch load: refusing unsafe upatch name '%s'", name);
 		rep_fail(&rep, "parse", "parser_rejected", 0,
 			 "unsafe upatch name");
-		goto done;
-	}
-
-	if (is_java) {
-		/* Persist first so a successful userspace install is always
-		 * represented for boot restore.  A failed install removes only
-		 * the newly-created archive; an existing agent remains usable. */
-		{
-			char persisted_path[PATH_MAX];
-
-			if (snprintf(persisted_path, sizeof(persisted_path),
-				     "%s/%s.upatch", SHIRUDO_UPATCHES_DIR, name) <
-			    (int)sizeof(persisted_path))
-				persisted_before = access(persisted_path, F_OK) == 0;
-		}
-		rc = persist_upatch(file, name);
-		if (rc) {
-			rep_fail(&rep, "persist", "unknown", -rc, "persist failed");
-			goto done;
-		}
-		if (upatch_apply(file, false, &rep) != 0) {
-			char installed[PATH_MAX];
-
-			if (!persisted_before && snprintf(installed, sizeof(installed), "%s/%s.upatch",
-				     SHIRUDO_UPATCHES_DIR, name) < (int)sizeof(installed))
-				(void)unlink(installed);
-			goto done;
-		}
-		/* A system has one Java agent. Remove older Java load records
-		 * after the replacement has been installed successfully. */
-		{
-			struct dirent **entries = NULL;
-			int n = scandir(SHIRUDO_UPATCHES_DIR, &entries, is_upatch_file,
-					alphasort);
-
-			if (n >= 0) {
-				for (int i = 0; i < n; i++) {
-					char oldpath[PATH_MAX];
-					struct shirudo_upatch old;
-
-					if (snprintf(oldpath, sizeof(oldpath), "%s/%s",
-						     SHIRUDO_UPATCHES_DIR,
-						     entries[i]->d_name) >=
-						(int)sizeof(oldpath))
-						goto next_java_entry;
-					if (shirudo_upatch_open(oldpath, &old) == 0) {
-						char oldname[SHIRUDO_UPATCH_NAME_MAX + 1];
-
-						memcpy(oldname, old.hdr.name,
-						       SHIRUDO_UPATCH_NAME_MAX);
-						oldname[SHIRUDO_UPATCH_NAME_MAX] = '\0';
-						if (old.hdr.type == SHIRUDO_UPATCH_TYPE_JAVA &&
-						    !shirudo_upatch_is_unload(&old) &&
-						    strcmp(oldname, name) != 0)
-							(void)unlink(oldpath);
-						shirudo_upatch_close(&old);
-					}
-		next_java_entry:
-					shirudo_libc_free(entries[i]);
-				}
-				shirudo_libc_free(entries);
-			}
-		}
-		rep.ok = true;
-		rep.phase = "done";
-		ret = 0;
 		goto done;
 	}
 
@@ -3341,7 +2877,7 @@ static int cmd_upatch_unload(int argc, const char **argv)
 	uint8_t payload[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN] = {};
 	struct shirudo_upatch u;
 	struct shirudo_op_report rep = { .op = "upatch_unload", .phase = "done" };
-	bool no_precheck, no_version_check, is_java;
+	bool no_precheck, no_version_check;
 	int rc, ret = 1;
 
 	for (int i = 1; i < argc; i++)
@@ -3377,7 +2913,6 @@ static int cmd_upatch_unload(int argc, const char **argv)
 	}
 	memcpy(name, u.hdr.name, SHIRUDO_UPATCH_NAME_MAX);
 	name[SHIRUDO_UPATCH_NAME_MAX] = '\0';
-	is_java = u.hdr.type == SHIRUDO_UPATCH_TYPE_JAVA;
 	if (u.hdr.metadata_len == sizeof(payload))
 		memcpy(payload, shirudo_upatch_metadata(&u), sizeof(payload));
 	else
@@ -3397,63 +2932,18 @@ static int cmd_upatch_unload(int argc, const char **argv)
 		     SHIRUDO_UPATCHES_DIR, name) >= (int)sizeof(persisted))
 		goto done;
 
-	if (!is_java && no_precheck) {
+	if (no_precheck) {
 		pr_warn("upatch unload: --no-precheck, pre-flight state check "
 			"skipped");
-	} else if (!is_java && upatch_preflight(expect_chain, &rep) != 0) {
+	} else if (upatch_preflight(expect_chain, &rep) != 0) {
 		if (!rep.category)
 			rep_fail(&rep, "pre_flight", "tampered", EPERM,
 				 "pre-flight check failed");
 		goto done;
 	}
 
-	if (!is_java && eventlog_room(&rep, "unload") != 0)
+	if (eventlog_room(&rep, "unload") != 0)
 		goto done;
-
-	if (is_java) {
-		uint8_t live[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN];
-
-		if (memcmp(payload, (uint8_t[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN]){},
-			   sizeof(payload)) == 0) {
-			rep_fail(&rep, "parse", "parser_rejected", EINVAL,
-				 "Java unload requires an expected payload hash");
-			goto done;
-		}
-		rc = java_agent_payload(live);
-		if (rc == -ENOENT) {
-			(void)unlink(persisted);
-			rep.ok = true;
-			rep.phase = "done";
-			rep.category = "already_unloaded";
-			ret = 0;
-			goto done;
-		}
-		if (rc) {
-			rep_fail(&rep, "pin", "payload_mismatch", -rc,
-				 "Java agent payload unreadable");
-			goto done;
-		}
-		if (!shirudo_ct_eq(live, payload, sizeof(payload))) {
-			rep_fail(&rep, "pin", "payload_mismatch", EPERM,
-				 "installed Java agent does not match directive");
-			goto done;
-		}
-		rc = java_agent_clear();
-		if (rc) {
-			rep_fail(&rep, "pin", "detach_failed", -rc,
-				 "Java agent removal failed");
-			goto done;
-		}
-		if (unlink(persisted) != 0 && errno != ENOENT) {
-			rep_fail(&rep, "persist", "unknown", errno,
-				 "persisted Java upatch removal failed");
-			goto done;
-		}
-		rep.ok = true;
-		rep.phase = "done";
-		ret = 0;
-		goto done;
-	}
 
 	/*
 	 * Authorization: load the directive's signed loader so the kernel

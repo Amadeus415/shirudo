@@ -57,10 +57,6 @@ const void *shirudo_upatch_signature(const struct shirudo_upatch *u);
 const void *shirudo_upatch_metadata(const struct shirudo_upatch *u);
 const void *shirudo_upatch_data(const struct shirudo_upatch *u);
 
-/* Decode optional Java LOAD metadata. */
-int shirudo_java_upatch_metadata(const struct shirudo_upatch *u,
-					struct shirudo_java_upatch_metadata *out);
-
 bool shirudo_upatch_is_unload(const struct shirudo_upatch *u);
 const char *shirudo_upatch_type_str(const struct shirudo_upatch *u);
 

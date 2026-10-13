@@ -221,7 +221,7 @@ static int validate_fd_array_cnt(char *detail, size_t detail_sz)
 	if (errno == E2BIG)
 		return abi_fail(detail, detail_sz,
 				"kernel lacks BPF_PROG_LOAD.fd_array_cnt; "
-				"use the legacy outer-loader ABI");
+				"boot a Shirudo-patched kernel");
 	return 0;
 }
 

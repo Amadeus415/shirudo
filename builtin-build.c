@@ -20,9 +20,9 @@
 #endif
 
 static const struct shirudo_help build_help = {
-	.usage   = "shirudo build <input.bpf.c|.bpf.o|agent.jar> [-o <output.upatch>] [options]\n"
+	.usage   = "shirudo build <input.bpf.c|.bpf.o> [-o <output.upatch>] [options]\n"
 		   "       shirudo build --unload <upatch-name> [-o <output.upatch>] [options]",
-	.summary = "Build a BPF or Java .upatch artifact ready\nfor target-side loading. "
+	.summary = "Build a signed BPF .upatch artifact ready\nfor target-side loading. "
 		   "Operator-only: "
 		   "dispatches to the separate\nshirudo-build binary. The "
 		   "helper is resolved in this order:\n"

@@ -26,7 +26,6 @@
 
 enum shirudo_upatch_type {
 	SHIRUDO_UPATCH_TYPE_BPF = 1,
-	SHIRUDO_UPATCH_TYPE_JAVA = 2,
 };
 
 #define SHIRUDO_UPATCH_NAME_MAX		256
@@ -63,22 +62,6 @@ struct shirudo_upatch_header {
 
 _Static_assert(sizeof(struct shirudo_upatch_header) ==
 		SHIRUDO_UPATCH_HEADER_SIZE, "unexpected upatch header padding");
-
-/* Optional metadata carried by a Java LOAD upatch.  The JAR remains the
- * userspace payload; this descriptor identifies the companion BPF upatch
- * which exposes the Java-agent test-run program. */
-#define SHIRUDO_JAVA_UPATCH_METADATA_MAGIC	0x4a41564du /* "JAVM" */
-#define SHIRUDO_JAVA_UPATCH_METADATA_VERSION	1u
-
-struct shirudo_java_upatch_metadata {
-	uint32_t	magic;
-	uint32_t	version;
-	char		telemetry_upatch[SHIRUDO_UPATCH_NAME_MAX];
-};
-
-_Static_assert(sizeof(struct shirudo_java_upatch_metadata) ==
-		8 + SHIRUDO_UPATCH_NAME_MAX,
-		"unexpected Java upatch metadata size");
 
 /*
  * Optional trailing "extras" blob at header.extra_off (0 = absent).

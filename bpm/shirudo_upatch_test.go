@@ -5,26 +5,6 @@ import (
 	"testing"
 )
 
-func TestParseShirudoJavaUpatch(t *testing.T) {
-	body := make([]byte, shirudoUpatchHeaderSize+3)
-	binary.LittleEndian.PutUint64(body[0:8], shirudoUpatchMagic)
-	binary.LittleEndian.PutUint32(body[8:12], shirudoUpatchVersion)
-	binary.LittleEndian.PutUint32(body[352:356], shirudoUpatchTypeJava)
-	binary.LittleEndian.PutUint32(body[328:332], shirudoUpatchHeaderSize)
-	binary.LittleEndian.PutUint32(body[332:336], 3)
-	body[shirudoUpatchHeaderSize] = 'J'
-	body[shirudoUpatchHeaderSize+1] = 'A'
-	body[shirudoUpatchHeaderSize+2] = 'R'
-
-	upatch, err := parseShirudoUpatch(body)
-	if err != nil {
-		t.Fatalf("parseShirudoUpatch() error = %v", err)
-	}
-	if upatch.PayloadType != "java" || upatch.DataLen != 3 || upatch.LoaderInsnsLen != 0 || upatch.SignatureLen != 0 {
-		t.Fatalf("upatch = %#v", upatch)
-	}
-}
-
 func testShirudoUpatchBytes(t *testing.T, name string, flags uint32, source bool) []byte {
 	t.Helper()
 

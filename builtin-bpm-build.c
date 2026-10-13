@@ -49,7 +49,6 @@ struct bpm_build_file {
 struct bpm_build_upatch {
 	char source[PATH_MAX];
 	char type[16];
-	char telemetry[SHIRUDO_UPATCH_NAME_MAX];
 	char load_target[PATH_MAX];
 	char unload_target[PATH_MAX];
 	char load_path[PATH_MAX];
@@ -355,7 +354,6 @@ static int build_parse_spec(struct bpm_build_spec *spec)
 
 			if (!strcmp(key, "source")) { dst = upatch->source; cap = sizeof(upatch->source); }
 			else if (!strcmp(key, "type")) { dst = upatch->type; cap = sizeof(upatch->type); }
-			else if (!strcmp(key, "telemetry_upatch")) { dst = upatch->telemetry; cap = sizeof(upatch->telemetry); }
 			else if (!strcmp(key, "load_target")) { dst = upatch->load_target; cap = sizeof(upatch->load_target); }
 			else if (!strcmp(key, "unload_target")) { dst = upatch->unload_target; cap = sizeof(upatch->unload_target); }
 			else return -EINVAL;
@@ -379,17 +377,10 @@ static int build_parse_spec(struct bpm_build_spec *spec)
 		if (!u->source[0])
 			return -EINVAL;
 		if (!u->type[0])
-			build_copy(u->type, sizeof(u->type),
-				   strlen(u->source) > 5 &&
-				   !strcasecmp(u->source + strlen(u->source) - 5, ".jar") ?
-				   "java" : "bpf");
+			build_copy(u->type, sizeof(u->type), "bpf");
 		for (p = u->type; *p; p++)
 			*p = (char)tolower((unsigned char)*p);
-		if ((strcmp(u->type, "bpf") && strcmp(u->type, "java")) ||
-		    build_default_targets(u))
-			return -EINVAL;
-		if (u->telemetry[0] && (strcmp(u->type, "java") ||
-					!build_name_ok(u->telemetry)))
+		if (strcmp(u->type, "bpf") || build_default_targets(u))
 			return -EINVAL;
 	}
 	return 0;
@@ -515,7 +506,6 @@ static const char *build_helper(void)
 
 static int build_run_helper(const char *workdir, const char *keys_dir,
 				const char *source, const char *output,
-				const char *type, const char *telemetry,
 				const char *unload_name, const char *payload)
 {
 	const char *helper = build_helper();
@@ -535,14 +525,9 @@ static int build_run_helper(const char *workdir, const char *keys_dir,
 	argv[n++] = (char *)output;
 	argv[n++] = (char *)"--keys-dir";
 	argv[n++] = (char *)keys_dir;
-	argv[n++] = (char *)"--type";
-	argv[n++] = (char *)type;
 	if (unload_name) {
 		argv[n++] = (char *)"--payload-sha256";
 		argv[n++] = (char *)payload;
-	} else if (telemetry && *telemetry) {
-		argv[n++] = (char *)"--telemetry-upatch";
-		argv[n++] = (char *)telemetry;
 	}
 	argv[n] = NULL;
 
@@ -596,8 +581,8 @@ static int build_upatches(struct bpm_build_spec *spec, const char *keys_dir)
 		build_copy(u->unload_path, sizeof(u->unload_path), unload);
 		unlink(load);
 		unlink(unload);
-		rc = build_run_helper(spec->scope, keys_dir, u->source, load, u->type,
-				      u->telemetry, NULL, NULL);
+		rc = build_run_helper(spec->scope, keys_dir, u->source, load,
+				      NULL, NULL);
 		if (rc)
 			return rc;
 		if (shirudo_upatch_open(load, &parsed))
@@ -611,8 +596,8 @@ static int build_upatches(struct bpm_build_spec *spec, const char *keys_dir)
 			  SHIRUDO_CRYPTO_SHA256_LEN);
 		build_copy(u->type, sizeof(u->type), shirudo_upatch_type_str(&parsed));
 		shirudo_upatch_close(&parsed);
-		rc = build_run_helper(spec->scope, keys_dir, NULL, unload, u->type,
-				      NULL, u->name, u->payload_sha256);
+		rc = build_run_helper(spec->scope, keys_dir, NULL, unload,
+				      u->name, u->payload_sha256);
 		if (rc)
 			return rc;
 	}
@@ -664,8 +649,6 @@ static int build_environment(const struct bpm_build_spec *spec,
 		shirudo_json_obj_open(&e);
 		shirudo_json_kv_string(&e, "source", u->source);
 		shirudo_json_kv_string(&e, "type", u->type);
-		if (u->telemetry[0])
-			shirudo_json_kv_string(&e, "telemetry_upatch", u->telemetry);
 		shirudo_json_kv_string(&e, "load_target", u->load_target);
 		shirudo_json_kv_string(&e, "load_output", strrchr(u->load_target, '/') ?
 					strrchr(u->load_target, '/') + 1 : u->load_target);

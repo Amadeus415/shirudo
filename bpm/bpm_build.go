@@ -23,21 +23,19 @@ var bpmBuildLookPath = exec.LookPath
 var bpmBuildNow = time.Now
 
 type bpmShirudoBuildUpatchOptions struct {
-	WorkDir         string
-	Source          string
-	Output          string
-	Type            string
-	TelemetryUpatch string
-	Unload          bool
-	UnloadName      string
-	PayloadSHA256   string
-	KeysDir         string
+	WorkDir       string
+	Source        string
+	Output        string
+	Type          string
+	Unload        bool
+	UnloadName    string
+	PayloadSHA256 string
+	KeysDir       string
 }
 
 type bpmBuiltUpatch struct {
 	Source           string
 	Type             string
-	TelemetryUpatch  string
 	LoadTarget       string
 	LoadOutput       string
 	LoadOutputPath   string
@@ -84,15 +82,14 @@ type bpmBuildEnvironmentShirudo struct {
 }
 
 type bpmBuildEnvironmentUpatch struct {
-	Source          string `json:"source"`
-	Type            string `json:"type"`
-	TelemetryUpatch string `json:"telemetry_upatch,omitempty"`
-	LoadTarget      string `json:"load_target"`
-	LoadOutput      string `json:"load_output"`
-	UnloadTarget    string `json:"unload_target"`
-	UnloadOutput    string `json:"unload_output"`
-	UpatchName      string `json:"upatch_name,omitempty"`
-	PayloadSHA256   string `json:"payload_sha256,omitempty"`
+	Source        string `json:"source"`
+	Type          string `json:"type"`
+	LoadTarget    string `json:"load_target"`
+	LoadOutput    string `json:"load_output"`
+	UnloadTarget  string `json:"unload_target"`
+	UnloadOutput  string `json:"unload_output"`
+	UpatchName    string `json:"upatch_name,omitempty"`
+	PayloadSHA256 string `json:"payload_sha256,omitempty"`
 }
 
 func runBPMBuild(ctx context.Context, buildFilePath string, version string, outputDir string, keysDir string, stdout io.Writer, stderr io.Writer) (string, error) {
@@ -197,12 +194,11 @@ func buildBPMUpatches(ctx context.Context, spec bpmBuildSpec, keysDir string, st
 	built := make([]bpmBuiltUpatch, 0, len(plans))
 	for _, plan := range plans {
 		if err := buildBPMUpatch(ctx, bpmShirudoBuildUpatchOptions{
-			WorkDir:         plan.WorkDir,
-			Source:          plan.Source,
-			Output:          plan.LoadOutputPath,
-			Type:            plan.Built.Type,
-			TelemetryUpatch: plan.Built.TelemetryUpatch,
-			KeysDir:         keysDir,
+			WorkDir: plan.WorkDir,
+			Source:  plan.Source,
+			Output:  plan.LoadOutputPath,
+			Type:    plan.Built.Type,
+			KeysDir: keysDir,
 		}, stdout, stderr); err != nil {
 			return nil, fmt.Errorf("build upatch %s: %w", plan.Built.LoadTarget, err)
 		}
@@ -264,7 +260,6 @@ func planBPMUpatchBuilds(spec bpmBuildSpec) ([]bpmUpatchBuildPlan, error) {
 			Built: bpmBuiltUpatch{
 				Source:           upatch.Source,
 				Type:             bpmBuildUpatchType(upatch),
-				TelemetryUpatch:  upatch.TelemetryUpatch,
 				LoadTarget:       upatch.LoadTarget,
 				LoadOutput:       loadOutput,
 				LoadOutputPath:   loadOutputPath,
@@ -371,8 +366,8 @@ func runBPMShirudoBuildUpatch(ctx context.Context, opts bpmShirudoBuildUpatchOpt
 	if payloadType == "" {
 		payloadType = "bpf"
 	}
-	if payloadType != "bpf" && payloadType != "java" {
-		return fmt.Errorf("upatch type must be bpf or java")
+	if payloadType != "bpf" {
+		return fmt.Errorf("upatch type must be bpf")
 	}
 	if opts.Unload {
 		name := strings.TrimSpace(opts.UnloadName)
@@ -390,10 +385,6 @@ func runBPMShirudoBuildUpatch(ctx context.Context, opts bpmShirudoBuildUpatchOpt
 	args = append(args, "-o", opts.Output)
 	if keysDir := strings.TrimSpace(opts.KeysDir); keysDir != "" {
 		args = append(args, "--keys-dir", keysDir)
-	}
-	args = append(args, "--type", payloadType)
-	if !opts.Unload && strings.TrimSpace(opts.TelemetryUpatch) != "" {
-		args = append(args, "--telemetry-upatch", strings.TrimSpace(opts.TelemetryUpatch))
 	}
 
 	command := exec.CommandContext(ctx, "shirudo", args...)
@@ -507,15 +498,14 @@ func bpmBuildUpatchEnvironment(builtUpatches []bpmBuiltUpatch) []bpmBuildEnviron
 	upatches := make([]bpmBuildEnvironmentUpatch, 0, len(builtUpatches))
 	for _, upatch := range builtUpatches {
 		upatches = append(upatches, bpmBuildEnvironmentUpatch{
-			Source:          upatch.Source,
-			Type:            upatch.Type,
-			TelemetryUpatch: upatch.TelemetryUpatch,
-			LoadTarget:      upatch.LoadTarget,
-			LoadOutput:      upatch.LoadOutput,
-			UnloadTarget:    upatch.UnloadTarget,
-			UnloadOutput:    upatch.UnloadOutput,
-			UpatchName:      upatch.UpatchName,
-			PayloadSHA256:   upatch.PayloadSHA256,
+			Source:        upatch.Source,
+			Type:          upatch.Type,
+			LoadTarget:    upatch.LoadTarget,
+			LoadOutput:    upatch.LoadOutput,
+			UnloadTarget:  upatch.UnloadTarget,
+			UnloadOutput:  upatch.UnloadOutput,
+			UpatchName:    upatch.UpatchName,
+			PayloadSHA256: upatch.PayloadSHA256,
 		})
 	}
 	return upatches

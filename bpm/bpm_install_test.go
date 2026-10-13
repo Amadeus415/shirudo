@@ -250,12 +250,12 @@ func TestUninstallBPMPackageUnloadsUpatchesInReverseOrder(t *testing.T) {
 		bpmShirudoUpatchUnload = oldUnload
 	})
 
-	if _, err := uninstallBPMPackage(context.Background(), "java-bee-world-0.1.0", installRoot, io.Discard, io.Discard); err != nil {
+	if _, err := uninstallBPMPackage(context.Background(), "two-bee-world-0.1.0", installRoot, io.Discard, io.Discard); err != nil {
 		t.Fatalf("uninstallBPMPackage() error = %v", err)
 	}
 	want := []string{
-		filepath.Join(installDir, "upatches/java.unload.upatch"),
-		filepath.Join(installDir, "upatches/javaagent.unload.upatch"),
+		filepath.Join(installDir, "upatches/second.unload.upatch"),
+		filepath.Join(installDir, "upatches/first.unload.upatch"),
 	}
 	if !reflect.DeepEqual(unloaded, want) {
 		t.Fatalf("unloaded = %#v, want %#v", unloaded, want)
@@ -486,35 +486,34 @@ func buildTestBPMPackageBodyWithTwoUpatches(t *testing.T) []byte {
 	t.Helper()
 
 	outputPath, err := buildBPMPackage(t.TempDir(), []byte(`[package]
-name = "java-bee-world"
+name = "two-bee-world"
 
 [[upatches]]
-source = "javaagent.bpf.c"
-load_target = "upatches/javaagent.upatch"
-unload_target = "upatches/javaagent.unload.upatch"
+source = "first.bpf.c"
+load_target = "upatches/first.upatch"
+unload_target = "upatches/first.unload.upatch"
 
 [[upatches]]
-type = "java"
-source = "agent.jar"
-load_target = "upatches/java.upatch"
-unload_target = "upatches/java.unload.upatch"
+source = "second.bpf.c"
+load_target = "upatches/second.upatch"
+unload_target = "upatches/second.unload.upatch"
 `), bpmPackageMetadata{
-		Name: "java-bee-world",
+		Name: "two-bee-world",
 	}, "0.1.0", bpmPackageFile{
-		Target: "upatches/javaagent.upatch",
-		Body:   []byte("javaagent load\n"),
+		Target: "upatches/first.upatch",
+		Body:   []byte("first load\n"),
 		Upatch: true,
 	}, bpmPackageFile{
-		Target: "upatches/javaagent.unload.upatch",
-		Body:   []byte("javaagent unload\n"),
+		Target: "upatches/first.unload.upatch",
+		Body:   []byte("first unload\n"),
 		Upatch: true,
 	}, bpmPackageFile{
-		Target: "upatches/java.upatch",
-		Body:   []byte("java load\n"),
+		Target: "upatches/second.upatch",
+		Body:   []byte("second load\n"),
 		Upatch: true,
 	}, bpmPackageFile{
-		Target: "upatches/java.unload.upatch",
-		Body:   []byte("java unload\n"),
+		Target: "upatches/second.unload.upatch",
+		Body:   []byte("second unload\n"),
 		Upatch: true,
 	})
 	if err != nil {

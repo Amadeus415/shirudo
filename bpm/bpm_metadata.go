@@ -35,12 +35,11 @@ type bpmBuildFileEntry struct {
 }
 
 type bpmBuildUpatchEntry struct {
-	Source          string
-	Type            string
-	TelemetryUpatch string
-	LoadTarget      string
-	UnloadTarget    string
-	Tree            *bpmBuildTreeMetadata
+	Source       string
+	Type         string
+	LoadTarget   string
+	UnloadTarget string
+	Tree         *bpmBuildTreeMetadata
 }
 
 // bpmBuildTreeMetadata is optional build-time publication metadata.  It is
@@ -249,7 +248,6 @@ func parseBPMBuildUpatches(body []byte) ([]bpmBuildUpatchEntry, error) {
 		}
 		current.Source = strings.TrimSpace(current.Source)
 		current.Type = strings.ToLower(strings.TrimSpace(current.Type))
-		current.TelemetryUpatch = strings.TrimSpace(current.TelemetryUpatch)
 		current.LoadTarget = strings.TrimSpace(current.LoadTarget)
 		current.UnloadTarget = strings.TrimSpace(current.UnloadTarget)
 		if current.Source == "" {
@@ -258,16 +256,8 @@ func parseBPMBuildUpatches(body []byte) ([]bpmBuildUpatchEntry, error) {
 		if current.Type == "" {
 			current.Type = "bpf"
 		}
-		if current.Type != "bpf" && current.Type != "java" {
-			return fmt.Errorf("parse upatches line %d: upatches.type must be bpf or java", lineNumber)
-		}
-		if current.TelemetryUpatch != "" {
-			if current.Type != "java" {
-				return fmt.Errorf("parse upatches line %d: upatches.telemetry_upatch requires type java", lineNumber)
-			}
-			if !bpmPackageNamePattern.MatchString(current.TelemetryUpatch) {
-				return fmt.Errorf("parse upatches line %d: upatches.telemetry_upatch is not a valid upatch name", lineNumber)
-			}
+		if current.Type != "bpf" {
+			return fmt.Errorf("parse upatches line %d: upatches.type must be bpf", lineNumber)
 		}
 		if current.LoadTarget == "" {
 			current.LoadTarget = defaultBPMBuildUpatchLoadTarget(current.Source)
@@ -420,8 +410,6 @@ func parseBPMBuildUpatches(body []byte) ([]bpmBuildUpatchEntry, error) {
 				current.Source = parsed
 			case "type":
 				current.Type = parsed
-			case "telemetry_upatch":
-				current.TelemetryUpatch = parsed
 			case "load_target":
 				current.LoadTarget = parsed
 			case "unload_target":
@@ -497,9 +485,6 @@ func bpmBuildUpatchType(upatch bpmBuildUpatchEntry) string {
 	typ := strings.ToLower(strings.TrimSpace(upatch.Type))
 	if typ != "" {
 		return typ
-	}
-	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(upatch.Source)), ".jar") {
-		return "java"
 	}
 	return "bpf"
 }

@@ -37,17 +37,6 @@ verification, keyrings, and the configured TPM interfaces. The target
 binary, its signed enforcement programs, and the certificate in the
 keyring are part of the target TCB.
 
-Legacy kernels can use the explicitly committed ``trusted-root`` mode.
-In that mode the target public certificate and immutable mode record are
-the trust anchor for userspace CMS verification. The private signing key
-is not copied to, or required in, target userspace. The legacy BPF-LSM
-object admits only an unsigned ``BPF_PROG_TYPE_SYSCALL`` loader whose
-caller matches the sealed Shirudo executable identity. This is a weaker
-boundary than native kernel signature enforcement: compromise of the
-pre-init target executable/filesystem or of the target kernel is outside
-the software guarantee. The mode is one-way and is reported by status as
-``trusted-root`` so operators can account for that reduced boundary.
-
 The operator host, build toolchain, package manager, private key, and
 existing SSH infrastructure are trusted according to the operator's
 deployment policy. shirudo does not make SSH credentials, bastions,

@@ -67,12 +67,6 @@ else
 endif
 
 SHIRUDO_LIBEXEC_DIR ?= $(libexecdir)/shirudo
-SHIRUDO_JAVAAGENT_LIBDIR ?= /usr/lib/shirudo
-
-# JNI is needed only for the target-side Java-agent bridge. Keep the main
-# binary build independent of a JDK, while install-target builds the bridge.
-JAVA_HOME ?= $(shell javac_path=$$(command -v javac 2>/dev/null); \
-	[ -n "$$javac_path" ] && dirname "$$(dirname "$$(readlink -f "$$javac_path")")")
 
 # Where operator-installed BPF headers live on a packaged host;
 # also baked into shirudo-build as a runtime fallback -I path.
@@ -149,7 +143,6 @@ UTIL_SRCS := \
     util/kernel_build_id.c \
     util/kernel_release.c \
     util/config.c \
-    util/mode.c \
     util/bpm_source_config.c \
     util/eventlog.c \
     util/json.c \
@@ -206,11 +199,8 @@ BPF_LIB_HEADERS    := bpf/lib/shirudo_bpf_common.h \
 # .incbin into util/loader.o. bpf/lib/ is include-only.
 BPF_SRCS := \
     bpf/bpf2.c \
-    bpf/bpf2-trusted-root.c \
     bpf/seal.c \
     bpf/unload.c
-
-JAVAAGENT_BRIDGE := util/libshirudo_javaagent.so
 
 # shirudo-build is operator-only and links util/sign.c (CMS signer)
 # plus a small subset of util/. The core shirudo binary does NOT
@@ -243,7 +233,6 @@ DEPS     := $(DEP_OBJS:.o=.d)
 
 .PHONY: all install install-common install-target install-operator clean distclean check test \
 		test-helpers \
-		javaagent-bridge \
         bpf libbpf bpftool
 
 all: shirudo
@@ -315,8 +304,6 @@ bpf/%.bpf.o: bpf/%.c bpf/vmlinux.h $(BPF_HEADERS_OUT)
 	    -Ithird_party/bpf-next/tools/include/uapi \
 	    -c $< -o $@
 
-bpf/bpf2-trusted-root.bpf.o: bpf/bpf2.c
-
 # ----- version_id ------------------------------------------------
 
 # Regenerated every build; cheap (one sha256sum invocation).
@@ -378,16 +365,6 @@ tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o \
 	@printf '  LD      $@\n'
 	$(Q)$(LD) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS)
 
-$(JAVAAGENT_BRIDGE): util/javaagent_bridge.c
-	@printf '  LD      $@\n'
-	$(Q)test -n "$(JAVA_HOME)" && test -f "$(JAVA_HOME)/include/jni.h" || \
-		{ echo "Java bridge requires a JDK (set JAVA_HOME)" >&2; exit 1; }
-	$(Q)$(CC) $(CFLAGS) -fPIC -shared \
-		-I"$(JAVA_HOME)/include" -I"$(JAVA_HOME)/include/linux" \
-		-o $@ $< -pthread
-
-javaagent-bridge: $(JAVAAGENT_BRIDGE)
-
 # ----- install ----------------------------------------------------
 
 # The reboot-persistence unit, with @bindir@ resolved to the install path.
@@ -432,7 +409,7 @@ install-common:
 # Target machines additionally get the reboot-persistence, periodic map
 # export, and status keepalive units. They are deliberately NOT in
 # install-operator.
-install-target: shirudo-target install-common javaagent-bridge systemd/shirudo.service \
+install-target: shirudo-target install-common systemd/shirudo.service \
 		systemd/shirudo-map-export.service \
 		systemd/shirudo-map-export.timer \
 		systemd/shirudo-keepalive.service \
@@ -456,10 +433,6 @@ install-target: shirudo-target install-common javaagent-bridge systemd/shirudo.s
 	    systemd/shirudo-bpm-tree-sync.service \
 	    systemd/shirudo-bpm-tree-sync.timer \
 	    $(DESTDIR)$(systemdunitdir)/
-	@printf '  INSTALL $(DESTDIR)$(SHIRUDO_JAVAAGENT_LIBDIR)/libshirudo_javaagent.so\n'
-	$(Q)install -d $(DESTDIR)$(SHIRUDO_JAVAAGENT_LIBDIR)
-	$(Q)install -m 0755 $(JAVAAGENT_BRIDGE) \
-	    $(DESTDIR)$(SHIRUDO_JAVAAGENT_LIBDIR)/libshirudo_javaagent.so
 
 install-operator: install shirudo-build bpf/vmlinux.h $(BPF_HEADERS_OUT) $(BPF_LIB_HEADERS)
 	@printf '  INSTALL $(DESTDIR)$(libexecdir)/shirudo/shirudo-build\n'
@@ -483,7 +456,6 @@ install-operator: install shirudo-build bpf/vmlinux.h $(BPF_HEADERS_OUT) $(BPF_L
 # Compiled test helpers (also usable as fuzz entry points).
 TEST_HELPERS := t/helper/test-json-parser \
                 t/helper/test-chain \
-		 t/helper/test-mode \
 		t/helper/test-config \
 		t/helper/test-bpm-source \
 		t/helper/test-kernel-release \
@@ -509,12 +481,6 @@ t/helper/test-json-parser: t/helper/test-json-parser.c util/json.o
 # util/config.o resolves shirudo_config_load(), called by tpm.o.
 t/helper/test-chain: t/helper/test-chain.c util/chain.o util/crypto_openssl.o util/tpm.o util/log.o \
                      util/config.o util/malloc.o
-	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl -ltss2-esys -ltss2-tctildr
-
-t/helper/test-mode: t/helper/test-mode.c util/mode.o util/chain.o util/io.o \
-			     util/crypto_openssl.o util/tpm.o util/log.o \
-			     util/config.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl -ltss2-esys -ltss2-tctildr
 
@@ -606,7 +572,6 @@ clean:
 	          systemd/shirudo-keepalive.service \
 	          systemd/shirudo-bpm-repo-update.service \
 	          systemd/shirudo-bpm-tree-sync.service
-	$(Q)rm -f $(JAVAAGENT_BRIDGE)
 	$(Q)rm -rf bpf/include
 
 distclean:

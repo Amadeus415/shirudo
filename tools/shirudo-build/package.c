@@ -157,14 +157,6 @@ static int read_small_file(const char *path, char **out, uint32_t *out_len)
 	return 0;
 }
 
-static int sha256_buffer(const void *buf, size_t len, uint8_t out[32])
-{
-	unsigned int out_len = 0;
-
-	return EVP_Digest(buf, len, out, &out_len, EVP_sha256(), NULL) == 1 &&
-		out_len == 32 ? 0 : -EIO;
-}
-
 static bool unsupported_kprobe_section(const char *sec)
 {
 	if (sec && sec[0] == '?')
@@ -1316,72 +1308,6 @@ int shirudo_build_package_load(const char *bpf_o, const char *src_path,
 	return err;
 }
 
-int shirudo_build_package_java_load(const char *jar_path,
-				    const char *out_upatch,
-				    const char *upatch_name,
-				    const char *telemetry_upatch)
-{
-	struct shirudo_upatch_header hdr;
-	struct shirudo_java_upatch_metadata metadata = {};
-	uint8_t digest[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN];
-	char *jar = NULL;
-	uint32_t jar_len = 0;
-	uint32_t metadata_len = 0;
-	int fd = -1, err;
-
-	err = read_small_file(jar_path, &jar, &jar_len);
-	if (err) {
-		pr_err("read Java agent %s: %s", jar_path, strerror(-err));
-		return err;
-	}
-	err = sha256_buffer(jar, jar_len, digest);
-	if (err)
-		goto out;
-	if (telemetry_upatch && telemetry_upatch[0]) {
-		if (!shirudo_upatch_name_valid(telemetry_upatch)) {
-			pr_err("invalid Java telemetry upatch name: %s",
-			       telemetry_upatch);
-			err = -EINVAL;
-			goto out;
-		}
-		metadata.magic = htole32(SHIRUDO_JAVA_UPATCH_METADATA_MAGIC);
-		metadata.version = htole32(SHIRUDO_JAVA_UPATCH_METADATA_VERSION);
-		strncpy(metadata.telemetry_upatch, telemetry_upatch,
-			sizeof(metadata.telemetry_upatch) - 1);
-		metadata_len = sizeof(metadata);
-	}
-
-	pack_header(&hdr, upatch_name, SHIRUDO_UPATCH_TYPE_JAVA, 0,
-			digest, 0, 0, 0, 0,
-			(uint32_t)sizeof(hdr) + jar_len, metadata_len,
-			(uint32_t)sizeof(hdr), jar_len, 0, 0, 0, 0);
-	fd = open(out_upatch, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-	if (fd < 0) {
-		err = -errno;
-		goto out;
-	}
-	err = shirudo_write_all(fd, &hdr, sizeof(hdr));
-	if (!err)
-		err = shirudo_write_all(fd, jar, jar_len);
-	if (!err && metadata_len)
-		err = shirudo_write_all(fd, &metadata, metadata_len);
-	if (!err && fsync(fd) != 0)
-		err = -errno;
-	if (close(fd) != 0 && !err)
-		err = -errno;
-	fd = -1;
-	if (err)
-		unlink(out_upatch);
-	else
-		pr_info("wrote %s (java jar=%uB name=%s)", out_upatch,
-			jar_len, upatch_name);
-out:
-	if (fd >= 0)
-		close(fd);
-	xfree(jar, jar_len);
-	return err;
-}
-
 /* Locate the BPF .rodata map. libbpf names it "<objname>.rodata". */
 static struct bpf_map *find_rodata(struct bpf_object *obj)
 {
@@ -1449,32 +1375,4 @@ int shirudo_build_package_unload(const char *upatch_name,
 			       SHIRUDO_DIRECTIVE_UNLOAD,
 			       payload_sha256, 32,
 			       NULL, pkey_path, cert_path);
-}
-
-int shirudo_build_package_java_unload(const char *name,
-				      const unsigned char payload_sha256[32],
-				      const char *out_upatch)
-{
-	struct shirudo_upatch_header hdr;
-	int fd = -1, err;
-
-	pack_header(&hdr, name, SHIRUDO_UPATCH_TYPE_JAVA,
-			SHIRUDO_DIRECTIVE_UNLOAD, payload_sha256,
-			0, 0, 0, 0, (uint32_t)sizeof(hdr), 32,
-			0, 0, 0, 0, 0, 0);
-	fd = open(out_upatch, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-	if (fd < 0)
-		return -errno;
-	err = shirudo_write_all(fd, &hdr, sizeof(hdr));
-	if (!err)
-		err = shirudo_write_all(fd, payload_sha256, 32);
-	if (!err && fsync(fd) != 0)
-		err = -errno;
-	if (close(fd) != 0 && !err)
-		err = -errno;
-	if (err)
-		unlink(out_upatch);
-	else
-		pr_info("wrote %s (java unload name=%s)", out_upatch, name);
-	return err;
 }

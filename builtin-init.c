@@ -6,6 +6,7 @@
  */
 
 #include <dirent.h>
+#include <endian.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -33,11 +34,9 @@
 #include "util/json.h"
 #include "util/macros.h"
 #include "util/keyring.h"
-#include "util/kernel_abi.h"
 #include "util/loader.h"
 #include "util/log.h"
 #include "util/malloc.h"
-#include "util/mode.h"
 #include "util/paths.h"
 #include "util/preflight.h"
 #include "util/seal.h"
@@ -393,8 +392,7 @@ static int attach_seal(struct bpf_object **obj_out, struct bpf_link **links)
 	return 0;
 }
 
-static int init_lsm(enum shirudo_mode mode, bool native_signing,
-		    bool attach_filesystem_seal)
+static int init_lsm(bool attach_filesystem_seal)
 {
 	/* Must match struct shirudo_sb_id in bpf/bpf2.c byte-for-byte. */
 	struct shirudo_sb_id {
@@ -402,7 +400,6 @@ static int init_lsm(enum shirudo_mode mode, bool native_signing,
 		uint32_t	exe_dev;
 		uint64_t	exe_ino;
 		int32_t		keyring_serial;
-		uint32_t	mode;
 	} id = {};
 	/*
 	 * The four mount-lifecycle guards over shirudo's bpffs. Table-driven
@@ -419,10 +416,8 @@ static int init_lsm(enum shirudo_mode mode, bool native_signing,
 		{ "shirudo_lsm_sb_remount", SHIRUDO_SB_REMOUNT_LINK_PIN },
 	};
 	struct bpf_link *mount_links[ARRAY_SIZE(mount_hooks)] = {};
-	const struct shirudo_embedded_bpf *blob = native_signing ?
-		shirudo_bpf2_blob() : shirudo_bpf2_trusted_root_blob();
-	struct bpf_program *p_bpf = NULL, *p_unlink, *p_setx, *p_rmx;
-	struct bpf_program *p_pload = NULL;
+	const struct shirudo_embedded_bpf *blob = shirudo_bpf2_blob();
+	struct bpf_program *p_bpf, *p_unlink, *p_setx, *p_rmx, *p_pload;
 	struct bpf_object *obj = NULL, *seal_obj = NULL;
 	struct bpf_link *link_bpf = NULL, *link_unlink = NULL;
 	struct bpf_link *link_setx = NULL, *link_rmx = NULL, *link_pload = NULL;
@@ -476,7 +471,6 @@ static int init_lsm(enum shirudo_mode mode, bool native_signing,
 	}
 	id.exe_dev = kernel_dev_t(st.st_dev);
 	id.exe_ino = (uint64_t)st.st_ino;
-	id.mode = mode == SHIRUDO_MODE_TRUSTED_ROOT ? 1 : 0;
 
 	/*
 	 * The trust anchor lsm/bpf_prog_load enforces: only a load the
@@ -518,13 +512,10 @@ static int init_lsm(enum shirudo_mode mode, bool native_signing,
 						  "shirudo_lsm_inode_setxattr");
 	p_rmx = bpf_object__find_program_by_name(obj,
 						 "shirudo_lsm_inode_removexattr");
-	if (native_signing)
-		p_pload = bpf_object__find_program_by_name(obj,
+	p_pload = bpf_object__find_program_by_name(obj,
 						   "shirudo_lsm_bpf_prog_load");
-	if (native_signing)
-		p_bpf = bpf_object__find_program_by_name(obj, "shirudo_lsm_bpf");
-	if (!p_unlink || !p_setx || !p_rmx ||
-	    (native_signing && (!p_bpf || !p_pload))) {
+	p_bpf = bpf_object__find_program_by_name(obj, "shirudo_lsm_bpf");
+	if (!p_unlink || !p_setx || !p_rmx || !p_pload || !p_bpf) {
 		pr_err("expected programs missing in bpf2 object");
 		err = -ENOENT;
 		goto out;
@@ -532,14 +523,11 @@ static int init_lsm(enum shirudo_mode mode, bool native_signing,
 
 	/*
 	 * Order: the bpffs guards (inode_unlink/setxattr/removexattr), then
-	 * seal's filesystem and exec-identity hooks, then the native-mode
-	 * bpf() gates
+	 * seal's filesystem and exec-identity hooks, then the bpf() gates
 	 * (bpf_prog_load admission, then lsm/bpf) LAST. Pinning a link
 	 * creates a bpffs inode, gated by neither guard set; seal's unsigned
 	 * load and the identity-map freeze must both precede the load gates
-	 * going live. In trusted-root mode the admission hooks are absent and
-	 * the retained inode_unlink link is pinned as the canonical
-	 * "shirudo active" marker checked for idempotency and by `shirudo status`.
+	 * going live.
 	 */
 	err = attach_pin(p_unlink, SHIRUDO_INODE_UNLINK_LINK_PIN, &link_unlink);
 	if (err) {
@@ -588,40 +576,20 @@ static int init_lsm(enum shirudo_mode mode, bool native_signing,
 			goto out;
 	}
 
-	if (native_signing) {
-		err = attach_pin(p_pload, SHIRUDO_LSM_PROG_LOAD_LINK_PIN,
-				 &link_pload);
-		if (err) {
-			pr_err("attach lsm/bpf_prog_load: %s", strerror(-err));
-			goto out;
-		}
+	err = attach_pin(p_pload, SHIRUDO_LSM_PROG_LOAD_LINK_PIN, &link_pload);
+	if (err) {
+		pr_err("attach lsm/bpf_prog_load: %s", strerror(-err));
+		goto out;
 	}
 
-	if (native_signing) {
-		err = attach_pin(p_bpf, SHIRUDO_LSM_LINK_PIN, &link_bpf);
-		if (err) {
-			pr_err("attach lsm/bpf: %s", strerror(-err));
-			goto out;
-		}
-	} else {
-		/* Keep the long-standing lsm_link marker, but make it a pin of
-		 * the retained inode_unlink guard when admission hooks are absent. */
-		/* bpf_link__pin() refuses a second pin for the same libbpf link
-		 * object, so use the raw object-pin helper for this marker alias. */
-		if (bpf_obj_pin(bpf_link__fd(link_unlink),
-				SHIRUDO_LSM_LINK_PIN) != 0) {
-			err = -errno;
-			pr_err("pin trusted-root LSM marker: %s", strerror(-err));
-			goto out;
-		}
+	err = attach_pin(p_bpf, SHIRUDO_LSM_LINK_PIN, &link_bpf);
+	if (err) {
+		pr_err("attach lsm/bpf: %s", strerror(-err));
+		goto out;
 	}
 
-	pr_info("bpf2%s attached: %s (%s)%s",
+	pr_info("bpf2%s attached: lsm/bpf gate live%s",
 		attach_filesystem_seal ? " + seal" : "",
-		native_signing ? "lsm/bpf gate live" :
-			"filesystem and mount LSM guards live",
-		native_signing ? "kernel signatures" :
-			"trusted-root userspace verification",
 		attach_filesystem_seal ? ", bpffs and /var/lib/shirudo sealed" :
 		", filesystem seal unavailable on this kernel");
 	err = 0;
@@ -659,6 +627,96 @@ static int select_upatch(const struct dirent *e)
 	size_t n = strlen(e->d_name);
 
 	return n > 7 && strcmp(e->d_name + n - 7, ".upatch") == 0;
+}
+
+/*
+ * State an older shirudo may have left behind for features this
+ * version no longer has: the trusted-root mode record, the Java agent
+ * payload with its lock and JAVA_TOOL_OPTIONS selector, and persisted
+ * Java-type upatches. None of it can load any more, and a Java upatch
+ * would fail every boot-restore, so init removes it before labelling
+ * the tree. The selector is removed only when shirudo wrote it.
+ */
+#define STALE_MODE_PATH		SHIRUDO_VAR_LIB "/mode"
+#define STALE_JAVAAGENT_PATH	SHIRUDO_VAR_LIB "/javaagent.jar"
+#define STALE_JAVAAGENT_LOCK	SHIRUDO_LOCKS_DIR "/javaagent.lock"
+#define STALE_JAVAAGENT_ENV	"/etc/environment.d/shirudo.conf"
+#define STALE_JAVAAGENT_ENV_HEAD \
+	"JAVA_TOOL_OPTIONS=\"-javaagent:" STALE_JAVAAGENT_PATH
+#define STALE_UPATCH_TYPE_JAVA	2u
+
+static void unlink_stale(const char *path)
+{
+	if (unlink(path) == 0)
+		pr_warn("init: removed stale %s", path);
+	else if (errno != ENOENT)
+		pr_warn("init: cannot remove stale %s: %s", path,
+			strerror(errno));
+}
+
+static bool is_javaagent_env(void)
+{
+	static const char head[] = STALE_JAVAAGENT_ENV_HEAD;
+	char buf[sizeof(head) - 1];
+	ssize_t n;
+	int fd;
+
+	fd = open(STALE_JAVAAGENT_ENV, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+	if (fd < 0)
+		return false;
+	n = read(fd, buf, sizeof(buf));
+	close(fd);
+	return n == (ssize_t)sizeof(buf) && memcmp(buf, head, sizeof(buf)) == 0;
+}
+
+static bool is_java_upatch(const char *path)
+{
+	unsigned char hdr[SHIRUDO_UPATCH_HEADER_SIZE];
+	uint32_t version, type, reserved;
+	uint64_t magic;
+	ssize_t n;
+	int fd;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+	if (fd < 0)
+		return false;
+	n = read(fd, hdr, sizeof(hdr));
+	close(fd);
+	if (n != (ssize_t)sizeof(hdr))
+		return false;
+	memcpy(&magic, hdr, sizeof(magic));
+	memcpy(&version, hdr + 8, sizeof(version));
+	memcpy(&type, hdr + SHIRUDO_UPATCH_LEGACY_HEADER_SIZE, sizeof(type));
+	memcpy(&reserved, hdr + SHIRUDO_UPATCH_LEGACY_HEADER_SIZE + 4,
+	       sizeof(reserved));
+	return le64toh(magic) == SHIRUDO_UPATCH_MAGIC &&
+	       le32toh(version) == SHIRUDO_UPATCH_VERSION &&
+	       le32toh(type) == STALE_UPATCH_TYPE_JAVA && reserved == 0;
+}
+
+static void remove_stale_state(void)
+{
+	struct dirent **names = NULL;
+	int n, i;
+
+	unlink_stale(STALE_MODE_PATH);
+	unlink_stale(STALE_JAVAAGENT_PATH);
+	unlink_stale(STALE_JAVAAGENT_LOCK);
+	if (is_javaagent_env())
+		unlink_stale(STALE_JAVAAGENT_ENV);
+
+	n = scandir(SHIRUDO_UPATCHES_DIR, &names, select_upatch, alphasort);
+	for (i = 0; i < n; i++) {
+		char path[PATH_MAX];
+
+		if (snprintf(path, sizeof(path), "%s/%s", SHIRUDO_UPATCHES_DIR,
+			     names[i]->d_name) < (int)sizeof(path) &&
+		    is_java_upatch(path))
+			unlink_stale(path);
+		shirudo_libc_free(names[i]);	/* scandir-owned */
+	}
+	if (n >= 0)
+		shirudo_libc_free(names);	/* scandir-owned */
 }
 
 /*
@@ -705,55 +763,39 @@ static int boot_restore(struct restore_entry **out_set, size_t *out_n)
 	pr_info("boot-restore: re-applying %d upatch%s from %s",
 		n, n == 1 ? "" : "es", SHIRUDO_UPATCHES_DIR);
 
-	/* Companion telemetry upatches must create their arena before the Java
-	 * selector is restored. Persisted names are not a dependency order. */
-	for (int pass = 0; pass < 2; pass++) {
-		for (i = 0; i < n; i++) {
-			char path[PATH_MAX];
-			struct shirudo_upatch u;
-			bool is_bpf;
+	for (i = 0; i < n; i++) {
+		char path[PATH_MAX];
+		struct shirudo_upatch u;
 
-			if (rc)
-				continue;
-			if (snprintf(path, sizeof(path), "%s/%s", SHIRUDO_UPATCHES_DIR,
-				     names[i]->d_name) >= (int)sizeof(path)) {
-				pr_err("boot-restore: path too long: %s",
-				       names[i]->d_name);
-				rc = -ENAMETOOLONG;
-				continue;
-			}
-			if (shirudo_upatch_open(path, &u) != 0) {
-				/* The normal apply path emits the detailed parse failure. */
-				if (pass == 0)
-					continue;
-				rc = -EINVAL;
-				continue;
-			}
-			is_bpf = u.hdr.type == SHIRUDO_UPATCH_TYPE_BPF;
-			shirudo_upatch_close(&u);
-			if ((pass == 0) != is_bpf)
-				continue;
-			/* Canonical name + payload hash for set_digest / eventlog. */
-			if (shirudo_upatch_open(path, &u) == 0) {
-				memcpy(set[cnt].name, u.hdr.name,
-				       SHIRUDO_UPATCH_NAME_MAX);
-				set[cnt].name[SHIRUDO_UPATCH_NAME_MAX] = '\0';
-				shirudo_hex_encode(u.hdr.payload_sha256,
-					   SHIRUDO_UPATCH_PAYLOAD_HASH_LEN,
-					   set[cnt].payload_hex);
-				shirudo_upatch_close(&u);
-			}
-			if (shirudo_upatch_apply(path) != 0) {
-				pr_err("boot-restore: failed to apply %s",
-				       names[i]->d_name);
-				rc = -EINVAL;
-				continue;
-			}
-			cnt++;
+		if (rc)
+			goto next;
+		if (snprintf(path, sizeof(path), "%s/%s", SHIRUDO_UPATCHES_DIR,
+			     names[i]->d_name) >= (int)sizeof(path)) {
+			pr_err("boot-restore: path too long: %s",
+			       names[i]->d_name);
+			rc = -ENAMETOOLONG;
+			goto next;
 		}
+		/* Canonical name + payload hash for set_digest / eventlog. */
+		if (shirudo_upatch_open(path, &u) == 0) {
+			memcpy(set[cnt].name, u.hdr.name,
+			       SHIRUDO_UPATCH_NAME_MAX);
+			set[cnt].name[SHIRUDO_UPATCH_NAME_MAX] = '\0';
+			shirudo_hex_encode(u.hdr.payload_sha256,
+				   SHIRUDO_UPATCH_PAYLOAD_HASH_LEN,
+				   set[cnt].payload_hex);
+			shirudo_upatch_close(&u);
+		}
+		if (shirudo_upatch_apply(path) != 0) {
+			pr_err("boot-restore: failed to apply %s",
+			       names[i]->d_name);
+			rc = -EINVAL;
+			goto next;
+		}
+		cnt++;
+next:
+		shirudo_libc_free(names[i]);	/* scandir-owned */
 	}
-	for (i = 0; i < n; i++)
-		shirudo_libc_free(names[i]);
 	shirudo_libc_free(names);		/* scandir-owned */
 
 	if (rc) {
@@ -932,7 +974,6 @@ static int chain_extend_init(const struct restore_entry *set, size_t n,
 static const struct shirudo_help_item init_options[] = {
 	{ "--check-only", "run the pre-flight only; never touch kernel state" },
 	{ "--no-tpm",     "proceed without TPM (degraded mode)" },
-	{ "--trusted-root", "commit userspace signature verification fallback" },
 	{ "--no-seal",    "skip filesystem sealing when target LSM hooks are not sleepable" },
 };
 
@@ -942,7 +983,7 @@ static const struct shirudo_help_section init_help_sections[] = {
 };
 
 static const struct shirudo_help init_help = {
-	.usage      = "shirudo init [--check-only] [--no-tpm] [--trusted-root] [--no-seal]",
+	.usage      = "shirudo init [--check-only] [--no-tpm] [--no-seal]",
 	.summary    = "Bootstrap the BPF LSM on this target. Idempotent; safe "
 		      "to re-run.\nThe pinned link survives the process exit.",
 	.sections   = init_help_sections,
@@ -959,10 +1000,6 @@ int cmd_init(int argc, const char **argv)
 {
 	struct shirudo_preflight_opts opts = {};
 	struct shirudo_preflight_result res;
-	struct shirudo_mode_state mode_state = {};
-	uint8_t cert_sha256[32];
-	enum shirudo_mode mode = SHIRUDO_MODE_UNTRUSTED_ROOT;
-	bool mode_committed = false, native_signing = true;
 	bool check_only = false, no_seal = false;
 	int i, rc;
 
@@ -973,8 +1010,6 @@ int cmd_init(int argc, const char **argv)
 			check_only = true;
 		} else if (strcmp(a, "--no-tpm") == 0) {
 			opts.allow_no_tpm = true;
-		} else if (strcmp(a, "--trusted-root") == 0) {
-			mode = SHIRUDO_MODE_TRUSTED_ROOT;
 		} else if (strcmp(a, "--no-seal") == 0) {
 			no_seal = true;
 		} else if (shirudo_is_help(a)) {
@@ -986,33 +1021,6 @@ int cmd_init(int argc, const char **argv)
 			return 2;
 		}
 	}
-
-	rc = shirudo_mode_read(&mode_state);
-	if (rc == 0) {
-		mode_committed = true;
-		if (mode_state.mode == SHIRUDO_MODE_UNTRUSTED_ROOT &&
-			mode == SHIRUDO_MODE_TRUSTED_ROOT) {
-			pr_err("init: trusted-root cannot downgrade an existing "
-			       "untrusted-root commitment");
-			return 1;
-		}
-		mode = mode_state.mode;
-	} else if (rc != -ENOENT) {
-		pr_err("init: invalid mode state %s: %s", SHIRUDO_MODE_PATH,
-		       strerror(-rc));
-		return 1;
-	}
-	rc = shirudo_chain_cert_sha256(cert_sha256);
-	if (rc) {
-		pr_err("init: read certificate digest: %s", strerror(-rc));
-		return 1;
-	}
-	if (mode_committed &&
-	    !shirudo_ct_eq(cert_sha256, mode_state.cert_sha256, 32)) {
-		pr_err("init: certificate differs from the committed mode state");
-		return 1;
-	}
-	opts.mode = mode;
 
 	shirudo_preflight_run(&opts, &res);
 	print_preflight(&res);
@@ -1029,21 +1037,11 @@ int cmd_init(int argc, const char **argv)
 	rc = init_bpffs();
 	if (rc)
 		return 1;
-	if (!mode_committed) {
-		rc = shirudo_mode_commit(mode, cert_sha256);
-		if (rc) {
-			pr_err("init: commit mode state: %s", strerror(-rc));
-			return 1;
-		}
-	}
+	remove_stale_state();
 
 	rc = init_keyring();
 	if (rc)
 		return 1;
-
-	if (mode == SHIRUDO_MODE_TRUSTED_ROOT ||
-		shirudo_kernel_abi_check(NULL, 0) != 0)
-		native_signing = false;
 
 	/*
 	 * Label the binary + the /var/lib/shirudo tree (bpffs skipped)
@@ -1055,7 +1053,7 @@ int cmd_init(int argc, const char **argv)
 		pr_warn("init: seal label-walk incomplete: %s "
 			"(some files may be unsealed)", strerror(-rc));
 
-	rc = init_lsm(mode, native_signing, !no_seal);
+	rc = init_lsm(!no_seal);
 	if (rc)
 		return 1;
 

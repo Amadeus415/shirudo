@@ -75,9 +75,8 @@ unload_target = "upatches/userns.unload.upatch"
 source = "nested/hello-sched-counter.bpf.c"
 
 [[upatches]]
-type = "java"
-source = "agent.jar"
-telemetry_upatch = "javaagent_metrics"
+type = "bpf"
+source = "agent.bpf.c"
 `))
 	if err != nil {
 		t.Fatalf("parseBPMBuildSpec() error = %v", err)
@@ -93,8 +92,7 @@ telemetry_upatch = "javaagent_metrics"
 		spec.Upatches[1].UnloadTarget != "upatches/hello-sched-counter.unload.upatch" {
 		t.Fatalf("Upatches[1] = %#v", spec.Upatches[1])
 	}
-	if spec.Upatches[2].Type != "java" || spec.Upatches[2].Source != "agent.jar" ||
-		spec.Upatches[2].TelemetryUpatch != "javaagent_metrics" ||
+	if spec.Upatches[2].Type != "bpf" || spec.Upatches[2].Source != "agent.bpf.c" ||
 		spec.Upatches[2].LoadTarget != "upatches/agent.upatch" ||
 		spec.Upatches[2].UnloadTarget != "upatches/agent.unload.upatch" {
 		t.Fatalf("Upatches[2] = %#v", spec.Upatches[2])

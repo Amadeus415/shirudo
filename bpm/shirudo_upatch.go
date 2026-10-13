@@ -16,7 +16,6 @@ const (
 	shirudoUpatchLegacySize = 352
 	shirudoUpatchHeaderSize = 360
 	shirudoUpatchTypeBPF    = 1
-	shirudoUpatchTypeJava   = 2
 )
 
 type shirudoUpatchHeader struct {
@@ -84,15 +83,9 @@ func parseShirudoUpatch(body []byte) (shirudoUpatchHeader, error) {
 	if len(body) >= shirudoUpatchHeaderSize {
 		typeValue := binary.LittleEndian.Uint32(body[352:356])
 		reserved := binary.LittleEndian.Uint32(body[356:360])
-		if reserved == 0 && (typeValue == shirudoUpatchTypeJava ||
-			h.LoaderInsnsOff >= shirudoUpatchHeaderSize) {
+		if reserved == 0 && h.LoaderInsnsOff >= shirudoUpatchHeaderSize {
 			headerSize = shirudoUpatchHeaderSize
-			switch typeValue {
-			case shirudoUpatchTypeBPF:
-				h.PayloadType = "bpf"
-			case shirudoUpatchTypeJava:
-				h.PayloadType = "java"
-			default:
+			if typeValue != shirudoUpatchTypeBPF {
 				return shirudoUpatchHeader{}, fmt.Errorf("unsupported upatch type %d", typeValue)
 			}
 		}
@@ -101,31 +94,19 @@ func parseShirudoUpatch(body []byte) (shirudoUpatchHeader, error) {
 		h.Directive = "unload"
 	}
 
-	if h.PayloadType == "java" {
-		if h.LoaderInsnsLen != 0 || h.SignatureLen != 0 {
-			return shirudoUpatchHeader{}, fmt.Errorf("invalid Java upatch sections")
-		}
-		if h.Directive == "unload" {
-			if h.DataLen != 0 || h.MetadataLen != 32 {
-				return shirudoUpatchHeader{}, fmt.Errorf("invalid Java unload sections")
-			}
-		} else if h.DataLen == 0 {
-			return shirudoUpatchHeader{}, fmt.Errorf("Java payload is empty")
-		}
-	}
-	if h.PayloadType == "bpf" && (h.LoaderInsnsLen == 0 || h.SignatureLen == 0) {
+	if h.LoaderInsnsLen == 0 || h.SignatureLen == 0 {
 		return shirudoUpatchHeader{}, fmt.Errorf("BPF loader and signature sections are required")
 	}
-	if err := validateUpatchSection("loader_insns", h.LoaderInsnsOff, h.LoaderInsnsLen, len(body), headerSize, h.PayloadType == "bpf"); err != nil {
+	if err := validateUpatchSection("loader_insns", h.LoaderInsnsOff, h.LoaderInsnsLen, len(body), headerSize, true); err != nil {
 		return shirudoUpatchHeader{}, err
 	}
-	if err := validateUpatchSection("signature", h.SignatureOff, h.SignatureLen, len(body), headerSize, h.PayloadType == "bpf"); err != nil {
+	if err := validateUpatchSection("signature", h.SignatureOff, h.SignatureLen, len(body), headerSize, true); err != nil {
 		return shirudoUpatchHeader{}, err
 	}
 	if err := validateUpatchSection("metadata", h.MetadataOff, h.MetadataLen, len(body), headerSize, false); err != nil {
 		return shirudoUpatchHeader{}, err
 	}
-	if err := validateUpatchSection("data", h.DataOff, h.DataLen, len(body), headerSize, h.PayloadType == "java" && h.Directive != "unload"); err != nil {
+	if err := validateUpatchSection("data", h.DataOff, h.DataLen, len(body), headerSize, false); err != nil {
 		return shirudoUpatchHeader{}, err
 	}
 

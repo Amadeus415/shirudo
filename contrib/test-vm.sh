@@ -60,7 +60,6 @@ VM_TIMEOUT="${TEST_VM_TIMEOUT:-3600}"
 VM_MODE="${VM_MODE:-test}"
 KERNEL_PROFILE="${TEST_VM_KERNEL_PROFILE:-full}"
 VM_SUITE="${TEST_VM_SUITE:-all}"
-TRUSTED_ROOT="${TEST_VM_TRUSTED_ROOT:-0}"
 SKIP_SEAL="${TEST_VM_SKIP_SEAL:-0}"
 VM_BENCH_VARIANT="${TEST_VM_BENCH_VARIANT:-}"
 BENCH_WARMUP_SEC="${BENCH_WARMUP_SEC:-}"
@@ -178,10 +177,6 @@ validate_mode()
 	case "$DNS_FUZZ" in
 	0|1) ;;
 	*) die "TEST_VM_DNS_FUZZ must be '0' or '1'" ;;
-	esac
-	case "$TRUSTED_ROOT" in
-	0|1) ;;
-	*) die "TEST_VM_TRUSTED_ROOT must be '0' or '1'" ;;
 	esac
 	case "$SKIP_SEAL" in
 	0|1) ;;
@@ -383,11 +378,6 @@ validate_host_bundle()
 		die "host VM bundle has no target-test certificate: $TEST_VM_HOST_BUNDLE"
 	[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/shirudo-test-basic.upatch" ]] ||
 		die "host VM bundle has no target-test fixtures: $TEST_VM_HOST_BUNDLE"
-	[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/java-sql-inj.upatch" ]] ||
-		die "host VM bundle has no Java SQL injection fixture: $TEST_VM_HOST_BUNDLE"
-	[[ -s "$TEST_VM_HOST_BUNDLE/java_sql_inj/vulnerable-app.jar" &&
-	   -x "$TEST_VM_HOST_BUNDLE/java_sql_inj/sql_inj_vuln" ]] ||
-		die "host VM bundle has no Java SQL injection demo: $TEST_VM_HOST_BUNDLE"
 	if [[ "$VM_SUITE" == obs ]]; then
 		[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/linux-observability.upatch" ]] ||
 			die "host VM bundle has no Linux observability fixture: $TEST_VM_HOST_BUNDLE"
@@ -1226,7 +1216,6 @@ EOF
 fi
 printf '      export VM_MODE=%q\n' "$VM_MODE" >>"$USER_DATA"
 printf '      export TEST_VM_SUITE=%q\n' "$VM_SUITE" >>"$USER_DATA"
-printf '      export TEST_VM_TRUSTED_ROOT=%q\n' "$TRUSTED_ROOT" >>"$USER_DATA"
 printf '      export TEST_VM_SKIP_SEAL=%q\n' "$SKIP_SEAL" >>"$USER_DATA"
 printf '      export TEST_VM_BENCH_VARIANT=%q\n' "$VM_BENCH_VARIANT" >>"$USER_DATA"
 for bench_env in BENCH_WARMUP_SEC BENCH_DURATION_SEC BENCH_SAMPLES BENCH_EXEC_WORKERS; do

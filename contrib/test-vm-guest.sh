@@ -17,7 +17,6 @@ UPPER=/var/tmp/shirudo-upper
 OVERLAY_WORK=/var/tmp/shirudo-overlay-work
 WORKSPACE=/workspace/shirudo
 VM_MODE="${VM_MODE:-test}"
-TRUSTED_ROOT="${TEST_VM_TRUSTED_ROOT:-0}"
 SKIP_SEAL="${TEST_VM_SKIP_SEAL:-0}"
 
 log()
@@ -238,29 +237,6 @@ configure_map_export()
 		>/etc/shirudo/shirudo.conf
 }
 
-install_java_sql_inj_example()
-{
-	local source_dir=/mnt/shirudo-bundle/java_sql_inj
-	local install_dir=/usr/local/share/shirudo/java_sql_inj
-
-	[[ -s "$source_dir/vulnerable-app.jar" &&
-	   -x "$source_dir/sql_inj_vuln" ]] || {
-		log "Java SQL injection demo is missing from the host bundle"
-		return 1
-	}
-	command -v java >/dev/null 2>&1 || {
-		log "prepared runtime has no Java runtime"
-		return 1
-	}
-	install -d -m 0755 "$install_dir"
-	install -m 0644 "$source_dir/vulnerable-app.jar" \
-		"$install_dir/vulnerable-app.jar"
-	install -d -m 0755 /usr/lib/shirudo
-	install -m 0755 "$BUNDLE/root/usr/lib/shirudo/libshirudo_javaagent.so" \
-		/usr/lib/shirudo/libshirudo_javaagent.so
-	install -m 0755 "$source_dir/sql_inj_vuln" /usr/local/bin/sql_inj_vuln
-}
-
 configure_oci_ca
 configure_bpm_oci_repository
 configure_map_export
@@ -336,16 +312,11 @@ for unit in "${TARGET_UNITS[@]}"; do
 done
 	systemctl daemon-reload
 cp -a "$BUNDLE/test-helpers/." "$WORKSPACE/"
-install_java_sql_inj_example
 
 log "checking custom-kernel and vTPM prerequisites"
 mountpoint -q /sys/kernel/security || mount -t securityfs securityfs /sys/kernel/security
 grep -qw bpf /sys/kernel/security/lsm
-if [[ "$TRUSTED_ROOT" == 1 ]]; then
-	log "native BPF signing is optional: using trusted-root mode"
-else
-	grep -aq signature_size /sys/kernel/btf/vmlinux
-fi
+grep -aq signature_size /sys/kernel/btf/vmlinux
 test -c /dev/tpm0
 test -c /dev/tpmrm0
 tpm2_getrandom 8 >/dev/null
@@ -365,10 +336,6 @@ install -m 0644 "$package_cert" \
 	/var/lib/shirudo/keys/cert.der
 rm -f /var/lib/shirudo/keys/signing_key.pem
 init_args=()
-if [[ "$TRUSTED_ROOT" == 1 ]]; then
-	init_args+=(--trusted-root)
-fi
-
 if [[ "$SKIP_SEAL" == 1 ]]; then
 	log "filesystem sealing disabled: target LSM hooks are not sleepable"
 	init_args+=(--no-seal)
@@ -379,7 +346,6 @@ test -e /var/lib/shirudo/bpffs/lsm_link
 /usr/local/bin/shirudo status --json --include-tpm >/tmp/shirudo-status.json
 python3 - /tmp/shirudo-status.json <<'PY'
 import json
-import os
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as status_file:
@@ -389,9 +355,6 @@ if not tpm.get("chain"):
     raise SystemExit("shirudo status reported no TPM chain")
 if tpm.get("chain_matches_eventlog") is not True:
     raise SystemExit("TPM chain does not match the Shirudo event log")
-expected_mode = "trusted-root" if os.environ.get("TEST_VM_TRUSTED_ROOT") == "1" else "untrusted-root"
-if status.get("mode") != expected_mode:
-    raise SystemExit(f"expected mode {expected_mode}, got {status.get('mode')}")
 PY
 
 if [[ -n "${TEST_VM_BPM_TREE_INPUT:-}" ]]; then

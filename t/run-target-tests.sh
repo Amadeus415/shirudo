@@ -17,7 +17,6 @@ for t in \
 	t1118-bpm-tree.sh \
 	t1119-bpm-tree-sequential.sh \
 	t1120-bpm-tree-delete.sh \
-	t1201-java-sql-inj.sh \
 	t1101-seal.sh \
 	t1102-eventlog-full.sh \
 	t1103-version-gate.sh \

@@ -1,5 +1,4 @@
 ca-certificates
-openjdk-21-jre-headless
 keyutils
 libelf1t64
 libjson-c5
