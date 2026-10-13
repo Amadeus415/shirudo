@@ -8,14 +8,17 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
 #include <openssl/bio.h>
+#include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -31,6 +34,27 @@
 #define ALG_RSA_BITS	2048
 #define VALIDITY_DAYS	(10L * 365L)
 #define CERT_CN		"shirudo"
+
+/*
+ * ML-DSA-87 (FIPS 204, NIST category 5) is the default: the kernel
+ * verifies it natively (CONFIG_CRYPTO_MLDSA) and the largest parameter
+ * set gives a fleet-wide trust anchor that must outlive hardware
+ * generations the most margin for about 2 KiB per signature. The
+ * smaller sets are deliberately not offered. RSA-2048 stays as the
+ * explicit opt-out for kernels or toolchains without ML-DSA support.
+ */
+struct genkey_alg {
+	const char	*name;		/* command-line spelling */
+	const char	*ossl_name;	/* EVP_PKEY_Q_keygen() type */
+	bool		mldsa;
+};
+
+static const struct genkey_alg genkey_algs[] = {
+	{ "ml-dsa-87", "ML-DSA-87", true },
+	{ "rsa-2048",  "RSA",       false },
+};
+
+#define GENKEY_DEFAULT_ALG	(&genkey_algs[0])
 
 static void openssl_complain(const char *where)
 {
@@ -112,12 +136,37 @@ static int path_exists(const char *p)
 	return stat(p, &st) == 0;
 }
 
-static EVP_PKEY *gen_keypair(void)
+static const struct genkey_alg *lookup_alg(const char *name)
 {
-	EVP_PKEY *k = EVP_RSA_gen(ALG_RSA_BITS);
+	for (size_t i = 0; i < ARRAY_SIZE(genkey_algs); i++)
+		if (strcasecmp(name, genkey_algs[i].name) == 0)
+			return &genkey_algs[i];
+	if (strcasecmp(name, "rsa") == 0)
+		return &genkey_algs[ARRAY_SIZE(genkey_algs) - 1];
+	return NULL;
+}
 
-	if (!k)
-		openssl_complain("EVP_RSA_gen");
+static EVP_PKEY *gen_keypair(const struct genkey_alg *alg)
+{
+	EVP_PKEY *k;
+
+	if (!alg->mldsa) {
+		k = EVP_RSA_gen(ALG_RSA_BITS);
+		if (!k)
+			openssl_complain("EVP_RSA_gen");
+		return k;
+	}
+	k = EVP_PKEY_Q_keygen(NULL, NULL, alg->ossl_name);
+	if (!k) {
+		openssl_complain("EVP_PKEY_Q_keygen");
+		if (OPENSSL_version_major() < 3 ||
+		    (OPENSSL_version_major() == 3 &&
+		     OPENSSL_version_minor() < 5))
+			pr_err("genkey: %s needs OpenSSL 3.5 or newer "
+			       "(running %s); upgrade libcrypto or pass "
+			       "--algorithm rsa-2048",
+			       alg->ossl_name, OpenSSL_version(OPENSSL_VERSION));
+	}
 	return k;
 }
 
@@ -184,7 +233,11 @@ static int build_validity(X509 *c)
 	return 0;
 }
 
-static int build_cert(X509 *c, EVP_PKEY *pkey)
+/*
+ * ML-DSA hashes the message internally, so OpenSSL requires a NULL
+ * digest for it; RSA keeps the classic SHA-256 certificate signature.
+ */
+static int build_cert(X509 *c, EVP_PKEY *pkey, const struct genkey_alg *alg)
 {
 	if (X509_set_version(c, 2) != 1) {	/* X.509 v3 */
 		openssl_complain("X509_set_version");
@@ -210,7 +263,7 @@ static int build_cert(X509 *c, EVP_PKEY *pkey)
 	if (add_ext(c, NID_authority_key_identifier, "keyid:always") != 0)
 		return -1;
 
-	if (X509_sign(c, pkey, EVP_sha256()) == 0) {
+	if (X509_sign(c, pkey, alg->mldsa ? NULL : EVP_sha256()) == 0) {
 		openssl_complain("X509_sign");
 		return -1;
 	}
@@ -298,6 +351,9 @@ static const struct shirudo_help_item genkey_options[] = {
 	{ "--force, -f",      "overwrite an existing key/cert (refused otherwise)" },
 	{ "--keys-dir <dir>", "write signing_key.pem + cert.der under <dir> "
 			      "instead of the default" },
+	{ "--algorithm <alg>", "ml-dsa-87 (default; FIPS 204, post-quantum; "
+			       "OpenSSL >= 3.5 and CONFIG_CRYPTO_MLDSA on the "
+			       "target) or rsa-2048 (classical opt-out)" },
 };
 
 static const struct shirudo_help_section genkey_help_sections[] = {
@@ -306,9 +362,11 @@ static const struct shirudo_help_section genkey_help_sections[] = {
 };
 
 static const struct shirudo_help genkey_help = {
-	.usage   = "shirudo genkey [--force] [--keys-dir <dir>]",
-	.summary = "Generate a self-signed X.509 cert + RSA-2048 private key "
-		   "for signing\n.upatch loader bytes. Operator-only.",
+	.usage   = "shirudo genkey [--force] [--keys-dir <dir>] "
+		   "[--algorithm <alg>]",
+	.summary = "Generate a self-signed X.509 cert + private key "
+		   "(ML-DSA-87 by default)\nfor signing .upatch loader "
+		   "bytes. Operator-only.",
 	.sections   = genkey_help_sections,
 	.n_sections = ARRAY_SIZE(genkey_help_sections),
 	.footer  = "Default output paths:\n"
@@ -325,11 +383,13 @@ static void usage(void)
 
 int cmd_genkey(int argc, const char **argv)
 {
-	EVP_PKEY *pkey = NULL;
+	const struct genkey_alg *alg = GENKEY_DEFAULT_ALG;
 	const char *keys_dir_arg = NULL;
-	const char *keys_dir;
+	const char *alg_arg = NULL;
 	char pkey_path[PATH_MAX];
 	char cert_path[PATH_MAX];
+	EVP_PKEY *pkey = NULL;
+	const char *keys_dir;
 	X509 *cert = NULL;
 	int force = 0;
 	int rc = 1;
@@ -343,12 +403,26 @@ int cmd_genkey(int argc, const char **argv)
 			keys_dir_arg = argv[++i];
 		} else if (strncmp(argv[i], "--keys-dir=", 11) == 0) {
 			keys_dir_arg = argv[i] + 11;
+		} else if (strcmp(argv[i], "--algorithm") == 0 &&
+			   i + 1 < argc) {
+			alg_arg = argv[++i];
+		} else if (strncmp(argv[i], "--algorithm=", 12) == 0) {
+			alg_arg = argv[i] + 12;
 		} else if (shirudo_is_help(argv[i])) {
 			shirudo_print_help(&genkey_help);
 			return 0;
 		} else {
 			pr_err("genkey: unknown option '%s'", argv[i]);
 			usage();
+			return 2;
+		}
+	}
+
+	if (alg_arg) {
+		alg = lookup_alg(alg_arg);
+		if (!alg) {
+			pr_err("genkey: unknown --algorithm '%s' (expected "
+			       "ml-dsa-87 or rsa-2048)", alg_arg);
 			return 2;
 		}
 	}
@@ -372,6 +446,7 @@ int cmd_genkey(int argc, const char **argv)
 
 	if (ensure_keys_dir(keys_dir) != 0)
 		return 1;
+	rc = 1;
 
 	if (!force) {
 		if (path_exists(pkey_path) || path_exists(cert_path)) {
@@ -385,7 +460,7 @@ int cmd_genkey(int argc, const char **argv)
 		unlink(cert_path);
 	}
 
-	pkey = gen_keypair();
+	pkey = gen_keypair(alg);
 	if (!pkey)
 		goto out;
 	cert = X509_new();
@@ -393,7 +468,7 @@ int cmd_genkey(int argc, const char **argv)
 		openssl_complain("X509_new");
 		goto out;
 	}
-	if (build_cert(cert, pkey) != 0)
+	if (build_cert(cert, pkey, alg) != 0)
 		goto out;
 
 	if (write_private_pem(pkey, pkey_path) != 0)
@@ -403,12 +478,15 @@ int cmd_genkey(int argc, const char **argv)
 		goto out;
 	}
 
-	pr_info("wrote %s (RSA-%d, mode 0600)",
-		pkey_path, ALG_RSA_BITS);
+	if (alg->mldsa)
+		pr_info("wrote %s (%s, mode 0600)", pkey_path, alg->ossl_name);
+	else
+		pr_info("wrote %s (RSA-%d, mode 0600)",
+			pkey_path, ALG_RSA_BITS);
 	pr_info("wrote %s (X.509 self-signed, %ld-day validity)",
 		cert_path, VALIDITY_DAYS);
-	pr_audit("genkey: created shirudo signing material at %s",
-		 keys_dir);
+	pr_audit("genkey: created shirudo %s signing material at %s",
+		 alg->ossl_name, keys_dir);
 	rc = 0;
 out:
 	if (cert)

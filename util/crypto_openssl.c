@@ -1,5 +1,9 @@
-/* SPDX-License-Identifier: BSD-2-Clause */
-/* Copyright (c) 2026 Authors of shirudo */
+// SPDX-License-Identifier: BSD-2-Clause
+/*
+ * Copyright (c) 2026 Authors of shirudo
+ *
+ * SHA-256, X.509 and CMS primitives on libcrypto; linked into both profiles.
+ */
 
 #include <errno.h>
 #include <limits.h>
@@ -12,10 +16,10 @@
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
-#include <openssl/ssl.h>
 #include <openssl/x509.h>
 
 #include "crypto.h"
+#include "malloc.h"
 
 static X509 *read_x509(const char *path)
 {
@@ -26,10 +30,14 @@ static X509 *read_x509(const char *path)
 		return NULL;
 	cert = PEM_read_bio_X509(bio, NULL, NULL, NULL);
 	if (!cert) {
-		BIO_reset(bio);
-		cert = d2i_X509_bio(bio, NULL);
+		ERR_clear_error();
+		/* file BIOs report a successful reset as 0, not 1 */
+		if (BIO_reset(bio) >= 0)
+			cert = d2i_X509_bio(bio, NULL);
 	}
 	BIO_free(bio);
+	if (!cert)
+		ERR_clear_error();
 	return cert;
 }
 
@@ -110,7 +118,7 @@ int shirudo_base64_encode(const uint8_t *data, size_t len,
 
 int shirudo_cert_read_file(const char *path, struct shirudo_cert *cert)
 {
-	if (!cert)
+	if (!path || !cert)
 		return -EINVAL;
 	cert->impl = read_x509(path);
 	return cert->impl ? 0 : -EINVAL;
@@ -124,13 +132,19 @@ void shirudo_cert_free(struct shirudo_cert *cert)
 	cert->impl = NULL;
 }
 
+/*
+ * SHA-256 over the DER SubjectPublicKeyInfo. Re-encoding through
+ * i2d_X509_PUBKEY keeps the value identical for every key algorithm the
+ * X.509 parser accepts, including ML-DSA keys libcrypto cannot otherwise
+ * marshal as a bare EVP_PKEY on older releases.
+ */
 int shirudo_cert_pubkey_digest(const struct shirudo_cert *cert,
 			       uint8_t out[SHIRUDO_CRYPTO_SHA256_LEN])
 {
-	X509_PUBKEY *spki;
 	unsigned char *der = NULL, *p;
-	unsigned int len = 0;
 	int der_len, encoded_len, rc = -EINVAL;
+	unsigned int len = 0;
+	X509_PUBKEY *spki;
 
 	if (!cert || !cert->impl || !out)
 		return -EINVAL;
@@ -140,7 +154,7 @@ int shirudo_cert_pubkey_digest(const struct shirudo_cert *cert,
 	der_len = i2d_X509_PUBKEY(spki, NULL);
 	if (der_len <= 0)
 		return -EINVAL;
-	der = malloc((size_t)der_len);
+	der = xmalloc((size_t)der_len);
 	if (!der)
 		return -ENOMEM;
 	p = der;
@@ -152,10 +166,17 @@ int shirudo_cert_pubkey_digest(const struct shirudo_cert *cert,
 		goto out;
 	rc = 0;
 out:
-	free(der);
+	xfree(der, (size_t)der_len);
 	return rc;
 }
 
+/*
+ * Verify a detached CMS signature against one operator certificate. The
+ * signature algorithm comes from the SignerInfo, so an ML-DSA signature
+ * (signedAttrs + SHA-512, or no attributes on OpenSSL 4) and an RSA
+ * signature verify through the same call; libcrypto >= 3.5 is needed for
+ * ML-DSA.
+ */
 int shirudo_verify_detached(const uint8_t *payload, size_t payload_len,
 			    const uint8_t *signature, size_t signature_len,
 			    const struct shirudo_cert *cert)
@@ -193,33 +214,4 @@ done:
 	BIO_free(data);
 	BIO_free(sig);
 	return rc;
-}
-
-void shirudo_tls_ca_cleanup(struct shirudo_tls_ca *ca)
-{
-	if (ca)
-		ca->impl = NULL;
-}
-
-CURLcode shirudo_sslctx_callback(CURL *curl, void *sslctx, void *userptr)
-{
-	const struct shirudo_tls_ca *ca = userptr;
-	const char *path = ca ? ca->path : NULL;
-	BIO *bio;
-	X509 *cert;
-
-	(void)curl;
-	if (!path || !path[0])
-		return CURLE_OK;
-	bio = BIO_new_file(path, "rb");
-	if (!bio)
-		return CURLE_SSL_CACERT_BADFILE;
-	cert = PEM_read_bio_X509(bio, NULL, NULL, NULL);
-	BIO_free(bio);
-	if (!cert)
-		return CURLE_SSL_CACERT_BADFILE;
-	if (X509_STORE_add_cert(SSL_CTX_get_cert_store(sslctx), cert) != 1)
-		ERR_clear_error();
-	X509_free(cert);
-	return CURLE_OK;
 }

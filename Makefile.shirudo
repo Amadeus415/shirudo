@@ -16,16 +16,19 @@ PROFILE ?= operator
 CONFIG_MK ?= config.mk
 -include $(CONFIG_MK)
 
+# Certificate parsing, SHA-256 and CMS verification run on libcrypto in
+# both profiles (the target links libcrypto.a statically anyway, for
+# TPM2-TSS). Only the libcurl TLS trust-anchor glue differs: OpenSSL on
+# the operator, static mbedTLS on the target.
+CRYPTO_SRC := util/crypto_openssl.c
 ifeq ($(PROFILE),target)
 OBJ_PREFIX := build/target/
-CRYPTO_SRC := util/crypto_mbedtls.c
+TLS_SRC := util/tls_mbedtls.c
 CRYPTO_CFLAGS := $(TARGET_MBEDTLS_CFLAGS)
-CRYPTO_DEFINE := -DSHIRUDO_CRYPTO_MBEDTLS
 else
 OBJ_PREFIX :=
-CRYPTO_SRC := util/crypto_openssl.c
+TLS_SRC := util/tls_openssl.c
 CRYPTO_CFLAGS :=
-CRYPTO_DEFINE := -DSHIRUDO_CRYPTO_OPENSSL
 endif
 
 obj = $(OBJ_PREFIX)$(1)
@@ -96,7 +99,7 @@ INCLUDES := \
 CFLAGS := $(CFLAGS_BASE) $(INCLUDES) \
           $(LIBCRYPTO_CFLAGS) $(TSS2_CFLAGS) \
           $(LIBELF_CFLAGS) $(ZLIB_CFLAGS) $(LIBCURL_CFLAGS) \
-          $(CRYPTO_CFLAGS) $(CRYPTO_DEFINE)
+          $(CRYPTO_CFLAGS)
 
 # libbpf is always linked from its archive. The normal shirudo binary keeps
 # the existing dynamic OpenSSL/libcurl profile for operator builds.
@@ -127,6 +130,7 @@ CLANG_BPF := $(CLANG) -target bpf -O2 -g -Wall -Wextra \
 
 UTIL_SRCS := \
 	$(CRYPTO_SRC) \
+	$(TLS_SRC) \
     util/parse-options.c \
     util/loader.c \
     util/upatch.c \
@@ -165,11 +169,7 @@ UTIL_SRCS := \
     util/upatch_resolve.c \
     util/upatch_table.c
 
-ifeq ($(PROFILE),target)
-BUILTIN_GENKEY_SRC := builtin-genkey-mbedtls.c
-else
 BUILTIN_GENKEY_SRC := builtin-genkey.c
-endif
 
 BUILTIN_SRCS := \
     builtin-init.c \

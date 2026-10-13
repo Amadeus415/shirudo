@@ -40,7 +40,11 @@ type bpmOCIIndexEntry struct {
 func signBPMIndex(ctx context.Context, payloadPath, certPath, keyPath string) ([]byte, error) {
 	dir := filepath.Dir(payloadPath)
 	sigPath := filepath.Join(dir, "index.sig")
-	args := []string{"cms", "-sign", "-binary", "-in", payloadPath,
+	// SHA-512 is explicit because ML-DSA keys have no default CMS digest
+	// on OpenSSL 3.x, and it is the only digest the kernel's PKCS#7
+	// parser accepts next to ML-DSA signed attributes; RSA keys sign the
+	// same way, so one wire form covers both.
+	args := []string{"cms", "-sign", "-binary", "-md", "sha512", "-in", payloadPath,
 		"-signer", certPath, "-inkey", keyPath, "-out", sigPath,
 		"-outform", "DER", "-nosmimecap"}
 	cmd := exec.CommandContext(ctx, "openssl", args...)

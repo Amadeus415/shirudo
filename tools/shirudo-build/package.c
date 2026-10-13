@@ -33,7 +33,12 @@
 #include "sign.h"
 #include "upatch.h"
 
-#define SHIRUDO_MAX_SIG_SIZE	4096
+/*
+ * A detached CMS over an ML-DSA-87 signature is about 5 KiB (4627-byte
+ * signature plus SignerInfo); the kernel caps attr.signature_size at
+ * 64 KiB (BPF_PROG_MAX_SIGNATURE_SIZE).
+ */
+#define SHIRUDO_MAX_SIG_SIZE	16384
 #define SHIRUDO_SERIALIZER_PREFIX	"shirudo_serialize__"
 #define SHIRUDO_TEST_RUN_PREFIX	"shirudo_test__"
 

@@ -269,20 +269,18 @@ command -v flock >/dev/null 2>&1 ||
 
 validate_package_cert
 
-make_mbedtls_test_cert()
+# Fixture keys follow the genkey default (ML-DSA-87) when the host OpenSSL
+# can produce it; older toolchains fall back to RSA-2048 so the suite still
+# runs, and the log records which family the bundle was signed with.
+fixture_key_algorithm()
 {
-	local keys_dir="$1"
-
-	# The OpenSSL-generated certificate from `shirudo genkey` contains an
-	# empty authorityKeyIdentifier extension.  mbedTLS rejects that extension
-	# while parsing the target's cert.der, so use a minimal equivalent test
-	# certificate for target-side CMS verification.
-	openssl req -new -x509 -key "$keys_dir/signing_key.pem" \
-		-outform DER -out "$keys_dir/cert.der" -days 3650 \
-		-subj /CN=shirudo \
-		-addext 'basicConstraints=critical,CA:FALSE' \
-		-addext 'keyUsage=digitalSignature' \
-		-addext 'subjectKeyIdentifier=hash'
+	if [[ -n "${SHIRUDO_TEST_KEY_ALGORITHM:-}" ]]; then
+		printf '%s' "$SHIRUDO_TEST_KEY_ALGORITHM"
+	elif openssl list -public-key-algorithms 2>/dev/null | grep -qi 'ML-DSA'; then
+		printf 'ml-dsa-87'
+	else
+		printf 'rsa-2048'
+	fi
 }
 
 mkdir -p "$(dirname "$BUNDLE_DIR")"
@@ -572,11 +570,11 @@ PY
 			signature="$tree_restored_signature"
 			;;
 		esac
-		openssl cms -sign -binary -in "$payload" \
+		openssl cms -sign -binary -md sha512 -in "$payload" \
 			-signer "$FIXTURE_WORK/trusted/cert.der" \
 			-inkey "$FIXTURE_WORK/trusted/signing_key.pem" \
 			-outform DER -out "$signature" -nosmimecap \
-			-nocerts -noattr -keyid
+			-nocerts -keyid
 	done
 
 	python3 - "$registry_dir" \
@@ -706,10 +704,14 @@ EOF
 log "building target-test fixtures on the operator host"
 mkdir -p "$TMP_DIR/fixtures/decoders" "$FIXTURE_WORK/trusted" \
 	"$FIXTURE_WORK/foreign" "$FIXTURE_WORK/own"
-"$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/trusted" >/dev/null
-"$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/foreign" >/dev/null
-"$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/own" >/dev/null
-make_mbedtls_test_cert "$FIXTURE_WORK/trusted"
+fixture_algorithm=$(fixture_key_algorithm)
+log "signing fixtures with ${fixture_algorithm} keys"
+"$REPO_ROOT/shirudo" genkey --algorithm "$fixture_algorithm" \
+	--keys-dir "$FIXTURE_WORK/trusted" >/dev/null
+"$REPO_ROOT/shirudo" genkey --algorithm "$fixture_algorithm" \
+	--keys-dir "$FIXTURE_WORK/foreign" >/dev/null
+"$REPO_ROOT/shirudo" genkey --algorithm "$fixture_algorithm" \
+	--keys-dir "$FIXTURE_WORK/own" >/dev/null
 
 "${CC:-cc}" -O0 -g -Wl,--build-id=sha1 \
 	-o /tmp/shirudo-test-uprobe-target \

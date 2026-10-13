@@ -98,7 +98,8 @@ load-bearing — consult them directly rather than reasoning from memory:
 | `/root/bpf-next/tools/bpf/bpftool/gen.c:687-707` | Reference for the gen_loader + load + sign sequence. |
 | `/root/bpf-next/kernel/bpf/syscall.c:2801` | `bpf_prog_verify_signature()` — runs **before** LSM hooks. `attr.keyring_id` is a key **serial number** (not a name). |
 | `/root/bpf-next/include/linux/lsm_hook_defs.h:441` | `lsm/bpf` hook signature, with the crucial `bool kernel` arg distinguishing nested-from-loader vs userspace calls. |
-| `/root/bpf-next/tools/testing/selftests/bpf/verify_sig_setup.sh` | OpenSSL recipe for `genkey` (2048-bit RSA, SHA-256, self-signed X.509). |
+| `/root/bpf-next/tools/testing/selftests/bpf/verify_sig_setup.sh` | OpenSSL recipes for `genkey`: `setup-mldsa` (ML-DSA-87, self-signed X.509, shirudo's default) and `setup-rsa` (2048-bit RSA, SHA-256, the explicit opt-out). |
+| `/root/bpf-next/Documentation/bpf/signing.rst` | Kernel BPF signing design, including the ML-DSA form (OpenSSL < 4.0 needs signedAttrs + SHA-512; `CONFIG_CRYPTO_MLDSA` + `CONFIG_CRYPTO_SHA512`). |
 | `/root/bpf-next/tools/perf/perf.c` | `cmd_struct[]` dispatch table **pattern** to model `shirudo.c` after. perf is GPL-2.0; **do not copy**, the pattern itself is uncopyrightable. |
 | `/root/bpf-next/tools/lib/subcmd/parse-options.{h,c}` | `OPT_*` / `parse_options()` **API model only**. libsubcmd is GPL-2.0; **do not link**, do not vendor. shirudo whiteroom-implements the subset it uses under `util/parse-options.{c,h}` (or wraps POSIX `getopt_long(3)`). See PLAN.md §"Vendoring and whiteroom reimplementation". |
 | `Documentation/coding-style.rst` (in-tree copy of `third_party/bpf-next/Documentation/process/coding-style.rst`) | **Coding style for all C in this repo** (userspace and BPF). |
@@ -169,8 +170,13 @@ load-bearing — consult them directly rather than reasoning from memory:
   binary via `.incbin` inline asm. No generated skeleton headers.
 - Runtime deps (dynamic-linked, all BSD-2-Clause or with a
   BSD-2-Clause OR-branch):
-  - `libcrypto` (OpenSSL crypto-primitives half — X.509, EVP, CMS,
-    SHA-256). **Not `libssl`** — shirudo does no TLS.
+  - `libcrypto` >= 3.5 (OpenSSL crypto-primitives half — X.509, EVP,
+    CMS, SHA-256, ML-DSA). Both profiles use it for certificate parsing
+    and CMS verification; the target's mbedTLS is only libcurl's TLS
+    backend. **Signing defaults to ML-DSA-87 (FIPS 204)**; `shirudo
+    genkey --algorithm rsa-2048` is the classical opt-out. Target kernels
+    need `CONFIG_CRYPTO_MLDSA` and `CONFIG_CRYPTO_SHA512`; see
+    `Documentation/requirements.rst`.
   - `libtss2-esys ≥ 4.0` and `libtss2-tcti-device` (tpm2-tss) — used
     on the target for the NV-extend chain.
   Same binary on both sides; the operator never opens the TPM,

@@ -19,6 +19,7 @@ and source-of-truth design.
    :maxdepth: 2
    :caption: Contents
 
+   requirements
    architecture
    threat-model
    getting-started
@@ -28,6 +29,10 @@ and source-of-truth design.
 Quick orientation
 =================
 
+- **Checking whether a host can run shirudo?**
+  :doc:`requirements` lists the kernel options (including
+  ``CONFIG_CRYPTO_MLDSA`` for the default ML-DSA signatures), the
+  operator toolchain and the target runtime.
 - **Just want to deploy shirudo on a target?** Start with
   :doc:`getting-started`.
 - **Want to understand what shirudo does and how?** Read

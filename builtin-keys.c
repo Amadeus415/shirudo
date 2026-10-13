@@ -16,14 +16,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#ifdef SHIRUDO_CRYPTO_MBEDTLS
-#include <mbedtls/error.h>
-#include <mbedtls/ctr_drbg.h>
-#include <mbedtls/entropy.h>
-#include <mbedtls/pk.h>
-#include <mbedtls/x509_crt.h>
-#include "util/crypto.h"
-#else
 #include <openssl/asn1.h>
 #include <openssl/bio.h>
 #include <openssl/err.h>
@@ -31,7 +23,6 @@
 #include <openssl/pem.h>
 #include <openssl/sha.h>
 #include <openssl/x509.h>
-#endif
 
 #include "builtin.h"
 #include "util/help.h"
@@ -40,8 +31,6 @@
 #include "util/macros.h"
 #include "util/malloc.h"
 #include "util/paths.h"
-
-#ifndef SHIRUDO_CRYPTO_MBEDTLS
 
 static void openssl_complain(const char *where)
 {
@@ -182,17 +171,22 @@ static void print_fpr(const char *label, const unsigned char *fpr)
 	printf("\n");
 }
 
-static const char *pkey_algorithm(EVP_PKEY *pkey)
+/*
+ * "RSA-2048" / "EC-256" for the classical families, otherwise the
+ * provider's own name ("ML-DSA-87"), whose parameter set already says
+ * everything a bit count would.
+ */
+static void format_pkey_algorithm(EVP_PKEY *pkey, char *out, size_t out_sz)
 {
-	int t = EVP_PKEY_base_id(pkey);
+	const char *name = EVP_PKEY_get0_type_name(pkey);
+	int id = EVP_PKEY_get_base_id(pkey);
 
-	switch (t) {
-	case EVP_PKEY_RSA:	return "RSA";
-	case EVP_PKEY_EC:	return "EC";
-	case EVP_PKEY_ED25519:	return "Ed25519";
-	case EVP_PKEY_ED448:	return "Ed448";
-	default:		return "unknown";
-	}
+	if (!name)
+		name = "unknown";
+	if (id == EVP_PKEY_RSA || id == EVP_PKEY_EC)
+		snprintf(out, out_sz, "%s-%d", name, EVP_PKEY_get_bits(pkey));
+	else
+		snprintf(out, out_sz, "%s", name);
 }
 
 static int dump_operator_cert(X509 *cert, const char *cert_path,
@@ -203,10 +197,11 @@ static int dump_operator_cert(X509 *cert, const char *cert_path,
 	const ASN1_TIME *nb = X509_get0_notBefore(cert);
 	const ASN1_TIME *na = X509_get0_notAfter(cert);
 	EVP_PKEY *pub = X509_get0_pubkey(cert);
-	unsigned char fpr[SHA256_DIGEST_LENGTH];
 	char subj_s[256], iss_s[256], nb_s[32], na_s[32], exp_s[48];
-	long left;
+	unsigned char fpr[SHA256_DIGEST_LENGTH];
+	char alg_s[64];
 	int self_signed;
+	long left;
 
 	name_to_str(subj, subj_s, sizeof(subj_s));
 	name_to_str(iss, iss_s, sizeof(iss_s));
@@ -220,9 +215,10 @@ static int dump_operator_cert(X509 *cert, const char *cert_path,
 	printf("  %-22s %s\n", "Subject:", subj_s);
 	printf("  %-22s %s%s\n", "Issuer:", iss_s,
 	       self_signed ? "  (self-signed)" : "");
-	if (pub)
-		printf("  %-22s %s-%d\n", "Public-key:",
-		       pkey_algorithm(pub), EVP_PKEY_get_bits(pub));
+	if (pub) {
+		format_pkey_algorithm(pub, alg_s, sizeof(alg_s));
+		printf("  %-22s %s\n", "Public-key:", alg_s);
+	}
 	if (compute_cert_fpr(cert, fpr) == 0)
 		print_fpr("Fingerprint:", fpr);
 	print_fpr("SPKI fingerprint:", cert_spki_fpr);
@@ -235,8 +231,9 @@ static int dump_operator_cert(X509 *cert, const char *cert_path,
 static int dump_signing_key(const char *pkey_path,
 			    const unsigned char cert_spki_fpr[SHA256_DIGEST_LENGTH])
 {
-	EVP_PKEY *priv;
 	unsigned char fpr_priv[SHA256_DIGEST_LENGTH];
+	char alg_s[64];
+	EVP_PKEY *priv;
 	int rc = 0;
 
 	if (!path_exists(pkey_path)) {
@@ -252,8 +249,8 @@ static int dump_signing_key(const char *pkey_path,
 
 	printf("Signing key (%s):\n", pkey_path);
 	printf("  %-22s %s\n", "Present:", "yes");
-	printf("  %-22s %s-%d\n", "Algorithm:",
-	       pkey_algorithm(priv), EVP_PKEY_get_bits(priv));
+	format_pkey_algorithm(priv, alg_s, sizeof(alg_s));
+	printf("  %-22s %s\n", "Algorithm:", alg_s);
 
 	if (compute_spki_fpr(priv, fpr_priv) != 0) {
 		rc = -1;
@@ -305,227 +302,6 @@ static int keys_dump_disk_material(const char *cert_path,
 	X509_free(cert);
 	return rc ? 1 : 0;
 }
-
-#else
-
-struct local_cert {
-	mbedtls_x509_crt crt;
-};
-
-static int path_exists(const char *p)
-{
-	struct stat st;
-
-	return stat(p, &st) == 0;
-}
-
-static int read_cert_der(const char *path, struct local_cert *cert)
-{
-	int rc;
-
-	mbedtls_x509_crt_init(&cert->crt);
-	rc = mbedtls_x509_crt_parse_file(&cert->crt, path);
-	if (rc || !cert->crt.raw.p) {
-		char buf[128];
-		mbedtls_strerror(rc, buf, sizeof(buf));
-		pr_err("mbedTLS: read certificate %s: %s", path, buf);
-		mbedtls_x509_crt_free(&cert->crt);
-		return -1;
-	}
-	return 0;
-}
-
-static void free_cert(struct local_cert *cert)
-{
-	mbedtls_x509_crt_free(&cert->crt);
-}
-
-static mbedtls_pk_context *read_priv_pem(const char *path)
-{
-	mbedtls_pk_context *key = xmalloc(sizeof(*key));
-	mbedtls_entropy_context entropy;
-	mbedtls_ctr_drbg_context drbg;
-	int rc;
-
-	mbedtls_pk_init(key);
-	mbedtls_entropy_init(&entropy);
-	mbedtls_ctr_drbg_init(&drbg);
-	rc = mbedtls_ctr_drbg_seed(&drbg, mbedtls_entropy_func, &entropy, NULL, 0);
-	if (!rc)
-		rc = mbedtls_pk_parse_keyfile(key, path, NULL,
-					       mbedtls_ctr_drbg_random, &drbg);
-	mbedtls_ctr_drbg_free(&drbg);
-	mbedtls_entropy_free(&entropy);
-	if (rc) {
-		char buf[128];
-		mbedtls_strerror(rc, buf, sizeof(buf));
-		pr_err("mbedTLS: read private key %s: %s", path, buf);
-		mbedtls_pk_free(key);
-		xfree(key, sizeof(*key));
-		return NULL;
-	}
-	return key;
-}
-
-static void name_to_str(const mbedtls_x509_name *name, char *out, size_t out_sz)
-{
-	if (mbedtls_x509_dn_gets(out, out_sz, name) < 0)
-		snprintf(out, out_sz, "(parse error)");
-}
-
-static time_t x509_time_epoch(const mbedtls_x509_time *t)
-{
-	struct tm tm = {
-		.tm_year = t->year - 1900, .tm_mon = t->mon - 1,
-		.tm_mday = t->day, .tm_hour = t->hour,
-		.tm_min = t->min, .tm_sec = t->sec, .tm_isdst = 0,
-	};
-
-	return timegm(&tm);
-}
-
-static void asn1_time_to_iso(const mbedtls_x509_time *t,
-			     char *out, size_t out_sz)
-{
-	struct tm tm = {
-		.tm_year = t->year - 1900, .tm_mon = t->mon - 1,
-		.tm_mday = t->day, .tm_hour = t->hour,
-		.tm_min = t->min, .tm_sec = t->sec, .tm_isdst = 0,
-	};
-
-	if (!strftime(out, out_sz, "%Y-%m-%dT%H:%M:%SZ", &tm))
-		snprintf(out, out_sz, "(format error)");
-}
-
-static long days_remaining(const mbedtls_x509_time *not_after)
-{
-	time_t now = time(NULL), expiry = x509_time_epoch(not_after);
-
-	if (now == (time_t)-1 || expiry == (time_t)-1)
-		return -1;
-	return (long)(difftime(expiry, now) / (24 * 60 * 60));
-}
-
-static void format_expires_in(long days, char *out, size_t out_sz)
-{
-	if (days < 0)
-		snprintf(out, out_sz, "EXPIRED %ld days ago", -days);
-	else if (days >= 365)
-		snprintf(out, out_sz, "%ldy %ldd", days / 365, days % 365);
-	else
-		snprintf(out, out_sz, "%ldd", days);
-}
-
-static int compute_cert_fpr(const struct local_cert *cert,
-			    unsigned char fpr[SHIRUDO_CRYPTO_SHA256_LEN])
-{
-	return shirudo_sha256_buffer(cert->crt.raw.p, cert->crt.raw.len, fpr);
-}
-
-static int compute_spki_fpr(const mbedtls_pk_context *key,
-			    unsigned char fpr[SHIRUDO_CRYPTO_SHA256_LEN])
-{
-	unsigned char der[2048];
-	int n = mbedtls_pk_write_pubkey_der(key, der, sizeof(der));
-
-	if (n <= 0)
-		return -1;
-	return shirudo_sha256_buffer(der + sizeof(der) - n, (size_t)n, fpr);
-}
-
-static void print_fpr(const char *label, const unsigned char *fpr)
-{
-	printf("  %-22s SHA256:", label);
-	for (int i = 0; i < SHIRUDO_CRYPTO_SHA256_LEN; i++)
-		printf("%02x", fpr[i]);
-	printf("\n");
-}
-
-static int dump_operator_cert(const struct local_cert *cert, const char *path,
-			      const unsigned char spki[SHIRUDO_CRYPTO_SHA256_LEN])
-{
-	char subject[256], issuer[256], nb[32], na[32], exp[48];
-	unsigned char fpr[SHIRUDO_CRYPTO_SHA256_LEN];
-
-	name_to_str(&cert->crt.subject, subject, sizeof(subject));
-	name_to_str(&cert->crt.issuer, issuer, sizeof(issuer));
-	asn1_time_to_iso(&cert->crt.valid_from, nb, sizeof(nb));
-	asn1_time_to_iso(&cert->crt.valid_to, na, sizeof(na));
-	format_expires_in(days_remaining(&cert->crt.valid_to), exp, sizeof(exp));
-	printf("Cert (%s):\n", path);
-	printf("  %-22s %s\n", "Subject:", subject);
-	printf("  %-22s %s%s\n", "Issuer:", issuer,
-		   cert->crt.subject_raw.len == cert->crt.issuer_raw.len &&
-		   !memcmp(cert->crt.subject_raw.p, cert->crt.issuer_raw.p,
-			   cert->crt.subject_raw.len) ? "  (self-signed)" : "");
-	printf("  %-22s %s-%zu\n", "Public-key:",
-		   mbedtls_pk_get_name(&cert->crt.pk),
-		   mbedtls_pk_get_bitlen(&cert->crt.pk));
-	if (!compute_cert_fpr(cert, fpr))
-		print_fpr("Fingerprint:", fpr);
-	print_fpr("SPKI fingerprint:", spki);
-	printf("  %-22s %s\n", "Valid from:", nb);
-	printf("  %-22s %s\n", "Valid until:", na);
-	printf("  %-22s %s\n", "Expires in:", exp);
-	return 0;
-}
-
-static int dump_signing_key(const char *path,
-			    const unsigned char cert_spki[SHIRUDO_CRYPTO_SHA256_LEN])
-{
-	mbedtls_pk_context *key;
-	unsigned char fpr[SHIRUDO_CRYPTO_SHA256_LEN];
-	int rc = 0;
-
-	if (!path_exists(path)) {
-		printf("Signing key (%s):\n  %-22s %s\n", path, "Present:",
-		       "no  (target host -- private key lives on the operator)");
-		return 0;
-	}
-	key = read_priv_pem(path);
-	if (!key)
-		return -1;
-	printf("Signing key (%s):\n", path);
-	printf("  %-22s %s\n", "Present:", "yes");
-	printf("  %-22s %s-%zu\n", "Algorithm:",
-	       mbedtls_pk_get_name(key), mbedtls_pk_get_bitlen(key));
-	if (compute_spki_fpr(key, fpr))
-		rc = -1;
-	else {
-		print_fpr("SPKI fingerprint:", fpr);
-		if (!memcmp(fpr, cert_spki, sizeof(fpr)))
-			printf("  %-22s %s\n", "Cert match:", "OK  (signing key matches cert)");
-		else {
-			printf("  %-22s %s\n", "Cert match:", "MISMATCH  (private key does NOT match cert)");
-			rc = -1;
-		}
-	}
-	mbedtls_pk_free(key);
-	xfree(key, sizeof(*key));
-	return rc;
-}
-
-static int keys_dump_disk_material(const char *cert_path, const char *pkey_path)
-{
-	struct local_cert cert;
-	unsigned char spki[SHIRUDO_CRYPTO_SHA256_LEN];
-	int rc;
-
-	if (read_cert_der(cert_path, &cert) ||
-	    compute_spki_fpr(&cert.crt.pk, spki)) {
-		free_cert(&cert);
-		return 1;
-	}
-	rc = dump_operator_cert(&cert, cert_path, spki);
-	if (!rc) {
-		printf("\n");
-		rc = dump_signing_key(pkey_path, spki);
-	}
-	free_cert(&cert);
-	return rc ? 1 : 0;
-}
-
-#endif
 
 struct list_row {
 	key_serial_t	serial;

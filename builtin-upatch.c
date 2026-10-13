@@ -101,12 +101,17 @@ static void rep_fail(struct shirudo_op_report *rep, const char *phase,
 		snprintf(rep->message, sizeof(rep->message), "%s", msg);
 }
 
-/* Map a BPF_PROG_LOAD errno (positive) to a report category. */
+/*
+ * Map a BPF_PROG_LOAD errno (positive) to a report category. ENOPKG is
+ * the kernel's PKCS#7/X.509 parser meeting an algorithm it was not
+ * built with (an ML-DSA signature without CONFIG_CRYPTO_MLDSA).
+ */
 static const char *cat_from_load_errno(int e)
 {
 	switch (e) {
 	case EKEYREJECTED:	return "signature_rejected";
 	case ENOKEY:		return "keyring_missing";
+	case ENOPKG:		return "signature_unsupported";
 	case EACCES:
 	case EPERM:		return "lsm_denied";
 	default:		return "verifier_rejected";

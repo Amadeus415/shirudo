@@ -18,11 +18,13 @@ Prerequisites
 =============
 
 The operator needs a supported C/BPF toolchain, libbpf development
-files, OpenSSL crypto development files, and the TPM2-TSS development
-files required by the selected build profile. The target needs a
-supported Linux kernel, the target runtime libraries, and root access
-for initialization and BPF operations. Neither package includes an SSH
-transport library.
+files, OpenSSL 3.5+ crypto development files, and the TPM2-TSS
+development files required by the selected build profile. The target
+needs a supported Linux kernel built with ``CONFIG_CRYPTO_MLDSA`` and
+``CONFIG_CRYPTO_SHA512`` for the default ML-DSA-87 signatures, the
+target runtime libraries, and root access for initialization and BPF
+operations. Neither package includes an SSH transport library. The
+complete list is in :doc:`requirements`.
 
 Build the binaries
 ==================
@@ -91,6 +93,12 @@ On the operator machine:
 ::
 
     sudo shirudo genkey
+
+This writes an ML-DSA-87 (FIPS 204, post-quantum) private key and a
+self-signed certificate. ``--algorithm rsa-2048`` is the only other
+choice, the classical opt-out for a fleet whose kernels lack
+``CONFIG_CRYPTO_MLDSA``. ``shirudo keys`` prints the algorithm and
+fingerprints of the material on disk.
 
 Transfer the generated public certificate to the target through the
 organization's normal provisioning path. Do not copy the private
@@ -187,6 +195,11 @@ Troubleshooting
 
 * ``signature_rejected`` or ``keyring_missing``: verify that
   the target was initialized with the matching public certificate.
+* ``signature_unsupported``, or a ``cert_kernel_support`` pre-flight
+  failure from ``shirudo init``: the target kernel cannot verify the
+  certificate's algorithm. Enable ``CONFIG_CRYPTO_MLDSA`` and
+  ``CONFIG_CRYPTO_SHA512`` (see :doc:`requirements`) or re-key with
+  ``shirudo genkey --algorithm rsa-2048``.
 * ``verifier_rejected``: inspect the verifier log in the
   structured report and rebuild against the target's BTF.
 * ``btf_mismatch``: regenerate ``vmlinux.h`` from the target

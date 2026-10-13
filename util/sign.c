@@ -19,6 +19,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 #include <openssl/bio.h>
 #include <openssl/cms.h>
@@ -111,10 +112,27 @@ cleanup:
 	return x509;
 }
 
+static bool pkey_is_mldsa(const EVP_PKEY *pkey)
+{
+	const char *name = EVP_PKEY_get0_type_name(pkey);
+
+	return name && strncasecmp(name, "ML-DSA", 6) == 0;
+}
+
 int shirudo_cms_sign(struct shirudo_sign_io *io,
 		     const char *pkey_path, const char *cert_path)
 {
+	/*
+	 * TODO: add an issuerAndSerialNumber signing mode so signed BPF
+	 * upatches can exercise both kernel-supported CMS forms.
+	 */
+	unsigned int signer_flags = CMS_NOCERTS | CMS_BINARY | CMS_NOSMIMECAP |
+#ifdef CMS_NO_SIGNING_TIME
+				    CMS_NO_SIGNING_TIME |
+#endif
+				    CMS_USE_KEYID | CMS_NOATTR;
 	unsigned int hash_len = SHIRUDO_SHA256_LEN;
+	const EVP_MD *cms_digest = EVP_sha256();
 	BIO *bd_in = NULL, *bd_out = NULL;
 	EVP_PKEY *private_key = NULL;
 	CMS_ContentInfo *cms = NULL;
@@ -157,6 +175,19 @@ int shirudo_cms_sign(struct shirudo_sign_io *io,
 		goto cleanup;
 	}
 
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L && OPENSSL_VERSION_NUMBER < 0x40000000L
+	/*
+	 * OpenSSL 3.x cannot combine ML-DSA with CMS_NOATTR, so fall back
+	 * to signedAttrs, where the kernel accepts only SHA-512 for ML-DSA
+	 * (crypto/asymmetric_keys/public_key.c). Same workaround as
+	 * bpftool and module signing; OpenSSL 4 signs the content directly.
+	 */
+	if (pkey_is_mldsa(private_key)) {
+		signer_flags &= ~CMS_NOATTR;
+		cms_digest = EVP_sha512();
+	}
+#endif
+
 	cms = CMS_sign(NULL, NULL, NULL, NULL,
 		       CMS_NOCERTS | CMS_PARTIAL | CMS_BINARY | CMS_DETACHED |
 		       CMS_STREAM);
@@ -165,12 +196,8 @@ int shirudo_cms_sign(struct shirudo_sign_io *io,
 		goto cleanup;
 	}
 
-	if (!CMS_add1_signer(cms, x509, private_key, EVP_sha256(),
-			     CMS_NOCERTS | CMS_BINARY | CMS_NOSMIMECAP |
-			     /* TODO: Add an issuerAndSerialNumber signing mode so signed
-			      * BPF upatches can exercise both kernel-supported CMS forms. */
-			     CMS_USE_KEYID |
-			     CMS_NOATTR)) {
+	if (!CMS_add1_signer(cms, x509, private_key, cms_digest,
+			     signer_flags)) {
 		err = -EINVAL;
 		goto cleanup;
 	}

@@ -197,6 +197,11 @@ static int init_keyring(void)
 	xfree(der, der_sz);
 	if (key < 0) {
 		pr_err("add cert to keyring: %s", strerror(-key));
+		if (key == -ENOENT || key == -ENOPKG)
+			pr_err("kernel cannot verify this cert's public-key "
+			       "algorithm (ML-DSA needs CONFIG_CRYPTO_MLDSA=y "
+			       "and CONFIG_CRYPTO_SHA512=y; see "
+			       "Documentation/requirements.rst)");
 		return key;
 	}
 

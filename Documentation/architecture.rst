@@ -207,10 +207,14 @@ exception is the operator-only ``shirudo build`` dispatch to
 ``shirudo-build``; that helper invokes clang to compile BPF
 source.
 
-The target profile is independent of the operator profile. It uses
-the target's static mbedTLS/libcurl arrangement and shared libbpf,
-libelf, zlib, and TPM2-TSS dependencies. Neither profile includes an
-SSH transport library.
+The target profile is independent of the operator profile. Both
+profiles parse certificates and verify CMS signatures with libcrypto
+(OpenSSL 3.5 or newer, so ML-DSA keys are handled by one
+implementation); the target profile additionally links a static
+mbedTLS-backed libcurl for registry TLS, plus libbpf, libelf, zlib,
+and TPM2-TSS. Neither profile includes an SSH transport library. The
+default signing algorithm is ML-DSA-87; see :doc:`requirements` for
+the kernel and toolchain prerequisites that implies.
 
 The signed-loader path
 ======================
@@ -252,8 +256,9 @@ Failure reporting
 unload command emit structured JSON containing the phase, result,
 errno, category, verifier log when available, and TPM state. The
 primary categories include ``verifier_rejected``,
-``btf_mismatch``, ``signature_rejected``,
-``lsm_denied``, and ``tampered``.
+``btf_mismatch``, ``signature_rejected``, ``signature_unsupported``
+(the kernel lacks the signature's algorithm, typically
+``CONFIG_CRYPTO_MLDSA``), ``lsm_denied``, and ``tampered``.
 
 Project layout
 ==============

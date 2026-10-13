@@ -51,7 +51,7 @@ int main(int argc, char **argv)
 {
 	const struct shirudo_upatch_header *h;
 	uint8_t insns_sha[32];
-	unsigned char *m, cert[8192];
+	unsigned char *m, cert[16384];	/* an ML-DSA-87 cert is ~7.5 KiB */
 	unsigned int shalen = 32;
 	const void *insns, *sig, *data;
 	int ufd, cfd, cn, map_fd, prog_fd, key = 0;

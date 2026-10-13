@@ -112,7 +112,7 @@ _shirudo()
 		COMPREPLY=( $(compgen -W "--keys-dir=" -- "$cur") )
 		;;
 	genkey)
-		COMPREPLY=( $(compgen -W "--keys-dir= --force -f" -- "$cur") )
+		COMPREPLY=( $(compgen -W "--keys-dir= --algorithm= --force -f" -- "$cur") )
 		;;
 	config|version|help)
 		# nothing to complete beyond --help / --list-cmds

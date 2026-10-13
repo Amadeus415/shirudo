@@ -19,12 +19,18 @@
 #include "config.h"
 #include "kernel_abi.h"
 #include "loader.h"
+#include "malloc.h"
 #include "paths.h"
 #include "preflight.h"
 
 #ifndef KEY_SPEC_USER_KEYRING
 #define KEY_SPEC_USER_KEYRING	(-4)
 #endif
+#ifndef KEY_SPEC_THREAD_KEYRING
+#define KEY_SPEC_THREAD_KEYRING	(-1)
+#endif
+
+#define PREFLIGHT_CERT_MAX	(1u * 1024u * 1024u)
 
 static struct shirudo_preflight_check *next_slot(
 		struct shirudo_preflight_result *r,
@@ -171,6 +177,89 @@ static void check_cert(struct shirudo_preflight_result *r)
 		     SHIRUDO_CERT_PATH);
 }
 
+static int read_cert(unsigned char **out, size_t *out_sz)
+{
+	unsigned char *buf;
+	struct stat st;
+	ssize_t n;
+	int fd;
+
+	fd = open(SHIRUDO_CERT_PATH, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+	if (fstat(fd, &st) < 0) {
+		int rc = -errno;
+
+		close(fd);
+		return rc;
+	}
+	if (st.st_size <= 0 || st.st_size > PREFLIGHT_CERT_MAX) {
+		close(fd);
+		return -EINVAL;
+	}
+	buf = xmalloc((size_t)st.st_size);
+	if (!buf) {
+		close(fd);
+		return -ENOMEM;
+	}
+	n = read(fd, buf, (size_t)st.st_size);
+	close(fd);
+	if (n != st.st_size) {
+		xfree(buf, (size_t)st.st_size);
+		return -EIO;
+	}
+	*out = buf;
+	*out_sz = (size_t)st.st_size;
+	return 0;
+}
+
+/*
+ * The only authoritative answer to "can this kernel use the cert" is the
+ * kernel's own X.509 parser. An ML-DSA cert on a kernel without
+ * CONFIG_CRYPTO_MLDSA fails add_key(2) with ENOENT (parser knows the
+ * OID, no "mldsa87" algorithm is registered) or ENOPKG (parser predates
+ * the OID); the same probe triggers module autoload where the algorithm
+ * is modular. The probe key goes into the thread keyring, which is
+ * private to this thread and discarded with it, so no durable kernel
+ * state is touched; it is cleared right away regardless.
+ */
+static void check_cert_kernel_algo(struct shirudo_preflight_result *r)
+{
+	struct shirudo_preflight_check *c =
+		next_slot(r, SHIRUDO_PRE_CERT_KERNEL_ALGO, "cert_kernel_support");
+	unsigned char *der = NULL;
+	size_t der_sz = 0;
+	long key;
+	int rc;
+
+	rc = read_cert(&der, &der_sz);
+	if (rc) {
+		pass(c);
+		snprintf(c->detail, sizeof(c->detail),
+			 "skipped (cert unreadable: %s)", strerror(-rc));
+		return;
+	}
+	key = syscall(__NR_add_key, "asymmetric", "", der, der_sz,
+		      (long)KEY_SPEC_THREAD_KEYRING);
+	rc = key < 0 ? errno : 0;
+	xfree(der, der_sz);
+	syscall(__NR_keyctl, KEYCTL_CLEAR, (long)KEY_SPEC_THREAD_KEYRING,
+		0L, 0L, 0L);
+	if (!rc) {
+		pass(c);
+		return;
+	}
+	if (rc == ENOENT || rc == ENOPKG)
+		fail(r, c,
+		     "kernel cannot verify the public-key algorithm of %s "
+		     "(ML-DSA certs need CONFIG_CRYPTO_MLDSA=y and "
+		     "CONFIG_CRYPTO_SHA512=y; see Documentation/requirements.rst)",
+		     SHIRUDO_CERT_PATH);
+	else
+		fail(r, c, "kernel rejected %s: %s (add_key asymmetric)",
+		     SHIRUDO_CERT_PATH, strerror(rc));
+}
+
 static void check_keyring(struct shirudo_preflight_result *r)
 {
 	struct shirudo_preflight_check *c =
@@ -264,6 +353,7 @@ void shirudo_preflight_run(const struct shirudo_preflight_opts *opts,
 	check_bpffs(out);
 	check_signed_loader_abi(out);
 	check_cert(out);
+	check_cert_kernel_algo(out);
 	check_keyring(out);
 	check_embedded_loader(out);
 	check_tpm(out, opts->allow_no_tpm);

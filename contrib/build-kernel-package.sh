@@ -373,6 +373,10 @@ scripts/config --enable ASYMMETRIC_KEY_TYPE
 scripts/config --enable X509_CERTIFICATE_PARSER
 scripts/config --enable PKCS7_MESSAGE_PARSER
 scripts/config --enable SYSTEM_DATA_VERIFICATION
+scripts/config --enable CRYPTO_RSA
+scripts/config --enable CRYPTO_SHA256
+scripts/config --enable CRYPTO_MLDSA
+scripts/config --enable CRYPTO_SHA512
 scripts/config --enable TCG_TPM
 scripts/config --enable TCG_TIS_CORE
 scripts/config --enable TCG_TIS

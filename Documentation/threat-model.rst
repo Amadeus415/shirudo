@@ -76,6 +76,41 @@ TPM chain, verifier log, and failure category. External automation can
 collect those reports over its own SSH or monitoring path. shirudo
 does not claim to provide a complete or synchronized fleet view.
 
+Cryptographic algorithms
+========================
+
+shirudo's own trust anchors are post-quantum by default. ``shirudo
+genkey`` produces an ML-DSA-87 (FIPS 204) key and self-signed
+certificate, every ``.upatch`` loader is CMS-signed with that key, and
+the BPM index and upatch-tree signatures use the same key. The kernel
+verifies ML-DSA natively (``CONFIG_CRYPTO_MLDSA``), so no userspace
+verifier is on the load path. Long-lived fleets and embedded devices
+that cannot be re-keyed quickly are the reason: a signature scheme a
+quantum adversary can forge would let such an adversary install BPF on
+every target that still trusts the old certificate. ML-DSA-87 keeps the
+anchor ahead of the 2029 migration horizon published by the major
+browser and cloud programs. ``--algorithm rsa-2048`` remains an explicit,
+documented opt-out for kernels or toolchains without ML-DSA; operators
+choosing it accept the classical risk.
+
+Digests stay SHA-256 (payload, program and TPM chain) and SHA-512 (the
+CMS signed-attributes digest). Hash functions retain roughly half their
+bit strength against Grover-style search, which leaves both well above
+the 128-bit margin.
+
+Residual classical cryptography is outside shirudo's trust boundary:
+
+* The organization's SSH transport (OpenSSH already negotiates a
+  hybrid ML-KEM key exchange by default; host-key signatures remain
+  the operator's policy).
+* TLS to OCI registries for BPM fetches, which uses the platform
+  TLS stack (OpenSSL 3.5+ negotiates hybrid ML-KEM; mbedTLS in the
+  static target image does not yet). Artifacts fetched this way are
+  still authenticated by their ML-DSA CMS signature, so the exposure is
+  confidentiality of public artifact bytes and registry credentials.
+* Future TPM attestation keys (``TPM2_NV_Certify``) would be RSA or
+  ECC until TPM vendors ship post-quantum attestation.
+
 Threats outside scope
 =====================
 

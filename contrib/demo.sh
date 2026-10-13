@@ -460,7 +460,7 @@ good "shirudo installed at $(command -v shirudo)"
 
 step 2 "Operator: forge the trust anchor  (shirudo genkey)"
 say "The operator is the agent's trusted, credential-holding side. It creates"
-say "an RSA-2048 key + self-signed X.509 cert -- the anchor for ${BOLD}everything an"
+say "an ML-DSA-87 (FIPS 204, post-quantum) key + self-signed X.509 cert -- the anchor for ${BOLD}everything an"
 say "agent will ever deploy${RST}. The ${BOLD}${RED}private key never leaves the operator${RST}; only"
 say "the public cert is shipped to targets, into a sealed kernel keyring."
 run "shirudo genkey --force"

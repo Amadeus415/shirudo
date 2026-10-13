@@ -480,16 +480,21 @@ func bpmBuildSPKIFingerprint(keysDir string) (string, string, error) {
 	return fingerprint, publicKeyPath, err
 }
 
+// bpmSPKISHA256Fingerprint hashes the certificate's DER
+// SubjectPublicKeyInfo exactly as encoded in the certificate. Using the
+// raw bytes rather than re-marshalling cert.PublicKey keeps the value
+// algorithm-agnostic: Go's x509 package has no key type for ML-DSA, so
+// cert.PublicKey is nil for shirudo's default certificates, while the
+// raw SPKI is always present and matches what the C side digests.
 func bpmSPKISHA256Fingerprint(body []byte) (string, error) {
 	cert, err := x509.ParseCertificate(body)
 	if err != nil {
 		return "", fmt.Errorf("parse Shirudo public certificate: %w", err)
 	}
-	spkiDER, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
-	if err != nil {
-		return "", fmt.Errorf("marshal Shirudo SPKI: %w", err)
+	if len(cert.RawSubjectPublicKeyInfo) == 0 {
+		return "", fmt.Errorf("parse Shirudo public certificate: missing SubjectPublicKeyInfo")
 	}
-	fingerprint := sha256.Sum256(spkiDER)
+	fingerprint := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
 
 	return fmt.Sprintf("%x", fingerprint[:]), nil
 }

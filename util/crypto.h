@@ -3,8 +3,11 @@
  * Copyright (c) 2026 Authors of shirudo
  *
  * Small crypto interface shared by the operator and target profiles.
- * The operator implementation uses OpenSSL; the target implementation
- * uses mbedTLS.  Callers must not depend on either provider's types.
+ * Hashing, X.509 and CMS verification run on libcrypto in both profiles
+ * so every key algorithm the kernel verifies (RSA, ML-DSA) is handled
+ * by one implementation; only the libcurl TLS trust-anchor glue is per
+ * profile (OpenSSL on the operator, mbedTLS on the target). Callers
+ * must not depend on either provider's types.
  */
 
 #ifndef SHIRUDO_CRYPTO_H
