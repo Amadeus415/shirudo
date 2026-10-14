@@ -48,7 +48,7 @@ test_expect_success 'init binds the register to PCR 15 and anchors its name' '
 
 test_expect_success 'status reports the register bound, logged and anchored' '
 	./$R status | grep -qx "tpm=1 defined=1 written=1 logged=1 anchored=1" &&
-	$S status --json --include-tpm >"$WORK/status.json" &&
+	$S status --json >"$WORK/status.json" &&
 	python3 - "$WORK/status.json" <<"PY"
 import json, sys
 t = json.load(open(sys.argv[1]))["tpm"]

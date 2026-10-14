@@ -37,7 +37,7 @@ test_expect_success 'keepalive service exports status with TPM and system data' 
 		../systemd/shirudo-keepalive.service.in &&
 	grep -q "^EnvironmentFile=-/etc/shirudo/map-export.env$" \
 		../systemd/shirudo-keepalive.service.in &&
-	grep -q "^ExecStart=@bindir@/shirudo status --otel --include-tpm --include-system$" \
+	grep -q "^ExecStart=@bindir@/shirudo status --otel --include-system$" \
 		../systemd/shirudo-keepalive.service.in
 '
 
@@ -97,7 +97,7 @@ test_expect_success 'target install resolves and stages both exporter units' '
 	) &&
 	grep -q "^ExecStart=/opt/shirudo/bin/shirudo upatch map --all$" \
 		"$GENERATED" &&
-	grep -q "^ExecStart=/opt/shirudo/bin/shirudo status --otel --include-tpm --include-system$" \
+	grep -q "^ExecStart=/opt/shirudo/bin/shirudo status --otel --include-system$" \
 		"$GENERATED_KEEPALIVE" &&
 	grep -q "^ExecStart=/opt/shirudo/bin/shirudo bpm repo update$" \
 		"$GENERATED_BPM" &&

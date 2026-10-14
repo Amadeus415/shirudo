@@ -13,7 +13,7 @@ cd "$(dirname "$0")"
 target_guard
 
 tpm_chain() {
-	"$SHIRUDO_BIN" status --json --include-tpm 2>/dev/null | python3 -c '
+	"$SHIRUDO_BIN" status --json 2>/dev/null | python3 -c '
 import sys, json
 d = json.load(sys.stdin)
 t = d.get("tpm") or {}

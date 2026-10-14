@@ -2,8 +2,7 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Local readiness + state report: shirudo status [--json] [--otel]
- * [--include-tpm].
+ * Local readiness + state report: shirudo status [--json] [--otel].
  * Local-only -- never contacts another host. Safe to run before `init`
  * (everything degrades to "absent"/false).
  */
@@ -165,7 +164,7 @@ static void gather_assets(struct asset_view *a)
 /*
  * Projection of one eventlog line for display: enough for the compact
  * table and the events[] JSON, not the full record (the authoritative
- * copy stays the on-disk log, replayed by --include-tpm).
+ * copy stays the on-disk log, which status always replays).
  */
 struct ev_proj {
 	char ts[40];
@@ -386,9 +385,8 @@ static void print_kernel_config_human(const struct shirudo_sysinfo *si)
 static const struct shirudo_help_item status_options[] = {
 	{ "--json",                 "machine-readable JSON output" },
 	{ "--otel",                 "export the status report as an OTLP log" },
-	{ "--include-tpm",          "read the live register and replay the eventlog" },
 	{ "--include-system",       "add a `system` block (hostname, kernel, arch, cpus, ...)" },
-	{ "--include-eventlog",     "dump eventlog entries (implies --include-tpm)" },
+	{ "--include-eventlog",     "dump eventlog entries" },
 	{ "--include-kernellog[=N]","last N lines of the kernel ring buffer "
 				    "(default 10, max 100)" },
 	{ "--include-modules",      "loaded kernel modules (10 most recent; --show-full for tree)" },
@@ -402,7 +400,7 @@ static const struct shirudo_help_section status_help_sections[] = {
 };
 
 static const struct shirudo_help status_help = {
-	.usage      = "shirudo status [--json] [--otel] [--include-tpm] "
+	.usage      = "shirudo status [--json] [--otel] "
 		      "[--include-system] [--include-eventlog]\n"
 		      "                       [--include-kernellog[=N]] "
 		      "[--include-modules] [--show-full]",
@@ -557,7 +555,7 @@ static bool status_otel_endpoint_configured(const struct shirudo_config *cfg)
 
 int cmd_status(int argc, const char **argv)
 {
-	bool json = false, include_tpm = false;
+	bool json = false;
 	bool json_stdout = false, otel = false;
 	bool include_system = false, include_eventlog = false;
 	bool include_kernel_log = false, include_modules = false;
@@ -589,8 +587,6 @@ int cmd_status(int argc, const char **argv)
 			json_stdout = true;
 		else if (strcmp(argv[i], "--otel") == 0)
 			otel = true;
-		else if (strcmp(argv[i], "--include-tpm") == 0)
-			include_tpm = true;
 		else if (strcmp(argv[i], "--include-system") == 0)
 			include_system = true;
 		else if (strcmp(argv[i], "--include-eventlog") == 0)
@@ -654,15 +650,11 @@ int cmd_status(int argc, const char **argv)
 	 * it on first so any individual --include-* already given is a no-op.
 	 */
 	if (show_full) {
-		include_tpm = true;
 		include_system = true;
 		include_eventlog = true;
 		include_kernel_log = true;
 		include_modules = true;
 	}
-	/* The events[] array lives under tpm.eventlog, so it needs that. */
-	if (include_eventlog)
-		include_tpm = true;
 	if (include_system)
 		shirudo_sysinfo_gather(&sysi);
 
@@ -683,7 +675,7 @@ int cmd_status(int argc, const char **argv)
 
 	gather_assets(&assets);
 
-	if (include_tpm) {
+	{
 		snprintf(nv_index, sizeof(nv_index), "0x%08X", SHIRUDO_NV_INDEX);
 		chain_rc = shirudo_chain_status(&cst);
 		if (chain_rc == 0 && !(cst.defined && cst.written))
@@ -764,9 +756,9 @@ int cmd_status(int argc, const char **argv)
 				keyring_present && keyring_pinned >= 1,
 				keyring_present && keyring_pinned >= 1 &&
 					keyring_serial == keyring_pinned,
-				include_tpm && chain_rc == 0,
+				chain_rc == 0,
 				match == 1, match >= 0,
-				include_tpm ? nv_index : NULL);
+				nv_index);
 			otel_status = shirudo_status_verdict(&cin);
 			shirudo_json_kv_string(&e, "status",
 					       otel_status);
@@ -830,7 +822,7 @@ int cmd_status(int argc, const char **argv)
 		shirudo_json_obj_close(&e);
 		if (include_system)
 			shirudo_sysinfo_emit_json(&e, &sysi);
-		if (include_tpm) {
+		{
 			shirudo_json_obj_open_key(&e, "tpm");
 			shirudo_json_kv_string(&e, "nv_index", nv_index);
 			if (chain_rc == 0)
@@ -999,9 +991,9 @@ int cmd_status(int argc, const char **argv)
 			keyring_present && keyring_pinned >= 1,
 			keyring_present && keyring_pinned >= 1 &&
 				keyring_serial == keyring_pinned,
-			include_tpm && chain_rc == 0,
+			chain_rc == 0,
 			match == 1, match >= 0,
-			include_tpm ? nv_index : NULL);
+			nv_index);
 		verdict = shirudo_status_verdict(&cin);
 		shirudo_status_reason(&cin, reason, sizeof(reason));
 		nc = shirudo_conditions(&cin, conds, ARRAY_SIZE(conds));
@@ -1052,7 +1044,7 @@ int cmd_status(int argc, const char **argv)
 		xfree(rows, n_rows * sizeof(*rows));
 		rows = NULL;
 
-		if (include_tpm) {
+		{
 			printf("\nTPM Measurement:\n");
 			printf("  %-18s %s (anchored in PCR %u)\n", "NV index:",
 			       nv_index, SHIRUDO_CHAIN_PCR);

@@ -292,7 +292,7 @@ environment, not configuration: the timers read
 seconds after the previous run finished, and that command exports to
 whatever ``map_export`` names: JSON lines, OTLP, S3, any combination,
 or nothing.  ``shirudo-keepalive.timer`` runs ``shirudo status --otel
---include-tpm --include-system`` on the same cadence.  Both are
+--include-system`` on the same cadence.  Both are
 ordinary one-shot services; disable a timer to stop an export, and
 nothing else changes.
 
@@ -418,7 +418,7 @@ On a target::
     sudo shirudo upatch map --all                           # decoded, to stdout
     sudo shirudo upatch map --all --json=/tmp/maps.ndjson  # JSON lines
     sudo shirudo upatch map --all --otel --otel-endpoint=http://127.0.0.1:4318
-    sudo shirudo status --otel --include-tpm --include-system
+    sudo shirudo status --otel --include-system
 
 Every refusal is logged to syslog under the ``shirudo`` tag with the
 HTTP status or curl error, the attempt count and the endpoint.  On the

@@ -20,7 +20,7 @@ test_expect_success 'status --otel sends a structured keepalive log' '
 	done
 	port=$(cat "$work/port") &&
 	OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="http://127.0.0.1:$port/v1/logs" \
-		"$S" status --otel --include-tpm >"$work/stdout" 2>"$work/stderr" &&
+		"$S" status --otel >"$work/stdout" 2>"$work/stderr" &&
 	wait "$server" &&
 	test ! -s "$work/stdout" &&
 	python3 - "$work/body" "$work/meta" <<"PY"
@@ -66,7 +66,7 @@ test_expect_success 'status --json --otel keeps JSON output available' '
 	done
 	port=$(cat "$work/port") &&
 	OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="http://127.0.0.1:$port/v1/logs" \
-		"$S" status --json --otel --include-tpm >"$work/stdout" 2>"$work/stderr" &&
+		"$S" status --json --otel >"$work/stdout" 2>"$work/stderr" &&
 	wait "$server" &&
 	python3 - "$work/stdout" <<"PY"
 import json

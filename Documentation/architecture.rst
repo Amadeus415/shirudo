@@ -465,9 +465,11 @@ same tree.
 the conditions ``LsmAttached``, ``KeyringSealed``, ``ChainIntact`` and
 ``TpmMeasured`` with an ``OK``, ``WARN`` or ``ALERT`` verdict each, the
 keyring serial against its pin, the register against this boot's
-eventlog replay and its anchor, the on-disk assets, and with ``--include-tpm``,
+eventlog replay and its anchor, the on-disk assets, and with
 ``--include-system``, ``--include-eventlog``, ``--include-kernellog``
-and ``--include-modules`` the corresponding detail.  The overall
+and ``--include-modules`` the corresponding detail.  The register is
+always read: a status that did not ask the TPM would be a status the
+target wrote about itself.  The overall
 ``status`` is ``ok``, ``degraded``, ``init-pending``, ``lsm-off`` or
 ``tampered``.  ``--json`` emits the same as one document; ``--otel``
 pushes it as a keepalive log record.  ``status`` is the target's own

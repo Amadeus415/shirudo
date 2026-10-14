@@ -337,7 +337,7 @@ fi
 configure_bpm_tree
 /usr/local/bin/shirudo init "${init_args[@]}"
 test -e /var/lib/shirudo/bpffs/lsm_link
-/usr/local/bin/shirudo status --json --include-tpm >/tmp/shirudo-status.json
+/usr/local/bin/shirudo status --json >/tmp/shirudo-status.json
 python3 - /tmp/shirudo-status.json <<'PY'
 import json
 import sys

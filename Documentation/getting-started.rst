@@ -117,7 +117,7 @@ Install the target package, place ``cert.der``, then::
 
     sudo shirudo init --check-only
     sudo shirudo init
-    sudo shirudo status --include-tpm
+    sudo shirudo status
 
 ``--check-only`` runs the pre-flight and reports every missing
 prerequisite at once without touching the kernel: root, BPF LSM active,
@@ -270,7 +270,7 @@ logs and metrics::
     sudo shirudo upatch map --all
     sudo shirudo upatch map --all --otel \
         --otel-endpoint=https://collector.example:4318
-    sudo shirudo status --otel --include-tpm --include-system
+    sudo shirudo status --otel --include-system
 
 Set ``map_export.otel_endpoint`` in ``/etc/shirudo/shirudo.conf`` and
 enable ``shirudo-map-export.timer`` and ``shirudo-keepalive.timer`` to
@@ -284,7 +284,7 @@ how to land them in ClickHouse, Splunk or a collector of your own.
 
 ::
 
-    sudo shirudo status --include-tpm --include-eventlog
+    sudo shirudo status --include-eventlog
     sudo shirudo status --json
     sudo shirudo upatch list
     sudo shirudo upatch get fix

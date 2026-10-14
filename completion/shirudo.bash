@@ -112,7 +112,7 @@ _shirudo()
 		COMPREPLY=( $(compgen -W "--check-only --no-seal" -- "$cur") )
 		;;
 	status)
-		COMPREPLY=( $(compgen -W "--json --include-tpm \
+		COMPREPLY=( $(compgen -W "--json \
 			--include-system --include-eventlog \
 			--include-kernellog --include-modules \
 			--include-maps --show-full" -- "$cur") )
