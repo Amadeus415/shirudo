@@ -348,7 +348,8 @@ build_tree_test_registry()
 		"$TMP_DIR/fixtures/shirudo-test-tree-skip.upatch" \
 		"$TMP_DIR/fixtures/shirudo-test-tree-match.unload.upatch" \
 		"$tree_payload" "$tree_initial_payload" "$tree_updated_payload" \
-		"$tree_restored_payload" <<'PY'
+		"$tree_restored_payload" "$tree_match_payload" \
+		"$tree_skip_payload" "$tree_match_unload_payload" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -356,7 +357,8 @@ import sys
 
 registry, match_path, skip_path, match_unload_path, tree_payload, \
     initial_payload, updated_payload, restored_payload = \
-    map(pathlib.Path, sys.argv[1:])
+    map(pathlib.Path, sys.argv[1:9])
+match_payload, skip_payload, match_unload_payload = sys.argv[9:12]
 tree_endpoint = "oci://127.0.0.1:5443/shirudo/upatch-tree"
 
 
@@ -369,7 +371,11 @@ def write(path, body):
     path.write_bytes(body)
 
 
-def artifact(repository, path, title):
+# payload_sha256 is the upatch header's digest of loader_insns || data,
+# which the target compares against the fetched artifact's header; an
+# unload directive carries its own, not its load's. The layer digest
+# covers the whole file and is a different value again.
+def artifact(repository, path, title, payload_sha256):
     body = path.read_bytes()
     layer_digest = digest(body)
     manifest = {
@@ -391,17 +397,18 @@ def artifact(repository, path, title):
         "repository": "oci://127.0.0.1:5443/" + repository,
         "manifest_digest": manifest_digest,
         "layer_digest": layer_digest,
-        "payload_sha256": digest(body),
+        "payload_sha256": "sha256:" + payload_sha256,
     }
 
 
 match_artifact = artifact("shirudo/tree-match", match_path,
-                         "shirudo-test-tree-match.upatch")
+                         "shirudo-test-tree-match.upatch", match_payload)
 skip_artifact = artifact("shirudo/tree-skip", skip_path,
-                        "shirudo-test-tree-skip.upatch")
+                        "shirudo-test-tree-skip.upatch", skip_payload)
 match_unload_artifact = artifact("shirudo/tree-match-unload",
                                  match_unload_path,
-                                 "shirudo-test-tree-match.unload.upatch")
+                                 "shirudo-test-tree-match.unload.upatch",
+                                 match_unload_payload)
 
 
 def operation(seq, name, selector, artifact_info, op="add"):
@@ -738,6 +745,9 @@ observability_payload="$($REPO_ROOT/shirudo upatch info \
 	-o "$TMP_DIR/fixtures/shirudo-test-tree-skip.unload.upatch" \
 	--key "$FIXTURE_WORK/trusted/signing_key.pem" \
 	--cert "$FIXTURE_WORK/trusted/cert.der"
+tree_match_unload_payload="$($REPO_ROOT/shirudo upatch info \
+	"$TMP_DIR/fixtures/shirudo-test-tree-match.unload.upatch" --json |
+	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
 build_tree_test_registry
 "$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
 	shirudo-test-map-export --payload-sha256 "$map_export_payload" \
