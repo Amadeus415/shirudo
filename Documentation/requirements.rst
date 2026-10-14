@@ -128,7 +128,69 @@ report; it never attaches somewhere else.
      - ``netfilter`` upatches at IPv6 pre-routing.
 
 
-2) Cryptography
+2) Operator kernel
+------------------
+
+The operator kernel needs nothing from the tables above.  Building and
+signing never touch ``bpf()``: ``shirudo build`` compiles with clang,
+runs libbpf's gen_loader, which records map creation, program loads,
+CO-RE relocations and attach targets for the signed loader to perform
+on the target kernel, and signs the result with libcrypto.  No BPF
+program is loaded on the operator, the operator kernel's BTF is not
+consulted, and no capability is needed.  ``shirudo bpm build``, ``push``
+and ``tree append`` wrap that path and talk to a registry.  Any Linux
+kernel that a current clang and OpenSSL 3.5 run on will do.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Operator activity
+     - Kernel requirement
+   * - Build and sign upatches; build and publish packages and trees
+       (``shirudo build``, ``shirudo bpm build``, ``push``,
+       ``tree append``)
+     - None.  No BPF is loaded and no kernel BTF is read; the target
+       kernel's ``vmlinux.h`` is the only kernel-derived input, see
+       below.
+   * - Inspect artifacts and packages offline (``shirudo upatch info``,
+       ``shirudo bpm info``)
+     - None.
+   * - Craft and test mitigations: reproduce the bug, load the shield,
+       run the reproducer against it
+     - A kernel that mimics the target: the fleet's release,
+       configuration and BTF, meeting the base and attach-point tables
+       of the target kernel, preferably in a VM.
+   * - Operator and target on one node (local development)
+     - The full target table; the node is a target.
+
+``vmlinux.h`` is the one input the build takes from a kernel.  By
+default the tree generates it from the build host's own BTF
+(``/sys/kernel/btf/vmlinux``) with ``tools/gen-vmlinux-h``.  When the
+fleet runs another kernel, generate it from that kernel's BTF
+(``tools/gen-vmlinux-h <vmlinux or BTF file> > vmlinux.h``) and either
+build the tree with ``BPF_VMLINUX_H=<path>`` or pass ``--vmlinux
+<path>`` to ``shirudo build``.  CO-RE makes the artifact portable
+across builds of the same kernel generation, not across kernels that
+renamed a field.
+
+Mimic the target to craft mitigations.  Building is where the operator
+kernel's requirements end; crafting a mitigation is not.  The agentic
+loop the architecture describes (ingest the fix, reproduce it, derive a
+shield, load it, run the reproducer against it) needs a kernel that
+behaves like the fleet's: the same release and configuration, the same
+BTF, the attach points the shield will use.  Run that loop in a VM
+booting the target kernel rather than on the operator host.  ``make
+kernel KERNEL_TAG=<tag> KERNEL_CONFIG=<the fleet's .config>`` builds
+such a kernel with its BTF, ``make vm KERNEL=<version>`` boots a
+supported selection with a software TPM and a prepared shirudo, and
+``make test-tgt`` runs the target suite in it; any VM of the operator's
+own serves the same purpose.  A mitigation that loads and passes its
+reproducer on a kernel unlike the fleet's proves nothing about the
+fleet.
+
+
+3) Cryptography
 ---------------
 
 .. list-table::
@@ -168,7 +230,7 @@ report; it never attaches somewhere else.
        the registry or collector presents.
 
 
-3) Operator host
+4) Operator host
 ----------------
 
 * A C toolchain (``cc``, ``make``, ``pkg-config``).
@@ -193,7 +255,7 @@ The operator never needs a TPM, the kernel keyring or ``CAP_BPF``; only
 the private key under ``/var/lib/shirudo/keys/``.
 
 
-4) Target host
+5) Target host
 --------------
 
 * The kernel configuration above, booted with the BPF LSM enabled.
@@ -213,7 +275,7 @@ Operator and target may be on different architectures; the artifact
 format is little-endian and the signature is architecture-neutral.
 
 
-5) Build host for the target binary
+6) Build host for the target binary
 -----------------------------------
 
 ``make target`` runs ``make target-deps`` first, which builds OpenSSL,
