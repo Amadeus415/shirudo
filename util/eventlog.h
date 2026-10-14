@@ -23,7 +23,23 @@
 /* The on-disk path; SHIRUDO_EVENTLOG_PATH in the environment overrides it. */
 const char *shirudo_eventlog_path(void);
 
+/*
+ * Where an init run from the initrd leaves its record until the root
+ * file system's init adopts it; SHIRUDO_EVENTLOG_PENDING_PATH in the
+ * environment overrides it. Every reader below sees a pending record
+ * as part of this boot's log.
+ */
+const char *shirudo_eventlog_pending_path(void);
+
 int shirudo_eventlog_append(const char *json_line);
+int shirudo_eventlog_append_to(const char *path, const char *json_line);
+
+/*
+ * Fold the pending record into the eventlog: every pending line this
+ * boot's part of the log does not already hold is appended, then the
+ * pending file goes. 0 when nothing was pending.
+ */
+int shirudo_eventlog_adopt_pending(void);
 
 /*
  * Replay this boot's records, from its last "init" record on, the way

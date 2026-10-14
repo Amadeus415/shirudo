@@ -14,13 +14,20 @@
 #define SHIRUDO_SIG_KEYRING_USER	4
 #define SHIRUDO_SIG_KEYRING_BPF		5
 
-/* Must match struct shirudo_sb_id in bpf/bpf2.c byte for byte. */
+/*
+ * Must match struct shirudo_sb_id in bpf/bpf2.c byte for byte. exe is
+ * the binary that keeps running the target; alt_exe, when set, the
+ * initrd's copy that ran init and is gone after the switch to the root.
+ */
 struct shirudo_identity {
 	uint32_t	sb_dev;
 	uint32_t	exe_dev;
 	uint64_t	exe_ino;
 	int32_t		keyring_serial;
 	uint32_t	keyring_type;
+	uint32_t	alt_exe_dev;
+	uint32_t	pad;
+	uint64_t	alt_exe_ino;
 };
 
 /*

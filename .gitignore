@@ -26,6 +26,7 @@
 
 # Generated systemd units (from systemd/*.service.in)
 /systemd/shirudo.service
+/systemd/shirudo-initrd.service
 /systemd/shirudo-map-export.service
 /systemd/shirudo-keepalive.service
 /systemd/shirudo-bpm-repo-update.service

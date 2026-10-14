@@ -17,6 +17,7 @@
 #include <linux/keyctl.h>
 
 #include "config.h"
+#include "initrd.h"
 #include "crypto.h"
 #include "kernel_abi.h"
 #include "loader.h"
@@ -172,13 +173,13 @@ static void check_cert(struct shirudo_preflight_result *r)
 		next_slot(r, SHIRUDO_PRE_CERT_ON_DISK, "cert_on_disk");
 	struct stat st;
 
-	if (stat(SHIRUDO_CERT_PATH, &st) == 0 &&
+	if (stat(shirudo_cert_path(), &st) == 0 &&
 	    S_ISREG(st.st_mode) && st.st_size > 0)
 		pass(c);
 	else
 		fail(r, c,
 		     "%s missing or empty (copy the operator's cert)",
-		     SHIRUDO_CERT_PATH);
+		     shirudo_cert_path());
 }
 
 static int read_cert(unsigned char **out, size_t *out_sz)
@@ -188,7 +189,7 @@ static int read_cert(unsigned char **out, size_t *out_sz)
 	ssize_t n;
 	int fd;
 
-	fd = open(SHIRUDO_CERT_PATH, O_RDONLY | O_CLOEXEC);
+	fd = open(shirudo_cert_path(), O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return -errno;
 	if (fstat(fd, &st) < 0) {
@@ -230,7 +231,7 @@ static void check_cert_algorithm(struct shirudo_preflight_result *r)
 	char name[64];
 	int rc;
 
-	if (shirudo_cert_read_file(SHIRUDO_CERT_PATH, &cert)) {
+	if (shirudo_cert_read_file(shirudo_cert_path(), &cert)) {
 		pass(c);
 		snprintf(c->detail, sizeof(c->detail),
 			 "skipped (cert unreadable)");
@@ -240,7 +241,7 @@ static void check_cert_algorithm(struct shirudo_preflight_result *r)
 	shirudo_cert_free(&cert);
 	if (rc) {
 		fail(r, c, "%s: cannot determine public-key algorithm",
-		     SHIRUDO_CERT_PATH);
+		     shirudo_cert_path());
 		return;
 	}
 	if (strcmp(name, "ML-DSA-87") == 0)
@@ -248,7 +249,7 @@ static void check_cert_algorithm(struct shirudo_preflight_result *r)
 	else
 		fail(r, c, "%s is %s; shirudo accepts only ML-DSA-87 "
 		     "certificates (re-key with shirudo genkey)",
-		     SHIRUDO_CERT_PATH, name);
+		     shirudo_cert_path(), name);
 }
 
 /*
@@ -292,10 +293,10 @@ static void check_cert_kernel_algo(struct shirudo_preflight_result *r)
 		     "kernel cannot verify the public-key algorithm of %s "
 		     "(ML-DSA certs need CONFIG_CRYPTO_MLDSA=y and "
 		     "CONFIG_CRYPTO_SHA512=y; see Documentation/requirements.rst)",
-		     SHIRUDO_CERT_PATH);
+		     shirudo_cert_path());
 	else
 		fail(r, c, "kernel rejected %s: %s (add_key asymmetric)",
-		     SHIRUDO_CERT_PATH, strerror(rc));
+		     shirudo_cert_path(), strerror(rc));
 }
 
 static void check_keyring(struct shirudo_preflight_result *r)

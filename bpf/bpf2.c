@@ -83,8 +83,8 @@ char _license[] SEC("license") = "Dual BSD/GPL";
  * program attaches: the private bpffs superblock device, the
  * (dev, ino) of shirudo's own executable, and the serial and kind
  * (enum bpf_sig_keyring) of the sealed keyring a signed load must have
- * been verified against. Must match the userspace struct in
- * builtin-init.c byte-for-byte.
+ * been verified against. Must match struct shirudo_identity in
+ * util/identity.h byte-for-byte.
  */
 struct shirudo_sb_id {
 	__u32	sb_dev;
@@ -92,6 +92,9 @@ struct shirudo_sb_id {
 	__u64	exe_ino;
 	__s32	keyring_serial;
 	__u32	keyring_type;
+	__u32	alt_exe_dev;
+	__u32	pad;
+	__u64	alt_exe_ino;
 };
 
 struct {
@@ -277,6 +280,10 @@ static __always_inline int shirudo_bpffs_guard(__u32 target_dev)
 	exe_dev = BPF_CORE_READ(exe, f_inode, i_sb, s_dev);
 	exe_ino = BPF_CORE_READ(exe, f_inode, i_ino);
 	if (exe_dev == id->exe_dev && exe_ino == id->exe_ino)
+		return 0;
+	/* The initrd's copy of shirudo, while it finishes init. */
+	if (id->alt_exe_ino && exe_dev == id->alt_exe_dev &&
+	    exe_ino == id->alt_exe_ino)
 		return 0;
 
 	return -EPERM;

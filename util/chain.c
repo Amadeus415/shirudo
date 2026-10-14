@@ -18,6 +18,7 @@
 #include "chain.h"
 #include "config.h"
 #include "crypto.h"
+#include "initrd.h"
 #include "log.h"
 #include "malloc.h"
 #include "paths.h"
@@ -64,7 +65,7 @@ int shirudo_chain_cert_sha256(uint8_t out[32])
 	int fd, rc = 0;
 	ssize_t got;
 
-	fd = open(SHIRUDO_CERT_PATH, O_RDONLY | O_CLOEXEC);
+	fd = open(shirudo_cert_path(), O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return -errno;
 	if (fstat(fd, &st) < 0 || st.st_size <= 0 ||
@@ -241,14 +242,6 @@ out:
 	return rc;
 }
 
-/* The initrd marks itself by this file; tests point elsewhere. */
-static bool in_initrd(void)
-{
-	const char *env = getenv("SHIRUDO_INITRD_RELEASE");
-
-	return access(env && *env ? env : "/etc/initrd-release", F_OK) == 0;
-}
-
 int shirudo_chain_init(const uint8_t event[32],
 		       struct shirudo_chain_init_info *info)
 {
@@ -318,7 +311,7 @@ int shirudo_chain_init(const uint8_t event[32],
 					  info->phase_before);
 	if (rc)
 		goto out;
-	info->initrd = in_initrd();
+	info->initrd = shirudo_in_initrd();
 	register_expectation(info->pcr_before, info->phase_before,
 			     branch_written, branch_init, policy, unwritten,
 			     written);

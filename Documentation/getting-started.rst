@@ -143,19 +143,21 @@ sealing xattr, attaches the enforcement programs, re-applies any
 installed upatches, binds this boot's measurement register and extends
 it once.  It is idempotent and safe to re-run.
 
-The production configuration runs it from the initrd.  Boot the kernel
-with ``bpf.keyring_unsealed=1``, which leaves the bpf keyring open
-until ``init`` seals it, and give the initrd the target binary,
-``shirudo.service``, ``/etc/shirudo`` and ``/var/lib/shirudo`` at
-their usual paths, so that ``init`` runs after the ``enter-initrd``
-phase is measured and before the switch to the root file system.  The
-register then binds while PCR 11 holds a value no later process can
-bring back, and the keyring is the kernel's own.  Started from the root
-file system instead, ``init`` finds the bpf keyring sealed empty,
-stages the certificate in a sealed ``shirudo`` user keyring until the
-next reboot, and binds the register with the post-initrd PCR 11
-value; ``status`` reports ``keyring_mode`` and ``bound_in``, and the
-verifier can refuse both.  Extra arguments go in
+The production configuration runs it from the initrd first.  Boot the
+kernel with ``bpf.keyring_unsealed=1``, which leaves the bpf keyring
+open until ``init`` seals it, and give the initrd the target binary,
+``shirudo-initrd.service`` and a copy of the certificate at
+``/etc/shirudo/cert.der``; the ``initrd`` document describes that run,
+what ``shirudo.service`` then finishes from the root file system, and
+the dracut module and installer under ``tools/gen-initrd`` that set a
+target up that way.  The register then binds while PCR 11 holds a
+value no later process can bring back, and the keyring is the kernel's
+own.  Started from the root file system alone, ``init`` finds the bpf
+keyring sealed empty, stages the certificate in a sealed ``shirudo``
+user keyring until the next reboot, and binds the register with the
+post-initrd PCR 11 value; ``status`` reports ``mode: staging`` and
+``bound_in: root``, and the verifier can refuse both.  Extra arguments
+go in
 ``/etc/shirudo/init.env`` as ``SHIRUDO_INIT_ARGS``.  Enable the unit
 and the timers you want::
 

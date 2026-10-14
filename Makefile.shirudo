@@ -132,6 +132,7 @@ UTIL_SRCS := \
     util/upatch.c \
     util/keyring.c \
     util/identity.c \
+    util/initrd.c \
     util/paths.c \
     util/harden.c \
     util/preflight.c \
@@ -368,8 +369,12 @@ tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o \
 
 # ----- install ----------------------------------------------------
 
-# The reboot-persistence unit, with @bindir@ resolved to the install path.
+# The reboot-persistence units, with @bindir@ resolved to the install path.
 systemd/shirudo.service: systemd/shirudo.service.in
+	@printf '  GEN     $@\n'
+	$(Q)sed 's|@bindir@|$(bindir)|g' $< > $@
+
+systemd/shirudo-initrd.service: systemd/shirudo-initrd.service.in
 	@printf '  GEN     $@\n'
 	$(Q)sed 's|@bindir@|$(bindir)|g' $< > $@
 
@@ -411,6 +416,7 @@ install-common:
 # export, and status keepalive units. They are deliberately NOT in
 # install-operator.
 install-target: shirudo-target install-common systemd/shirudo.service \
+		systemd/shirudo-initrd.service \
 		systemd/shirudo-map-export.service \
 		systemd/shirudo-map-export.timer \
 		systemd/shirudo-keepalive.service \
@@ -425,6 +431,7 @@ install-target: shirudo-target install-common systemd/shirudo.service \
 	@printf '  INSTALL $(DESTDIR)$(systemdunitdir)/shirudo*.service,timer\n'
 	$(Q)install -d $(DESTDIR)$(systemdunitdir)
 	$(Q)install -m 0644 systemd/shirudo.service \
+	    systemd/shirudo-initrd.service \
 	    systemd/shirudo-map-export.service \
 	    systemd/shirudo-map-export.timer \
 	    systemd/shirudo-keepalive.service \
@@ -465,6 +472,7 @@ TEST_HELPERS := testing/helper/test-json-parser \
                 testing/helper/test-chain \
                 testing/helper/test-tpm-wire \
                 testing/helper/test-register \
+                testing/helper/test-eventlog \
                 $(TPMSIM_HELPER) \
 		testing/helper/test-config \
 		testing/helper/test-bpm-source \
@@ -494,8 +502,12 @@ testing/helper/test-json-parser: testing/helper/test-json-parser.c util/json.o
 REGISTER_OBJS := util/chain.o util/tpm.o util/tpm_wire.o util/eventlog.o \
                  util/hex.o util/crypto_openssl.o util/json.o util/io.o \
                  util/seal.o util/config.o util/log.o util/malloc.o \
-                 $(VERSION_OBJ)
+                 util/initrd.o $(VERSION_OBJ)
 REGISTER_LIBS := -lcrypto -lssl -ltss2-esys -ltss2-tctildr
+
+testing/helper/test-eventlog: testing/helper/test-eventlog.c $(REGISTER_OBJS)
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
 testing/helper/test-chain: testing/helper/test-chain.c $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
@@ -600,6 +612,7 @@ clean:
 	$(Q)rm -rf build/target
 	$(Q)rm -f $(DEPS) testing/helper/*.d
 	$(Q)rm -f $(BPF_OBJS) $(VMLINUX_H) systemd/shirudo.service \
+	    systemd/shirudo-initrd.service \
 	          systemd/shirudo-map-export.service \
 	          systemd/shirudo-keepalive.service \
 	          systemd/shirudo-bpm-repo-update.service \

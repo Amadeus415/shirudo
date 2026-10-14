@@ -294,7 +294,10 @@ instead, and the target stays in staging.  It does, in order:
    reachable.  Every
    check is hard; all failures are reported together as
    ``init_prereqs_missing`` and nothing is touched.  ``shirudo init
-   --check-only`` stops here;
+   --check-only`` stops here.  In the initrd, told by
+   ``/etc/initrd-release``, ``init`` also binds the root's
+   ``/var/lib/shirudo`` read-only at its usual path and reads the
+   certificate from the initrd's own ``/etc/shirudo/cert.der``;
 2. mounts the private bpffs at ``/run/shirudo/bpffs`` with
    ``mode=0700,nosuid,nodev,noexec``;
 3. removes state left behind by features that no longer exist;
@@ -308,7 +311,10 @@ instead, and the target stays in staging.  It does, in order:
    boot makes ``init`` stage the certificate instead: a ``shirudo``
    keyring in the user keyring, sealed with ``KEYCTL_SETPERM`` to view,
    read and search only, until the next reboot;
-5. labels ``/var/lib/shirudo/`` with ``security.bpf.shirudo``;
+5. labels ``/var/lib/shirudo/`` with ``security.bpf.shirudo`` and
+   appends the record an initrd run left under ``/run`` to the
+   eventlog; the initrd run itself skips both, its root being
+   read-only;
 6. loads bpf2 and, unless ``--no-seal``, seal through the signed path,
    freezes the identity map, creates the links and pins each one before
    doing anything else fallible;
@@ -402,7 +408,8 @@ Files.  Under ``/var/lib/shirudo/``: ``keys/cert.der`` (and
 (staging), ``locks/`` and ``bpm/`` (registry indexes, packages, tree
 state).  Under ``/run/shirudo/``, per boot: the ``bpffs/`` mount with
 ``lsm_link``, the ``bpf2_*_link`` and ``seal_*_link`` pins, the frozen
-``identity`` map and ``upatches/<name>/``; it lives under ``/run``
+``identity`` map and ``upatches/<name>/``, and ``eventlog.pending``
+between the initrd run and the root's; it lives under ``/run``
 because that is what
 systemd carries from the initrd into the root file system, so pins
 made before the switch keep their links.  Under

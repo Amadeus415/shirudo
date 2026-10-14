@@ -54,6 +54,11 @@ Reviewing the security design
     behind each, and the residual risks.
 
 Measuring and attesting a target
+    `initrd <initrd.rst>`__ describes the production configuration:
+    the run of ``init`` inside the initrd, what the root file system's
+    run finishes, what an initrd must contain and how the generator
+    and the installer build one.
+
     `tpm <tpm.rst>`__ describes the per-boot measurement register,
     the events and the eventlog, the TPM-signed evidence and its
     verification, how they relate to systemd's NvPCRs and what they

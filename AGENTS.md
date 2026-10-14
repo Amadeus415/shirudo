@@ -50,6 +50,7 @@ remote-management or transport layers.
 | `Documentation/threat-model.rst` | Authoritative security design: trust boundaries, threats, residual risks, deferred mitigations. Consult before touching any security-relevant path. |
 | `Documentation/architecture.rst` | Implemented architecture, operator/target boundary, BPM package and upatch tree formats. |
 | `Documentation/tpm.rst` | The measurement register, its events and eventlog, `shirudo attest` and its verification, the relation to systemd's NvPCRs and the known limits. Read it with the threat model before touching the TPM paths. |
+| `Documentation/initrd.rst` | The production configuration: `init` run from the initrd and finished by the root file system, what survives switch-root, what the initrd needs, the dracut module, generator and installer under `tools/gen-initrd/`. |
 | `Documentation/upatch-spec.rst` | The `.upatch` container and signing scheme. |
 | `Documentation/requirements.rst` | Kernel options, operator toolchain, target runtime. |
 | `Documentation/getting-started.rst` | Quickstart: build, sign, initialise a target, load and unload, publish and install packages. |
@@ -192,6 +193,18 @@ one usually still compiles and passes tests.
   value the target wrote about itself is not a check.
 - **Pin the bpf_link before anything else fallible** in `shirudo init`,
   or a crash leaves an attached, unowned link that the kernel detaches.
+- **init runs twice in production and the two halves are fixed.** The
+  initrd run (`shirudo-initrd.service`, detected by `/etc/initrd-release`
+  with the root at `/sysroot`) enrols the initrd's own
+  `/etc/shirudo/cert.der`, attaches the LSM with its pins under
+  `/run/shirudo/bpffs`, records the root's binary as the lasting
+  identity beside its own, restores the archived upatches read through
+  a read-only bind of `/sysroot/var/lib/shirudo`, binds the register
+  and leaves the init record at `/run/shirudo/eventlog.pending`. The
+  root run labels the tree and adopts that record. Anything else the
+  initrd would write to the root is wrong: the root is read-only there,
+  and `/run` is the only thing systemd carries across switch-root
+  besides the API file systems. Non-systemd initrds are unsupported.
 - **Single shirudo instance per host.** Keyring name, private bpffs,
   `/var/lib/shirudo`, the `security.bpf.shirudo` xattr namespace and
   the NV index are single-tenant by design.

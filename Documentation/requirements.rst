@@ -274,11 +274,13 @@ the private key under ``/var/lib/shirudo/keys/``.
 * A TPM 2.0 exposed as ``/dev/tpmrm0`` (discrete, firmware or cloud
   vTPM), or a software TPM reachable through ``tpm.tcti``.  TPM 1.2 is
   refused; there is no opt-out.
-* ``systemd`` for the boot unit and the timers, and in the initrd
+* ``systemd`` for the boot units and the timers, and a systemd-based
+  initrd (dracut) for the production configuration, with
   ``systemd-pcrphase-initrd.service``, which measures ``enter-initrd``
   and ``leave-initrd`` into PCR 11: the register's binding closes when
   the second one lands, so without the phase measurements an initrd
-  binding is no stronger than a late one.
+  binding is no stronger than a late one.  The ``initrd`` document
+  lists what the initrd must contain.
 * x86-64, arm64 or riscv64.
 
 Operator and target may be on different architectures; the artifact

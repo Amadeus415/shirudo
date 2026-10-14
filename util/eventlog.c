@@ -32,9 +32,20 @@ const char *shirudo_eventlog_path(void)
 	return env && *env ? env : SHIRUDO_EVENTLOG_PATH;
 }
 
+const char *shirudo_eventlog_pending_path(void)
+{
+	const char *env = getenv("SHIRUDO_EVENTLOG_PENDING_PATH");
+
+	return env && *env ? env : SHIRUDO_EVENTLOG_PENDING_PATH;
+}
+
 int shirudo_eventlog_append(const char *json_line)
 {
-	const char *path = shirudo_eventlog_path();
+	return shirudo_eventlog_append_to(shirudo_eventlog_path(), json_line);
+}
+
+int shirudo_eventlog_append_to(const char *path, const char *json_line)
+{
 	size_t len = strlen(json_line);
 	int fd, rc;
 
@@ -75,14 +86,14 @@ int shirudo_eventlog_would_exceed(unsigned long max_bytes)
 	return cur + SHIRUDO_EVENTLOG_LINE_MAX > max_bytes;
 }
 
-static int read_log(char **out, size_t *out_len)
+static int read_file(const char *path, char **out, size_t *out_len)
 {
 	struct stat st;
 	ssize_t got;
 	char *buf;
 	int fd, rc;
 
-	fd = open(shirudo_eventlog_path(), O_RDONLY | O_CLOEXEC);
+	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return -errno;
 	if (fstat(fd, &st) != 0) {
@@ -111,25 +122,73 @@ static int read_log(char **out, size_t *out_len)
 	return 0;
 }
 
+/* The log and, after it, whatever the initrd phase left pending. */
+static int read_log(char **out, size_t *out_len)
+{
+	size_t base_len = 0, pending_len = 0, off;
+	char *base = NULL, *pending = NULL, *buf;
+	int rc, rc_pending;
+
+	rc = read_file(shirudo_eventlog_path(), &base, &base_len);
+	if (rc && rc != -ENOENT)
+		return rc;
+	rc_pending = read_file(shirudo_eventlog_pending_path(), &pending,
+			       &pending_len);
+	if (rc_pending && rc_pending != -ENOENT) {
+		xfree(base, base_len + 1);
+		return rc_pending;
+	}
+	if (rc && rc_pending)
+		return -ENOENT;
+	if (rc_pending) {
+		*out = base;
+		*out_len = base_len;
+		return 0;
+	}
+	if (rc) {
+		*out = pending;
+		*out_len = pending_len;
+		return 0;
+	}
+	if (base_len + pending_len > SHIRUDO_JSON_MAX_BYTES) {
+		rc = -EFBIG;
+		goto out;
+	}
+	buf = xmalloc(base_len + pending_len + 2);
+	if (!buf) {
+		rc = -ENOMEM;
+		goto out;
+	}
+	memcpy(buf, base, base_len);
+	off = base_len;
+	if (off && buf[off - 1] != '\n')
+		buf[off++] = '\n';
+	memcpy(buf + off, pending, pending_len);
+	off += pending_len;
+	buf[off] = '\0';
+	*out = buf;
+	*out_len = off;
+out:
+	xfree(base, base_len + 1);
+	xfree(pending, pending_len + 1);
+	return rc;
+}
+
 /*
- * Walk this boot's records: every line whose boot_id is the running
- * boot's, from the last "init" line on. The callback learns whether a
- * line is that init so a replay can start over from zero. -ENOENT when
- * no init of this boot exists.
+ * Walk this boot's records in <buf>: every line whose boot_id is the
+ * running boot's, from the last "init" line on. The callback learns
+ * whether a line is that init so a replay can start over from zero.
+ * -ENOENT when no init of this boot exists. Consumes <buf>.
  */
-static int walk_boot(int (*cb)(const char *line, size_t len, bool is_init,
-			       void *ctx), void *ctx)
+static int walk_lines(char *buf, int (*cb)(const char *line, size_t len,
+					   bool is_init, void *ctx), void *ctx)
 {
 	char boot_id[64], line_boot[64], type[32];
-	char *buf = NULL, *line, *save;
 	bool in_boot = false;
-	size_t len = 0;
-	int rc;
+	char *line, *save;
+	int rc = 0;
 
 	shirudo_eventlog_boot_id(boot_id, sizeof(boot_id));
-	rc = read_log(&buf, &len);
-	if (rc)
-		return rc;
 	for (line = strtok_r(buf, "\n", &save); line && !rc;
 	     line = strtok_r(NULL, "\n", &save)) {
 		struct shirudo_json_field f[] = {
@@ -155,10 +214,92 @@ static int walk_boot(int (*cb)(const char *line, size_t len, bool is_init,
 			continue;
 		rc = cb(line, strlen(line), is_init, ctx);
 	}
-	xfree(buf, len + 1);
 	if (!rc && !in_boot)
 		return -ENOENT;
 	return rc;
+}
+
+static int walk_boot(int (*cb)(const char *line, size_t len, bool is_init,
+			       void *ctx), void *ctx)
+{
+	char *buf = NULL;
+	size_t len = 0;
+	int rc;
+
+	rc = read_log(&buf, &len);
+	if (rc)
+		return rc;
+	rc = walk_lines(buf, cb, ctx);
+	xfree(buf, len + 1);
+	return rc;
+}
+
+struct adopt_ctx {
+	const char	*line;
+	size_t		len;
+	bool		found;
+};
+
+static int adopt_seen(const char *line, size_t len, bool is_init, void *ctx)
+{
+	struct adopt_ctx *a = ctx;
+
+	(void)is_init;
+	if (len == a->len && memcmp(line, a->line, len) == 0)
+		a->found = true;
+	return 0;
+}
+
+/* Whether this boot's part of the log already holds <line>. */
+static int log_holds(const char *line, size_t len)
+{
+	struct adopt_ctx a = { .line = line, .len = len };
+	char *buf = NULL;
+	size_t blen = 0;
+	int rc;
+
+	rc = read_file(shirudo_eventlog_path(), &buf, &blen);
+	if (rc == -ENOENT)
+		return 0;
+	if (rc)
+		return rc;
+	rc = walk_lines(buf, adopt_seen, &a);
+	xfree(buf, blen + 1);
+	if (rc && rc != -ENOENT)
+		return rc;
+	return a.found ? 1 : 0;
+}
+
+int shirudo_eventlog_adopt_pending(void)
+{
+	const char *pending = shirudo_eventlog_pending_path();
+	char *buf = NULL, *line, *save;
+	size_t len = 0;
+	int rc;
+
+	rc = read_file(pending, &buf, &len);
+	if (rc == -ENOENT)
+		return 0;
+	if (rc)
+		return rc;
+	for (line = strtok_r(buf, "\n", &save); line && !rc;
+	     line = strtok_r(NULL, "\n", &save)) {
+		if (!*line)
+			continue;
+		rc = log_holds(line, strlen(line));
+		if (rc > 0) {
+			rc = 0;
+			continue;
+		}
+		if (!rc)
+			rc = shirudo_eventlog_append(line);
+	}
+	xfree(buf, len + 1);
+	if (rc)
+		return rc;
+	if (unlink(pending) != 0 && errno != ENOENT)
+		return -errno;
+	return 0;
 }
 
 static int replay_line(const char *line, size_t len, bool is_init, void *ctx)

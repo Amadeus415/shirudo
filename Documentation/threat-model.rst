@@ -60,8 +60,8 @@ PCR 11 holds the ``enter-initrd`` phase, which nothing that runs later
 can bring back.  Staging is what a target gets when ``init`` runs from
 the root file system on a kernel that sealed the bpf keyring empty at
 boot: the certificate sits in a ``shirudo`` keyring under the user
-keyring, sealed and pinned by serial, and the register binds under the
-post-initrd phase value.  Everything below holds in both; where the
+keyring, sealed, and the register binds under the post-initrd phase
+value.  Everything below holds in both; where the
 staging configuration is weaker, the residual risk says so, and the
 verifier can refuse staged evidence outright.
 
@@ -181,13 +181,17 @@ T5  Silent state change
 
 T6  The boot window
     Enforcement is BPF and does not survive a reboot by itself.
-    ``shirudo.service`` runs ``init`` from the initrd, after the
+    ``shirudo-initrd.service`` runs ``init`` from the initrd, after the
     ``enter-initrd`` phase is measured and before the switch to the
-    root file system, where it enrols the certificate in the still open
-    bpf keyring and seals it, re-applies the installed set all or
-    nothing, binds the register and extends it by exactly one event an
-    operator predicts from the certificate and the set.  Until it has
-    run the target is unprotected; see residual risk 7.
+    root file system, where it enrols the initrd's measured copy of the
+    certificate in the still open bpf keyring and seals it, attaches
+    the LSM with its pins under ``/run``, which systemd carries across
+    the switch, re-applies the installed set all or nothing, binds the
+    register and extends it by exactly one event an operator predicts
+    from the certificate and the set.  ``shirudo.service`` then finishes
+    from the root file system: labels and the eventlog record.  Until
+    the initrd run has happened the target is unprotected; see residual
+    risk 7.
 
 T7  The delivery path
     The registry index is a detached CMS signature by the operator's
@@ -283,7 +287,10 @@ Each of these is known, documented and bounded; none is silent.
 
 7.  The boot window before ``init`` has run.  Run from the initrd it
     is the initrd itself, which the measured boot records in PCRs 9 and
-    11 and the verifier pins.  Started from the root file system
+    11 and the verifier pins; PCR 11 carries the initrd phases only on
+    a measured UKI boot, and without them the verifier has PCR 9 alone
+    to tell the initrd binding from a later one.  Started from the root
+    file system
     instead, every process that runs before it is unconstrained, the
     certificate is only staged, and the binding carries the
     post-``leave-initrd`` PCR 11 value, which ``--expect-bind-pcr=11``

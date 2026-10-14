@@ -84,9 +84,10 @@ Binding at boot
 
 ``shirudo init`` is meant to run from the initrd, after
 ``systemd-pcrphase-initrd.service`` has measured ``enter-initrd`` into
-PCR 11 and before the switch to the root file system, which is how the
-shipped unit orders itself; it binds the register after it has
-re-applied the installed set, in this order:
+PCR 11 and before the switch to the root file system, which is how
+``shirudo-initrd.service`` orders itself (the ``initrd`` document);
+it binds the register after it has re-applied the installed set, in
+this order:
 
 1. Read PCRs 9 and 11; the values are ``pcr_before`` and
    ``phase_before``.  Compute both policy branches, the policy digest
@@ -119,9 +120,10 @@ re-applied the installed set, in this order:
    anchor and its digest, the register value and the TPM's reset
    count.
 
-The phase measurements are ``systemd-pcrphase-initrd.service``'s;
-without them PCR 11 never moves and the binding is only as strong as
-the anchor in PCR 9.  Run from the root file system instead, ``init``
+The phase measurements are ``systemd-pcrphase-initrd.service``'s,
+which systemd runs only for a measured UKI boot; without them PCR 11
+never moves, the binding is only as strong as the anchor in PCR 9 and
+``init`` says so.  Run from the root file system instead, ``init``
 binds all the same,
 with the post-initrd PCR 11 value and ``bound_in: root`` on the
 record, and warns; a verifier that pins the ``enter-initrd`` value or

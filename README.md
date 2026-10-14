@@ -77,6 +77,9 @@ development both roles can live on the same node.
   the threats addressed and the residual risks.
 * [The TPM](Documentation/tpm.rst): the per-boot measurement
   register, the signed evidence and its verification.
+* [The initrd](Documentation/initrd.rst): the production configuration,
+  with `init` run from the initrd, and the generator and installer that
+  set it up.
 * [Telemetry](Documentation/telemetry.rst): the OTLP export and how to
   integrate it with collectors.
 * [The .upatch format](Documentation/upatch-spec.rst): the signed

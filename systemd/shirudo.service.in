@@ -1,22 +1,19 @@
-# shirudo reboot-persistence unit.
+# shirudo reboot-persistence unit: the root file system's half.
 #
 # bpffs and the kernel keyrings do not survive a reboot, so the BPF LSM
 # and the loaded upatch set must be re-applied on every boot. This unit
-# re-runs `shirudo init` -- which re-mounts the private bpffs, enrols
-# the cert in the kernel's bpf keyring and seals it, re-attaches bpf2 +
-# seal, re-applies the persisted upatches, binds this boot's measurement
-# register and extends it by one event.
+# runs `shirudo init` as early as a filesystem-dependent service can,
+# inside the sysinit phase.
 #
-# It is meant to run from the initrd, with /var/lib/shirudo and
-# /etc/shirudo reachable at their usual paths: the kernel booted with
-# bpf.keyring_unsealed=1 keeps the bpf keyring open until init seals it,
-# and the register binds while PCR 11 still holds the enter-initrd
-# phase, which no later process can bring back. Included in an initrd
-# it therefore orders after the phase measurement and the TPM setup and
-# before the switch to the root file system; installed in the root file
-# system instead it runs as early as a filesystem-dependent service can,
-# inside the sysinit phase, with the cert staged in the user keyring
-# when the bpf keyring was sealed empty at boot.
+# After an initrd that ran shirudo-initrd.service the keyring is sealed,
+# the LSM is attached with its pins under /run and the register is
+# bound; this run finds all of that, labels the state tree, adopts the
+# record the initrd left under /run into the eventlog and stops. That
+# is the production configuration. Without such an initrd this run does
+# everything itself: the bpf keyring was sealed empty at boot, so the
+# certificate is staged in the user keyring until the next reboot, and
+# the register binds after the initrd, which `status` and the evidence
+# both say.
 #
 # Install: `make install` drops this file; enable with
 #   systemctl enable shirudo.service
@@ -26,9 +23,9 @@
 [Unit]
 Description=shirudo: bring up the BPF LSM and re-apply signed upatches
 DefaultDependencies=no
-After=local-fs.target systemd-pcrphase-initrd.service
-After=systemd-tpm2-setup-early.service systemd-pcrnvdone.service
-Before=sysinit.target shutdown.target initrd-switch-root.target
+After=local-fs.target systemd-tpm2-setup-early.service
+After=systemd-pcrnvdone.service
+Before=sysinit.target shutdown.target
 Conflicts=shutdown.target
 RequiresMountsFor=/var/lib/shirudo
 

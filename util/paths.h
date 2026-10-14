@@ -18,6 +18,8 @@
 #define SHIRUDO_KEYS_DIR_ENV		"SHIRUDO_KEYS_DIR"
 #define SHIRUDO_CERT_FILE		"cert.der"
 #define SHIRUDO_CERT_PATH		SHIRUDO_KEYS_DIR "/" SHIRUDO_CERT_FILE
+/* The initrd's own copy of the certificate, measured with the initrd. */
+#define SHIRUDO_INITRD_CERT_PATH	"/etc/shirudo/" SHIRUDO_CERT_FILE
 #define SHIRUDO_UPATCHES_DIR		SHIRUDO_VAR_LIB "/upatches"
 #define SHIRUDO_INCOMING_DIR		SHIRUDO_VAR_LIB "/incoming"
 #define SHIRUDO_LOCKS_DIR		SHIRUDO_VAR_LIB "/locks"
@@ -30,6 +32,8 @@
  */
 #define SHIRUDO_RUN_DIR			"/run/shirudo"
 #define SHIRUDO_BPFFS_DIR		SHIRUDO_RUN_DIR "/bpffs"
+/* The init record written from the initrd, until the root adopts it. */
+#define SHIRUDO_EVENTLOG_PENDING_PATH	SHIRUDO_RUN_DIR "/eventlog.pending"
 #define SHIRUDO_BPM_ETC_DIR		"/etc/shirudo/bpm"
 #define SHIRUDO_BPM_REGISTRIES_DIR	SHIRUDO_BPM_ETC_DIR "/registries.d"
 #define SHIRUDO_BPM_KEYS_DIR		SHIRUDO_BPM_ETC_DIR "/keys"

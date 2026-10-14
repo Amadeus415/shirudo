@@ -29,12 +29,14 @@
 #include "builtin.h"
 #include "util/bpm_tree.h"
 #include "util/chain.h"
+#include "util/elf_target.h"
 #include "util/config.h"
 #include "util/eventlog.h"
 #include "util/help.h"
 #include "util/json.h"
 #include "util/macros.h"
 #include "util/identity.h"
+#include "util/initrd.h"
 #include "util/keyring.h"
 #include "util/loader.h"
 #include "util/log.h"
@@ -64,14 +66,14 @@ static void print_preflight(const struct shirudo_preflight_result *r)
 	       r->n - r->n_failed, r->n, r->n_failed);
 }
 
-static int read_cert_der(unsigned char **out, size_t *out_sz)
+static int read_der(const char *path, unsigned char **out, size_t *out_sz)
 {
 	unsigned char *buf;
 	struct stat st;
 	ssize_t n;
 	int fd;
 
-	fd = open(SHIRUDO_CERT_PATH, O_RDONLY | O_CLOEXEC);
+	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return -errno;
 	if (fstat(fd, &st) < 0) {
@@ -99,6 +101,11 @@ static int read_cert_der(unsigned char **out, size_t *out_sz)
 	return 0;
 }
 
+static int read_cert_der(unsigned char **out, size_t *out_sz)
+{
+	return read_der(shirudo_cert_path(), out, out_sz);
+}
+
 static void keyring_note_asymmetric(key_serial_t serial, const char *type,
 				    const char *description, void *ud)
 {
@@ -122,6 +129,37 @@ static int keyring_has_cert(key_serial_t ring)
 
 /* Set once init_keyring has chosen the trust anchor for this boot. */
 static bool bpf_keyring_mode;
+
+/* Set when init runs in the initrd, the root file system at /sysroot. */
+static bool initrd_mode;
+
+/*
+ * The initrd enrols its own, measured copy of the certificate. The
+ * root's copy is what every later command reads, so the two differing
+ * means an initrd that was not regenerated after the certificate
+ * changed: worth a warning, not a refusal, since the measured copy is
+ * the one a verifier pins through PCR 11.
+ */
+static void warn_root_cert_differs(const unsigned char *der, size_t der_sz)
+{
+	unsigned char *root = NULL;
+	size_t root_sz = 0;
+	int rc;
+
+	rc = read_der(SHIRUDO_CERT_PATH, &root, &root_sz);
+	if (rc) {
+		pr_warn("initrd: the root file system has no certificate at "
+			"%s (%s); %s is the anchor", SHIRUDO_CERT_PATH,
+			strerror(-rc), SHIRUDO_INITRD_CERT_PATH);
+		return;
+	}
+	if (root_sz != der_sz || memcmp(root, der, der_sz) != 0)
+		pr_warn("initrd: %s differs from the root file system's %s; "
+			"the initrd's copy is the anchor, regenerate the "
+			"initrd after rotating the certificate",
+			SHIRUDO_INITRD_CERT_PATH, SHIRUDO_CERT_PATH);
+	xfree(root, root_sz);
+}
 
 /*
  * The bpf keyring is the trust anchor a signed loader is verified
@@ -194,9 +232,11 @@ static int init_keyring(void)
 
 	rc = read_cert_der(&der, &der_sz);
 	if (rc) {
-		pr_err("read %s: %s", SHIRUDO_CERT_PATH, strerror(-rc));
+		pr_err("read %s: %s", shirudo_cert_path(), strerror(-rc));
 		return rc;
 	}
+	if (initrd_mode)
+		warn_root_cert_differs(der, der_sz);
 	frozen = shirudo_identity_read(&id) == 0;
 
 	ring = shirudo_keyring_bpf_serial();
@@ -401,6 +441,96 @@ static uint32_t kernel_dev_t(dev_t st_dev)
 	return ((uint32_t)major(st_dev) << 20) | (minor(st_dev) & 0xfffffu);
 }
 
+/*
+ * Whether two shirudo binaries come from different builds: by GNU
+ * build ID, which survives the stripping an initrd generator applies,
+ * and by content only when one of them carries no ID.
+ */
+static bool binaries_differ(const char *a, const char *b)
+{
+	uint8_t ida[SHIRUDO_UPATCH_BUILD_ID_MAX], idb[SHIRUDO_UPATCH_BUILD_ID_MAX];
+	unsigned char ba[65536], bb[65536];
+	uint32_t lena = 0, lenb = 0;
+	bool differ = true;
+	ssize_t na, nb;
+	int fa, fb;
+
+	fa = open(a, O_RDONLY | O_CLOEXEC);
+	fb = open(b, O_RDONLY | O_CLOEXEC);
+	if (fa < 0 || fb < 0)
+		goto out;
+	if (shirudo_elf_build_id_fd(fa, ida, &lena) == 0 && lena &&
+	    shirudo_elf_build_id_fd(fb, idb, &lenb) == 0 && lenb) {
+		differ = lena != lenb || memcmp(ida, idb, lena) != 0;
+		goto out;
+	}
+	if (lseek(fa, 0, SEEK_SET) < 0 || lseek(fb, 0, SEEK_SET) < 0)
+		goto out;
+	do {
+		na = read(fa, ba, sizeof(ba));
+		nb = read(fb, bb, sizeof(bb));
+		if (na < 0 || nb < 0 || na != nb || memcmp(ba, bb, (size_t)na))
+			goto out;
+	} while (na > 0);
+	differ = false;
+out:
+	if (fa >= 0)
+		close(fa);
+	if (fb >= 0)
+		close(fb);
+	return differ;
+}
+
+/*
+ * The executables the bpffs guards admit. Normally the running binary
+ * alone: /proc/self/exe resolves to it, and it is what later runs
+ * `upatch unload` and sets the payload xattr on a pin. From the initrd
+ * the running binary is the initrd's copy, which is gone after the
+ * switch to the root file system; the identity that lasts is the
+ * root's binary at the same path, and the initrd's copy is recorded
+ * beside it only for the rest of this init.
+ */
+static int identity_executables(struct shirudo_identity *id)
+{
+	char self[PATH_MAX], root_exe[PATH_MAX];
+	struct stat st;
+	ssize_t n;
+
+	if (stat("/proc/self/exe", &st) != 0) {
+		pr_err("stat /proc/self/exe: %s", strerror(errno));
+		return -errno;
+	}
+	if (!initrd_mode) {
+		id->exe_dev = kernel_dev_t(st.st_dev);
+		id->exe_ino = (uint64_t)st.st_ino;
+		return 0;
+	}
+	id->alt_exe_dev = kernel_dev_t(st.st_dev);
+	id->alt_exe_ino = (uint64_t)st.st_ino;
+
+	n = readlink("/proc/self/exe", self, sizeof(self) - 1);
+	if (n < 0) {
+		pr_err("readlink /proc/self/exe: %s", strerror(errno));
+		return -errno;
+	}
+	self[n] = '\0';
+	if (snprintf(root_exe, sizeof(root_exe), "%s%s", shirudo_sysroot(),
+		     self) >= (int)sizeof(root_exe))
+		return -ENAMETOOLONG;
+	if (stat(root_exe, &st) != 0) {
+		pr_err("initrd: %s: %s; the root file system needs shirudo "
+		       "installed at the path the initrd runs it from",
+		       root_exe, strerror(errno));
+		return -errno;
+	}
+	id->exe_dev = kernel_dev_t(st.st_dev);
+	id->exe_ino = (uint64_t)st.st_ino;
+	if (binaries_differ("/proc/self/exe", root_exe))
+		pr_warn("initrd: %s differs from the initrd's copy of shirudo; "
+			"regenerate the initrd after upgrading", root_exe);
+	return 0;
+}
+
 /* Attach a program and pin its link; *out is NULL on failure. */
 static int attach_pin(struct bpf_program *p, const char *pin,
 		      struct bpf_link **out)
@@ -559,17 +689,13 @@ static int init_lsm(bool attach_filesystem_seal)
 	id.sb_dev = kernel_dev_t(st.st_dev);
 
 	/*
-	 * Record shirudo's own executable identity so the inode_unlink
-	 * hook can tell shirudo's `upatch unload` from an attacker's
-	 * `rm` of a pin. /proc/self/exe resolves to the running binary.
+	 * Record shirudo's executable identity so the inode_unlink hook
+	 * can tell shirudo's `upatch unload` from an attacker's `rm` of a
+	 * pin.
 	 */
-	if (stat("/proc/self/exe", &st) != 0) {
-		err = -errno;
-		pr_err("stat /proc/self/exe: %s", strerror(errno));
+	err = identity_executables(&id);
+	if (err)
 		goto out;
-	}
-	id.exe_dev = kernel_dev_t(st.st_dev);
-	id.exe_ino = (uint64_t)st.st_ino;
 
 	/*
 	 * The trust anchor lsm/bpf_prog_load enforces: only a load the
@@ -1010,7 +1136,24 @@ static int append_init_event(const struct shirudo_measured_upatch *set,
 		       strerror(-e.err));
 		return e.err;
 	}
-	return shirudo_eventlog_append(buf);
+	/*
+	 * From the initrd the record waits under /run for the root file
+	 * system's init: the eventlog is on a root that is read-only here.
+	 */
+	return shirudo_eventlog_append_to(initrd_mode ?
+					  shirudo_eventlog_pending_path() :
+					  shirudo_eventlog_path(), buf);
+}
+
+/* A PCR nothing has extended since the TPM reset. */
+static bool phase_unmeasured(const uint8_t pcr[32])
+{
+	int i;
+
+	for (i = 0; i < 32; i++)
+		if (pcr[i])
+			return false;
+	return true;
 }
 
 /* The upatch tree's projection root at boot, zeros when no tree is kept. */
@@ -1059,7 +1202,8 @@ static int chain_extend_init(struct shirudo_measured_upatch *set, size_t n)
 
 	rc = shirudo_chain_cert_sha256(cert_sha);
 	if (rc) {
-		pr_err("chain: read %s: %s", SHIRUDO_CERT_PATH, strerror(-rc));
+		pr_err("chain: read %s: %s", shirudo_cert_path(),
+		       strerror(-rc));
 		return rc;
 	}
 
@@ -1119,6 +1263,11 @@ static int chain_extend_init(struct shirudo_measured_upatch *set, size_t n)
 		pr_warn("tpm: init ran after the initrd; the register's binding "
 			"can be told from an initrd one by PCR %u",
 			SHIRUDO_CHAIN_PHASE_PCR);
+	else if (phase_unmeasured(info.phase_before))
+		pr_warn("tpm: PCR %u holds no phase measurement; systemd "
+			"measures enter-initrd only for a measured UKI boot, so "
+			"a verifier cannot pin this binding to the initrd by it",
+			SHIRUDO_CHAIN_PHASE_PCR);
 	return 0;
 }
 
@@ -1146,6 +1295,148 @@ static void usage(void)
 	fprintf(stderr, "usage: %s\n", init_help.usage);
 }
 
+/* mkdir -p for a path of plain directories. */
+static int mkdir_parents(const char *path, mode_t mode)
+{
+	char buf[PATH_MAX], *p;
+
+	if (snprintf(buf, sizeof(buf), "%s", path) >= (int)sizeof(buf))
+		return -ENAMETOOLONG;
+	for (p = buf + 1; *p; p++) {
+		if (*p != '/')
+			continue;
+		*p = '\0';
+		if (mkdir(buf, mode) != 0 && errno != EEXIST)
+			return -errno;
+		*p = '/';
+	}
+	if (mkdir(buf, mode) != 0 && errno != EEXIST)
+		return -errno;
+	return 0;
+}
+
+/*
+ * The initrd phase reads the root's state tree: the archived upatches
+ * to restore, the eventlog to continue, the keys to compare. A
+ * recursive bind of <sysroot>/var/lib/shirudo at its usual path keeps
+ * every path the same; it is read-only, so nothing is written there
+ * before the root file system is up, and it is detached when init
+ * leaves. The private bpffs is under /run, which systemd carries
+ * across the switch.
+ */
+static int initrd_enter(void)
+{
+	char src[PATH_MAX];
+	struct stat st;
+	int rc;
+
+	if (snprintf(src, sizeof(src), "%s%s", shirudo_sysroot(),
+		     SHIRUDO_VAR_LIB) >= (int)sizeof(src))
+		return -ENAMETOOLONG;
+	if (stat(src, &st) != 0 || !S_ISDIR(st.st_mode)) {
+		pr_err("initrd: %s is not a directory; the root file system "
+		       "must be mounted at %s with /var on it or mounted "
+		       "there (x-initrd.mount)", src, shirudo_sysroot());
+		return -ENOENT;
+	}
+	rc = mkdir_parents(SHIRUDO_VAR_LIB, 0700);
+	if (rc) {
+		pr_err("initrd: mkdir %s: %s", SHIRUDO_VAR_LIB, strerror(-rc));
+		return rc;
+	}
+	if (mount(src, SHIRUDO_VAR_LIB, NULL, MS_BIND | MS_REC, NULL) != 0) {
+		pr_err("initrd: bind %s at %s: %s", src, SHIRUDO_VAR_LIB,
+		       strerror(errno));
+		return -errno;
+	}
+	if (mount(NULL, SHIRUDO_VAR_LIB, NULL,
+		  MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) != 0) {
+		rc = -errno;
+		pr_err("initrd: make %s read-only: %s", SHIRUDO_VAR_LIB,
+		       strerror(errno));
+		umount2(SHIRUDO_VAR_LIB, MNT_DETACH);
+		return rc;
+	}
+	pr_info("initrd: %s bound read-only at %s", src, SHIRUDO_VAR_LIB);
+	return 0;
+}
+
+static void initrd_leave(void)
+{
+	if (umount2(SHIRUDO_VAR_LIB, MNT_DETACH) != 0)
+		pr_warn("initrd: detach %s: %s", SHIRUDO_VAR_LIB,
+			strerror(errno));
+}
+
+static int run_init(bool no_seal)
+{
+	struct shirudo_measured_upatch *set = NULL;
+	size_t n = 0;
+	int rc;
+
+	rc = init_bpffs();
+	if (rc)
+		return rc;
+	if (!initrd_mode)
+		remove_stale_state();
+
+	rc = init_keyring();
+	if (rc)
+		return rc;
+
+	/*
+	 * Label the binary + the /var/lib/shirudo tree BEFORE init_lsm
+	 * attaches seal, so the bulk setxattr is not gated by seal's own
+	 * inode_setxattr hook, and fold in the record an initrd phase left
+	 * for this boot. The initrd itself writes nothing to the tree: its
+	 * root is read-only, and the root's init does both on its re-run.
+	 */
+	if (initrd_mode) {
+		pr_info("initrd: labels and the eventlog are left to the root "
+			"file system's init");
+	} else {
+		rc = shirudo_seal_label_tree();
+		if (rc)
+			pr_warn("init: seal label-walk incomplete: %s "
+				"(some files may be unsealed)", strerror(-rc));
+		rc = shirudo_eventlog_adopt_pending();
+		if (rc) {
+			pr_err("init: the initrd's record in %s could not be "
+			       "adopted: %s", shirudo_eventlog_pending_path(),
+			       strerror(-rc));
+			return rc;
+		}
+	}
+
+	rc = init_lsm(!no_seal);
+	if (rc)
+		return rc;
+
+	rc = boot_restore(&set, &n);
+	if (rc) {
+		pr_err("init: incomplete -- LSM active, but boot-restore "
+		       "failed; re-run `shirudo init` after fixing the "
+		       "upatch");
+		xfree(set, n * sizeof(*set));
+		return rc;
+	}
+
+	rc = chain_extend_init(set, n);
+	xfree(set, n * sizeof(*set));
+	if (rc) {
+		pr_err("init: incomplete -- LSM active and upatches "
+		       "loaded, but TPM register not advanced");
+		return rc;
+	}
+
+	pr_info("init: complete (LSM active%s%s)",
+		no_seal ? ", filesystem seal skipped" :
+		", bpffs sealed against VFS unlink",
+		initrd_mode ? "; initrd phase, the root file system's init "
+		"adopts the record" : "");
+	return 0;
+}
+
 int cmd_init(int argc, const char **argv)
 {
 	struct shirudo_preflight_result res;
@@ -1169,6 +1460,7 @@ int cmd_init(int argc, const char **argv)
 		}
 	}
 
+	initrd_mode = shirudo_in_initrd();
 	shirudo_preflight_run(&res);
 	print_preflight(&res);
 
@@ -1181,53 +1473,10 @@ int cmd_init(int argc, const char **argv)
 	if (check_only)
 		return 0;
 
-	rc = init_bpffs();
-	if (rc)
+	if (initrd_mode && initrd_enter())
 		return 1;
-	remove_stale_state();
-
-	rc = init_keyring();
-	if (rc)
-		return 1;
-
-	/*
-	 * Label the binary + the /var/lib/shirudo tree
-	 * BEFORE init_lsm attaches seal, so the bulk setxattr is not gated
-	 * by seal's own inode_setxattr hook.
-	 */
-	rc = shirudo_seal_label_tree();
-	if (rc)
-		pr_warn("init: seal label-walk incomplete: %s "
-			"(some files may be unsealed)", strerror(-rc));
-
-	rc = init_lsm(!no_seal);
-	if (rc)
-		return 1;
-
-	{
-		struct shirudo_measured_upatch *set = NULL;
-		size_t n = 0;
-
-		rc = boot_restore(&set, &n);
-		if (rc) {
-			pr_err("init: incomplete -- LSM active, but boot-restore "
-			       "failed; re-run `shirudo init` after fixing the "
-			       "upatch");
-			xfree(set, n * sizeof(*set));
-			return 1;
-		}
-
-		rc = chain_extend_init(set, n);
-		xfree(set, n * sizeof(*set));
-		if (rc) {
-			pr_err("init: incomplete -- LSM active and upatches "
-			       "loaded, but TPM register not advanced");
-			return 1;
-		}
-	}
-
-	pr_info("init: complete (LSM active%s)",
-		no_seal ? ", filesystem seal skipped" :
-		", bpffs sealed against VFS unlink");
-	return 0;
+	rc = run_init(no_seal);
+	if (initrd_mode)
+		initrd_leave();
+	return rc ? 1 : 0;
 }
