@@ -42,6 +42,9 @@
 #ifndef KEY_SPEC_SESSION_KEYRING
 #define KEY_SPEC_SESSION_KEYRING (-3)
 #endif
+#ifndef KEYCTL_RESTRICT_KEYRING
+#define KEYCTL_RESTRICT_KEYRING	29
+#endif
 
 static long sys_add_key(const char *type, const char *desc,
 			const void *payload, size_t plen, key_serial_t ring)
@@ -266,5 +269,30 @@ int shirudo_keyring_list(key_serial_t keyring,
 		cb(serials[i], type, description, ud);
 	}
 	xfree(serials, cap);
+	return 0;
+}
+
+key_serial_t shirudo_keyring_bpf_serial(void)
+{
+	long ret = sys_keyctl(KEYCTL_GET_KEYRING_ID, KEY_SPEC_BPF_KEYRING, 0, 0,
+			      0);
+
+	return ret < 0 ? -errno : (key_serial_t)ret;
+}
+
+key_serial_t shirudo_keyring_bpf_add_cert(const unsigned char *cert,
+					  size_t cert_len)
+{
+	long ret = sys_add_key("asymmetric", NULL, cert, cert_len,
+			       KEY_SPEC_BPF_KEYRING);
+
+	return ret < 0 ? -errno : (key_serial_t)ret;
+}
+
+int shirudo_keyring_bpf_seal(void)
+{
+	/* No restriction type: the keyring rejects every further link. */
+	if (sys_keyctl(KEYCTL_RESTRICT_KEYRING, KEY_SPEC_BPF_KEYRING, 0, 0, 0) < 0)
+		return -errno;
 	return 0;
 }

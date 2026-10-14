@@ -1,19 +1,22 @@
 # shirudo reboot-persistence unit.
 #
-# bpffs and the kernel keyring do not survive a reboot, so the BPF LSM
+# bpffs and the kernel keyrings do not survive a reboot, so the BPF LSM
 # and the loaded upatch set must be re-applied on every boot. This unit
-# re-runs `shirudo init` -- which re-mounts the private bpffs, re-links
-# the cert into the keyring, re-attaches bpf2 + seal, re-applies the
-# persisted upatches, binds this boot's measurement register and
-# extends it by one event.
+# re-runs `shirudo init` -- which re-mounts the private bpffs, enrols
+# the cert in the kernel's bpf keyring and seals it, re-attaches bpf2 +
+# seal, re-applies the persisted upatches, binds this boot's measurement
+# register and extends it by one event.
 #
 # It is meant to run from the initrd, with /var/lib/shirudo and
-# /etc/shirudo reachable at their usual paths: the register binds while
-# PCR 11 still holds the enter-initrd phase, which no later process can
-# bring back. Included in an initrd it therefore orders after the phase
-# measurement and the TPM setup and before the switch to the root file
-# system; installed in the root file system instead it runs as early as
-# a filesystem-dependent service can, inside the sysinit phase.
+# /etc/shirudo reachable at their usual paths: the kernel booted with
+# bpf.keyring_unsealed=1 keeps the bpf keyring open until init seals it,
+# and the register binds while PCR 11 still holds the enter-initrd
+# phase, which no later process can bring back. Included in an initrd
+# it therefore orders after the phase measurement and the TPM setup and
+# before the switch to the root file system; installed in the root file
+# system instead it runs as early as a filesystem-dependent service can,
+# inside the sysinit phase, with the cert staged in the user keyring
+# when the bpf keyring was sealed empty at boot.
 #
 # Install: `make install` drops this file; enable with
 #   systemctl enable shirudo.service
@@ -32,11 +35,11 @@ RequiresMountsFor=/var/lib/shirudo
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Use the normal per-uid kernel keyring, not a service-private one:
-# `shirudo init` links the cert into KEY_SPEC_USER_KEYRING and later
-# target-side commands search it from other processes. systemd's default
-# KeyringMode=private isolates that keyring and the cert add fails with
-# EACCES (no possession).
+# Use the normal per-uid kernel keyring, not a service-private one: when
+# the cert is staged in the user keyring, `shirudo init` links it under
+# KEY_SPEC_USER_KEYRING and later target-side commands search it from
+# other processes. systemd's default KeyringMode=private isolates that
+# keyring and the cert add fails with EACCES (no possession).
 KeyringMode=inherit
 EnvironmentFile=-/etc/shirudo/init.env
 ExecStart=@bindir@/shirudo init $SHIRUDO_INIT_ARGS

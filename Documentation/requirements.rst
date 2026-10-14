@@ -61,8 +61,13 @@ carries the same list for the test VM kernel.
        ``vmlinux.h`` generation, and the ABI check above.
    * - ``CONFIG_KEYS``, ``CONFIG_ASYMMETRIC_KEY_TYPE``,
        ``CONFIG_ASYMMETRIC_PUBLIC_KEY_SUBTYPE``
-     - The sealed ``shirudo`` keyring that holds the operator
-       certificate.
+     - The kernel's bpf keyring (``KEY_SPEC_BPF_KEYRING``), which
+       holds the operator certificate once ``init`` has enrolled it
+       and sealed it.  The kernel is booted with
+       ``bpf.keyring_unsealed=1`` so that the keyring takes the
+       certificate from the initrd; booted without, it is sealed
+       empty and a ``shirudo`` keyring under the user keyring stages
+       the certificate until the next reboot.
    * - ``CONFIG_X509_CERTIFICATE_PARSER``,
        ``CONFIG_PKCS7_MESSAGE_PARSER``,
        ``CONFIG_SYSTEM_DATA_VERIFICATION``
@@ -269,7 +274,11 @@ the private key under ``/var/lib/shirudo/keys/``.
 * A TPM 2.0 exposed as ``/dev/tpmrm0`` (discrete, firmware or cloud
   vTPM), or a software TPM reachable through ``tpm.tcti``.  TPM 1.2 is
   refused; there is no opt-out.
-* ``systemd`` for the boot unit and the timers.
+* ``systemd`` for the boot unit and the timers, and in the initrd
+  ``systemd-pcrphase-initrd.service``, which measures ``enter-initrd``
+  and ``leave-initrd`` into PCR 11: the register's binding closes when
+  the second one lands, so without the phase measurements an initrd
+  binding is no stronger than a late one.
 * x86-64, arm64 or riscv64.
 
 Operator and target may be on different architectures; the artifact

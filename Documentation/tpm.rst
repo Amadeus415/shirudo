@@ -119,7 +119,10 @@ re-applied the installed set, in this order:
    anchor and its digest, the register value and the TPM's reset
    count.
 
-Run from the root file system instead, ``init`` binds all the same,
+The phase measurements are ``systemd-pcrphase-initrd.service``'s;
+without them PCR 11 never moves and the binding is only as strong as
+the anchor in PCR 9.  Run from the root file system instead, ``init``
+binds all the same,
 with the post-initrd PCR 11 value and ``bound_in: root`` on the
 record, and warns; a verifier that pins the ``enter-initrd`` value or
 requires the initrd binding rejects such evidence, which is what tells

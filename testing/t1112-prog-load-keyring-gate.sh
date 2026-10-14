@@ -36,10 +36,10 @@ trap 'rm -rf "$WORK"' EXIT
 # ENOKEY (126) or EKEYREJECTED (129) instead; assert it is neither, so a
 # regression that stopped enforcing the keyring bind cannot pass by
 # accidentally failing the signature.
-test_expect_success 'valid signature, non-shirudo keyring -> denied by lsm/bpf_prog_load (EACCES)' '
+test_expect_success 'valid signature, non-shirudo keyring -> denied (EACCES by the hook, EPERM by the kernel)' '
 	out=$(./$H "$OWN" "$OWN_CERT") &&
-	echo "own-keyring load: $out" &&
-	[ "$out" = "errno=13" ]
+	echo "own-keyring load: $out (keyring mode $(keyring_mode))" &&
+	[ "$out" = "errno=$(foreign_keyring_errno)" ]
 '
 
 test_done

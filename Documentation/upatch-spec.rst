@@ -146,9 +146,9 @@ signature
 A detached CMS/PKCS#7 signature over ``loader_insns || data``, produced
 by the vendored ``util/sign.c`` on the operator.  On the target, the
 kernel's ``bpf_prog_verify_signature()`` checks it against the
-certificate in the sealed ``shirudo`` keyring (the keyring's serial is
-passed as ``attr.keyring_id``) before the verifier and the LSM hooks
-run.
+certificate in the sealed bpf keyring, named as ``attr.keyring_id``
+(while staging, the sealed ``shirudo`` keyring's serial), before the
+verifier and the LSM hooks run.
 
 The container is algorithm-agnostic: the SignerInfo names the key
 algorithm, the signer is identified by subjectKeyIdentifier, and no
@@ -389,7 +389,7 @@ Inspected by ``shirudo upatch info <file>`` (offline: header, sections,
 attach metadata, signed decoders) and listed by ``shirudo upatch list``.
 
 Consumed by ``shirudo upatch load`` and ``unload`` on the target through
-the signature-gated ``BPF_PROG_LOAD`` with the sealed keyring serial.
+the signature-gated ``BPF_PROG_LOAD`` naming the sealed keyring.
 Artifacts reach the target inside a ``.bee`` package pulled from an OCI
 registry, as an upatch-tree artifact, or as a file the administrator
 copied there.

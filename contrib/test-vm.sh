@@ -1297,10 +1297,12 @@ done
 
 log "booting $(basename "$KERNEL") with ${CPUS} CPUs and ${MEMORY} memory"
 
-KERNEL_LSM_ARGS="lsm=landlock,lockdown,yama,integrity,apparmor,bpf"
+# The bpf keyring is left open for init to enrol the certificate and
+# seal it, as a production initrd does.
+KERNEL_LSM_ARGS="lsm=landlock,lockdown,yama,integrity,apparmor,bpf bpf.keyring_unsealed=1"
 KERNEL_NET_DEVICE="virtio-net-pci,netdev=net0"
 if [[ "$KERNEL_PROFILE" == small ]]; then
-	KERNEL_LSM_ARGS="lsm=bpf"
+	KERNEL_LSM_ARGS="lsm=bpf bpf.keyring_unsealed=1"
 fi
 
 QEMU_ARGS=(

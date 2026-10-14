@@ -30,6 +30,9 @@
 #ifndef KEY_SPEC_THREAD_KEYRING
 #define KEY_SPEC_THREAD_KEYRING	(-1)
 #endif
+#ifndef KEY_SPEC_BPF_KEYRING
+#define KEY_SPEC_BPF_KEYRING	(-9)
+#endif
 
 #define PREFLIGHT_CERT_MAX	(1u * 1024u * 1024u)
 
@@ -303,12 +306,20 @@ static void check_keyring(struct shirudo_preflight_result *r)
 
 	ret = syscall(__NR_keyctl, KEYCTL_GET_KEYRING_ID,
 		      (long)KEY_SPEC_USER_KEYRING, 0L, 0L, 0L);
+	if (ret < 0) {
+		fail(r, c,
+		     "keyctl(GET_KEYRING_ID, USER) failed: %s "
+		     "(needs CONFIG_KEYS=y)", strerror(errno));
+		return;
+	}
+	ret = syscall(__NR_keyctl, KEYCTL_GET_KEYRING_ID,
+		      (long)KEY_SPEC_BPF_KEYRING, 0L, 0L, 0L);
 	if (ret >= 0)
 		pass(c);
 	else
 		fail(r, c,
-		     "keyctl(GET_KEYRING_ID, USER) failed: %s "
-		     "(needs CONFIG_KEYS=y)", strerror(errno));
+		     "keyctl(GET_KEYRING_ID, BPF) failed: %s (the kernel has "
+		     "no bpf keyring)", strerror(errno));
 }
 
 static void check_embedded_loader(struct shirudo_preflight_result *r)

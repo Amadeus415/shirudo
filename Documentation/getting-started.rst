@@ -122,8 +122,9 @@ Install the target package, place ``cert.der``, then::
 ``--check-only`` runs the pre-flight and reports every missing
 prerequisite at once without touching the kernel: root, BPF LSM active,
 bpffs mountable, the signed-loader kernel ABI, the certificate present
-and ML-DSA-87, the kernel able to parse it, the keyring usable, the
-embedded enforcement programs present, a TPM 2.0 reachable.  All of
+and ML-DSA-87, the kernel able to parse it, the kernel's bpf keyring
+present, the embedded enforcement programs present, a TPM 2.0
+reachable.  All of
 them are hard; there is no unmeasured mode.  A machine without a TPM
 can use a software one for development::
 
@@ -136,21 +137,25 @@ password needs ``tpm.owner_auth`` (or ``SHIRUDO_TPM_OWNER_AUTH``) to
 define the measurement register, once and again whenever the PCR 9 or
 PCR 11 value at binding changes.
 
-``init`` mounts the private bpffs, installs the certificate into the
-``shirudo`` keyring and seals it, labels ``/var/lib/shirudo`` with the
+``init`` mounts the private bpffs, enrols the certificate in the
+kernel's bpf keyring and seals it, labels ``/var/lib/shirudo`` with the
 sealing xattr, attaches the enforcement programs, re-applies any
 installed upatches, binds this boot's measurement register and extends
 it once.  It is idempotent and safe to re-run.
 
-The production configuration runs it from the initrd: give the initrd
-the target binary, ``shirudo.service``, ``/etc/shirudo`` and
-``/var/lib/shirudo`` at their usual paths, so that ``init`` runs after
-the ``enter-initrd`` phase is measured and before the switch to the
-root file system.  The register then binds while PCR 11 holds a value
-no later process can bring back.  Started from the root file system
-instead, ``init`` binds the register with the post-initrd PCR 11
-value; ``status`` reports ``bound_in``, and the verifier can refuse
-it.  Extra arguments go in
+The production configuration runs it from the initrd.  Boot the kernel
+with ``bpf.keyring_unsealed=1``, which leaves the bpf keyring open
+until ``init`` seals it, and give the initrd the target binary,
+``shirudo.service``, ``/etc/shirudo`` and ``/var/lib/shirudo`` at
+their usual paths, so that ``init`` runs after the ``enter-initrd``
+phase is measured and before the switch to the root file system.  The
+register then binds while PCR 11 holds a value no later process can
+bring back, and the keyring is the kernel's own.  Started from the root
+file system instead, ``init`` finds the bpf keyring sealed empty,
+stages the certificate in a sealed ``shirudo`` user keyring until the
+next reboot, and binds the register with the post-initrd PCR 11
+value; ``status`` reports ``keyring_mode`` and ``bound_in``, and the
+verifier can refuse both.  Extra arguments go in
 ``/etc/shirudo/init.env`` as ``SHIRUDO_INIT_ARGS``.  Enable the unit
 and the timers you want::
 

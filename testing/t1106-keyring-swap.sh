@@ -21,6 +21,12 @@ cd "$(dirname "$0")"
 . ./integration-lib.sh
 target_guard
 
+# With the certificate enrolled in the kernel's bpf keyring there is no
+# user keyring to substitute; t1121 covers that trust anchor.
+[ "$("$SHIRUDO_BIN" status --json 2>/dev/null |
+	python3 -c "import json, sys; print(json.load(sys.stdin).get(\"keyring_mode\", \"\"))")" != bpf ] ||
+	test_skip_all "certificate is enrolled in the bpf keyring"
+
 command -v keyctl >/dev/null 2>&1 || test_skip_all "no keyctl"
 ARCH=$(ls /var/lib/shirudo/upatches/*.upatch 2>/dev/null | head -1)
 [ -n "$ARCH" ] || test_skip_all "no persisted .upatch to attempt loading"

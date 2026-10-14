@@ -141,12 +141,106 @@ static int keyring_has_cert(key_serial_t ring)
 	return found ? 1 : 0;
 }
 
+/*
+ * The keyring the kernel verified a signed loader against, as the
+ * kernel names it in the verdict (enum bpf_sig_keyring) and as the
+ * identity map hands it to lsm/bpf_prog_load.
+ */
+#define SHIRUDO_SIG_KEYRING_USER	4
+#define SHIRUDO_SIG_KEYRING_BPF		5
+
+/* Set once init_keyring has chosen the trust anchor for this boot. */
+static bool bpf_keyring_mode;
+
+/*
+ * The bpf keyring is the trust anchor a signed loader is verified
+ * against once it is sealed. Booted with bpf.keyring_unsealed=1 it
+ * takes keys until the first seal, which is init's job from the initrd:
+ * enrol the certificate, seal, pin the serial. Found sealed, it either
+ * holds the certificate init enrolled earlier this boot (-EEXIST: use
+ * it) or was sealed empty by the kernel at boot (-ENOKEY: the user
+ * keyring stages the certificate until the target reboots into the
+ * production configuration); sealed around someone else's key, it is
+ * refused.
+ */
+static int init_bpf_keyring(key_serial_t ring, const unsigned char *der,
+			    size_t der_sz)
+{
+	key_serial_t key, pinned;
+	int rc;
+
+	key = shirudo_keyring_bpf_add_cert(der, der_sz);
+	if (key >= 0) {
+		rc = shirudo_keyring_bpf_seal();
+		if (rc) {
+			pr_err("bpf keyring: certificate enrolled but the "
+			       "keyring could not be sealed: %s",
+			       strerror(-rc));
+			return rc;
+		}
+		pr_info("bpf keyring serial=%d: certificate enrolled (key "
+			"serial=%d) and sealed", (int)ring, (int)key);
+		pin_keyring_serial(ring);
+		return 0;
+	}
+	if (key != -EPERM && key != -EACCES) {
+		pr_err("bpf keyring: add cert: %s", strerror(-key));
+		if (key == -ENOENT || key == -ENOPKG)
+			pr_err("kernel cannot verify this cert's public-key "
+			       "algorithm (ML-DSA needs CONFIG_CRYPTO_MLDSA=y "
+			       "and CONFIG_CRYPTO_SHA512=y; see "
+			       "Documentation/requirements.rst)");
+		return key;
+	}
+	rc = keyring_has_cert(ring);
+	if (rc < 0) {
+		pr_err("bpf keyring: list: %s", strerror(-rc));
+		return rc;
+	}
+	if (rc == 0)
+		return -ENOKEY;
+	pinned = shirudo_keyring_read_pinned_serial();
+	if (pinned == ring) {
+		pr_info("bpf keyring serial=%d: already enrolled and sealed "
+			"this boot", (int)ring);
+		return -EEXIST;
+	}
+	pr_err("bpf keyring serial=%d is sealed around a certificate shirudo "
+	       "did not enrol this boot (tampered)", (int)ring);
+	return -EKEYREJECTED;
+}
+
 static int init_keyring(void)
 {
 	unsigned char *der = NULL;
 	key_serial_t ring, key;
 	size_t der_sz = 0;
 	int rc;
+
+	ring = shirudo_keyring_bpf_serial();
+	if (ring > 0) {
+		rc = read_cert_der(&der, &der_sz);
+		if (rc) {
+			pr_err("read %s: %s", SHIRUDO_CERT_PATH, strerror(-rc));
+			return rc;
+		}
+		rc = init_bpf_keyring(ring, der, der_sz);
+		xfree(der, der_sz);
+		der = NULL;
+		if (rc == 0 || rc == -EEXIST) {
+			bpf_keyring_mode = true;
+			return 0;
+		}
+		if (rc != -ENOKEY)
+			return rc;
+		pr_warn("bpf keyring serial=%d is sealed empty; staging the "
+			"certificate in the user keyring. Boot with "
+			"bpf.keyring_unsealed=1 and run init from the initrd "
+			"for the production trust anchor", (int)ring);
+	} else {
+		pr_warn("kernel has no bpf keyring (%s); staging the "
+			"certificate in the user keyring", strerror(-ring));
+	}
 
 	/*
 	 * Idempotent only when the existing keyring is readable and contains
@@ -407,6 +501,7 @@ static int init_lsm(bool attach_filesystem_seal)
 		uint32_t	exe_dev;
 		uint64_t	exe_ino;
 		int32_t		keyring_serial;
+		uint32_t	keyring_type;
 	} id = {};
 	/*
 	 * The four mount-lifecycle guards over shirudo's bpffs. Table-driven
@@ -481,16 +576,23 @@ static int init_lsm(bool attach_filesystem_seal)
 
 	/*
 	 * The trust anchor lsm/bpf_prog_load enforces: only a load the
-	 * kernel verified against exactly this sealed keyring is admitted
-	 * from userspace. init_keyring has already linked the cert and
-	 * sealed the keyring, so this resolves the same serial the load
-	 * path passes as keyring_id.
+	 * kernel verified against exactly this sealed keyring, of exactly
+	 * this kind, is admitted from userspace. init_keyring has already
+	 * enrolled the cert and sealed the keyring, so this resolves the
+	 * serial the kernel records for a load that names it as keyring_id.
 	 */
-	keyring = shirudo_keyring_find(SHIRUDO_KEYRING_NAME);
+	if (bpf_keyring_mode) {
+		keyring = shirudo_keyring_bpf_serial();
+		id.keyring_type = SHIRUDO_SIG_KEYRING_BPF;
+	} else {
+		keyring = shirudo_keyring_find(SHIRUDO_KEYRING_NAME);
+		id.keyring_type = SHIRUDO_SIG_KEYRING_USER;
+	}
 	if (keyring < 0) {
 		err = keyring;
-		pr_err("resolve \"%s\" keyring serial: %s",
-		       SHIRUDO_KEYRING_NAME, strerror(-err));
+		pr_err("resolve the %s keyring serial: %s",
+		       bpf_keyring_mode ? "bpf" : "\"shirudo\"",
+		       strerror(-err));
 		goto out;
 	}
 	id.keyring_serial = (int32_t)keyring;

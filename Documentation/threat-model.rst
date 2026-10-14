@@ -29,8 +29,8 @@ but shirudo itself.
 The assets, in the order an attacker would want them:
 
 - the private signing key on the operator;
-- the certificate on the target and the sealed ``shirudo`` keyring it
-  is loaded into;
+- the certificate on the target and the sealed bpf keyring it is
+  enrolled in, or the sealed ``shirudo`` user keyring that stages it;
 - the enforcement links and the identity map pinned in the private
   bpffs: losing them means losing enforcement;
 - the loaded upatches, their pins and the payload xattrs that bind a
@@ -46,9 +46,24 @@ The assets, in the order an attacker would want them:
 
 The target trusted computing base is the kernel, with the BPF LSM
 active and the signed-BPF verification path compiled in, plus shirudo:
-the binary, its two embedded enforcement programs, and the certificate
-in the keyring.  Every other process on the target, including root with
-every capability, is outside the TCB and constrained by it.
+the binary, its two embedded enforcement programs, the certificate in
+the keyring, and the initrd that runs ``init`` before anything else,
+which the measured boot records in PCRs 9 and 11.  Every other process
+on the target, including root with every capability, is outside the
+TCB and constrained by it.
+
+Two configurations exist and ``status`` names them.  In production the
+kernel is booted with ``bpf.keyring_unsealed=1`` and ``init`` runs from
+the initrd: the certificate goes into the kernel's bpf keyring, which
+``init`` seals and nothing can replace, and the register binds while
+PCR 11 holds the ``enter-initrd`` phase, which nothing that runs later
+can bring back.  Staging is what a target gets when ``init`` runs from
+the root file system on a kernel that sealed the bpf keyring empty at
+boot: the certificate sits in a ``shirudo`` keyring under the user
+keyring, sealed and pinned by serial, and the register binds under the
+post-initrd phase value.  Everything below holds in both; where the
+staging configuration is weaker, the residual risk says so, and the
+verifier can refuse staged evidence outright.
 
 The operator TCB is the operator host, clang/LLVM, libbpf and the
 signing key.  An upatch does what its author wrote; shirudo guarantees
@@ -91,14 +106,16 @@ D.  An adversary holding the operator's signing key.  Out of scope:
 T1  Loading unsigned BPF
     ``lsm/bpf`` admits a userspace ``BPF_PROG_LOAD`` only for a
     ``BPF_PROG_TYPE_SYSCALL`` program that carries a signature.  The
-    kernel verifies that signature against the sealed ``shirudo``
-    keyring, whose serial is passed as ``attr.keyring_id``, before the
-    verifier runs, and ``lsm/bpf_prog_load`` then requires the verdict
-    ``BPF_SIG_VERIFIED`` from exactly that keyring serial.  The payload
-    is hash-locked to the loader by ``excl_prog_hash``.  Root without
-    the key gets ``-EACCES`` or ``-ENOKEY``; a certificate planted in
-    any other keyring is ignored, and a foreign-signed artifact fails
-    with ``ENOKEY``.
+    kernel verifies that signature against the sealed bpf keyring
+    named as ``attr.keyring_id`` (or, while the certificate is staged,
+    the sealed ``shirudo`` keyring's serial), before the verifier runs,
+    and ``lsm/bpf_prog_load`` then requires the verdict
+    ``BPF_SIG_VERIFIED`` from exactly that keyring kind and, while
+    staging, that serial (the kernel records none for its own bpf
+    keyring).  The payload is hash-locked to the loader by
+    ``excl_prog_hash``.  Root without the key gets ``-EACCES`` or
+    ``-ENOKEY``; a certificate planted in any other keyring is ignored,
+    and a foreign-signed artifact fails with ``ENOKEY``.
 
 T2  Detaching or replacing enforcement
     ``lsm/bpf`` denies ``LINK_DETACH``, ``LINK_UPDATE``,
@@ -118,10 +135,12 @@ T3  Tampering with shirudo's files and process
     carries the same label, compared by xattr value and never by path.
     Marked shirudo tasks cannot be ptraced or perf-sampled, and the
     process drops dumpability, forbids new privileges and locks
-    sensitive buffers. The keyring is sealed with ``KEYCTL_SETPERM`` so
-    no key can be added or removed for the rest of the boot, and its
-    serial is pinned on disk; a swapped same-name keyring makes every
-    load refuse ``tampered``.
+    sensitive buffers. The bpf keyring is sealed with
+    ``KEYCTL_RESTRICT_KEYRING`` so no key can be linked into it for the
+    rest of the boot, and the kernel then refuses every caller-supplied
+    keyring for signature verification; a staged ``shirudo`` keyring is
+    sealed with ``KEYCTL_SETPERM`` and its serial pinned on disk, so a
+    swapped same-name keyring makes every load refuse ``tampered``.
 
 T4  Substituting artifacts
     The signature covers the loader instructions and data, so the kernel
@@ -162,8 +181,9 @@ T6  The boot window
     Enforcement is BPF and does not survive a reboot by itself.
     ``shirudo.service`` runs ``init`` from the initrd, after the
     ``enter-initrd`` phase is measured and before the switch to the
-    root file system, re-applies the installed set all or nothing,
-    binds the register and extends it by exactly one event an
+    root file system, where it enrols the certificate in the still open
+    bpf keyring and seals it, re-applies the installed set all or
+    nothing, binds the register and extends it by exactly one event an
     operator predicts from the certificate and the set.  Until it has
     run the target is unprotected; see residual risk 7.
 
@@ -250,18 +270,21 @@ Each of these is known, documented and bounded; none is silent.
     measured boot).  ``SHIRUDO_VERSION_ID`` is a skew guard, not an
     integrity check: a malicious binary can lie about it.
 
-6.  Keyring swap degrades to denial of service.  Root can unlink the
-    sealed keyring and create a fake one with the same name; the serial
-    pin turns that into a fail-closed refusal instead of a bypass.  A
-    complete fix needs a kernel kfunc that lets ``lsm/key_permission``
-    identify the keyring.
+6.  While the certificate is staged in the user keyring, a keyring
+    swap degrades to denial of service.  Root can unlink the sealed
+    ``shirudo`` keyring and create a fake one with the same name; the
+    serial pin turns that into a fail-closed refusal instead of a
+    bypass.  The bpf keyring, the production anchor, can be neither
+    unlinked nor substituted, and the kernel refuses every other
+    keyring once it is sealed.
 
 7.  The boot window before ``init`` has run.  Run from the initrd it
     is the initrd itself, which the measured boot records in PCRs 9 and
     11 and the verifier pins.  Started from the root file system
-    instead, every process that runs before it is unconstrained and
-    the binding carries the post-``leave-initrd`` PCR 11 value, which
-    ``--expect-bind-pcr=11`` and ``--require-initrd`` reject.
+    instead, every process that runs before it is unconstrained, the
+    certificate is only staged, and the binding carries the
+    post-``leave-initrd`` PCR 11 value, which ``--expect-bind-pcr=11``
+    and ``--require-initrd`` reject.
 
 8.  Registry withholding and replay.  A hostile registry can serve an
     old signed index, or none; it cannot serve a forged one.  Operators
@@ -277,11 +300,14 @@ Each of these is known, documented and bounded; none is silent.
 
 10. Endorsement key trust.  Credential activation ties the attestation
     key to the endorsement key in the evidence, and the endorsement
-    certificate ties that key to a manufacturer; only ``--ek-ca`` with
-    the manufacturer's issuers checks the certificate, and the operator
-    decides which issuers to trust.  A TPM without a certificate, as
-    virtual TPMs usually are, leaves the endorsement key pinned by its
-    name as presented at enrolment.
+    certificate ties that key to a manufacturer.  ``challenge`` makes
+    no challenge unless the certificate chains to the issuers given
+    with ``--ek-ca``, the key is pinned with ``--ek-name`` from an
+    inventory or a platform's API, or the operator waives the check
+    with ``--trust-presented-ek``, which proves only that the same
+    party answers each time; a TPM without a certificate, as virtual
+    TPMs usually are, needs one of the latter two.  Which issuers to
+    trust is the operator's decision.
 
 11. The anchor shares PCR 9 with the initrd measurements and with
     systemd's ``nvpcr-init`` events and their separator, so ``attest
@@ -308,10 +334,9 @@ NvPCR, so that its name follows the UKI signing key instead of the PCR
 values of each boot and systemd-aware verifiers find it in PCR 9 before
 the separator, and measuring the anchor through ``systemd-pcrextend`` so
 systemd's measurement log explains it (residual risk 11); signed PCR
-policies for the kernel and
-initrd PCRs so a verifier needs no golden values; an in-kernel detach
-so the unload compare runs against signed ``.rodata`` (residual risk
-1); and the keyring kfunc of residual risk 6.
+policies for the kernel and initrd PCRs so a verifier needs no golden
+values; and an in-kernel detach so the unload compare runs against
+signed ``.rodata`` (residual risk 1).
 
 
 6) Out of scope
@@ -333,8 +358,15 @@ so the unload compare runs against signed ``.rodata`` (residual risk
 -----------------------
 
 Keep the signing key on a host with the controls of a certificate
-authority and never on a target.  Treat ``tampered`` as an incident to
-understand, not a condition to retry.  Verify ``shirudo status`` after
+authority and never on a target.  Boot targets with
+``bpf.keyring_unsealed=1`` and run ``init`` from the initrd; a target
+whose ``status`` says ``staging`` has its trust anchor in a user
+keyring and its register bound after the initrd, and a fleet check
+that passes ``--require-initrd`` and ``--expect-bind-pcr=11`` with the
+UKI's ``enter-initrd`` value does not accept it.  Give ``challenge``
+the manufacturer's issuers with ``--ek-ca`` wherever the TPM has a
+certificate.  Treat ``tampered`` as an incident to understand, not a
+condition to retry.  Verify ``shirudo status`` after
 every boot and every load; a target whose register the eventlog cannot
 explain is not healthy just because it is still running.  Record the
 attestation key name when a target is enrolled (``shirudo attest``

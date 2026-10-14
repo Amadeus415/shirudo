@@ -17,16 +17,19 @@
  *                       kernel-recorded verdict is final here. A
  *                       userspace load is admitted only when the kernel
  *                       recorded BPF_SIG_VERIFIED against exactly the
- *                       sealed "shirudo" keyring: sig.verdict must be
- *                       VERIFIED, sig.keyring_type must be USER, and
- *                       sig.keyring_serial must equal the serial init
- *                       froze into the identity map. Everything else --
- *                       unsigned, signed by any other keyring, or
- *                       signed against a substituted same-named keyring
- *                       -- is denied. This is what makes "only
- *                       shirudo-signed BPF loads from userspace" a
- *                       kernel-enforced invariant rather than a
- *                       best-effort keyring_id choice by the caller.
+ *                       keyring init sealed: sig.verdict must be
+ *                       VERIFIED and sig.keyring_type the kind init
+ *                       froze into the identity map, the bpf keyring
+ *                       (the kernel's singleton, recorded without a
+ *                       serial) or a staged user keyring, which
+ *                       sig.keyring_serial must then name by the
+ *                       serial init froze. Everything else -- unsigned,
+ *                       signed by any other keyring, or signed against
+ *                       a substituted same-named keyring -- is denied.
+ *                       This is what makes "only shirudo-signed BPF
+ *                       loads from userspace" a kernel-enforced
+ *                       invariant rather than a best-effort keyring_id
+ *                       choice by the caller.
  *   lsm/inode_unlink -- denies VFS unlink on shirudo's private
  *                       bpffs superblock unless the caller is shirudo
  *                       itself (its exe_file inode matches the
@@ -78,9 +81,9 @@ char _license[] SEC("license") = "Dual BSD/GPL";
 /*
  * Frozen identity record, populated by `shirudo init` before this
  * program attaches: the private bpffs superblock device, the
- * (dev, ino) of shirudo's own executable, and the serial of the
- * sealed "shirudo" keyring (the trust anchor a signed load must have
- * been verified against). Must match the userspace struct in
+ * (dev, ino) of shirudo's own executable, and the serial and kind
+ * (enum bpf_sig_keyring) of the sealed keyring a signed load must have
+ * been verified against. Must match the userspace struct in
  * builtin-init.c byte-for-byte.
  */
 struct shirudo_sb_id {
@@ -88,6 +91,7 @@ struct shirudo_sb_id {
 	__u32	exe_dev;
 	__u64	exe_ino;
 	__s32	keyring_serial;
+	__u32	keyring_type;
 };
 
 struct {
@@ -226,10 +230,21 @@ int BPF_PROG(shirudo_lsm_bpf_prog_load, struct bpf_prog *prog,
 
 	if (verdict != BPF_SIG_VERIFIED)
 		return -EACCES;
-	if (ktype != BPF_SIG_KEYRING_USER)
+	if (ktype != id->keyring_type)
 		return -EACCES;
-	if (serial != id->keyring_serial)
+	/*
+	 * The bpf keyring is the kernel's own singleton, resolved by the
+	 * kernel and recorded without a serial (0) because it is held
+	 * without a reference, so the kind alone names it. A staged user
+	 * keyring is named by the serial init froze, which a same-named
+	 * substitute cannot match.
+	 */
+	if (ktype == BPF_SIG_KEYRING_BPF) {
+		if (serial && serial != id->keyring_serial)
+			return -EACCES;
+	} else if (serial != id->keyring_serial) {
 		return -EACCES;
+	}
 
 	return 0;
 }

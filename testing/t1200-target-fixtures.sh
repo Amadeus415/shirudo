@@ -92,9 +92,9 @@ test_expect_success 'foreign-signed prebuilt fixture is rejected' '
 	{ [ "$cat" = keyring_missing ] || [ "$cat" = signature_rejected ]; }
 '
 
-test_expect_success 'valid non-shirudo keyring fixture is denied by the LSM gate' '
+test_expect_success 'valid non-shirudo keyring fixture is denied' '
 	out=$(./helper/test-signed-load "$OWN" "$OWN_CERT") &&
-	[ "$out" = errno=13 ]
+	[ "$out" = "errno=$(foreign_keyring_errno)" ]
 '
 
 test_expect_success 'prebuilt map fixture exports mixed log and metric maps' '

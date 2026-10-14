@@ -69,4 +69,23 @@ key_serial_t shirudo_keyring_read_pinned_serial(void);
 int shirudo_keyring_list(key_serial_t keyring,
 			 shirudo_keyring_cb cb, void *ud);
 
+/*
+ * The kernel's bpf keyring, the trust anchor a signed loader names with
+ * KEY_SPEC_BPF_KEYRING. Sealed empty at boot unless the kernel was
+ * booted with bpf.keyring_unsealed=1, in which case it takes keys until
+ * userspace seals it; from then on the kernel refuses every
+ * caller-supplied keyring for signature verification.
+ */
+#ifndef KEY_SPEC_BPF_KEYRING
+#define KEY_SPEC_BPF_KEYRING	(-9)
+#endif
+
+/* Its serial, or -errno on a kernel without one. */
+key_serial_t shirudo_keyring_bpf_serial(void);
+/* Enrol a DER certificate; -EPERM once the keyring is sealed. */
+key_serial_t shirudo_keyring_bpf_add_cert(const unsigned char *cert,
+					  size_t cert_len);
+/* Seal it for the rest of the boot: no key can be linked afterwards. */
+int shirudo_keyring_bpf_seal(void);
+
 #endif /* SHIRUDO_KEYRING_H */

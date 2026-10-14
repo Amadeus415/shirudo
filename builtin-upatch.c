@@ -1776,6 +1776,61 @@ static int get_pin_payload(const char *name, uint8_t out[32])
 }
 
 /*
+ * The keyring a signed loader is verified against: the trust anchor
+ * init pinned. Enrolled in the kernel's bpf keyring, that is
+ * KEY_SPEC_BPF_KEYRING, which the kernel sealed for the boot and names
+ * as such in the verdict. Staged in the user keyring, it is the sealed
+ * "shirudo" keyring's own serial rather than KEY_SPEC_USER_KEYRING (-4):
+ * with -4 the kernel's keyring_search recurses through the whole user
+ * keyring (_uid.0), so a root attacker who links their own cert
+ * anywhere in _uid.0 could get BPF they signed accepted. The pinned
+ * serial also catches a same-named "shirudo" keyring substituted for
+ * the sealed one, which a root attacker can do by unlinking the real
+ * one from _uid.0 and linking a fake; the bpf keyring cannot be
+ * substituted. Returns 0 with *keyring set, or -1 with rep filled.
+ */
+static int trust_anchor_keyring(key_serial_t *keyring,
+				struct shirudo_op_report *rep)
+{
+	key_serial_t pinned = shirudo_keyring_read_pinned_serial();
+	key_serial_t bpf_ring = shirudo_keyring_bpf_serial();
+	key_serial_t ring;
+
+	if (bpf_ring > 0 && pinned == bpf_ring) {
+		*keyring = KEY_SPEC_BPF_KEYRING;
+		return 0;
+	}
+	ring = shirudo_keyring_find(SHIRUDO_KEYRING_NAME);
+	if (ring < 0) {
+		pr_err("keyring \"%s\" not found: %s (run `shirudo init`)",
+		       SHIRUDO_KEYRING_NAME, strerror(-ring));
+		rep_fail(rep, "pre_flight", "keyring_missing", -ring,
+			 "shirudo keyring not found");
+		return -1;
+	}
+	if (pinned == -ENOENT) {
+		pr_warn("keyring: no pinned serial at %s; swap detection "
+			"skipped (re-run `shirudo init`)",
+			SHIRUDO_KEYRING_SERIAL_PATH);
+	} else if (pinned < 0) {
+		pr_err("keyring: pinned serial unreadable: %s",
+		       strerror(-pinned));
+		rep_fail(rep, "pre_flight", "tampered", -pinned,
+			 "keyring serial pin unreadable");
+		return -1;
+	} else if (pinned != ring) {
+		pr_err("keyring \"%s\" serial %d != pinned %d -- a same-named "
+		       "keyring was substituted", SHIRUDO_KEYRING_NAME,
+		       (int)ring, (int)pinned);
+		rep_fail(rep, "pre_flight", "tampered", 0,
+			 "keyring serial mismatch (substituted keyring)");
+		return -1;
+	}
+	*keyring = ring;
+	return 0;
+}
+
+/*
  * Load, attach, and pin one signed LOAD upatch. Shared by the
  * operator-facing `shirudo upatch load` and by `shirudo init`
  * boot-restore, so both go through the identical signature-verified
@@ -1835,64 +1890,10 @@ static int upatch_apply(const char *path, bool verify_only,
 		goto out;
 	}
 
-	/*
-	 * Verify the CMS signature against the **sealed "shirudo" keyring
-	 * only**, by passing that keyring's serial as keyring_id rather
-	 * than KEY_SPEC_USER_KEYRING (-4). With -4 the kernel's
-	 * keyring_search recurses through the whole user keyring (_uid.0),
-	 * so a root attacker who links their own cert anywhere in _uid.0
-	 * could get BPF they signed accepted. Scoping to the shirudo
-	 * keyring -- which init sealed read-only, so no cert can be added
-	 * for the boot -- confines the trust anchor to exactly the operator
-	 * cert init linked there, closing that hole. A positive serial is
-	 * accepted: the loading task possesses the keyring (a subkeyring of
-	 * _uid.0) and lookup_user_key only rejects id < 1.
-	 */
-	keyring = shirudo_keyring_find(SHIRUDO_KEYRING_NAME);
-	if (keyring < 0) {
-		pr_err("keyring \"%s\" not found: %s (run `shirudo init`)",
-		       SHIRUDO_KEYRING_NAME, strerror(-keyring));
-		rep_fail(rep, "pre_flight", "keyring_missing", -keyring,
-			 "shirudo keyring not found");
+	/* The keyring the kernel verifies the CMS signature against. */
+	if (trust_anchor_keyring(&keyring, rep)) {
 		rc = 1;
 		goto out;
-	}
-	/* keyring now holds the sealed shirudo keyring's serial. */
-
-	/*
-	 * Swap detection: init pinned the keyring serial under the sealed
-	 * tree. If the resolved-by-name serial no longer matches, a
-	 * same-named "shirudo" keyring was substituted (a root attacker can
-	 * unlink the real one from _uid.0 and link a fake) -- refuse rather
-	 * than verify against an attacker-chosen cert. Absent pin (pre-pin
-	 * init) degrades to a warning, like the payload-xattr check; a
-	 * present-but-bad pin is treated as tampering. The complete fix
-	 * needs an lsm/key_permission hook with a key_ref->key kfunc the
-	 * kernel does not offer yet.
-	 */
-	{
-		key_serial_t pinned = shirudo_keyring_read_pinned_serial();
-
-		if (pinned == -ENOENT) {
-			pr_warn("keyring: no pinned serial at %s; swap "
-				"detection skipped (re-run `shirudo init`)",
-				SHIRUDO_KEYRING_SERIAL_PATH);
-		} else if (pinned < 0) {
-			pr_err("keyring: pinned serial unreadable: %s",
-			       strerror(-pinned));
-			rep_fail(rep, "pre_flight", "tampered", -pinned,
-				 "keyring serial pin unreadable");
-			rc = 1;
-			goto out;
-		} else if (pinned != keyring) {
-			pr_err("keyring \"%s\" serial %d != pinned %d -- a "
-			       "same-named keyring was substituted",
-			       SHIRUDO_KEYRING_NAME, (int)keyring, (int)pinned);
-			rep_fail(rep, "pre_flight", "tampered", 0,
-				 "keyring serial mismatch (substituted keyring)");
-			rc = 1;
-			goto out;
-		}
 	}
 
 	insns = shirudo_upatch_loader(&u);
@@ -2241,8 +2242,9 @@ int shirudo_upatch_apply(const char *path)
 /*
  * Operator-side pre-flight gate (threat-model.rst, pre-flight checks).
  * Runs before any BPF_PROG_LOAD: the live kernel must expose the private
- * signed-loader ABI, the shirudo keyring must exist, the LSM link must still
- * be pinned (enforcing), and -- when the caller supplied --expect-chain --
+ * signed-loader ABI, the trust anchor init pinned must be present, the LSM
+ * link must still be pinned (enforcing), and -- when the caller supplied
+ * --expect-chain --
  * the live register must still match what the operator expects.
  * An ABI mismatch is kernel_abi_unsupported; state mismatches are tampered.
  * No kernel state is touched. This is the optimistic-concurrency / tamper
@@ -2255,6 +2257,7 @@ static int upatch_preflight(const char *expect_chain,
 	uint8_t want[SHIRUDO_CHAIN_DIGEST_LEN], have[SHIRUDO_CHAIN_DIGEST_LEN];
 	char have_hex[2 * SHIRUDO_CHAIN_DIGEST_LEN + 1];
 	char abi_detail[SHIRUDO_KERNEL_ABI_DETAIL_MAX];
+	key_serial_t keyring;
 	int fd, rc;
 
 	rc = shirudo_kernel_abi_check(abi_detail, sizeof(abi_detail));
@@ -2266,11 +2269,8 @@ static int upatch_preflight(const char *expect_chain,
 		return rc;
 	}
 
-	if (shirudo_keyring_find(SHIRUDO_KEYRING_NAME) < 0) {
-		pr_err("upatch load: pre-flight refused (category: tampered, "
-		       "message: keyring_missing) -- run `shirudo init`");
+	if (trust_anchor_keyring(&keyring, rep))
 		return -1;
-	}
 
 	fd = bpf_obj_get(SHIRUDO_LSM_LINK_PIN);
 	if (fd < 0) {

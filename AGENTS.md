@@ -153,6 +153,15 @@ one usually still compiles and passes tests.
   userspace calls are filtered.
 - **The operator never touches the kernel keyring or the TPM; the
   target never touches the private key.**
+- **The bpf keyring is the trust anchor; the user keyring is staging.**
+  `init` enrols the certificate in the kernel's `.bpf` keyring and
+  seals it, which needs the kernel booted with `bpf.keyring_unsealed=1`
+  and `init` run from the initrd; a kernel that sealed it empty at boot
+  makes `init` stage the certificate in a sealed `shirudo` user keyring
+  until the next reboot. A load names the keyring the pin records, and
+  `lsm/bpf_prog_load` admits only the keyring kind `init` froze into
+  the identity map, and for a staged user keyring only the frozen
+  serial (the kernel records none for its own bpf keyring).
 - **The operator is stateless.** It writes only the keypair (`genkey`)
   and the artifacts or reports the caller names. No hidden caches,
   state files, logs or staging directories; `--expect-chain` comes

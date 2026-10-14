@@ -101,3 +101,16 @@ tree_registry_stop() {
 tree_sync() {
 	BPM_OCI_SCHEME=http "$SHIRUDO_BIN" bpm tree sync --report "$1" >/dev/null
 }
+
+# "bpf" once init enrolled the certificate in the kernel's bpf keyring,
+# "user" while it is staged in the user keyring.
+keyring_mode() {
+	"$SHIRUDO_BIN" status --json 2>/dev/null | report_field keyring_mode
+}
+
+# What a load verified against a keyring the caller supplied gets: the
+# kernel refuses the keyring outright (EPERM) when the bpf keyring is the
+# trust anchor, the admission hook denies it (EACCES) while staging.
+foreign_keyring_errno() {
+	[ "$(keyring_mode)" = bpf ] && echo 1 || echo 13
+}

@@ -31,8 +31,8 @@ the operator; it embeds the ``bpf()`` calls that create the maps and
 load the payload program.  The operator CMS-signs the loader
 instructions and data with an ML-DSA-87 key.  The target kernel
 verifies that signature at ``BPF_PROG_LOAD`` against the certificate in
-the sealed ``shirudo`` keyring, before the verifier and before any LSM
-hook runs.  The payload program is hash-locked to the loader
+the sealed bpf keyring, before the verifier and before any LSM hook
+runs.  The payload program is hash-locked to the loader
 (``excl_prog_hash``), so a signature over a few kilobytes of loader
 covers every instruction that ends up attached.
 
@@ -156,15 +156,16 @@ parameterised with the target name and the expected payload digest.
 Load.  ``shirudo upatch load fix.upatch`` on the target:
 
 1. runs the pre-flight: the kernel exposes the signed-loader ABI, the
-   ``shirudo`` keyring exists and its serial equals the pinned one, the
+   keyring ``init`` pinned is there (the bpf keyring, or while staging
+   the ``shirudo`` keyring whose serial equals the pin), the
    enforcement link is pinned, the eventlog has room, the binary's
    version identity matches ``--expect-version-id`` when given, and
    the register is the one ``init`` bound and equals ``--expect-chain``
    when given;
 2. parses and bounds-checks the container;
-3. loads the signed loader with ``BPF_PROG_LOAD``, passing the keyring
-   serial as ``attr.keyring_id``; the kernel verifies the CMS signature
-   here;
+3. loads the signed loader with ``BPF_PROG_LOAD``, naming that keyring
+   as ``attr.keyring_id`` (``KEY_SPEC_BPF_KEYRING``, or the staged
+   keyring's serial); the kernel verifies the CMS signature here;
 4. runs the loader under ``BPF_PROG_TEST_RUN``; it creates the maps and
    loads the payload program, which the kernel checks against the
    loader's ``excl_prog_hash``;
@@ -230,12 +231,14 @@ already-vetted program), and the read-only commands (``OBJ_GET``,
 
 ``lsm/bpf_prog_load`` runs after the kernel's signature check and admits
 a program only when the verdict is ``BPF_SIG_VERIFIED`` and the
-signature was resolved from the user keyring whose serial matches the
-one shirudo froze into its identity map at init.  A certificate planted
+signature was resolved from the keyring whose kind shirudo froze into
+its identity map at init: the kernel's own bpf keyring, which the kernel
+resolves itself and records without a serial, or in staging mode the
+user keyring whose serial was frozen alongside.  A certificate planted
 anywhere else in the caller's keyrings does not count.
 
 bpffs guards.  The identity map (the bpffs ``s_dev``, shirudo's
-executable ``(dev, ino)``, the keyring serial) is written and
+executable ``(dev, ino)``, the keyring kind and serial) is written and
 ``BPF_MAP_FREEZE``'d before any link is created, so userspace cannot
 change it for the rest of the boot.  ``lsm/inode_unlink``,
 ``lsm/inode_setxattr`` and ``lsm/inode_removexattr`` on shirudo's bpffs
@@ -275,24 +278,35 @@ freed memory; the libc allocators are poisoned project-wide.
 ---------------
 
 ``shirudo init`` is idempotent and runs on every boot from
-``systemd/shirudo.service`` (``Type=oneshot``, before ``sysinit.target``,
-``KeyringMode=inherit``, extra arguments from ``/etc/shirudo/init.env``).
-It does, in order:
+``systemd/shirudo.service`` (``Type=oneshot``, ``KeyringMode=inherit``,
+extra arguments from ``/etc/shirudo/init.env``), from the initrd in
+the production configuration: after the ``enter-initrd`` phase is
+measured, before the switch to the root file system, with
+``/etc/shirudo`` and ``/var/lib/shirudo`` at their usual paths.
+Installed in the root file system it runs before ``sysinit.target``
+instead, and the target stays in staging.  It does, in order:
 
 1. the pre-flight: root, BPF LSM active, bpffs mountable, the
    signed-loader kernel ABI, ``cert.der`` present and ML-DSA-87, the
    kernel able to parse that certificate (``CONFIG_CRYPTO_MLDSA``),
-   keyring usable, embedded loaders present, TPM 2.0 reachable.  Every
+   the kernel's bpf keyring present, embedded loaders present, TPM 2.0
+   reachable.  Every
    check is hard; all failures are reported together as
    ``init_prereqs_missing`` and nothing is touched.  ``shirudo init
    --check-only`` stops here;
 2. mounts the private bpffs at ``/var/lib/shirudo/bpffs`` with
    ``mode=0700,nosuid,nodev,noexec``;
 3. removes state left behind by features that no longer exist;
-4. creates the ``shirudo`` keyring in the user keyring, adds
-   ``cert.der``, seals it with ``KEYCTL_SETPERM`` to view, read and
-   search only, and pins its serial in
-   ``/var/lib/shirudo/keyring.serial``; an existing keyring is reused;
+4. enrols ``cert.der`` in the kernel's bpf keyring, seals it with
+   ``KEYCTL_RESTRICT_KEYRING`` so nothing can be linked into it for the
+   rest of the boot, and pins its serial in
+   ``/var/lib/shirudo/keyring.serial``; a keyring already sealed around
+   that pin is reused.  That needs the kernel booted with
+   ``bpf.keyring_unsealed=1`` and ``init`` run from the initrd.  A kernel
+   that sealed the bpf keyring empty at boot makes ``init`` stage the
+   certificate instead: a ``shirudo`` keyring in the user keyring, sealed
+   with ``KEYCTL_SETPERM`` to view, read and search only, its serial
+   pinned, until the next reboot;
 5. labels ``/var/lib/shirudo/`` with ``security.bpf.shirudo``;
 6. loads bpf2 and, unless ``--no-seal``, seal through the signed path,
    freezes the identity map, creates the links and pins each one before
@@ -587,9 +601,6 @@ flight rather than by shirudo code:
 - the signed loader creating the link and pinning it, and detaching
   and unloading in kernel, so the whole lifecycle is signature-covered
   (residual risk 1);
-- a dedicated BPF keyring for signed loaders, sealed empty at boot and
-  enrolled by early userspace under ``bpf.keyring_unsealed=1``, which
-  replaces the user-keyring seal and the serial pin (residual risk 6);
 - BPF in-kernel sockets, so keepalive, status and alerting can be sent
   from kernel context without a userspace timer;
 - xattr getters and setters for dentries, files and kernfs, so
