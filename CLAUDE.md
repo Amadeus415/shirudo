@@ -203,10 +203,12 @@ load-bearing — consult them directly rather than reasoning from memory:
   through a linked library (OpenSSL, libtss2, libbpf,
   raw `syscall()` for keyctl). The core binary never `fork`s and
   never `execve`s any program on either side. **The single
-  exception** is the operator-only `shirudo build` subcommand,
-  which `execv`s a separate `shirudo-build` binary at
-  `$(libexecdir)/shirudo/shirudo-build` (git-style libexec
-  dispatch); `shirudo-build` itself `execv`s `clang`. Neither
+  exception** is the operator-only signing dispatch: `shirudo
+  build`, `shirudo bpm build`, `shirudo bpm push` (signed index)
+  and `shirudo bpm tree append` `execv` a separate `shirudo-build`
+  binary at `$(libexecdir)/shirudo/shirudo-build` (git-style
+  libexec dispatch; `shirudo-build --sign` is the detached-CMS
+  mode); `shirudo-build` itself `execv`s `clang`. Neither
   `shirudo-build` nor `clang` ship to the target — they live
   only in the operator package, so the invariant remains
   absolute on every target-side code path. If a future feature
@@ -222,9 +224,10 @@ load-bearing — consult them directly rather than reasoning from memory:
   After=local-fs.target, Before=sysinit.target) and exits. It sets
   `KeyringMode=inherit` so the cert add into the user keyring is not
   blocked by systemd's private-keyring isolation.
-- **`shirudo build` is the sole subprocess exception, and it's
-  operator-only by physical packaging.** The core `shirudo`
-  binary's `builtin-build.c` resolves the helper in this order:
+- **The `shirudo-build` dispatch is the sole subprocess exception,
+  and it's operator-only by physical packaging.** The core `shirudo`
+  binary (`builtin-build.c`, and `builtin-bpm-build.c` for the bpm
+  commands) resolves the helper in this order:
   `SHIRUDO_BUILD`, the compiled-in `$(libexecdir)/shirudo/shirudo-build`,
   then `shirudo-build` on `$PATH`. The `shirudo-build` binary itself
   `execv`s `clang -target bpf …`. Both `shirudo-build` and

@@ -84,6 +84,9 @@ struct shirudo_tree_state {
 /* Parse the signed tree payload. Unknown JSON fields are ignored. */
 int shirudo_tree_parse(const char *body, size_t len,
 			       struct shirudo_tree_publication *out);
+/* Grow the operations array by one copied operation (publisher side). */
+int shirudo_tree_publication_append(struct shirudo_tree_publication *pub,
+				    const struct shirudo_tree_operation *op);
 void shirudo_tree_publication_free(struct shirudo_tree_publication *pub);
 
 /* Evaluate a publication selector against the running node.  An empty

@@ -17,10 +17,12 @@
 #include <unistd.h>
 
 #include "compile.h"
+#include "io.h"
 #include "log.h"
 #include "malloc.h"
 #include "package.h"
 #include "paths.h"
+#include "sign.h"
 #include "upatch.h"
 #include "vmlinux.h"
 
@@ -29,6 +31,8 @@
 #endif
 
 #define SHIRUDO_SHA256_HEX_LEN	64
+#define SHIRUDO_SIGN_MAX_PAYLOAD	(64u * 1024u * 1024u)
+#define SHIRUDO_SIGN_MAX_SIG		(64u * 1024u)
 
 static void usage(FILE *fp)
 {
@@ -43,6 +47,10 @@ static void usage(FILE *fp)
 		"\n"
 		"  shirudo-build --unload <upatch-name> [-o <output.upatch>]\n"
 		"                [--payload-sha256 <64-hex>]\n"
+		"                [--keys-dir <dir>]\n"
+		"                [--key <signing_key.pem>] [--cert <cert.der>]\n"
+		"\n"
+		"  shirudo-build --sign <payload> -o <signature.der>\n"
 		"                [--keys-dir <dir>]\n"
 		"                [--key <signing_key.pem>] [--cert <cert.der>]\n"
 		"\n"
@@ -66,7 +74,11 @@ static void usage(FILE *fp)
 		"--emit-artifacts: for a .bpf.c input, also keep the compiled\n"
 		"                  .bpf.o next to the .upatch (instead of a temp\n"
 		"                  file that is removed). Reports every emitted\n"
-		"                  path on stdout. A debugging aid.\n",
+		"                  path on stdout. A debugging aid.\n"
+		"--sign: write the detached CMS signature over the whole payload\n"
+		"        file to -o, in the same form as a loader signature. Used\n"
+		"        by `shirudo bpm push` and `shirudo bpm tree append` for\n"
+		"        the repository index and upatch tree publications.\n",
 		SHIRUDO_KEYS_DIR_ENV, SHIRUDO_KEYS_DIR_ENV,
 		SHIRUDO_SIGNING_KEY_PATH, SHIRUDO_KEYS_DIR_ENV,
 		SHIRUDO_CERT_PATH, SHIRUDO_VMLINUX_PATH);
@@ -181,6 +193,84 @@ static int compile_to_temp(const char *source, const char *vmlinux_h,
 	return 0;
 }
 
+/*
+ * Detached CMS over an arbitrary file, for the BPM repository index and
+ * upatch tree publications. Same signer flags as a loader signature, so
+ * the target verifies both with one code path.
+ */
+static int sign_file(const char *payload_path, const char *output,
+		     const char *pkey, const char *cert)
+{
+	struct shirudo_sign_io io = {};
+	unsigned char *payload = NULL;
+	size_t payload_len = 0;
+	struct stat st;
+	ssize_t got;
+	int fd, rc;
+
+	fd = open(payload_path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		pr_err("open %s: %s", payload_path, strerror(errno));
+		return -errno;
+	}
+	if (fstat(fd, &st) || !S_ISREG(st.st_mode) ||
+	    st.st_size > SHIRUDO_SIGN_MAX_PAYLOAD) {
+		close(fd);
+		pr_err("%s: not a regular file under %u bytes", payload_path,
+		       SHIRUDO_SIGN_MAX_PAYLOAD);
+		return -EINVAL;
+	}
+	payload = xmalloc((size_t)st.st_size + 1);
+	if (!payload) {
+		close(fd);
+		return -ENOMEM;
+	}
+	while (payload_len < (size_t)st.st_size) {
+		got = read(fd, payload + payload_len,
+			   (size_t)st.st_size - payload_len);
+		if (got <= 0) {
+			rc = got < 0 ? -errno : -EIO;
+			close(fd);
+			pr_err("read %s: %s", payload_path, strerror(-rc));
+			goto out;
+		}
+		payload_len += (size_t)got;
+	}
+	close(fd);
+
+	io.insns = payload;
+	io.insns_sz = payload_len;
+	io.signature_sz = SHIRUDO_SIGN_MAX_SIG;
+	io.signature = xmalloc(io.signature_sz);
+	if (!io.signature) {
+		rc = -ENOMEM;
+		goto out;
+	}
+	rc = shirudo_cms_sign(&io, pkey, cert);
+	if (rc) {
+		pr_err("sign %s: %s", payload_path, strerror(-rc));
+		goto out;
+	}
+	fd = open(output, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	if (fd < 0) {
+		rc = -errno;
+		pr_err("open %s: %s", output, strerror(-rc));
+		goto out;
+	}
+	rc = shirudo_write_all(fd, io.signature, io.signature_sz);
+	if (close(fd) && !rc)
+		rc = -errno;
+	if (rc) {
+		pr_err("write %s: %s", output, strerror(-rc));
+		unlink(output);
+	}
+out:
+	if (io.signature)
+		xfree(io.signature, SHIRUDO_SIGN_MAX_SIG);
+	xfree(payload, (size_t)st.st_size + 1);
+	return rc;
+}
+
 int main(int argc, char **argv)
 {
 	const char *pkey = SHIRUDO_SIGNING_KEY_PATH;
@@ -192,6 +282,7 @@ int main(int argc, char **argv)
 	const char *extra_cflags = NULL;
 	uint8_t payload_sha256[32] = {};
 	const char *unload_name = NULL;
+	const char *sign_path = NULL;
 	const char *output = NULL;
 	const char *input = NULL;
 	const char *name = NULL;
@@ -235,6 +326,8 @@ int main(int argc, char **argv)
 			extra_cflags = argv[++i];
 		} else if (strcmp(a, "--unload") == 0 && i + 1 < argc) {
 			unload_name = argv[++i];
+		} else if (strcmp(a, "--sign") == 0 && i + 1 < argc) {
+			sign_path = argv[++i];
 		} else if (strcmp(a, "--payload-sha256") == 0 && i + 1 < argc) {
 			payload_sha256_hex = argv[++i];
 		} else if (strcmp(a, "--emit-artifacts") == 0) {
@@ -317,6 +410,18 @@ int main(int argc, char **argv)
 		       cert, strerror(errno));
 		pr_err("run `shirudo genkey` on the operator (or pass --cert).");
 		return 1;
+	}
+
+	if (sign_path) {
+		if (input || unload_name) {
+			pr_err("--sign takes no other input");
+			return 2;
+		}
+		if (!output) {
+			pr_err("--sign requires -o <signature.der>");
+			return 2;
+		}
+		return sign_file(sign_path, output, pkey, cert) ? 1 : 0;
 	}
 
 	if (unload_name) {

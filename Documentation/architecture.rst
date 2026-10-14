@@ -87,10 +87,11 @@ Build and publish
     C source/object (.bpf.c/.bpf.o)
                    |
                    v
-               bpm build
+           shirudo bpm build
                    |
                    v
         compile / gen_loader / sign
+             (shirudo-build)
                    |
                    v
             .upatch artifact(s)
@@ -98,13 +99,20 @@ Build and publish
                    v
       .bee package (contains .upatch)
                    |
-        bpm push <package.bee> oci://...
+    shirudo bpm push <package.bee> oci://...
                    |
                    v
-             OCI repository
+      OCI repository + signed index
+    (shirudo/bpm-index:stable, CMS by
+            shirudo-build --sign)
 
-``gen_loader`` and BPF CMS signing are performed by the operator-side
-builder.
+``gen_loader``, BPF CMS signing and the detached CMS over the repository
+index are performed by the operator-side ``shirudo-build`` helper; the
+core binary dispatches to it and never links the signer. ``bpm push``
+updates the index only when given the signing material (``--keys-dir``
+or ``--index-cert``/``--index-key``); published versions are immutable,
+so an index that already lists the version with different digests is
+refused.
 
 Pull and load
 -------------
@@ -160,8 +168,46 @@ Publications are authenticated by their CMS signature, OCI digests, operation
 digests, and sequence continuity; this version has no global tree-root value.
 The feature is enabled by
 ``/etc/shirudo/bpm/upatch-tree.conf`` and its 60-second timer, while omitting
-that file preserves manual ``shirudo upatch`` loading.  The publication and
-Beefile metadata format is described in ``docs/upatch-tree.md``.
+that file preserves manual ``shirudo upatch`` loading.
+
+Publishing a tree
+~~~~~~~~~~~~~~~~~
+
+Trees are published from a built ``.bee`` by ``shirudo bpm tree append``.
+A ``[[upatches]]`` entry opts in with an ``[upatches.tree]`` table::
+
+    [[upatches]]
+    source = "fix.bpf.c"
+
+    [upatches.tree]
+    id = "fix"                                # must equal the upatch name
+    load_artifact = "upatches/fix.upatch"     # default: load_target
+    unload_artifact = "upatches/fix.unload.upatch"
+
+    [upatches.tree.selector]                  # every list is optional
+    architecture = ["x86_64"]
+    kernel_release_prefix = ["7."]
+    [upatches.tree.selector.kconfig]
+    CONFIG_BPF_LSM = ["y"]
+    [upatches.tree.selector.labels]
+    env = ["prod"]
+
+``shirudo bpm tree append <package.bee> oci://registry/repo [--op add|delete]
+[--reference stable] [--tree-id <id>] [--keys-dir <dir>]`` fetches and
+verifies the current publication (``-ENOENT`` starts generation 1 with the
+package name as tree id), pushes each artifact as an immutable OCI manifest
+tagged ``upatch-<id>-<payload16>``, appends one operation per entry with
+``seq = head + 1``, and republishes the reference with ``generation + 1`` and
+``parent_manifest_digest`` set to the manifest it replaced. The publication
+is ``{"schema":2,"tree_id","generation","parent_manifest_digest"?,"base":
+{"seq"},"operations":[...],"head":{"seq"}}``; each operation is
+``{"seq","op","id","selector","artifact":{"repository","manifest_digest",
+"layer_digest","payload_sha256"},"operation_digest"}`` where
+``operation_digest`` is the SHA-256 of the compact JSON of the same object
+without that field, selector keys and list values sorted. The payload and
+its detached CMS signature are the two layers of the ``stable`` manifest.
+A ``delete`` operation publishes the entry's unload directive and is
+accepted by the target only for an id it loaded from the same tree.
 
 Map export
 ----------

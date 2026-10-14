@@ -13,13 +13,16 @@ named exception." That exception is the `execv` of `clang -target bpf`
 needed to compile `.bpf.c` sources. By physically isolating that
 exception in a separate binary that ships only with the operator
 package, the no-subprocess invariant remains absolute on every
-target-side code path.
+target-side code path. The same binary is the only place the CMS
+signer is linked: `shirudo bpm push` and `shirudo bpm tree append`
+sign the repository index and tree publications through `--sign`.
 
-The core `shirudo` binary's `builtin-build.c` dispatches to the helper using
-this resolution order: the `SHIRUDO_BUILD` environment override, the
-compiled-in `$(libexecdir)/shirudo/shirudo-build` path, then
-`shirudo-build` found on `$PATH`. The last case supports using a checkout's
-locally built binaries without installing them.
+The core `shirudo` binary (`builtin-build.c`, and `builtin-bpm-build.c`
+for the `bpm` commands) dispatches to the helper using this resolution
+order: the `SHIRUDO_BUILD` environment override, the compiled-in
+`$(libexecdir)/shirudo/shirudo-build` path, then `shirudo-build` found
+on `$PATH`. The last case supports using a checkout's locally built
+binaries without installing them.
 
 See `PLAN.md` § "Operator-only binaries and dual install targets" for
 the full rationale.
@@ -31,6 +34,7 @@ the full rationale.
 | `<source.bpf.c>` | compile (execv clang) → gen_loader → sign → package |
 | `<file.bpf.o>` | gen_loader → sign → package (skip compile) |
 | `--unload <name>` | emit signed UNLOAD directive `.upatch` |
+| `--sign <payload> -o <sig.der>` | detached CMS over a file (BPM index, upatch tree) |
 
 ## Install location
 
@@ -45,7 +49,7 @@ first on `PATH`:
 
 ```sh
 PATH="$PWD/tools/shirudo-build:$PWD:$PATH" \
-  bpm build --keys-dir "$HOME/.config/bpm"
+  shirudo bpm build --version 1.0.0 --keys-dir "$HOME/.config/bpm"
 ```
 
 ## Uprobe multi attach points

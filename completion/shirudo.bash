@@ -74,9 +74,18 @@ _shirudo()
 		elif [[ $sub == repo && cword -eq 3 ]]; then
 			COMPREPLY=( $(compgen -W "update" -- "$cur") )
 		elif [[ $sub == tree && cword -eq 3 ]]; then
-			COMPREPLY=( $(compgen -W "sync" -- "$cur") )
+			COMPREPLY=( $(compgen -W "sync append" -- "$cur") )
 		elif [[ $sub == tree && ${COMP_WORDS[3]} == sync && $cur == -* ]]; then
 			COMPREPLY=( $(compgen -W "--dry-run --report=" -- "$cur") )
+		elif [[ $sub == tree && ${COMP_WORDS[3]} == append && $cur == -* ]]; then
+			COMPREPLY=( $(compgen -W "--keys-dir --key --cert --tree-id \
+				--reference --op" -- "$cur") )
+		elif [[ $sub == tree && ${COMP_WORDS[3]} == append ]]; then
+			COMPREPLY=( $(compgen -f -X '!*.bee' -- "$cur") $(compgen -d -- "$cur") )
+		elif [[ $sub == push && $cur == -* ]]; then
+			COMPREPLY=( $(compgen -W "--keys-dir --index-cert --index-key" -- "$cur") )
+		elif [[ $sub == push ]]; then
+			COMPREPLY=( $(compgen -f -X '!*.bee' -- "$cur") $(compgen -d -- "$cur") )
 		elif [[ $sub == key && cword -eq 3 ]]; then
 			local subs
 			subs=$("$bin" bpm key --list-cmds 2>/dev/null)

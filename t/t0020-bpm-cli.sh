@@ -16,7 +16,9 @@ test_expect_success 'bpm exposes native subcommands to completion' '
 	echo "$out" | grep -qx pull &&
 	echo "$out" | grep -qx info &&
 	echo "$out" | grep -qx install &&
-	echo "$out" | grep -qx upgrade
+	echo "$out" | grep -qx upgrade &&
+	echo "$out" | grep -qx list &&
+	echo "$out" | grep -qx uninstall
 '
 
 test_expect_success 'bpm help describes the target package workflow' '
@@ -49,6 +51,20 @@ test_expect_success 'bpm pull without a reference prints OCI usage' '
 
 test_expect_success 'bpm rejects an unknown subcommand' '
 	! $SHIRUDO bpm not-a-command >/dev/null 2>&1
+'
+
+test_expect_success 'bpm tree help covers sync and append' '
+	out=$($SHIRUDO bpm tree --help 2>&1) &&
+	echo "$out" | grep -q "tree sync \[--dry-run\]" &&
+	echo "$out" | grep -q "tree append <package-file> <repository>" &&
+	! $SHIRUDO bpm tree not-a-command >/dev/null 2>&1
+'
+
+test_expect_success 'bpm uninstall and list validate their arguments' '
+	! $SHIRUDO bpm uninstall >/dev/null 2>&1 &&
+	! $SHIRUDO bpm uninstall ../etc >/dev/null 2>&1 &&
+	! $SHIRUDO bpm list extra >/dev/null 2>&1 &&
+	$SHIRUDO bpm uninstall --help 2>&1 | grep -q "usage: shirudo bpm uninstall <package>"
 '
 
 test_expect_success 'bpm parses spaced repository source assignments' '

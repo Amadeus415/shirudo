@@ -101,9 +101,10 @@ Cryptographic algorithms
        (no attributes). The kernel verifies both forms; see
        :doc:`upatch-spec`.
    * - BPM repository index and upatch tree signatures
-     - Detached CMS produced by ``openssl cms -sign -md sha512``
-       (signed attributes, any supported key); verified by the target
-       with libcrypto against the registered certificate.
+     - Detached CMS in the same form as a loader signature, produced
+       by ``shirudo-build --sign`` on behalf of ``shirudo bpm push``
+       and ``shirudo bpm tree append``; verified by the target with
+       libcrypto against the registered certificate.
    * - Payload, program and chain digests
      - SHA-256 (``payload_sha256``, ``excl_prog_hash``, the TPM
        NV-extend chain and event log). Hash functions keep their
@@ -115,9 +116,9 @@ Cryptographic algorithms
    * - TLS (BPM registry fetches, OTLP and S3 export)
      - TLS 1.3 only and hybrid ML-KEM key exchange only
        (X25519MLKEM768, with SecP256r1MLKEM768 as the libcurl
-       fallback), on every libcurl client in both profiles and on the
-       Go publisher. A registry or collector that does not offer a
-       hybrid group cannot be reached; there is no classical fallback.
+       fallback), on every libcurl client in both profiles. A registry
+       or collector that does not offer a hybrid group cannot be
+       reached; there is no classical fallback.
        Server certificates are whatever the registry or collector
        presents.
 
@@ -145,9 +146,9 @@ Build and sign tooling:
   bpftool is needed. ``make update-bpf-deps`` refreshes
   the vendored copy from a kernel tree on demand (``KERNEL_SRC=/path``,
   or a fresh bpf-next clone by default).
-* Go 1.25 or newer for the BPM publisher under ``bpm/``, which calls
-  the ``openssl`` command for CMS signing and therefore shares the
-  OpenSSL 3.5 requirement.
+* Nothing else: BPM packages, repository indexes and upatch trees are
+  built and published by ``shirudo bpm`` through the same
+  ``shirudo-build`` helper, so there is no second toolchain.
 
 The operator never needs a TPM, the kernel keyring, or ``CAP_BPF``;
 only the private key under ``/var/lib/shirudo/keys/``.

@@ -115,8 +115,8 @@ Residual classical cryptography is outside shirudo's trust boundary:
   hybrid ML-KEM key exchange by default; host-key signatures remain
   the operator's policy).
 * TLS to OCI registries and telemetry collectors. shirudo's clients
-  on both profiles and the Go publisher require TLS 1.3 and a hybrid
-  ML-KEM key exchange; a server that offers only classical groups is
+  on both profiles require TLS 1.3 and a hybrid ML-KEM key exchange; a
+  server that offers only classical groups is
   refused rather than downgraded. Server certificates remain classical
   WebPKI, which is an authentication rather than a confidentiality
   exposure. Artifacts fetched this way are still authenticated by their

@@ -55,6 +55,36 @@ the package directory containing ``Beefile`` and fails if either file is
 missing. OCI downloads are checked against the manifest's digest and size
 and removed after inspection. The command does not install or load upatches.
 
+Build and publish a BPM package
+===============================
+
+On the operator, a ``Beefile`` next to the BPF sources describes the
+package; ``shirudo bpm build`` compiles and signs every listed upatch
+through ``shirudo-build`` and writes ``<name>-<version>.bee``:
+
+::
+
+    shirudo bpm build ./pkg --version 1.0.0 --keys-dir /var/lib/shirudo/keys
+    shirudo bpm push ./pkg-1.0.0.bee oci://quay.io/namespace/pkg \
+        --keys-dir /var/lib/shirudo/keys
+
+``push`` uploads the package and its certificate and, with the signing
+material, adds the version to the registry's signed index at
+``shirudo/bpm-index:stable`` that targets consume with ``shirudo bpm
+repo update``. Packages whose Beefile carries ``[upatches.tree]``
+tables can also be appended to a signed upatch tree:
+
+::
+
+    shirudo bpm tree append ./pkg-1.0.0.bee oci://quay.io/namespace/tree \
+        --keys-dir /var/lib/shirudo/keys
+    shirudo bpm tree append ./pkg-1.0.0.bee oci://quay.io/namespace/tree \
+        --keys-dir /var/lib/shirudo/keys --op delete
+
+Both commands sign through ``shirudo-build``, so they exist only where
+the operator package is installed. See ``Documentation/architecture.rst``
+for the tree format.
+
 Initialize a target
 ===================
 
@@ -157,8 +187,12 @@ they run:
 
     ssh user@target sudo shirudo status --include-tpm
     ssh user@target sudo shirudo upatch list
+    ssh user@target sudo shirudo bpm list
     ssh user@target sudo shirudo upatch info --json \
         /tmp/cve-2026-31431.upatch
+
+``shirudo bpm uninstall <package>`` detaches a package's upatches through
+the signed unload directives it shipped and removes it.
 
 For an artifact already loaded on the target:
 

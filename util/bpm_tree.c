@@ -412,6 +412,41 @@ void shirudo_tree_publication_free(struct shirudo_tree_publication *pub)
 	*pub = (struct shirudo_tree_publication){};
 }
 
+static int tree_operations_reserve(struct shirudo_tree_publication *pub)
+{
+	struct shirudo_tree_operation *operations;
+	int old_capacity = pub->operations_capacity;
+	int new_capacity = old_capacity ? old_capacity * 2 : 16;
+
+	if (pub->n_operations >= SHIRUDO_TREE_MAX_OPS)
+		return -E2BIG;
+	if (pub->n_operations < old_capacity)
+		return 0;
+	if (new_capacity > SHIRUDO_TREE_MAX_OPS)
+		new_capacity = SHIRUDO_TREE_MAX_OPS;
+	operations = xreallocarray(pub->operations, (size_t)old_capacity,
+				   (size_t)new_capacity, sizeof(*operations));
+	if (!operations)
+		return -ENOMEM;
+	pub->operations = operations;
+	pub->operations_capacity = new_capacity;
+	return 0;
+}
+
+int shirudo_tree_publication_append(struct shirudo_tree_publication *pub,
+				    const struct shirudo_tree_operation *op)
+{
+	int rc;
+
+	if (!pub || !op)
+		return -EINVAL;
+	rc = tree_operations_reserve(pub);
+	if (rc)
+		return rc;
+	pub->operations[pub->n_operations++] = *op;
+	return 0;
+}
+
 int shirudo_tree_parse(const char *body, size_t len,
 			       struct shirudo_tree_publication *out)
 {
@@ -422,6 +457,7 @@ int shirudo_tree_parse(const char *body, size_t len,
 	bool seen_base = false, seen_base_seq = false;
 	bool seen_operations = false, seen_head = false, seen_head_seq = false;
 	int64_t schema = 0;
+	int rc;
 
 	if (!body || !out || len > SHIRUDO_JSON_MAX_BYTES)
 		return -EINVAL;
@@ -441,6 +477,7 @@ int shirudo_tree_parse(const char *body, size_t len,
 		if (tp_key(&p, key, sizeof(key), &first)) TREE_PARSE_FAIL(-EINVAL);
 		if (!strcmp(key, "schema")) {
 			if (tp_int(&p, &schema)) TREE_PARSE_FAIL(-EINVAL);
+			out->schema = (int)schema;
 			seen_schema = true;
 		} else if (!strcmp(key, "tree_id")) {
 			if (tp_string(&p, out->tree_id, sizeof(out->tree_id))) TREE_PARSE_FAIL(-EINVAL);
@@ -471,23 +508,9 @@ int shirudo_tree_parse(const char *body, size_t len,
 			for (;;) {
 				tp_ws(&p);
 				if (p.p < p.end && *p.p == ']') { p.p++; break; }
-				if (out->n_operations >= SHIRUDO_TREE_MAX_OPS)
-					TREE_PARSE_FAIL(-E2BIG);
-				if (out->n_operations >= out->operations_capacity) {
-					int old_capacity = out->operations_capacity;
-					int new_capacity = old_capacity ? old_capacity * 2 : 16;
-					struct shirudo_tree_operation *operations;
-					if (new_capacity > SHIRUDO_TREE_MAX_OPS)
-						new_capacity = SHIRUDO_TREE_MAX_OPS;
-					operations = xreallocarray(out->operations,
-								   (size_t)old_capacity,
-								   (size_t)new_capacity,
-								   sizeof(*operations));
-					if (!operations)
-						TREE_PARSE_FAIL(-ENOMEM);
-					out->operations = operations;
-					out->operations_capacity = new_capacity;
-				}
+				rc = tree_operations_reserve(out);
+				if (rc)
+					TREE_PARSE_FAIL(rc);
 				if (tp_operation(&p, &out->operations[out->n_operations]))
 					TREE_PARSE_FAIL(-EINVAL);
 				out->n_operations++;

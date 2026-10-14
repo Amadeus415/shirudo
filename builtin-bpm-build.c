@@ -2,10 +2,9 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Operator-side BPM package builder.  The format intentionally mirrors the
- * standalone Go builder: a Beefile describes ordinary files and upatches,
- * shirudo-build creates the signed upatches, and the result is a deterministic
- * gzip-compressed ustar archive.
+ * Operator-side BPM package builder: a Beefile describes ordinary files and
+ * upatches, shirudo-build creates the signed upatches, and the result is a
+ * deterministic gzip-compressed ustar archive.
  */
 
 #include <ctype.h>
@@ -25,6 +24,7 @@
 #include <zlib.h>
 
 #include "builtin.h"
+#include "builtin-bpm-build.h"
 #include "util/crypto.h"
 #include "util/json.h"
 #include "util/paths.h"
@@ -34,39 +34,11 @@
 #define SHIRUDO_LIBEXEC_DIR "/usr/local/libexec/shirudo"
 #endif
 
-#define BPM_BUILD_MAX_ENTRIES 128
 #define BPM_BUILD_MAX_FILE (256u * 1024u * 1024u)
 #define BPM_BUILD_MAX_JSON (256u * 1024u)
 #define BPM_BUILD_MAX_VALUE 1024
 
 extern const char shirudo_version[];
-
-struct bpm_build_file {
-	char source[PATH_MAX];
-	char target[PATH_MAX];
-};
-
-struct bpm_build_upatch {
-	char source[PATH_MAX];
-	char type[16];
-	char load_target[PATH_MAX];
-	char unload_target[PATH_MAX];
-	char load_path[PATH_MAX];
-	char unload_path[PATH_MAX];
-	char name[SHIRUDO_UPATCH_NAME_MAX];
-	char payload_sha256[SHIRUDO_CRYPTO_SHA256_LEN * 2 + 1];
-};
-
-struct bpm_build_spec {
-	char name[128];
-	char scope[PATH_MAX];
-	unsigned char *build_file;
-	size_t build_file_len;
-	struct bpm_build_file files[BPM_BUILD_MAX_ENTRIES];
-	size_t n_files;
-	struct bpm_build_upatch upatches[BPM_BUILD_MAX_ENTRIES];
-	size_t n_upatches;
-};
 
 static void build_copy(char *dst, size_t cap, const char *src)
 {
@@ -217,6 +189,101 @@ static int build_parse_value(const char *value, char *out, size_t cap,
 	return build_parse_string(value, out, cap);
 }
 
+/*
+ * A TOML array of strings: ["a", 'b']. Elements land in out[], at most max
+ * of them; an empty array is rejected since every selector list is a
+ * non-empty set.
+ */
+static int build_parse_string_array(const char *value,
+				    char out[][SHIRUDO_TREE_STRING_MAX],
+				    int max, int *n)
+{
+	char item[BPM_BUILD_MAX_VALUE];
+	const char *p = value;
+	int count = 0;
+
+	while (isspace((unsigned char)*p))
+		p++;
+	if (*p++ != '[')
+		return -EINVAL;
+	for (;;) {
+		const char *start, *end;
+		char quote;
+
+		while (isspace((unsigned char)*p))
+			p++;
+		if (*p == ']')
+			break;
+		if (*p != '"' && *p != '\'')
+			return -EINVAL;
+		quote = *p;
+		start = p++;
+		while (*p && *p != quote) {
+			if (quote == '"' && *p == '\\' && p[1])
+				p++;
+			p++;
+		}
+		if (*p != quote)
+			return -EINVAL;
+		end = ++p;
+		if ((size_t)(end - start) >= sizeof(item))
+			return -ENAMETOOLONG;
+		memcpy(item, start, (size_t)(end - start));
+		item[end - start] = '\0';
+		if (count >= max)
+			return -E2BIG;
+		if (build_parse_string(item, out[count], SHIRUDO_TREE_STRING_MAX))
+			return -EINVAL;
+		count++;
+		while (isspace((unsigned char)*p))
+			p++;
+		if (*p == ',') {
+			p++;
+			continue;
+		}
+		if (*p != ']')
+			return -EINVAL;
+	}
+	p++;
+	while (isspace((unsigned char)*p))
+		p++;
+	if (*p || !count)
+		return -EINVAL;
+	*n = count;
+	return 0;
+}
+
+static int build_parse_selector_kv(const char *key, const char *value,
+				   struct shirudo_tree_selector_kv *kvs,
+				   int max, int *n)
+{
+	struct shirudo_tree_selector_kv *kv;
+	size_t key_len = strlen(key);
+
+	if (key_len >= 2 && (key[0] == '"' || key[0] == '\'') &&
+	    key[key_len - 1] == key[0]) {
+		key++;
+		key_len -= 2;
+	}
+	if (!key_len || key_len >= SHIRUDO_TREE_STRING_MAX)
+		return -EINVAL;
+	for (int i = 0; i < *n; i++)
+		if (strlen(kvs[i].key) == key_len &&
+		    !strncmp(kvs[i].key, key, key_len))
+			return -EEXIST;
+	if (*n >= max)
+		return -E2BIG;
+	kv = &kvs[*n];
+	memcpy(kv->key, key, key_len);
+	kv->key[key_len] = '\0';
+	if (build_parse_string_array(value, kv->values,
+				     SHIRUDO_TREE_MAX_SELECTOR_VALUES,
+				     &kv->n_values))
+		return -EINVAL;
+	(*n)++;
+	return 0;
+}
+
 static bool build_name_ok(const char *s)
 {
 	const unsigned char *p = (const unsigned char *)s;
@@ -271,13 +338,16 @@ static int build_default_targets(struct bpm_build_upatch *u)
 	return 0;
 }
 
-static int build_parse_spec(struct bpm_build_spec *spec)
+static int build_target_ok(const char *target);
+
+static int build_parse_spec(struct bpm_build_spec *spec, char *body)
 {
-	char *body = (char *)spec->build_file;
-	char *save = NULL, *line;
-	char section[32] = {};
+	struct bpm_build_upatch *upatch = NULL, *tree_owner = NULL;
+	struct shirudo_tree_selector *sel = NULL;
 	struct bpm_build_file *file = NULL;
-	struct bpm_build_upatch *upatch = NULL;
+	bool tree_section = false;
+	char *save = NULL, *line;
+	char section[48] = {};
 
 	for (line = strtok_r(body, "\n", &save); line;
 	     line = strtok_r(NULL, "\n", &save)) {
@@ -304,16 +374,37 @@ static int build_parse_spec(struct bpm_build_spec *spec)
 				memmove(section, s, strlen(s) + 1);
 			file = NULL;
 			upatch = NULL;
+			tree_section = !array &&
+				(!strcmp(section, "upatches.tree") ||
+				 !strcmp(section, "upatches.tree.selector") ||
+				 !strcmp(section, "upatches.tree.selector.kconfig") ||
+				 !strcmp(section, "upatches.tree.selector.labels"));
 			if (array && !strcmp(section, "files")) {
 				if (spec->n_files >= BPM_BUILD_MAX_ENTRIES)
 					return -E2BIG;
 				file = &spec->files[spec->n_files++];
+				tree_owner = NULL;
 			} else if (array && !strcmp(section, "upatches")) {
 				if (spec->n_upatches >= BPM_BUILD_MAX_ENTRIES)
 					return -E2BIG;
 				upatch = &spec->upatches[spec->n_upatches++];
+				tree_owner = upatch;
 			} else if (array) {
 				return -EINVAL;
+			} else if (tree_section) {
+				/* The tree tables qualify the preceding [[upatches]]. */
+				if (!tree_owner)
+					return -EINVAL;
+				tree_owner->tree.present = true;
+				if (!tree_owner->tree.selector) {
+					tree_owner->tree.selector =
+						calloc(1, sizeof(*tree_owner->tree.selector));
+					if (!tree_owner->tree.selector)
+						return -ENOMEM;
+				}
+				sel = tree_owner->tree.selector;
+			} else {
+				tree_owner = NULL;
 			}
 			continue;
 		}
@@ -359,6 +450,47 @@ static int build_parse_spec(struct bpm_build_spec *spec)
 			else return -EINVAL;
 			if (build_parse_string(value, dst, cap))
 				return -EINVAL;
+		} else if (tree_section && !strcmp(section, "upatches.tree")) {
+			struct bpm_build_tree *t = &tree_owner->tree;
+			char *dst = NULL;
+			size_t cap = 0;
+
+			/* Unknown tree keys are additive metadata for newer publishers. */
+			if (!strcmp(key, "id")) { dst = t->id; cap = sizeof(t->id); }
+			else if (!strcmp(key, "load_artifact")) { dst = t->load_artifact; cap = sizeof(t->load_artifact); }
+			else if (!strcmp(key, "unload_artifact")) { dst = t->unload_artifact; cap = sizeof(t->unload_artifact); }
+			else continue;
+			if (build_parse_string(value, dst, cap))
+				return -EINVAL;
+		} else if (tree_section && !strcmp(section, "upatches.tree.selector")) {
+			char (*dst)[SHIRUDO_TREE_STRING_MAX];
+			int *n;
+
+			if (!strcmp(key, "kernel_release_prefix")) {
+				dst = sel->kernel_release_prefix;
+				n = &sel->n_kernel_release_prefix;
+			} else if (!strcmp(key, "kernel_build_id")) {
+				dst = sel->kernel_build_id;
+				n = &sel->n_kernel_build_id;
+			} else if (!strcmp(key, "architecture")) {
+				dst = sel->architecture;
+				n = &sel->n_architecture;
+			} else {
+				continue;
+			}
+			if (*n || build_parse_string_array(value, dst,
+					SHIRUDO_TREE_MAX_SELECTOR_VALUES, n))
+				return -EINVAL;
+		} else if (tree_section && !strcmp(section, "upatches.tree.selector.kconfig")) {
+			if (build_parse_selector_kv(key, value, sel->kconfig,
+						    SHIRUDO_TREE_MAX_KCONFIG,
+						    &sel->n_kconfig))
+				return -EINVAL;
+		} else if (tree_section) {
+			if (build_parse_selector_kv(key, value, sel->labels,
+						    SHIRUDO_TREE_MAX_LABELS,
+						    &sel->n_labels))
+				return -EINVAL;
 		}
 	}
 	if (!build_name_ok(spec->name))
@@ -382,8 +514,57 @@ static int build_parse_spec(struct bpm_build_spec *spec)
 			*p = (char)tolower((unsigned char)*p);
 		if (strcmp(u->type, "bpf") || build_default_targets(u))
 			return -EINVAL;
+		if (!u->tree.present)
+			continue;
+		if (!u->tree.id[0] || !shirudo_upatch_name_valid(u->tree.id))
+			return -EINVAL;
+		if (!u->tree.load_artifact[0])
+			build_copy(u->tree.load_artifact, sizeof(u->tree.load_artifact),
+				   u->load_target);
+		if (!u->tree.unload_artifact[0])
+			build_copy(u->tree.unload_artifact,
+				   sizeof(u->tree.unload_artifact), u->unload_target);
+		if (build_target_ok(u->tree.load_artifact) ||
+		    build_target_ok(u->tree.unload_artifact))
+			return -EINVAL;
 	}
 	return 0;
+}
+
+int bpm_build_parse_beefile(const unsigned char *body, size_t len,
+			    struct bpm_build_spec *spec)
+{
+	unsigned char *scratch;
+	int rc;
+
+	if (!body || !spec || memchr(body, '\0', len))
+		return -EINVAL;
+	spec->build_file = malloc(len + 1);
+	scratch = malloc(len + 1);
+	if (!spec->build_file || !scratch) {
+		free(scratch);
+		free(spec->build_file);
+		spec->build_file = NULL;
+		return -ENOMEM;
+	}
+	memcpy(spec->build_file, body, len);
+	spec->build_file[len] = '\0';
+	spec->build_file_len = len;
+	memcpy(scratch, body, len);
+	scratch[len] = '\0';
+	rc = build_parse_spec(spec, (char *)scratch);
+	free(scratch);
+	return rc;
+}
+
+void bpm_build_spec_free(struct bpm_build_spec *spec)
+{
+	if (!spec)
+		return;
+	for (size_t i = 0; i < spec->n_upatches; i++)
+		free(spec->upatches[i].tree.selector);
+	free(spec->build_file);
+	free(spec);
 }
 
 static bool build_within(const char *dir, const char *path)
@@ -493,7 +674,7 @@ static int build_entry_name(char *out, size_t cap, const char *top,
 	return 0;
 }
 
-static const char *build_helper(void)
+const char *bpm_build_helper(void)
 {
 	const char *override = getenv("SHIRUDO_BUILD");
 
@@ -504,38 +685,44 @@ static const char *build_helper(void)
 	return "shirudo-build";
 }
 
-static int build_run_helper(const char *workdir, const char *keys_dir,
-				const char *source, const char *output,
-				const char *unload_name, const char *payload)
+bool bpm_build_helper_available(void)
 {
-	const char *helper = build_helper();
-	char *argv[16];
-	pid_t pid;
-	int n = 0, status;
+	const char *helper = bpm_build_helper();
+	const char *path;
 
-	if (unload_name) {
-		argv[n++] = (char *)helper;
-		argv[n++] = (char *)"--unload";
-		argv[n++] = (char *)unload_name;
-	} else {
-		argv[n++] = (char *)helper;
-		argv[n++] = (char *)source;
+	if (strchr(helper, '/'))
+		return !access(helper, X_OK);
+	for (path = getenv("PATH"); path && *path; path = *path ? path + 1 : path) {
+		const char *end = strchr(path, ':');
+		char candidate[PATH_MAX];
+		size_t len;
+
+		if (!end)
+			end = path + strlen(path);
+		len = (size_t)(end - path);
+		if (len && len + 1 + strlen(helper) < sizeof(candidate)) {
+			memcpy(candidate, path, len);
+			candidate[len] = '/';
+			strcpy(candidate + len + 1, helper);
+			if (!access(candidate, X_OK))
+				return true;
+		}
+		path = end;
 	}
-	argv[n++] = (char *)"-o";
-	argv[n++] = (char *)output;
-	argv[n++] = (char *)"--keys-dir";
-	argv[n++] = (char *)keys_dir;
-	if (unload_name) {
-		argv[n++] = (char *)"--payload-sha256";
-		argv[n++] = (char *)payload;
-	}
-	argv[n] = NULL;
+	return false;
+}
+
+int bpm_build_run_helper(const char *workdir, char *const argv[])
+{
+	const char *helper = bpm_build_helper();
+	pid_t pid;
+	int status;
 
 	pid = fork();
 	if (pid < 0)
 		return -errno;
 	if (!pid) {
-		if (chdir(workdir))
+		if (workdir && chdir(workdir))
 			_exit(127);
 		if (strchr(helper, '/'))
 			execv(helper, argv);
@@ -548,6 +735,32 @@ static int build_run_helper(const char *workdir, const char *keys_dir,
 	if (!WIFEXITED(status) || WEXITSTATUS(status))
 		return -EIO;
 	return 0;
+}
+
+static int build_run_helper(const char *workdir, const char *keys_dir,
+				const char *source, const char *output,
+				const char *unload_name, const char *payload)
+{
+	char *argv[16];
+	int n = 0;
+
+	argv[n++] = (char *)bpm_build_helper();
+	if (unload_name) {
+		argv[n++] = (char *)"--unload";
+		argv[n++] = (char *)unload_name;
+	} else {
+		argv[n++] = (char *)source;
+	}
+	argv[n++] = (char *)"-o";
+	argv[n++] = (char *)output;
+	argv[n++] = (char *)"--keys-dir";
+	argv[n++] = (char *)keys_dir;
+	if (unload_name) {
+		argv[n++] = (char *)"--payload-sha256";
+		argv[n++] = (char *)payload;
+	}
+	argv[n] = NULL;
+	return bpm_build_run_helper(workdir, argv);
 }
 
 static void build_hex(const unsigned char *in, char *out, size_t n)
@@ -635,7 +848,6 @@ static int build_environment(const struct bpm_build_spec *spec,
 	shirudo_json_obj_close(&e);
 	shirudo_json_kv_string(&e, "os", un.sysname);
 	shirudo_json_kv_string(&e, "arch", un.machine);
-	shirudo_json_kv_string(&e, "go_version", "n/a");
 	shirudo_json_kv_string(&e, "bpm_version", shirudo_version);
 	shirudo_json_obj_open_key(&e, "shirudo");
 	shirudo_json_kv_string(&e, "path", self);
@@ -853,12 +1065,13 @@ int cmd_bpm_build(int argc, const char **argv)
 {
 	const char *context = ".", *file_arg = NULL, *version = NULL, *keys_arg = NULL;
 	char build_file[PATH_MAX], resolved_file[PATH_MAX], keys_dir[PATH_MAX];
-	struct bpm_build_spec spec = {};
-	struct shirudo_cert cert = {};
-	unsigned char digest[SHIRUDO_CRYPTO_SHA256_LEN];
 	char fingerprint[SHIRUDO_CRYPTO_SHA256_LEN * 2 + 1];
-	unsigned char *original_build_file;
+	unsigned char digest[SHIRUDO_CRYPTO_SHA256_LEN];
+	struct shirudo_cert cert = {};
+	struct bpm_build_spec *spec;
+	unsigned char *body = NULL;
 	int positional = 0, rc;
+	size_t body_len = 0;
 
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "-f") || !strcmp(argv[i], "--file")) {
@@ -899,29 +1112,25 @@ int cmd_bpm_build(int argc, const char **argv)
 		return -errno;
 	if (strlen(resolved_file) >= sizeof(resolved_file))
 		return -ENAMETOOLONG;
-	build_copy(spec.scope, sizeof(spec.scope), resolved_file);
+	spec = calloc(1, sizeof(*spec));
+	if (!spec)
+		return -ENOMEM;
+	build_copy(spec->scope, sizeof(spec->scope), resolved_file);
 	{
-		char *slash = strrchr(spec.scope, '/');
+		char *slash = strrchr(spec->scope, '/');
 
-		if (!slash)
-			return -EINVAL;
+		if (!slash) {
+			rc = -EINVAL;
+			goto out;
+		}
 		*slash = '\0';
 	}
-	rc = build_read_file(resolved_file, &spec.build_file, &spec.build_file_len,
-			     BPM_BUILD_MAX_FILE);
+	rc = build_read_file(resolved_file, &body, &body_len, BPM_BUILD_MAX_FILE);
 	if (rc)
-		return rc;
-	original_build_file = malloc(spec.build_file_len + 1);
-	if (!original_build_file) {
-		free(spec.build_file);
-		return -ENOMEM;
-	}
-	memcpy(original_build_file, spec.build_file, spec.build_file_len + 1);
-	rc = build_parse_spec(&spec);
-	free(spec.build_file);
-	spec.build_file = original_build_file;
+		goto out;
+	rc = bpm_build_parse_beefile(body, body_len, spec);
 	if (!rc)
-		rc = build_validate(&spec);
+		rc = build_validate(spec);
 	if (rc)
 		goto out;
 	if (build_join(build_file, sizeof(build_file), keys_dir, SHIRUDO_CERT_FILE) ||
@@ -933,12 +1142,13 @@ int cmd_bpm_build(int argc, const char **argv)
 	if (rc)
 		goto out_cert;
 	build_hex(digest, fingerprint, sizeof(digest));
-	rc = build_upatches(&spec, keys_dir);
+	rc = build_upatches(spec, keys_dir);
 	if (!rc)
-		rc = build_archive(&spec, version, keys_dir, fingerprint);
+		rc = build_archive(spec, version, keys_dir, fingerprint);
 out_cert:
 	shirudo_cert_free(&cert);
 out:
-	free(spec.build_file);
+	free(body);
+	bpm_build_spec_free(spec);
 	return rc;
 }
