@@ -70,3 +70,6 @@ util/version_id.c
 /vendor/libbpf/bpf/*.d
 /vendor/libbpf/libbpf.a
 /tools/gen-vmlinux-h/gen-vmlinux-h
+
+# rendered documentation from make html-docs
+/Documentation/output/

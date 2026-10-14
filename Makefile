@@ -50,7 +50,7 @@ export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdi
        SHIRUDO_TARGET_STATIC_LIBDIR
 export VM_SSH_COMMAND
 
-.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build update-bpf-deps test-helpers linux-obs-ipv4-shields bundle test-vm-bundle kernel bpf-next kernel-small vm vm-small test-vm-small-bundle vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
+.PHONY: all help html-docs target target-deps target-deps-clean shirudo-target target-config shirudo-build update-bpf-deps test-helpers linux-obs-ipv4-shields bundle test-vm-bundle kernel bpf-next kernel-small vm vm-small test-vm-small-bundle vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg binrpm-pkg bintar-pkg clean \
         distclean test config
 
@@ -179,6 +179,9 @@ shirudo make targets (run from the repo root):
     make test-op           build the operator tools, then run only the
                            host/operator-side TAP suite under t/; safe without
                            root, LSM, or a target kernel
+    make html-docs         render Documentation/*.rst with docutils in strict
+                           mode into Documentation/output/ (needs rst2html
+                           from python3-docutils); CI runs it on every push
     make test              run the full pipeline: bundle, host checks, and
                            target-side VM tests
     make test-tgt          boot a prepared target VM and run the complete
@@ -285,6 +288,31 @@ export HELP_TEXT
 
 help:
 	@printf '%s\n' "$$HELP_TEXT"
+
+# Render every document with docutils and fail on anything it reports, so a
+# Sphinx-only role, a duplicate link target or a mis-parsed table breaks the
+# build rather than the rendered page. coding-style.rst is the kernel's text
+# verbatim; its restarted enumerated list is an informational note that is not
+# ours to fix, so that one file halts at warnings instead.
+RST2HTML ?= rst2html
+DOCS_HTML_DIR ?= Documentation/output
+DOCS_RST := $(sort $(wildcard Documentation/*.rst))
+
+html-docs:
+	$(Q)command -v $(RST2HTML) >/dev/null 2>&1 || { \
+	    printf 'shirudo: %s not found; install python3-docutils\n' '$(RST2HTML)' >&2; \
+	    exit 1; }
+	$(Q)mkdir -p $(DOCS_HTML_DIR)
+	$(Q)for f in $(DOCS_RST); do \
+	    out=$(DOCS_HTML_DIR)/$$(basename $$f .rst).html; \
+	    case $$f in \
+	    Documentation/coding-style.rst) halt=--halt=warning ;; \
+	    *) halt=--strict ;; \
+	    esac; \
+	    printf '  HTML    %s\n' "$$out"; \
+	    $(RST2HTML) $$halt --no-generator "$$f" > "$$out" || { \
+	        rm -f "$$out"; exit 1; }; \
+	done
 
 shirudo-build: config
 	+$(Q)$(MAKE) -f Makefile.shirudo shirudo-build
@@ -720,6 +748,7 @@ test:
 	+$(Q)$(MAKE) test-tgt
 
 clean:
+	$(Q)rm -rf $(DOCS_HTML_DIR)
 	+$(Q)set -eu; \
 		bundle_dir="$(abspath $(TEST_VM_BUNDLE_DIR))"; \
 		mkdir -p "$$(dirname "$$bundle_dir")"; \

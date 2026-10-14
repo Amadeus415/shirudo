@@ -191,6 +191,8 @@ Before sending
 * Build both profiles and the helper (``make``, ``make shirudo-build``)
   and run ``make test-op``; run ``make test-tgt`` when the change
   touches target-side behaviour.
+* Run ``make html-docs`` when the change touches ``Documentation/``;
+  every document must render clean under docutils' strict mode.
 * Keep each commit to one logical change that builds and passes on its
   own, so the history bisects.
 * Read `threat-model <threat-model.rst>`__ before changing anything on a

@@ -214,6 +214,9 @@ one usually still compiles and passes tests.
 - `make test-op` runs the host-side suite (`t/t0*`), no root needed;
   `make test-tgt` runs the target suite in the QEMU/swtpm VM
   (`make help` lists the VM targets and variables).
+- `make html-docs` renders `Documentation/*.rst` with docutils in strict
+  mode into `Documentation/output/`; CI runs it on every push, so run it
+  after touching any document (python3-docutils provides `rst2html`).
 - `make bindeb-pkg`, `make binrpm-pkg` and `make bintar-pkg` build the
   distribution packages. The target package is static apart from glibc
   and portable; the operator package links the host's shared libraries
