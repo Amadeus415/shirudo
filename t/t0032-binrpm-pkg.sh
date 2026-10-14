@@ -132,7 +132,8 @@ test_expect_success 'buildrpm.sh rejects a dash in version or release and an unk
 '
 
 test_expect_success 'make binrpm-pkg stages both roles and runs buildrpm.sh for each' '
-	(cd .. && make -n binrpm-pkg RPM_RAW_VERSION=v1.2.3-5-gabc123 >"$WORK/plan" 2>&1) &&
+	(cd .. && make -n binrpm-pkg TARGET_DEPS_PREBUILT=1 \
+		RPM_RAW_VERSION=v1.2.3-5-gabc123 >"$WORK/plan" 2>&1) &&
 	grep -q "install-target" "$WORK/plan" &&
 	grep -q "install-operator" "$WORK/plan" &&
 	grep -q "buildrpm.sh target " "$WORK/plan" &&
@@ -148,7 +149,8 @@ test_expect_success 'PKG_ROLES=operator leaves the target package and its static
 	! grep -q "buildrpm.sh target" "$WORK/plan-op" &&
 	grep -q "buildrpm.sh operator" "$WORK/plan-op" &&
 	grep -q "shirudo-build" "$WORK/plan-op" &&
-	(cd .. && make -n bindeb-pkg PKG_ROLES=target >"$WORK/plan-deb" 2>&1) &&
+	(cd .. && make -n bindeb-pkg PKG_ROLES=target TARGET_DEPS_PREBUILT=1 \
+		>"$WORK/plan-deb" 2>&1) &&
 	grep -q "install-target" "$WORK/plan-deb" &&
 	! grep -q "install-operator" "$WORK/plan-deb" &&
 	! grep -q "builddeb.sh operator" "$WORK/plan-deb"
