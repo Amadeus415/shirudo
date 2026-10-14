@@ -3194,6 +3194,7 @@ static int export_one_map(const char *upatch, const char *map,
 	if (rc) {
 		pr_err("upatch map: read %s/%s: %s", upatch, map,
 		       strerror(-rc));
+		shirudo_map_view_free(&v);
 		return 1;
 	}
 	if (json_path) {
