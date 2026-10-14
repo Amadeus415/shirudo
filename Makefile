@@ -280,8 +280,8 @@ TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
 	bpf/vmlinux.h \
 	tools/shirudo-build/*.c tools/shirudo-build/*.h \
 	t/helper/*.c t/helper/*.py completion/* systemd/*.in systemd/*.timer \
-	test-vm/fixtures/*.c test-vm/fixtures/*.lua \
-	test-vm/fixtures/decoders/* \
+	t/fixtures/*.c t/fixtures/*.lua \
+	t/fixtures/decoders/* \
 	shields/linux_obs/*.c shields/linux_obs/*.h shields/linux_obs/*.list \
 		shields/linux_obs/*.py shields/linux_obs/Beefile \
 	shields/linux_obs/decoders/*))

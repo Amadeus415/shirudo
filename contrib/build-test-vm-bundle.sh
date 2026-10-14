@@ -335,7 +335,7 @@ build_fixture()
 	(
 		cd "$REPO_ROOT"
 		"$REPO_ROOT/tools/shirudo-build/shirudo-build" \
-			"$REPO_ROOT/test-vm/fixtures/$source" \
+			"$REPO_ROOT/t/fixtures/$source" \
 			-o "$TMP_DIR/fixtures/$name.upatch" \
 			--name "$name" --vmlinux "$REPO_ROOT/bpf/vmlinux.h" \
 			--key "$keys_dir/signing_key.pem" \
@@ -675,7 +675,7 @@ mkdir -p "$TMP_DIR/fixtures/decoders" "$FIXTURE_WORK/trusted" \
 
 "${CC:-cc}" -O0 -g -Wl,--build-id=sha1 \
 	-o /tmp/shirudo-test-uprobe-target \
-	"$REPO_ROOT/test-vm/fixtures/uprobe-target.c"
+	"$REPO_ROOT/t/fixtures/uprobe-target.c"
 
 build_fixture basic.bpf.c shirudo-test-basic "$FIXTURE_WORK/trusted"
 build_fixture basic.bpf.c shirudo-test-lifecycle "$FIXTURE_WORK/trusted"
