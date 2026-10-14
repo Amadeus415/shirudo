@@ -41,6 +41,7 @@
 #include "util/io.h"
 #include "util/json.h"
 #include "util/log.h"
+#include "util/malloc.h"
 #include "util/macros.h"
 #include "util/paths.h"
 #include "util/seal.h"
@@ -115,7 +116,7 @@ static int prepare_direct_install(const char *raw, struct bpm_source *source,
 	entry->package_size = -1;
 	rc = 0;
 out:
-	free(manifest.data);
+	bpm_buffer_free(&manifest);
 	return rc;
 }
 
@@ -193,7 +194,7 @@ static int download_package(const char *raw, const char *destination)
 	}
 	rc = -EINVAL;
 out:
-	free(manifest.data);
+	bpm_buffer_free(&manifest);
 	return rc;
 }
 
@@ -335,9 +336,9 @@ static int print_package_readme(const char *source)
 {
 	char temporary[] = "/tmp/shirudo-bpm-info-XXXXXX";
 	unsigned char *beefile = NULL, *readme = NULL;
+	size_t beefile_len = 0, readme_len = 0;
 	const char *archive = source;
 	char package_dir[101];
-	size_t len;
 	int fd, rc;
 
 	if (!strncmp(source, "oci://", 6)) {
@@ -351,7 +352,7 @@ static int print_package_readme(const char *source)
 			goto out;
 	}
 	rc = bpm_pkg_read_member_in(archive, "Beefile", NULL, package_dir,
-				    sizeof(package_dir), &beefile, &len,
+				    sizeof(package_dir), &beefile, &beefile_len,
 				    4u * 1024u * 1024u);
 	if (rc) {
 		if (rc == -ENOENT)
@@ -359,16 +360,16 @@ static int print_package_readme(const char *source)
 		goto out;
 	}
 	rc = bpm_pkg_read_member_in(archive, "README.md", package_dir, NULL, 0,
-				    &readme, &len, 4u * 1024u * 1024u);
+				    &readme, &readme_len, 4u * 1024u * 1024u);
 	if (rc) {
 		if (rc == -ENOENT)
 			pr_err("bpm info: package %s does not include README.md", source);
 		goto out;
 	}
-	rc = shirudo_write_all(STDOUT_FILENO, readme, len);
+	rc = shirudo_write_all(STDOUT_FILENO, readme, readme_len);
 out:
-	free(beefile);
-	free(readme);
+	xfree(beefile, beefile_len + 1);
+	xfree(readme, readme_len + 1);
 	if (archive == temporary)
 		unlink(temporary);
 	return rc;
@@ -518,18 +519,18 @@ static int extract_package_cert(const char *archive, char *out, size_t out_sz)
 	if (rc)
 		return rc;
 	if (sizeof(tmp) > out_sz) {
-		free(body);
+		xfree(body, len + 1);
 		return -ENAMETOOLONG;
 	}
 	fd = mkstemp(tmp);
 	if (fd < 0) {
-		free(body);
+		xfree(body, len + 1);
 		return -errno;
 	}
 	rc = shirudo_write_all(fd, body, len);
 	if (close(fd) && !rc)
 		rc = -errno;
-	free(body);
+	xfree(body, len + 1);
 	if (rc)
 		unlink(tmp);
 	else
@@ -567,8 +568,8 @@ static int key_fingerprint_compare(const void *a, const void *b)
 static int list_keys(void)
 {
 	char **fingerprints = NULL;
+	size_t count = 0, cap = 0;
 	struct dirent *entry;
-	size_t count = 0;
 	DIR *dir;
 	int rc = 0;
 
@@ -600,13 +601,15 @@ static int list_keys(void)
 		    key_file_fingerprint(path, hex) ||
 		    strncasecmp(entry->d_name, hex, 64))
 			continue;
-		next = realloc(fingerprints, (count + 1) * sizeof(*next));
+		next = xreallocarray(fingerprints, cap, count + 1,
+				     sizeof(*next));
 		if (!next) {
 			rc = -ENOMEM;
 			break;
 		}
 		fingerprints = next;
-		fingerprints[count] = strdup(hex);
+		cap = count + 1;
+		fingerprints[count] = xstrdup(hex);
 		if (!fingerprints[count]) {
 			rc = -ENOMEM;
 			break;
@@ -621,8 +624,8 @@ static int list_keys(void)
 			puts(fingerprints[i]);
 	}
 	for (size_t i = 0; i < count; i++)
-		free(fingerprints[i]);
-	free(fingerprints);
+		xstrfree(fingerprints[i]);
+	xfree(fingerprints, cap * sizeof(*fingerprints));
 	return rc;
 }
 
@@ -669,7 +672,7 @@ static int state_read(struct bpm_state_entry *st, int *n)
 	root[0] = (struct shirudo_json_field){ .key = "packages", .type = SHIRUDO_JSON_T_ARRAY, .dst = &arr, .sub = sub, .n_sub = ARRAY_SIZE(sub) };
 	(void)unused;
 	rc = shirudo_json_parse((const char *)body, len, root, ARRAY_SIZE(root));
-	free(body);
+	xfree(body, len + 1);
 	if (rc || !root[0].seen) return rc ? rc : -EINVAL;
 	*n = sink.n;
 	return 0;
@@ -712,7 +715,7 @@ static int load_cached_index(const char *source, struct bpm_index_entry *entries
 	if (rc)
 		return rc;
 	rc = bpm_index_parse(body, len, entries, n);
-	free(body);
+	xfree(body, len + 1);
 	return rc;
 }
 
@@ -780,7 +783,10 @@ static int repo_update_one(const char *name)
 	if ((rc = cache_path(name, cache, sizeof(cache)))) goto out;
 	rc = atomic_write(cache, index.data, index.len, 0600);
 out:
-	free(manifest.data); free(index.data); free(sig.data); return rc;
+	bpm_buffer_free(&manifest);
+	bpm_buffer_free(&index);
+	bpm_buffer_free(&sig);
+	return rc;
 }
 
 static int find_entry(const struct bpm_index_entry *e, int n, const char *name,
@@ -939,7 +945,7 @@ rollback:
 	for (int restore_i = nold - 1; restore_i >= 0; restore_i--)
 		(void)shirudo_upatch_install(old_loads[restore_i]);
 out:
-	free(manifest.data);
+	bpm_buffer_free(&manifest);
 	if (rc && archive[0]) unlink(archive);
 	return rc;
 }
@@ -1194,8 +1200,8 @@ static int tree_pull_artifact(const struct shirudo_tree_operation *op,
 	}
 	rc = -ENOENT;
 out:
-	free(manifest.data);
-	free(blob.data);
+	bpm_buffer_free(&manifest);
+	bpm_buffer_free(&blob);
 	return rc;
 }
 
@@ -1308,7 +1314,7 @@ static int tree_read_pending(struct bpm_tree_pending *pending)
 			!shirudo_upatch_name_valid(pending->id) ||
 			tree_digest_hex(pending->operation_digest, (uint8_t[32]){})))
 		rc = -EINVAL;
-	free(body);
+	xfree(body, len + 1);
 	return rc;
 }
 
@@ -1748,7 +1754,7 @@ static int package_uninstall(const struct bpm_state_entry *st)
 	if (snprintf(updir, sizeof(updir), "%s/upatches", st->path) >=
 	    (int)sizeof(updir))
 		return -ENAMETOOLONG;
-	unloads = calloc(128, PATH_MAX);
+	unloads = xcalloc(128, PATH_MAX);
 	if (!unloads)
 		return -ENOMEM;
 	d = opendir(updir);
@@ -1792,7 +1798,7 @@ static int package_uninstall(const struct bpm_state_entry *st)
 	}
 	rc = remove_tree(dir);
 out:
-	free(unloads);
+	xfree(unloads, 128 * PATH_MAX);
 	return rc;
 }
 
@@ -1831,7 +1837,8 @@ static const struct shirudo_help_item bpm_target_subcmds[] = {
  */
 static int bpm_exec_operator(const char *sub, int argc, const char **argv)
 {
-	const char **helper_argv = calloc((size_t)argc + 2, sizeof(*helper_argv));
+	const char **helper_argv = xcalloc((size_t)argc + 2,
+					   sizeof(*helper_argv));
 	char label[64];
 	int rc;
 
@@ -1843,7 +1850,7 @@ static int bpm_exec_operator(const char *sub, int argc, const char **argv)
 	for (int i = 3; i < argc + 1; i++)
 		helper_argv[i] = argv[i - 1];
 	rc = shirudo_build_exec(label, (char **)helper_argv);
-	free(helper_argv);
+	xfree(helper_argv, ((size_t)argc + 2) * sizeof(*helper_argv));
 	return rc;
 }
 
@@ -2162,14 +2169,14 @@ int cmd_bpm(int argc, const char **argv)
 			fprintf(stderr, "usage: shirudo bpm list\n");
 			return argc == 3 && shirudo_is_help(argv[2]) ? 0 : 2;
 		}
-		state = calloc(BPM_MAX_STATE, sizeof(*state));
+		state = xcalloc(BPM_MAX_STATE, sizeof(*state));
 		if (!state)
 			return bpm_fail("list", -ENOMEM);
 		rc = state_read(state, &n_state);
 		for (int i = 0; !rc && i < n_state; i++)
 			printf("%s %s %s\n", state[i].name, state[i].version,
 			       state[i].source);
-		free(state);
+		xfree(state, BPM_MAX_STATE * sizeof(*state));
 		return rc ? bpm_fail("list", rc) : 0;
 	}
 	if (!strcmp(sub, "uninstall")) {
@@ -2182,12 +2189,12 @@ int cmd_bpm(int argc, const char **argv)
 		}
 		if (!bpm_name_ok(argv[2]))
 			return bpm_fail("uninstall", -EINVAL);
-		state = calloc(BPM_MAX_STATE, sizeof(*state));
+		state = xcalloc(BPM_MAX_STATE, sizeof(*state));
 		if (!state)
 			return bpm_fail("uninstall", -ENOMEM);
 		lock = with_bpm_lock();
 		if (lock < 0) {
-			free(state);
+			xfree(state, BPM_MAX_STATE * sizeof(*state));
 			return bpm_finish(-1, lock, "lock");
 		}
 		rc = state_read(state, &n_state);
@@ -2203,7 +2210,7 @@ int cmd_bpm(int argc, const char **argv)
 				(size_t)(n_state - i - 1) * sizeof(*state));
 			rc = state_write(state, n_state - 1);
 		}
-		free(state);
+		xfree(state, BPM_MAX_STATE * sizeof(*state));
 		return bpm_finish(lock, rc, "uninstall");
 	}
 	if (!strcmp(sub, "upgrade") && argc == 2) {
