@@ -65,10 +65,10 @@ install_kernel_modules()
 	rsync -a --delete "${source}/" "${target}/"
 	depmod -a "$release"
 
-	for module in veth bridge 8021q br_netfilter nf_flow_table nf_flow_table_inet; do
+	for module in veth bridge 8021q nf_flow_table nf_flow_table_inet; do
 		modprobe "$module"
 	done
-	for module in veth bridge 8021q br_netfilter nf_flow_table nf_flow_table_inet; do
+	for module in veth bridge 8021q nf_flow_table nf_flow_table_inet; do
 		lsmod | awk -v module="$module" '$1 == module { found = 1 } END { exit !found }'
 	done
 	# nf_flow_table_procfs (CONFIG_NF_FLOW_TABLE_PROCFS) is built into

@@ -210,7 +210,6 @@ test_expect_success 'kernel VM artifacts provide networking modules' '
 	grep -q "CONFIG_VETH=m" ../contrib/build-kernel-package.sh &&
 	grep -q "CONFIG_BRIDGE=m" ../contrib/build-kernel-package.sh &&
 	grep -q "CONFIG_VLAN_8021Q=m" ../contrib/build-kernel-package.sh &&
-	grep -q "CONFIG_BRIDGE_NETFILTER=m" ../contrib/build-kernel-package.sh &&
 	grep -q "CONFIG_NF_FLOW_TABLE=m" ../contrib/build-kernel-package.sh &&
 	grep -q "CONFIG_NF_FLOW_TABLE_INET=m" ../contrib/build-kernel-package.sh &&
 	grep -q "CONFIG_NF_FLOW_TABLE_PROCFS=y" ../contrib/build-kernel-package.sh &&
