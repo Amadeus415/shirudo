@@ -10,56 +10,53 @@
 [![CodeQL](https://github.com/shirudo-dev/shirudo/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/shirudo-dev/shirudo/actions/workflows/codeql.yml)
 [![License](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
 
-shirudo ("shields", Japanese) is a BPF security platform for the agentic
-era. It ships BPF live patches, called upatches, to Linux targets
-without a reboot, and it makes sure a target runs only the BPF its
-operator signed. upatches can harden or patch the kernel itself or
-userspace applications; the goal is on-the-fly security patching and
-attack-surface hardening in the age of Mythos/Glasswing, for production
-systems whose patch and reboot cycles are longer than an attacker's.
+shirudo ("shields", JP) is a BPF security platform for the agentic era.
+It ships BPF live patches, called upatches, to Linux targets without a
+reboot, and it makes sure a target runs only the BPF its operator signed.
+upatches can harden or patch the kernel itself or userspace applications;
+the goal is on-the-fly security visibility, patching and attack-surface
+hardening in the age of LLMs, for production systems whose patch and
+reboot cycles often span multiple days if not weeks.
 
-The kernel's CVE stream runs at dozens of fixes a day, exploitation now
-regularly precedes the patch, and a fleet reboot cycle takes weeks.
-shirudo exists for the window in between: an agent or an engineer
-derives a BPF shield from the fix, the operator signs it, and the fleet
-pulls it within the hour, measured and revocable. There is deliberately
-no configuration DSL, since agents work a lot better with code.
+For example, the Linux kernel's CVE stream runs at dozens of fixes a day,
+exploitation now regularly precedes the patch, and a fleet reboot cycle
+might takes weeks. shirudo exists for the window in between: an agent,
+engineer or hybrid workflow derives a BPF mitigation from the fix, the
+operator signs it, and the fleet pulls it within the hour, measured and
+revocable. There is deliberately no configuration DSL, since agents work
+better with plain code. shirudo is not limited to just mitigations, it
+serves as a platform and can deploy any BPF programs into the fleet.
 
 What it does:
 
-* **Signed BPF only.** Once `shirudo init` has run, the kernel accepts
-  BPF from userspace only inside a signed loader program whose CMS
-  signature verifies against the certificate in a sealed kernel keyring,
-  before the verifier runs. The payload is hash-locked to the loader.
-* **Root is not enough.** BPF LSM programs lock down the `bpf()` syscall
-  so that even `CAP_SYS_ADMIN` cannot load, replace or detach BPF
-  without the signing key; pins live in a private bpffs that cannot be
-  unlinked, unmounted or mounted over.
-* **Sealed state.** Every file shirudo owns carries an xattr label
-  that only the shirudo binary itself may write, rename or remove;
-  shirudo processes cannot be ptraced or profiled by root.
-* **Measured.** Every init, load and unload extends a non-resettable
+* **Signed BPF only:** Once shirudo is brought up during early boot, the
+  kernel accepts BPF from userspace only inside a signed loader program
+  whose CMS signature verifies against the certificate in a sealed BPF
+  kernel keyring before the verifier runs.
+* **Root is not enough:** shiurdo's BPF programs lock down the bpf(2)
+  syscall so that even CAP\_SYS\_ADMIN cannot load, replace or detach
+  BPF without the signing key; pins live in a private bpffs that cannot
+  be unlinked, unmounted or mounted over.
+* **Sealed state:** Every file shirudo owns carries an xattr security
+  label that only the shirudo binary itself can access and modify.
+* **Measured:** Every init, load and unload extends a non-resettable
   TPM 2.0 NV index and appends to an eventlog; an operator checks a
   target from one 32-byte value, and a chain that moved refuses every
   further operation as `tampered`.
-* **Agentless.** One plain-C binary with git-like subcommands, no
-  daemon, no listening socket. Everything on the target is a one-shot
-  command, run by hand or by systemd timers, which keeps it light
-  enough for embedded devices.
-* **Pull-based delivery.** The operator publishes signed packages to an
-  OCI registry; targets pull, verify and install them on a timer, or
+* **Agentless:** shirudo is a plain-C binary, no daemon, no listening
+  socket. Everything on the target is a one-shot command, run by hand
+  or by systemd timers, which keeps it generally light enough to deploy
+  also on embedded devices.
+* **Pull-based delivery:** The operator publishes signed packages to an
+  OCI registry; target nodes pull, verify and install them on a timer, or
   follow a signed, append-only upatch tree whose selectors match kernel
   release, build ID, Kconfig and node labels.
-* **Telemetry out, nothing in.** Map snapshots and status keepalives
+* **Telemetry out, nothing in:** Map snapshots and status keepalives
   are pushed as OTLP logs and metrics to the OpenTelemetry Collector,
   ClickHouse, Splunk or any collector that accepts OTLP/HTTP JSON, with
   decoders that ship signed inside the upatch.
-* **Post-quantum by default.** ML-DSA-87 is the only signing algorithm;
-  every TLS client speaks TLS 1.3 with hybrid ML-KEM key exchange only.
-* **Built for agents.** Every command has structured JSON input and
-  output, named failure categories and verifier logs captured in full,
-  so an agent can build, test and ship a mitigation and read back
-  exactly what happened.
+* **PQC by default:** ML-DSA-87 is used as signing algorithm; every TLS
+  client speaks TLS 1.3 with hybrid ML-KEM key exchange.
 
 Two roles, one binary: the *operator* holds the private signing key and
 builds, signs and publishes; the *target* holds only the public
