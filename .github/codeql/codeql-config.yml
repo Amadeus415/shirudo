@@ -1,0 +1,4 @@
+name: shirudo CodeQL configuration
+
+paths-ignore:
+  - vendor
