@@ -60,3 +60,6 @@ Companion files in the repository root
   files retain their upstream SPDX identifiers.
 - ``upatches/`` — the BPF upatch packages shirudo ships (Linux
   observability, kernel CVE mitigations), each with its ``Beefile``.
+- ``vendor/libbpf/`` — vendored libbpf and BPF UAPI headers with
+  shirudo's BSD shims for the kernel's ``tools/include`` internals;
+  refreshed by ``make update-bpf-deps``, see its ``README.md``.

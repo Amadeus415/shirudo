@@ -4,7 +4,7 @@
 # Makefile.shirudo -- main build graph.
 #
 # Five strict build phases (see PLAN.md "Build phases"):
-#   1. bpf-next libraries (libbpf.a, bpftool) from BPF_NEXT_SRC
+#   1. vendored libbpf (vendor/libbpf) and the vmlinux.h generator
 #   2. generated headers   (bpf/vmlinux.h)
 #   3. compiled objects    (util/*.o, builtin-*.o, shirudo.o, bpf/*.bpf.o)
 #   4. embedded BPF        (util/loader.o, .incbin of bpf/*.bpf.o)
@@ -39,40 +39,19 @@ LD      := $(CC)
 LDFLAGS ?=
 SHIRUDO_BUNDLE_RPATH ?= 0
 CLANG   ?= clang
-BPF_NEXT_DEPS_DIR ?= artifacts/bpf-next-kernel-debs/shirudo-bpf-deps
-USE_BPF_NEXT_DEPS ?= 0
-# The bpf-next checkout recorded in config.mk by Makefile.config.
-BPF_NEXT_SRC ?=
-BPF_NEXT_UAPI ?= $(BPF_NEXT_SRC)/tools/include/uapi
-BPFTOOL_SOURCE_DIR := $(BPF_NEXT_SRC)/tools/bpf/bpftool
-LIBBPF_SOURCE_DIR  := $(BPF_NEXT_SRC)/tools/lib/bpf
+# libbpf, its BPF-side headers and the BPF UAPI headers are vendored under
+# vendor/libbpf (refreshed on demand with make update-bpf-deps); nothing in
+# a normal build reaches outside the repository for them. vmlinux.h is
+# dumped from BTF by the in-tree generator, so bpftool is not needed.
+LIBBPF_VENDOR    := vendor/libbpf
+LIBBPF_DIR       := $(LIBBPF_VENDOR)/bpf
+LIBBPF_A         := $(LIBBPF_VENDOR)/libbpf.a
+BPF_UAPI_INCLUDE := $(LIBBPF_VENDOR)/include/uapi
+VMLINUX_GEN      := tools/gen-vmlinux-h/gen-vmlinux-h
 BPF_VMLINUX_H ?=
 # Prefer the BTF emitted by `make bpf-next`; otherwise use the running host.
 # A caller can still override this explicitly for another target kernel.
 BPF_VMLINUX_BTF ?= $(if $(wildcard artifacts/bpf-next-kernel-debs/vmlinux.btf),artifacts/bpf-next-kernel-debs/vmlinux.btf,/sys/kernel/btf/vmlinux)
-
-ifeq ($(USE_BPF_NEXT_DEPS),1)
-  ifneq ($(wildcard $(BPF_NEXT_DEPS_DIR)/bpftool),$(BPF_NEXT_DEPS_DIR)/bpftool)
-    $(error USE_BPF_NEXT_DEPS=1 requires $(BPF_NEXT_DEPS_DIR)/bpftool; run make bpf-next)
-  endif
-  ifneq ($(wildcard $(BPF_NEXT_DEPS_DIR)/bpf/libbpf.a),$(BPF_NEXT_DEPS_DIR)/bpf/libbpf.a)
-    $(error USE_BPF_NEXT_DEPS=1 requires $(BPF_NEXT_DEPS_DIR)/bpf/libbpf.a; run make bpf-next)
-  endif
-  ifneq ($(wildcard $(BPF_NEXT_DEPS_DIR)/vmlinux.h),$(BPF_NEXT_DEPS_DIR)/vmlinux.h)
-    $(error USE_BPF_NEXT_DEPS=1 requires artifacts in $(BPF_NEXT_DEPS_DIR); run make bpf-next)
-  endif
-  BPFTOOL ?= $(BPF_NEXT_DEPS_DIR)/bpftool
-  BPF_TOOLS_LIB_ROOT ?= $(BPF_NEXT_DEPS_DIR)
-  ifeq ($(strip $(BPF_VMLINUX_H)),)
-    BPF_VMLINUX_H := $(BPF_NEXT_DEPS_DIR)/vmlinux.h
-  endif
-else
-  ifeq ($(strip $(BPF_NEXT_SRC)),)
-    $(error BPF_NEXT_SRC is not set; run make BPF_NEXT_SRC=/path/to/bpf-next (cached in config.mk) or USE_BPF_NEXT_DEPS=1)
-  endif
-  BPFTOOL ?= $(BPFTOOL_SOURCE_DIR)/bpftool
-  BPF_TOOLS_LIB_ROOT ?= $(BPF_NEXT_SRC)/tools/lib
-endif
 
 SHIRUDO_LIBEXEC_DIR ?= $(libexecdir)/shirudo
 
@@ -98,8 +77,8 @@ INCLUDES := \
     -I. \
     -Iinclude \
     -Iutil \
-    -I$(BPF_TOOLS_LIB_ROOT) \
-    -I$(BPF_NEXT_UAPI)
+    -I$(LIBBPF_VENDOR) \
+    -I$(BPF_UAPI_INCLUDE)
 
 CFLAGS := $(CFLAGS_BASE) $(INCLUDES) \
           $(LIBCRYPTO_CFLAGS) $(TSS2_CFLAGS) \
@@ -246,28 +225,25 @@ all: shirudo
 # operator install target.
 shirudo-build: tools/shirudo-build/shirudo-build
 
-# ----- phase 1: bpf-next libraries --------------------------------
+# ----- phase 1: vendored libbpf and the vmlinux.h generator -------
 
-LIBBPF_DIR ?= $(BPF_TOOLS_LIB_ROOT)/bpf
-LIBBPF_A   ?= $(LIBBPF_DIR)/libbpf.a
+LIBBPF_SRCS := $(wildcard $(LIBBPF_DIR)/*.c $(LIBBPF_DIR)/*.h \
+                          $(LIBBPF_VENDOR)/include/linux/*.h \
+                          $(LIBBPF_VENDOR)/include/asm/*.h \
+                          $(LIBBPF_VENDOR)/include/uapi/linux/*.h \
+                          $(LIBBPF_VENDOR)/Makefile)
 
 libbpf: $(LIBBPF_A)
 
-# libbpf's Makefile has no narrow "libbpf.a" target; the default
-# target builds both libbpf.a, libbpf.so, and the generated
-# bpf_helper_defs.h that BPF programs include. We consume libbpf.a
-# and bpf_helper_defs.h; the .so is harmless byproduct.
-$(LIBBPF_A):
+$(LIBBPF_A): $(LIBBPF_SRCS)
 	@printf '  LIBBPF\n'
-	$(Q)$(MAKE) -C $(LIBBPF_SOURCE_DIR) CC="$(CC)"
+	$(Q)$(MAKE) -C $(LIBBPF_VENDOR) CC="$(CC)" Q="$(Q)"
 
-BPFTOOL_DIR := $(BPFTOOL_SOURCE_DIR)
-
-bpftool: $(BPFTOOL)
-
-$(BPFTOOL):
-	@printf '  BPFTOOL\n'
-	$(Q)$(MAKE) -C $(BPFTOOL_DIR) CC="$(CC)"
+# Build-time only; links the vendored libbpf and dumps BTF as C.
+$(VMLINUX_GEN): tools/gen-vmlinux-h/gen-vmlinux-h.c $(LIBBPF_A)
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS_BASE) $(INCLUDES) -o $@ $< $(LIBBPF_A) \
+	    $(LIBELF_LIBS) $(ZLIB_LIBS)
 
 # ----- phase 2: generated headers ---------------------------------
 
@@ -276,9 +252,9 @@ bpf/vmlinux.h: $(BPF_VMLINUX_H)
 	@printf '  COPY    $@\n'
 	$(Q)cp $< $@
 else
-bpf/vmlinux.h: $(BPFTOOL)
+bpf/vmlinux.h: $(VMLINUX_GEN)
 	@printf '  GEN     $@\n'
-	$(Q)$< btf dump file $(BPF_VMLINUX_BTF) format c > $@
+	$(Q)$< $(BPF_VMLINUX_BTF) > $@
 endif
 
 # ----- phase 3: compile rules -------------------------------------
@@ -302,11 +278,11 @@ $(BPF_HEADERS_OUT): bpf/include/bpf/%.h: $(LIBBPF_A)
 	$(Q)cp $(LIBBPF_DIR)/$*.h $@
 
 # BPF objects pull <bpf/...> headers from the in-tree vendor dir,
-# vmlinux.h from bpf/, and UAPI kernel headers from the bpf-next tree.
+# vmlinux.h from bpf/, and UAPI kernel headers from vendor/libbpf.
 bpf/%.bpf.o: bpf/%.c bpf/vmlinux.h $(BPF_HEADERS_OUT)
 	@printf '  CLANG   $@\n'
 	$(Q)$(CLANG_BPF) -Ibpf -Ibpf/lib -Ibpf/include \
-	    -I$(BPF_NEXT_UAPI) \
+	    -I$(BPF_UAPI_INCLUDE) \
 	    -c $< -o $@
 
 # ----- version_id ------------------------------------------------
@@ -513,11 +489,11 @@ t/helper/test-dns-prog-run: t/helper/test-dns-prog-run.c
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-# Needs the bpf-next uapi bpf.h (excl_prog_hash / fd_array_cnt / keyring_id
+# Needs the vendored uapi bpf.h (excl_prog_hash / fd_array_cnt / keyring_id
 # are newer than a stock system header) and libcrypto for SHA-256.
 t/helper/test-signed-load: t/helper/test-signed-load.c
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -I$(BPF_NEXT_UAPI) \
+	$(Q)$(CC) $(CFLAGS) -I$(BPF_UAPI_INCLUDE) \
 	    -o $@ $^ -lcrypto
 
 t/helper/test-kernel-abi: t/helper/test-kernel-abi.c util/kernel_abi.o \
@@ -581,5 +557,5 @@ clean:
 	$(Q)rm -rf bpf/include
 
 distclean:
-	$(Q)$(MAKE) -C $(LIBBPF_SOURCE_DIR) clean 2>/dev/null || true
-	$(Q)$(MAKE) -C $(BPFTOOL_SOURCE_DIR) clean 2>/dev/null || true
+	$(Q)$(MAKE) -C $(LIBBPF_VENDOR) clean
+	$(Q)rm -f $(VMLINUX_GEN)

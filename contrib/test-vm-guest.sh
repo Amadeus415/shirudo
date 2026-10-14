@@ -275,12 +275,6 @@ else
 	mkdir -p "$WORKSPACE"
 	rsync -a --exclude=/.git/ --exclude=/artifacts/ --exclude=/build/ \
 		"$LOWER"/ "$WORKSPACE"/
-	if [[ -d "$LOWER/artifacts/bpf-next-kernel-debs/shirudo-bpf-deps" ]]; then
-		mkdir -p "$WORKSPACE/artifacts/bpf-next-kernel-debs"
-		rsync -a \
-			"$LOWER/artifacts/bpf-next-kernel-debs/shirudo-bpf-deps/" \
-			"$WORKSPACE/artifacts/bpf-next-kernel-debs/shirudo-bpf-deps/"
-	fi
 fi
 
 cd "$WORKSPACE"

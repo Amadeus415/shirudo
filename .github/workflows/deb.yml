@@ -170,12 +170,6 @@ jobs:
             install -m 0644 /usr/lib/x86_64-linux-gnu/libzstd.a /tmp/shirudo-target-deps/lib/libzstd.a
             install -m 0644 /usr/lib/x86_64-linux-gnu/libluajit-5.1.a /tmp/shirudo-target-deps/lib/libluajit-5.1.a
 
-            # libbpf, bpftool and the UAPI headers build from a bpf-next
-            # checkout; there is no submodule.
-            rm -rf /tmp/bpf-next
-            git clone --depth 1 --single-branch \
-              https://git.kernel.org/pub/scm/linux/kernel/git/bpf/bpf-next.git /tmp/bpf-next
-
             cd /host
 
             # Read the workflow version through /host so it also reaches the VM.
@@ -190,7 +184,6 @@ jobs:
               DEB_VERSION="\$deb_version" \
               SHIRUDO_GIT_DESCRIBE='printenv SHIRUDO_CI_VERSION' \
               TARGET_DEPS_PREBUILT=1 \
-              BPF_NEXT_SRC=/tmp/bpf-next \
               SHIRUDO_TARGET_PKG_CONFIG_PATH=/tmp/shirudo-curl/lib/pkgconfig:/tmp/shirudo-openssl/lib/pkgconfig \
               SHIRUDO_TARGET_STATIC_LIBDIR=/tmp/shirudo-target-deps/lib
 

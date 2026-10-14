@@ -158,17 +158,22 @@ load-bearing — consult them directly rather than reasoning from memory:
 
 ## Build approach (deferred — see PLAN.md "Build system")
 
-- There is no submodule: `make BPF_NEXT_SRC=/path/to/bpf-next` names the
-  bpf-next checkout that libbpf, bpftool and the UAPI headers build from
-  (cached in `config.mk`); `USE_BPF_NEXT_DEPS=1` uses the prebuilt bundle
-  from `make bpf-next`.
-- `libbpf` built **static** from the bpf-next tree at `BPF_NEXT_SRC` under its
+- No submodule and no kernel tree at build time: libbpf, its BPF-side
+  headers and the BPF UAPI headers live in `vendor/libbpf/` (copied
+  verbatim from `tools/lib/bpf` and `tools/include/uapi/linux`), plus
+  shirudo-owned BSD-2-Clause shims in `vendor/libbpf/include/{linux,asm}`
+  replacing the GPL `tools/include` internals libbpf reaches for. `make
+  update-bpf-deps [KERNEL_SRC=/path]` overwrites the copies from a kernel
+  tree (default: a fresh bpf-next clone) and is run on demand only; see
+  `vendor/libbpf/README.md` and `COMMIT`.
+- `libbpf` built **static** from `vendor/libbpf` under its
   `(LGPL-2.1 OR BSD-2-Clause)` BSD-branch.
   **`libsubcmd` is NOT linked** — it is GPL-2.0; shirudo whiteroom-
   reimplements only the CLI-parsing subset it needs as
   `util/parse-options.{c,h}` under BSD-2-Clause.
-- `bpftool` built from the bpf-next tree **as a build-time tool only** (needed for
-  `vmlinux.h` generation from `/sys/kernel/btf/vmlinux`). Not a runtime dep.
+- `vmlinux.h` is generated from BTF by `tools/gen-vmlinux-h` (bpftool's
+  `btf dump ... format c` logic under its BSD branch, linked against the
+  vendored libbpf), so bpftool is not built or needed. Build-time only.
 - BPF compiled with `clang -target bpf -O2 -g`, embedded into the userspace
   binary via `.incbin` inline asm. No generated skeleton headers.
 - Runtime deps (dynamic-linked, all BSD-2-Clause or with a

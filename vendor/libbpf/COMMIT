@@ -1,0 +1,5 @@
+# Written by contrib/update-bpf-deps.sh; do not edit.
+source=/home/darkstar/net
+commit=0d5e3fc78a6f2522e6339743b8e5ecc02351a9dd
+describe=v6.11-rc6-188825-g0d5e3fc78a6f
+updated=2026-10-14T09:40:37Z

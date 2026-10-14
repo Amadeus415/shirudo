@@ -85,12 +85,11 @@ test_expect_success 'test-vm imports the host-built payload' '
 	! grep -q "shirudo-build" ../contrib/test-vm-guest.sh &&
 	! grep -Fq "make \"\${BPF_MAKE_ARGS[@]}\" check" \
 		../contrib/test-vm-guest.sh &&
-	grep -Fq "BPFTOOL ?= \$(BPFTOOL_SOURCE_DIR)/bpftool" \
-		../Makefile.shirudo &&
+	grep -Fq "LIBBPF_VENDOR    := vendor/libbpf" ../Makefile.shirudo &&
 	grep -Fq "\$(LIBBPF_A)" ../Makefile.shirudo &&
-	grep -q "shirudo-bpf-deps" ../Makefile.shirudo &&
-	grep -q "Building Shirudo BPF dependency artifacts" \
-		../contrib/build-kernel-package.sh
+	grep -Fq "VMLINUX_GEN      := tools/gen-vmlinux-h/gen-vmlinux-h" \
+		../Makefile.shirudo &&
+	! grep -q "shirudo-bpf-deps" ../contrib/build-kernel-package.sh
 '
 	test_expect_success 'test-vm bundle stamp controls incremental rebuilds' '
 	grep -q "TEST_VM_BUNDLE_STAMP" ../Makefile &&

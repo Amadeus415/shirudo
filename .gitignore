@@ -31,7 +31,7 @@
 /systemd/shirudo-keepalive.service
 /systemd/shirudo-bpm-tree-sync.service
 
-# BPF-side headers copied from the bpf-next tree at build time
+# BPF-side headers copied from vendor/libbpf at build time
 /bpf/include/
 
 # Vendored bpf-next build state (do not commit)
@@ -67,3 +67,9 @@ util/version_id.c
 *.gcda
 *.gcno
 /coverage/
+
+# vendored libbpf build outputs and the build-time vmlinux.h generator
+/vendor/libbpf/bpf/*.o
+/vendor/libbpf/bpf/*.d
+/vendor/libbpf/libbpf.a
+/tools/gen-vmlinux-h/gen-vmlinux-h

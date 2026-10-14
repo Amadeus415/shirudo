@@ -78,9 +78,8 @@ SOURCE_DIR="${WORK_DIR}/linux"
 if [[ -n "$KERNEL_SOURCE_DIR_INPUT" ]]; then
   KERNEL_SOURCE_DIR="$KERNEL_SOURCE_DIR_INPUT"
 elif [[ "$KERNEL_TAG" == "bpf-next" ]]; then
-  # A local bpf-next checkout (the same BPF_NEXT_SRC the build uses) or a
-  # fresh shallow clone; there is no submodule.
-  KERNEL_SOURCE_DIR="${BPF_NEXT_SRC:-$SOURCE_DIR}"
+  # Fresh shallow clone unless KERNEL_SOURCE_DIR names a checkout.
+  KERNEL_SOURCE_DIR="$SOURCE_DIR"
 else
   KERNEL_SOURCE_DIR="$SOURCE_DIR"
 fi
@@ -90,8 +89,6 @@ KERNEL_OBSERVABILITY_CONFIGS_FILE="${KERNEL_OBSERVABILITY_CONFIGS_FILE:-${REPO_R
 KERNEL_SMALL_CONFIG="${KERNEL_SMALL_CONFIG:-${REPO_ROOT}/contrib/kernel-small.config}"
 VMLINUX_PATH="${OUTPUT_DIR}/bzImage"
 VMLINUX_BTF_PATH="${OUTPUT_DIR}/vmlinux.btf"
-BPF_DEPS_DIR="${OUTPUT_DIR}/shirudo-bpf-deps"
-BPF_DEPS_LIBBPF_DIR="${BPF_DEPS_DIR}/bpf"
 
 if [[ "$PACKAGE_FORMAT" == deb ]]; then
   BUILD_DEPENDENCIES=(
@@ -851,32 +848,6 @@ if [[ ! -s "$VMLINUX_BTF_PATH" ]]; then
   exit 1
 fi
 
-# Build the userspace BPF tools against the exact kernel checkout used for
-# the kernel. The VM runner consumes these artifacts instead of rebuilding
-# libbpf and bpftool for every fresh guest.
-echo "Building Shirudo BPF dependency artifacts"
-make -C "$SOURCE_DIR/tools/lib/bpf" CC="${CC:-cc}" \
-  EXTRA_CFLAGS="-g -O2 -Wno-error=discarded-qualifiers"
-make -C "$SOURCE_DIR/tools/bpf/bpftool" CC="${CC:-cc}" \
-  EXTRA_CFLAGS="-g -O2 -Wno-error=discarded-qualifiers"
-mkdir -p "$BPF_DEPS_LIBBPF_DIR"
-cp "$SOURCE_DIR/tools/lib/bpf/libbpf.a" "$BPF_DEPS_LIBBPF_DIR/"
-cp "$SOURCE_DIR/tools/lib/bpf"/*.h "$BPF_DEPS_LIBBPF_DIR/"
-cp "$SOURCE_DIR/tools/bpf/bpftool/bpftool" "$BPF_DEPS_DIR/"
-# The UAPI headers travel with the bundle so USE_BPF_NEXT_DEPS=1 builds
-# need no source tree at all.
-mkdir -p "$BPF_DEPS_DIR/include"
-cp -a "$SOURCE_DIR/tools/include/uapi" "$BPF_DEPS_DIR/include/"
-"$BPF_DEPS_DIR/bpftool" btf dump file "$VMLINUX_BTF_PATH" format c \
-  >"$BPF_DEPS_DIR/vmlinux.h"
-cat >"$BPF_DEPS_DIR/build" <<EOF
-source_dir=${KERNEL_SOURCE_DIR}
-kernel_commit=${kernel_commit}
-libbpf_source=${kernel_commit}:tools/lib/bpf
-bpftool_source=${kernel_commit}:tools/bpf/bpftool
-built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-EOF
-
 cat > "${OUTPUT_DIR}/${KERNEL_ARTIFACT_NAME}-kernel-build" <<EOF
 source_dir=${KERNEL_SOURCE_DIR}
 source_repository=${KERNEL_REPOSITORY}
@@ -911,5 +882,4 @@ tar -C "$OUTPUT_DIR" -czf "$BUNDLE_PATH" .
 
 echo "Built ${KERNEL_TAG} kernel bzImage: ${VMLINUX_PATH}"
 echo "Built kernel BTF: ${VMLINUX_BTF_PATH}"
-echo "Built Shirudo BPF dependency artifacts: ${BPF_DEPS_DIR}"
 echo "Built kernel ${PACKAGE_FORMAT} bundle: ${BUNDLE_PATH}"

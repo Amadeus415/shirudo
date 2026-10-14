@@ -11,7 +11,6 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUNDLE_DIR="${TEST_VM_HOST_BUNDLE:-${REPO_ROOT}/build/test-vm/host-bundle}"
 WORK_DIR="${TEST_VM_WORK_DIR:-${REPO_ROOT}/build/test-vm}"
 RUNTIME_CACHE_DIR="${TEST_VM_RUNTIME_CACHE_DIR:-${WORK_DIR}/cache/runtime}"
-BPF_DEPS_DIR="${TEST_VM_BPF_DEPS_DIR:-${REPO_ROOT}/artifacts/bpf-next-kernel-debs/shirudo-bpf-deps}"
 LIBGUESTFS_KERNEL_CACHE="${WORK_DIR}/cache/libguestfs/ubuntu"
 UBUNTU_CODENAME="${TEST_VM_UBUNTU_CODENAME:-resolute}"
 PACKAGE_FILE="$REPO_ROOT/contrib/test-vm-runtime-packages"
@@ -281,18 +280,8 @@ if bundle_is_current; then
 	exit 0
 fi
 
-BPF_MAKE_ARGS=()
-if [[ -f "$BPF_DEPS_DIR/bpftool" &&
-	  -f "$BPF_DEPS_DIR/bpf/libbpf.a" &&
-	  -f "$BPF_DEPS_DIR/vmlinux.h" ]]; then
-	log "using bpf-next kernel dependency artifacts"
-	BPF_MAKE_ARGS=(USE_BPF_NEXT_DEPS=1)
-else
-	log "bpf-next kernel dependency artifacts unavailable; using vendored tools"
-fi
-
 log "building host Shirudo payload and test helpers"
-make -C "$REPO_ROOT" "${BPF_MAKE_ARGS[@]}" all shirudo-build test-helpers
+make -C "$REPO_ROOT" all shirudo-build test-helpers
 
 TMP_DIR="$(mktemp -d "${BUNDLE_DIR}.tmp.XXXXXX")"
 FIXTURE_WORK="$(mktemp -d "${BUNDLE_DIR}.fixtures.XXXXXX")"
@@ -302,8 +291,7 @@ cleanup()
 }
 trap cleanup EXIT
 
-make -C "$REPO_ROOT" "${BPF_MAKE_ARGS[@]}" \
-	DESTDIR="$TMP_DIR/root" install-target
+make -C "$REPO_ROOT" DESTDIR="$TMP_DIR/root" install-target
 
 install -d "$TMP_DIR/test-helpers/t/helper"
 while IFS= read -r helper; do
@@ -794,11 +782,7 @@ fi
 )
 
 printf 'shirudo-test-vm-bundle-v1\n' >"$TMP_DIR/format"
-if [[ ${#BPF_MAKE_ARGS[@]} -eq 1 ]]; then
-	printf 'bpf-next-deps\n' >"$TMP_DIR/dependency-mode"
-else
-	printf 'vendored-tools\n' >"$TMP_DIR/dependency-mode"
-fi
+printf 'vendored-tools\n' >"$TMP_DIR/dependency-mode"
 printf 'shirudo-test-vm-bundle-stamp-v1\n' >"$TMP_DIR/.stamp"
 printf '%s\n' "$RUNTIME_KEY" >"$TMP_DIR/runtime-image-key"
 
