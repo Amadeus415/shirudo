@@ -27,7 +27,7 @@ mountpoint -q "$B" 2>/dev/null || test_skip_all "bpffs not mounted at $B"
 restore() {
 	# Only fires if a guard regressed and the bpffs came unmounted.
 	mountpoint -q "$B" 2>/dev/null ||
-		"$SHIRUDO_BIN" init --no-tpm >/dev/null 2>&1 || true
+		"$SHIRUDO_BIN" init >/dev/null 2>&1 || true
 }
 trap restore EXIT
 

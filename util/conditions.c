@@ -51,7 +51,7 @@ size_t shirudo_conditions(const struct shirudo_conditions_input *in,
 		if (!in->chain_seen) {
 			c[n].status = "WARN";
 			snprintf(c[n].detail, sizeof(c[n].detail),
-				 "no TPM chain (degraded / --no-tpm)");
+				 "no TPM chain (init incomplete or TPM lost)");
 		} else if (in->cm_seen && in->chain_matches) {
 			c[n].status = "OK";
 			snprintf(c[n].detail, sizeof(c[n].detail),

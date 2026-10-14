@@ -16,18 +16,17 @@ PROFILE ?= operator
 CONFIG_MK ?= config.mk
 -include $(CONFIG_MK)
 
-# Certificate parsing, SHA-256 and CMS verification run on libcrypto in
-# both profiles (the target links libcrypto.a statically anyway, for
-# TPM2-TSS). Only the libcurl TLS trust-anchor glue differs: OpenSSL on
-# the operator, static mbedTLS on the target.
+# Both profiles run on OpenSSL: libcrypto for SHA-256, certificates and
+# CMS, libssl behind libcurl for TLS. The operator links the system
+# shared libraries; the target links the static OpenSSL and libcurl
+# staged by make target-deps.
 CRYPTO_SRC := util/crypto_openssl.c
+TLS_SRC := util/tls_openssl.c
 ifeq ($(PROFILE),target)
 OBJ_PREFIX := build/target/
-TLS_SRC := util/tls_mbedtls.c
-CRYPTO_CFLAGS := $(TARGET_MBEDTLS_CFLAGS)
+CRYPTO_CFLAGS := $(TARGET_TLS_CFLAGS)
 else
 OBJ_PREFIX :=
-TLS_SRC := util/tls_openssl.c
 CRYPTO_CFLAGS :=
 endif
 
@@ -341,12 +340,12 @@ shirudo: $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A)
 	    $(STATIC_LIBS) $(DYNAMIC_LIBS)
 
 shirudo-target: $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A)
-	@printf '  LD      $@ (static mbedTLS)\n'
-	$(Q)$(LD) $(CFLAGS) $(TARGET_MBEDTLS_CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ \
+	@printf '  LD      $@ (static OpenSSL)\n'
+	$(Q)$(LD) $(CFLAGS) $(TARGET_TLS_CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ \
 	    $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) \
-	    $(STATIC_LIBS) $(TARGET_MBEDTLS_STATIC_LINK_LIBS) \
+	    $(STATIC_LIBS) $(TARGET_TLS_STATIC_LINK_LIBS) \
 	    $(TARGET_STATIC_RUNTIME_LINK_LIBS) \
-	    -Wl,-Bdynamic $(TARGET_MBEDTLS_DYNAMIC_LINK_LIBS)
+	    -Wl,-Bdynamic $(TARGET_TLS_DYNAMIC_LINK_LIBS)
 
 # util/loader.o has a make-level dep on every embedded bpf object.
 util/loader.o: $(BPF_OBJS)
@@ -418,7 +417,7 @@ install-target: shirudo-target install-common systemd/shirudo.service \
 		systemd/shirudo-bpm-repo-update.timer \
 		systemd/shirudo-bpm-tree-sync.service \
 		systemd/shirudo-bpm-tree-sync.timer
-	@printf '  INSTALL $(DESTDIR)$(bindir)/shirudo (static mbedTLS)\n'
+	@printf '  INSTALL $(DESTDIR)$(bindir)/shirudo (static OpenSSL)\n'
 	$(Q)install -d $(DESTDIR)$(bindir)
 	$(Q)install -m 0755 shirudo-target $(DESTDIR)$(bindir)/shirudo
 	@printf '  INSTALL $(DESTDIR)$(systemdunitdir)/shirudo*.service,timer\n'
@@ -521,7 +520,8 @@ t/helper/test-kernel-abi: t/helper/test-kernel-abi.c util/kernel_abi.o \
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LIBELF_LIBS) $(ZLIB_LIBS)
 
 t/helper/test-otel-map: t/helper/test-otel-map.c util/upatch_maps.o \
-                        util/upatch_maps_otel.o util/crypto_openssl.o util/serializer.o \
+                        util/upatch_maps_otel.o util/crypto_openssl.o \
+                        util/tls_openssl.o util/serializer.o \
                         util/upatch_decode.o util/upatch_resolve.o \
                         util/upatch.o util/json.o \
                         util/io.o util/malloc.o $(LIBBPF_A)

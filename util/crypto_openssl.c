@@ -170,6 +170,22 @@ out:
 	return rc;
 }
 
+int shirudo_cert_key_algorithm(const struct shirudo_cert *cert,
+			       char *out, size_t out_sz)
+{
+	const char *name;
+	EVP_PKEY *pub;
+
+	if (!cert || !cert->impl || !out || !out_sz)
+		return -EINVAL;
+	pub = X509_get0_pubkey(cert->impl);
+	name = pub ? EVP_PKEY_get0_type_name(pub) : NULL;
+	if (!name)
+		return -ENOPKG;
+	snprintf(out, out_sz, "%s", name);
+	return 0;
+}
+
 /*
  * Verify a detached CMS signature against one operator certificate. The
  * signature algorithm comes from the SignerInfo, so an ML-DSA signature

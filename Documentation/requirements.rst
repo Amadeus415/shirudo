@@ -60,13 +60,11 @@ VM kernels.
    * - ``CONFIG_CRYPTO_SHA256``
      - ``excl_prog_hash``, ``payload_sha256`` and the TPM chain
        digests.
-   * - ``CONFIG_CRYPTO_RSA``
-     - Only for fleets that opted out with ``shirudo genkey
-       --algorithm rsa-2048``.
    * - ``CONFIG_TCG_TPM`` plus a TPM driver (``CONFIG_TCG_TIS``,
        ``CONFIG_TCG_CRB``, or the virtual TPM of the platform)
-     - The NV-extend measurement chain. Hosts without TPM 2.0 run
-       ``shirudo init --no-tpm`` (unmeasured mode).
+     - The NV-extend measurement chain. A TPM 2.0 is mandatory;
+       ``shirudo init`` has no unmeasured mode (``contrib/swtpm.sh``
+       provides a software TPM for machines without one).
    * - ``CONFIG_UPROBES``, ``CONFIG_FUNCTION_TRACER``,
        ``CONFIG_CGROUP_BPF``
      - Attach points used by upatches (uprobe-multi, fentry/fexit,
@@ -89,11 +87,13 @@ Cryptographic algorithms
    * - Use
      - Algorithm
    * - Signing key and certificate
-     - ML-DSA-87 (FIPS 204, NIST category 5) by default; ``shirudo
-       genkey --algorithm rsa-2048`` is the only other choice, the
-       classical opt-out. The smaller ML-DSA sets are not offered: a
-       fleet-wide trust anchor gets the largest margin for about 2 KiB
-       per signature. The certificate is self-signed with the same key.
+     - ML-DSA-87 (FIPS 204, NIST category 5), and nothing else:
+       ``shirudo genkey`` has no algorithm option, the builder refuses
+       a classical signing key, and the target pre-flight refuses a
+       classical certificate. The smaller ML-DSA sets are not offered:
+       a fleet-wide trust anchor gets the largest margin for about
+       2 KiB per signature. The certificate is self-signed with the
+       same key.
    * - ``.upatch`` loader signature
      - Detached CMS over ``loader_insns || data``. With an ML-DSA key
        and OpenSSL 3.x the SignerInfo carries signed attributes and a
@@ -112,10 +112,17 @@ Cryptographic algorithms
      - SHA-256 derived auth value; no asymmetric TPM keys are used in
        the current scope.
 
-Transport security is outside shirudo: artifact transfer rides on the
-organization's SSH, and the target's BPM OCI fetches use libcurl with
-the platform's TLS stack. Neither is made post-quantum by shirudo;
-see :doc:`threat-model`.
+   * - TLS (BPM registry fetches, OTLP and S3 export)
+     - TLS 1.3 only and hybrid ML-KEM key exchange only
+       (X25519MLKEM768, with SecP256r1MLKEM768 as the libcurl
+       fallback), on every libcurl client in both profiles and on the
+       Go publisher. A registry or collector that does not offer a
+       hybrid group cannot be reached; there is no classical fallback.
+       Server certificates are whatever the registry or collector
+       presents.
+
+Artifact transfer rides on the organization's SSH and is outside
+shirudo; see :doc:`threat-model` for the residual classical pieces.
 
 Operator host
 =============
@@ -147,13 +154,16 @@ Target host
 * The kernel configuration above, booted with the BPF LSM enabled.
 * Root (``CAP_SYS_ADMIN``, ``CAP_BPF``) for ``shirudo init`` and
   every state-changing command.
-* Runtime libraries for the dynamic build: ``libcrypto`` >= 3.5,
-  TPM2-TSS, ``libelf``, ``zlib``, ``libcurl``, ``libluajit-5.1``. The
-  static target image (``make target``) bundles them; its
-  ``libcrypto.a`` must also be 3.5 or newer, and mbedTLS 3.6+ provides
-  only libcurl's TLS backend there.
+* Runtime libraries for the dynamic build: ``libcrypto`` and
+  ``libssl`` >= 3.5, TPM2-TSS, ``libelf``, ``zlib``, ``libcurl``,
+  ``libluajit-5.1``. The static target image (``make target``) carries
+  its own OpenSSL 3.5+, OpenSSL-backed libcurl and TPM2-TSS, built from
+  source by ``make target-deps``; the build host then only needs static
+  ``libjitterentropy``, ``libelf``, ``zlib``, ``libzstd`` and
+  ``libluajit-5.1`` archives.
 * A TPM 2.0 exposed as ``/dev/tpmrm0`` (discrete, firmware, cloud
-  vTPM or ``swtpm``) for the measurement chain, or ``--no-tpm``.
+  vTPM) or a software TPM reachable through ``tpm.tcti`` for the
+  measurement chain. There is no opt-out.
 * ``systemd`` for the reboot-persistence unit.
 * A supported architecture: x86_64 or arm64.
 

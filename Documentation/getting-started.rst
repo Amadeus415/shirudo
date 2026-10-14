@@ -66,12 +66,10 @@ target as root:
     sudo shirudo init
     sudo shirudo status --include-tpm
 
-If the machine has no usable TPM, initialize in degraded mode:
-
-::
-
-    sudo shirudo init --no-tpm
-    sudo shirudo status
+A TPM 2.0 is mandatory: init refuses to complete without a measurement
+chain, and there is no unmeasured mode. On a machine without a TPM,
+run a software TPM with ``contrib/swtpm.sh`` and export the
+``SHIRUDO_TPM_TCTI`` line it prints before initializing.
 
 The BPF LSM and target kernel configuration must support the features
 described in ``Documentation/architecture.rst``, including native kernel
@@ -95,9 +93,9 @@ On the operator machine:
     sudo shirudo genkey
 
 This writes an ML-DSA-87 (FIPS 204, post-quantum) private key and a
-self-signed certificate. ``--algorithm rsa-2048`` is the only other
-choice, the classical opt-out for a fleet whose kernels lack
-``CONFIG_CRYPTO_MLDSA``. ``shirudo keys`` prints the algorithm and
+self-signed certificate. There is no other key type: the builder
+refuses classical signing keys, and the target's pre-flight refuses a
+classical certificate. ``shirudo keys`` prints the algorithm and
 fingerprints of the material on disk.
 
 Transfer the generated public certificate to the target through the
@@ -196,10 +194,15 @@ Troubleshooting
 * ``signature_rejected`` or ``keyring_missing``: verify that
   the target was initialized with the matching public certificate.
 * ``signature_unsupported``, or a ``cert_kernel_support`` pre-flight
-  failure from ``shirudo init``: the target kernel cannot verify the
-  certificate's algorithm. Enable ``CONFIG_CRYPTO_MLDSA`` and
-  ``CONFIG_CRYPTO_SHA512`` (see :doc:`requirements`) or re-key with
-  ``shirudo genkey --algorithm rsa-2048``.
+  failure from ``shirudo init``: the target kernel cannot verify
+  ML-DSA. Enable ``CONFIG_CRYPTO_MLDSA`` and ``CONFIG_CRYPTO_SHA512``
+  (see :doc:`requirements`).
+* A ``cert_algorithm`` pre-flight failure: the provisioned ``cert.der``
+  is not ML-DSA-87. Re-key with ``shirudo genkey`` on the operator.
+* ``tpm_error`` or a ``tpm2_reachable`` pre-flight failure: shirudo
+  requires a TPM 2.0 and a definable NV index. Check ``/dev/tpmrm0``,
+  the ``tpm.tcti`` setting for a software TPM, and ``tpm.owner_auth``
+  on a TPM whose owner hierarchy is password-protected.
 * ``verifier_rejected``: inspect the verifier log in the
   structured report and rebuild against the target's BTF.
 * ``btf_mismatch``: regenerate ``vmlinux.h`` from the target

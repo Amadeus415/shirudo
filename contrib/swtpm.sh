@@ -26,7 +26,8 @@
 #   NV chain. "clean" wipes it -- that is the only way to reset shirudo's
 #   NV-extend chain on this emulator.
 # - shirudo's pre-flight skips the /dev/tpmrm0 check when SHIRUDO_TPM_TCTI
-#   is set, so no --no-tpm is needed once the env line is exported.
+#   is set; shirudo has no unmeasured mode, so on a machine without a TPM
+#   this emulator is the way to run it at all.
 
 set -u
 

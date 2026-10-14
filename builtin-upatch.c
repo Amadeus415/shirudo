@@ -2437,9 +2437,9 @@ static int append_upatch_event(const char *type, const char *name,
  * and logs type "upatch_load"; unload extends with "shirudo-unload"
  * and logs "upatch_unload". Each operator op is its own
  * forward-progress event (boot-restore coalesces into one init event
- * instead). Returns 0 on success or graceful degradation (no TPM/chain
- * -- the op is done, just unmeasured), negative on the tpm_error case
- * (op done but chain not advanced).
+ * instead). Returns 0 on success, negative on the tpm_error case (op
+ * done but chain not advanced): a missing TPM or chain is an error,
+ * never an unmeasured success, since init guarantees the chain exists.
  */
 static int upatch_chain_event(const char *tag, const char *type,
 			      const char *op, const char *name,
@@ -2464,9 +2464,10 @@ static int upatch_chain_event(const char *tag, const char *type,
 
 	rc = shirudo_chain_extend(event, chain);
 	if (rc == -ENODEV) {
-		pr_warn("upatch %s: TPM/chain unavailable, not measured "
-			"(degraded)", op);
-		return 0;
+		pr_err("upatch %s: TPM/chain unavailable (category: tpm_error) "
+		       "-- op done but NOT measured; shirudo requires the "
+		       "chain init established", op);
+		return rc;
 	}
 	if (rc) {
 		pr_err("upatch %s: chain extend failed (category: tpm_error) "

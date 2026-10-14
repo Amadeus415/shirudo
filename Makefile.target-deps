@@ -2,12 +2,19 @@
 # Copyright (c) 2026 Authors of shirudo
 #
 # Makefile.target-deps -- build and stage target-side static dependencies.
+#
+# OpenSSL is built here rather than taken from the distribution because the
+# target needs 3.5 or newer (ML-DSA certificates, hybrid ML-KEM TLS) as a
+# static archive, which no current distribution ships. libcurl and
+# TPM2-TSS are then built against that same OpenSSL so the target image
+# carries exactly one crypto and TLS implementation.
 
 SHELL := /bin/sh
 
 TARGET_DEPS_DIR ?= build/target-deps
 TARGET_STATIC_LIBDIR ?= $(TARGET_DEPS_DIR)/lib
-TARGET_CURL_PREFIX ?= $(TARGET_DEPS_DIR)/mbedtls-curl
+TARGET_OPENSSL_PREFIX ?= $(TARGET_DEPS_DIR)/openssl
+TARGET_CURL_PREFIX ?= $(TARGET_DEPS_DIR)/curl
 TARGET_SOURCE_DIR ?= $(TARGET_DEPS_DIR)/src
 
 # configure's --prefix/--libdir options require absolute paths. CURDIR is
@@ -16,18 +23,36 @@ TARGET_SOURCE_DIR ?= $(TARGET_DEPS_DIR)/src
 target-absolute = $(if $(filter /%,$(1)),$(1),$(CURDIR)/$(1))
 override TARGET_DEPS_DIR := $(call target-absolute,$(TARGET_DEPS_DIR))
 override TARGET_STATIC_LIBDIR := $(call target-absolute,$(TARGET_STATIC_LIBDIR))
+override TARGET_OPENSSL_PREFIX := $(call target-absolute,$(TARGET_OPENSSL_PREFIX))
 override TARGET_CURL_PREFIX := $(call target-absolute,$(TARGET_CURL_PREFIX))
 override TARGET_SOURCE_DIR := $(call target-absolute,$(TARGET_SOURCE_DIR))
 
+# OpenSSL 3.5 is the LTS release that introduced ML-DSA and ML-KEM.
+OPENSSL_VERSION ?= 3.5.9
 CURL_VERSION ?= 8.18.0
 TSS_VERSION ?= 4.1.3
 
 TARGET_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || gcc -print-multiarch)
 TARGET_SYSTEM_LIBDIR ?= /usr/lib/$(TARGET_MULTIARCH)
-TARGET_MBEDTLS_PREFIX ?= /usr
-TARGET_MBEDTLS_INCLUDEDIR ?= /usr/include
-TARGET_MBEDTLS_LIBDIR ?= $(TARGET_SYSTEM_LIBDIR)
-TARGET_MBEDTLS_PKG_CONFIG_PATH ?= $(TARGET_MBEDTLS_LIBDIR)/pkgconfig
+
+OPENSSL_PKG_CONFIG_PATH := $(TARGET_OPENSSL_PREFIX)/lib/pkgconfig
+
+# shirudo's clients speak HTTPS to OCI registries and OTLP/S3 endpoints
+# and nothing else. Pin every optional libcurl dependency off so the
+# static closure does not change with the build host's -dev packages
+# (zlib stays: it is already part of the target runtime archives).
+CURL_FEATURE_FLAGS ?= \
+	--without-libpsl --without-brotli --without-zstd \
+	--without-nghttp2 --without-nghttp3 --without-ngtcp2 \
+	--without-libidn2 --without-librtmp --without-libssh2 \
+	--without-libssh --without-libgsasl --without-winidn \
+	--disable-ldap --disable-ldaps --disable-rtsp --disable-dict \
+	--disable-telnet --disable-tftp --disable-pop3 --disable-imap \
+	--disable-smtp --disable-gopher --disable-mqtt --disable-smb \
+	--disable-ftp --disable-file --disable-manual --disable-docs
+OPENSSL_TARBALL := $(TARGET_SOURCE_DIR)/openssl-$(OPENSSL_VERSION).tar.gz
+OPENSSL_SOURCE := $(TARGET_SOURCE_DIR)/openssl-$(OPENSSL_VERSION)
+OPENSSL_STAMP := $(TARGET_OPENSSL_PREFIX)/.built
 
 CURL_TARBALL := $(TARGET_SOURCE_DIR)/curl-$(CURL_VERSION).tar.xz
 CURL_SOURCE := $(TARGET_SOURCE_DIR)/curl-$(CURL_VERSION)
@@ -38,12 +63,17 @@ TSS_STAMP := $(TARGET_STATIC_LIBDIR)/.tpm2-tss-built
 STATIC_ARCHIVES_STAMP := $(TARGET_STATIC_LIBDIR)/.system-archives-staged
 ENV_FILE := $(TARGET_DEPS_DIR)/target.env
 
+# libzstd is libelf's compression dependency on current distributions.
 SYSTEM_ARCHIVES := \
-	$(TARGET_SYSTEM_LIBDIR)/libcrypto.a \
 	$(TARGET_SYSTEM_LIBDIR)/libjitterentropy.a \
 	$(TARGET_SYSTEM_LIBDIR)/libelf.a \
 	$(TARGET_SYSTEM_LIBDIR)/libz.a \
+	$(TARGET_SYSTEM_LIBDIR)/libzstd.a \
 	$(TARGET_SYSTEM_LIBDIR)/libluajit-5.1.a
+
+OPENSSL_ARCHIVES := \
+	libssl.a \
+	libcrypto.a
 
 TSS_ARCHIVES := \
 	libtss2-esys.a \
@@ -53,11 +83,33 @@ TSS_ARCHIVES := \
 
 .PHONY: all clean check-system-archives
 
-all: $(CURL_STAMP) $(TSS_STAMP) $(STATIC_ARCHIVES_STAMP) $(ENV_FILE)
+all: $(OPENSSL_STAMP) $(CURL_STAMP) $(TSS_STAMP) $(STATIC_ARCHIVES_STAMP) $(ENV_FILE)
 	@printf 'shirudo: target dependencies ready\n'
 	@printf 'shirudo: run make target (or source %s)\n' '$(ENV_FILE)'
 
-$(CURL_STAMP):
+# Static-only, no shared objects or loadable modules: the target binary
+# must not pick up a provider or engine from the host filesystem. The
+# OPENSSLDIR is the Debian-family system location so default trust
+# lookups land on the target's CA store, not on this build prefix.
+$(OPENSSL_STAMP):
+	@mkdir -p "$(TARGET_SOURCE_DIR)" "$(TARGET_OPENSSL_PREFIX)"
+	@if test ! -f "$(OPENSSL_TARBALL)"; then \
+		curl -fsSL "https://github.com/openssl/openssl/releases/download/openssl-$(OPENSSL_VERSION)/openssl-$(OPENSSL_VERSION).tar.gz" \
+			-o "$(OPENSSL_TARBALL)"; \
+	fi
+	@rm -rf "$(OPENSSL_SOURCE)"
+	@tar -C "$(TARGET_SOURCE_DIR)" -xf "$(OPENSSL_TARBALL)"
+	@cd "$(OPENSSL_SOURCE)" && \
+		./Configure \
+			--prefix="$(TARGET_OPENSSL_PREFIX)" \
+			--openssldir=/etc/ssl \
+			--libdir=lib \
+			no-shared no-module no-docs no-tests no-apps
+	@$(MAKE) -C "$(OPENSSL_SOURCE)" -j$$(nproc)
+	@$(MAKE) -C "$(OPENSSL_SOURCE)" install_sw
+	@touch "$@"
+
+$(CURL_STAMP): $(OPENSSL_STAMP)
 	@mkdir -p "$(TARGET_SOURCE_DIR)" "$(TARGET_CURL_PREFIX)"
 	@if test ! -f "$(CURL_TARBALL)"; then \
 		curl -fsSL "https://curl.se/download/curl-$(CURL_VERSION).tar.xz" \
@@ -66,19 +118,22 @@ $(CURL_STAMP):
 	@rm -rf "$(CURL_SOURCE)"
 	@tar -C "$(TARGET_SOURCE_DIR)" -xf "$(CURL_TARBALL)"
 	@cd "$(CURL_SOURCE)" && \
-		PKG_CONFIG_PATH="$(TARGET_MBEDTLS_PKG_CONFIG_PATH)" \
-		CPPFLAGS="-I$(TARGET_MBEDTLS_INCLUDEDIR)" \
-		LDFLAGS="-L$(TARGET_MBEDTLS_LIBDIR)" \
+		PKG_CONFIG_PATH="$(OPENSSL_PKG_CONFIG_PATH)" \
+		CPPFLAGS="-I$(TARGET_OPENSSL_PREFIX)/include" \
+		LDFLAGS="-L$(TARGET_OPENSSL_PREFIX)/lib" \
 		./configure \
 			--prefix="$(TARGET_CURL_PREFIX)" \
-			--with-mbedtls="$(TARGET_MBEDTLS_PREFIX)" \
+			--with-openssl="$(TARGET_OPENSSL_PREFIX)" \
+			--with-ca-bundle=/etc/ssl/certs/ca-certificates.crt \
+			--with-ca-path=/etc/ssl/certs \
 			--enable-static \
-			--disable-shared
+			--disable-shared \
+			$(CURL_FEATURE_FLAGS)
 	@$(MAKE) -C "$(CURL_SOURCE)" -j$$(nproc)
 	@$(MAKE) -C "$(CURL_SOURCE)" DESTDIR= install
 	@touch "$@"
 
-$(TSS_STAMP):
+$(TSS_STAMP): $(OPENSSL_STAMP)
 	@mkdir -p "$(TARGET_SOURCE_DIR)" "$(TARGET_STATIC_LIBDIR)"
 	@if test ! -d "$(TSS_SOURCE)"; then \
 		git clone --depth 1 --branch "$(TSS_VERSION)" \
@@ -86,6 +141,7 @@ $(TSS_STAMP):
 	fi
 	@cd "$(TSS_SOURCE)" && ./bootstrap
 	@cd "$(TSS_SOURCE)" && \
+		PKG_CONFIG_PATH="$(OPENSSL_PKG_CONFIG_PATH)" \
 		./configure \
 			--prefix="$(TARGET_DEPS_DIR)" \
 			--libdir="$(TARGET_STATIC_LIBDIR)" \
@@ -116,10 +172,18 @@ check-system-archives:
 		fi; \
 	done
 
-$(STATIC_ARCHIVES_STAMP): check-system-archives $(TSS_STAMP)
+$(STATIC_ARCHIVES_STAMP): check-system-archives $(OPENSSL_STAMP) $(TSS_STAMP)
 	@mkdir -p "$(TARGET_STATIC_LIBDIR)"
 	@for archive in $(SYSTEM_ARCHIVES); do \
 		install -m 0644 "$$archive" "$(TARGET_STATIC_LIBDIR)/$$(basename "$$archive")"; \
+	done
+	@for archive in $(OPENSSL_ARCHIVES); do \
+		if test ! -f "$(TARGET_OPENSSL_PREFIX)/lib/$$archive"; then \
+			printf 'shirudo: OpenSSL build did not produce %s\n' "$$archive" >&2; \
+			exit 1; \
+		fi; \
+		install -m 0644 "$(TARGET_OPENSSL_PREFIX)/lib/$$archive" \
+			"$(TARGET_STATIC_LIBDIR)/$$archive"; \
 	done
 	@for archive in $(TSS_ARCHIVES); do \
 		if test ! -f "$(TARGET_STATIC_LIBDIR)/$$archive"; then \
@@ -129,13 +193,11 @@ $(STATIC_ARCHIVES_STAMP): check-system-archives $(TSS_STAMP)
 	done
 	@touch "$@"
 
-$(ENV_FILE): $(CURL_STAMP) $(STATIC_ARCHIVES_STAMP)
+$(ENV_FILE): $(OPENSSL_STAMP) $(CURL_STAMP) $(STATIC_ARCHIVES_STAMP)
 	@mkdir -p "$(TARGET_DEPS_DIR)"
 	@{ \
 		printf '%s\n' '# Source this file or use make target from the repository root.'; \
-		printf 'export SHIRUDO_TARGET_PKG_CONFIG_PATH=%s\n' "$(TARGET_CURL_PREFIX)/lib/pkgconfig:$(TARGET_MBEDTLS_PKG_CONFIG_PATH)"; \
-		printf 'export SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR=%s\n' "$(TARGET_MBEDTLS_INCLUDEDIR)"; \
-		printf 'export SHIRUDO_TARGET_MBEDTLS_LIBDIR=%s\n' "$(TARGET_MBEDTLS_LIBDIR)"; \
+		printf 'export SHIRUDO_TARGET_PKG_CONFIG_PATH=%s\n' "$(TARGET_CURL_PREFIX)/lib/pkgconfig:$(OPENSSL_PKG_CONFIG_PATH):$(TARGET_STATIC_LIBDIR)/pkgconfig"; \
 		printf 'export SHIRUDO_TARGET_STATIC_LIBDIR=%s\n' "$(TARGET_STATIC_LIBDIR)"; \
 	} > "$@"
 

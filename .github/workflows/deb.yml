@@ -74,13 +74,13 @@ jobs:
               libacl1-dev \
               libftdi1-dev \
               libini-config-dev \
-              libmbedtls-dev \
               libssl-dev \
               libjitterentropy3-dev \
               libfido2-dev \
               libtss2-dev \
               libelf-dev \
               zlib1g-dev \
+              libzstd-dev \
               libcurl4-openssl-dev \
               libjson-c-dev \
               libtool \
@@ -100,18 +100,43 @@ jobs:
             # Build the static target dependencies outside the /host mount.
             # The recursive Make-based builder crashes in the LVH guest, so
             # keep this CI-only path explicit and pass the staged paths below.
-            rm -rf /tmp/shirudo-target-deps /tmp/shirudo-mbedtls-curl /tmp/curl-8.18.0
+            rm -rf /tmp/shirudo-target-deps /tmp/shirudo-openssl /tmp/shirudo-curl \
+              /tmp/openssl-3.5.9 /tmp/curl-8.18.0
             mkdir -p /tmp/shirudo-target-deps/lib
+
+            # OpenSSL 3.5+ as a static archive: the distribution's libcrypto.a
+            # predates ML-DSA and ML-KEM. Static-only, no providers on disk.
+            curl -fsSL https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz \
+              -o /tmp/openssl-3.5.9.tar.gz
+            tar -C /tmp -xf /tmp/openssl-3.5.9.tar.gz
+            cd /tmp/openssl-3.5.9
+            ./Configure --prefix=/tmp/shirudo-openssl --openssldir=/etc/ssl \
+              --libdir=lib no-shared no-module no-docs no-tests no-apps
+            make -j4
+            make install_sw
 
             curl -fsSL https://curl.se/download/curl-8.18.0.tar.xz \
               -o /tmp/curl-8.18.0.tar.xz
             tar -C /tmp -xf /tmp/curl-8.18.0.tar.xz
             cd /tmp/curl-8.18.0
+            PKG_CONFIG_PATH=/tmp/shirudo-openssl/lib/pkgconfig \
+            CPPFLAGS=-I/tmp/shirudo-openssl/include \
+            LDFLAGS=-L/tmp/shirudo-openssl/lib \
             ./configure \
-              --prefix=/tmp/shirudo-mbedtls-curl \
-              --with-mbedtls=/usr \
+              --prefix=/tmp/shirudo-curl \
+              --with-openssl=/tmp/shirudo-openssl \
+              --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt \
+              --with-ca-path=/etc/ssl/certs \
               --enable-static \
-              --disable-shared
+              --disable-shared \
+              --without-libpsl --without-brotli --without-zstd \
+              --without-nghttp2 --without-nghttp3 --without-ngtcp2 \
+              --without-libidn2 --without-librtmp --without-libssh2 \
+              --without-libssh --without-libgsasl --without-winidn \
+              --disable-ldap --disable-ldaps --disable-rtsp --disable-dict \
+              --disable-telnet --disable-tftp --disable-pop3 --disable-imap \
+              --disable-smtp --disable-gopher --disable-mqtt --disable-smb \
+              --disable-ftp --disable-file --disable-manual --disable-docs
             make -j4
             make install
 
@@ -120,6 +145,7 @@ jobs:
               /tmp/shirudo-target-deps/tpm2-tss
             cd /tmp/shirudo-target-deps/tpm2-tss
             ./bootstrap
+            PKG_CONFIG_PATH=/tmp/shirudo-openssl/lib/pkgconfig \
             ./configure \
               --prefix=/tmp/shirudo-target-deps \
               --libdir=/tmp/shirudo-target-deps/lib \
@@ -141,10 +167,12 @@ jobs:
             make -j4
             make install
 
-            install -m 0644 /usr/lib/x86_64-linux-gnu/libcrypto.a /tmp/shirudo-target-deps/lib/libcrypto.a
+            install -m 0644 /tmp/shirudo-openssl/lib/libcrypto.a /tmp/shirudo-target-deps/lib/libcrypto.a
+            install -m 0644 /tmp/shirudo-openssl/lib/libssl.a /tmp/shirudo-target-deps/lib/libssl.a
             install -m 0644 /usr/lib/x86_64-linux-gnu/libjitterentropy.a /tmp/shirudo-target-deps/lib/libjitterentropy.a
             install -m 0644 /usr/lib/x86_64-linux-gnu/libelf.a /tmp/shirudo-target-deps/lib/libelf.a
             install -m 0644 /usr/lib/x86_64-linux-gnu/libz.a /tmp/shirudo-target-deps/lib/libz.a
+            install -m 0644 /usr/lib/x86_64-linux-gnu/libzstd.a /tmp/shirudo-target-deps/lib/libzstd.a
             install -m 0644 /usr/lib/x86_64-linux-gnu/libluajit-5.1.a /tmp/shirudo-target-deps/lib/libluajit-5.1.a
 
             cd /host
@@ -161,9 +189,7 @@ jobs:
               DEB_VERSION="\$deb_version" \
               SHIRUDO_GIT_DESCRIBE='printenv SHIRUDO_CI_VERSION' \
               TARGET_DEPS_PREBUILT=1 \
-              SHIRUDO_TARGET_PKG_CONFIG_PATH=/tmp/shirudo-mbedtls-curl/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig \
-              SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR=/usr/include \
-              SHIRUDO_TARGET_MBEDTLS_LIBDIR=/usr/lib/x86_64-linux-gnu \
+              SHIRUDO_TARGET_PKG_CONFIG_PATH=/tmp/shirudo-curl/lib/pkgconfig:/tmp/shirudo-openssl/lib/pkgconfig \
               SHIRUDO_TARGET_STATIC_LIBDIR=/tmp/shirudo-target-deps/lib
 
             # These libraries must be present in the target executable rather

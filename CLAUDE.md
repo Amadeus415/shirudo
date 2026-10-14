@@ -98,7 +98,7 @@ load-bearing — consult them directly rather than reasoning from memory:
 | `/root/bpf-next/tools/bpf/bpftool/gen.c:687-707` | Reference for the gen_loader + load + sign sequence. |
 | `/root/bpf-next/kernel/bpf/syscall.c:2801` | `bpf_prog_verify_signature()` — runs **before** LSM hooks. `attr.keyring_id` is a key **serial number** (not a name). |
 | `/root/bpf-next/include/linux/lsm_hook_defs.h:441` | `lsm/bpf` hook signature, with the crucial `bool kernel` arg distinguishing nested-from-loader vs userspace calls. |
-| `/root/bpf-next/tools/testing/selftests/bpf/verify_sig_setup.sh` | OpenSSL recipes for `genkey`: `setup-mldsa` (ML-DSA-87, self-signed X.509, shirudo's default) and `setup-rsa` (2048-bit RSA, SHA-256, the explicit opt-out). |
+| `/root/bpf-next/tools/testing/selftests/bpf/verify_sig_setup.sh` | OpenSSL recipe for `genkey`: `setup-mldsa` (ML-DSA-87, self-signed X.509). shirudo has no classical key type. |
 | `/root/bpf-next/Documentation/bpf/signing.rst` | Kernel BPF signing design, including the ML-DSA form (OpenSSL < 4.0 needs signedAttrs + SHA-512; `CONFIG_CRYPTO_MLDSA` + `CONFIG_CRYPTO_SHA512`). |
 | `/root/bpf-next/tools/perf/perf.c` | `cmd_struct[]` dispatch table **pattern** to model `shirudo.c` after. perf is GPL-2.0; **do not copy**, the pattern itself is uncopyrightable. |
 | `/root/bpf-next/tools/lib/subcmd/parse-options.{h,c}` | `OPT_*` / `parse_options()` **API model only**. libsubcmd is GPL-2.0; **do not link**, do not vendor. shirudo whiteroom-implements the subset it uses under `util/parse-options.{c,h}` (or wraps POSIX `getopt_long(3)`). See PLAN.md §"Vendoring and whiteroom reimplementation". |
@@ -170,12 +170,17 @@ load-bearing — consult them directly rather than reasoning from memory:
   binary via `.incbin` inline asm. No generated skeleton headers.
 - Runtime deps (dynamic-linked, all BSD-2-Clause or with a
   BSD-2-Clause OR-branch):
-  - `libcrypto` >= 3.5 (OpenSSL crypto-primitives half — X.509, EVP,
-    CMS, SHA-256, ML-DSA). Both profiles use it for certificate parsing
-    and CMS verification; the target's mbedTLS is only libcurl's TLS
-    backend. **Signing defaults to ML-DSA-87 (FIPS 204)**; `shirudo
-    genkey --algorithm rsa-2048` is the classical opt-out. Target kernels
-    need `CONFIG_CRYPTO_MLDSA` and `CONFIG_CRYPTO_SHA512`; see
+  - `libcrypto` and `libssl` >= 3.5 (OpenSSL: X.509, EVP, CMS,
+    SHA-256, ML-DSA, and TLS behind libcurl). Both profiles run on
+    OpenSSL only; the target links it statically from the from-source
+    build in `make target-deps`. There is no mbedTLS anymore. **Signing
+    is ML-DSA-87 (FIPS 204) only**: `genkey` has no algorithm option,
+    `util/sign.c` refuses non-ML-DSA keys, and the target pre-flight
+    (`cert_algorithm`) refuses non-ML-DSA certs. **Every libcurl client
+    enforces TLS 1.3 and hybrid ML-KEM key exchange only**
+    (`shirudo_tls_curl_policy()`: X25519MLKEM768, SecP256r1MLKEM768,
+    no classical fallback). Target kernels need
+    `CONFIG_CRYPTO_MLDSA` and `CONFIG_CRYPTO_SHA512`; see
     `Documentation/requirements.rst`.
   - `libtss2-esys ≥ 4.0` and `libtss2-tcti-device` (tpm2-tss) — used
     on the target for the NV-extend chain.
@@ -326,9 +331,10 @@ load-bearing — consult them directly rather than reasoning from memory:
   kernel, bpffs mountable, cert on disk, embedded LSM loader
   present in the binary, kernel keyring usable, TPM reachable —
   all checked up front, all failures collected into one report,
-  no kernel state touched if any required check fails. Single
-  override flag `--no-tpm` for the TPM-absence case; every
-  other prerequisite is hard. Reusable module
+  no kernel state touched if any required check fails. Every
+  prerequisite is hard; there is no TPM opt-out (`--no-tpm` was
+  removed: an unmeasured target is indistinguishable from a tampered
+  one). Reusable module
   `util/preflight.{c,h}` so `shirudo status` can use the same
   gate for dry-run readiness reports. Failure category is
   `init_prereqs_missing`. See PLAN.md §"Pre-flight checks (run
@@ -442,8 +448,8 @@ load-bearing — consult them directly rather than reasoning from memory:
 - **TPM 2.0 only.** TPM 1.2 lacks `TPMA_NV_EXTEND` and the SHA-256
   NV bank that shirudo's measurement chain requires; the
   pre-flight refuses TPM 1.2 even if `/dev/tpmrm0` is present.
-  Targets without TPM 2.0 must use `--no-tpm` (degraded mode —
-  LSM enforces; chain not measured). vTPMs from cloud platforms
+  Targets without TPM 2.0 cannot run shirudo; `contrib/swtpm.sh`
+  provides a software TPM 2.0 for development. vTPMs from cloud platforms
   and `swtpm` under QEMU are TPM 2.0 and fully supported.
 - **LSM coexistence.** shirudo's BPF LSM stacks cleanly with
   SELinux, AppArmor, SMACK, and Yama — verdicts compose to the
@@ -502,9 +508,8 @@ load-bearing — consult them directly rather than reasoning from memory:
   auth via `tpm.owner_auth` in `shirudo.conf` or
   `SHIRUDO_TPM_OWNER_AUTH` (passphrase or `hex:`), applied with
   `Esys_TR_SetAuth(ESYS_TR_RH_OWNER, …)` before define. Without it
-  `shirudo init` degrades to unmeasured mode with an actionable
-  diagnostic naming the key — it never silently swallows the auth
-  failure. `nv_define` is idempotent (existing index → reuse; a race
+  `shirudo init` fails with category `tpm_error` and an actionable
+  diagnostic naming the key — there is no unmeasured mode. `nv_define` is idempotent (existing index → reuse; a race
   that returns `TPM2_RC_NV_DEFINED` is also treated as reuse). The
   owner auth is consumed only at define, scrubbed (`explicit_bzero`)
   right after, and never written to the chain.

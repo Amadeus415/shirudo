@@ -100,7 +100,7 @@ _shirudo()
 		fi
 		;;
 	init)
-		COMPREPLY=( $(compgen -W "--check-only --no-tpm" -- "$cur") )
+		COMPREPLY=( $(compgen -W "--check-only --no-seal" -- "$cur") )
 		;;
 	status)
 		COMPREPLY=( $(compgen -W "--json --include-tpm \
@@ -112,7 +112,7 @@ _shirudo()
 		COMPREPLY=( $(compgen -W "--keys-dir=" -- "$cur") )
 		;;
 	genkey)
-		COMPREPLY=( $(compgen -W "--keys-dir= --algorithm= --force -f" -- "$cur") )
+		COMPREPLY=( $(compgen -W "--keys-dir= --force -f" -- "$cur") )
 		;;
 	config|version|help)
 		# nothing to complete beyond --help / --list-cmds

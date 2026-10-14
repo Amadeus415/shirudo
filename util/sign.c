@@ -168,6 +168,13 @@ int shirudo_cms_sign(struct shirudo_sign_io *io,
 		err = -EINVAL;
 		goto cleanup;
 	}
+	if (!pkey_is_mldsa(private_key)) {
+		pr_err("%s: %s key; shirudo signs with ML-DSA only "
+		       "(re-key with shirudo genkey)", pkey_path,
+		       EVP_PKEY_get0_type_name(private_key) ?: "unknown");
+		err = -EINVAL;
+		goto cleanup;
+	}
 
 	x509 = read_x509(cert_path);
 	if (!x509) {

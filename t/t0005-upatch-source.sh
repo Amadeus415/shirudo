@@ -46,9 +46,10 @@ function decode(input)
 end
 EOF
 
-openssl req -x509 -newkey rsa:2048 -nodes -keyout "$WORK/k.pem" \
-	-outform DER -out "$WORK/c.der" -days 1 -sha256 -subj "/CN=t0005" \
-	>/dev/null 2>&1 || test_skip_all "openssl keygen failed"
+# shirudo signs with ML-DSA-87 only (needs OpenSSL >= 3.5 to mint it).
+openssl req -x509 -newkey ML-DSA-87 -nodes -keyout "$WORK/k.pem" \
+	-outform DER -out "$WORK/c.der" -days 1 -subj "/CN=t0005" \
+	>/dev/null 2>&1 || test_skip_all "openssl ML-DSA keygen failed (needs OpenSSL >= 3.5)"
 
 cat > "$WORK/t.bpf.c" <<'EOF'
 // SPDX-License-Identifier: Dual BSD/GPL

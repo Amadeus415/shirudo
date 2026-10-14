@@ -5,8 +5,8 @@
 # t1108 -- TPM measurement chain: on a host with a live NV chain, the
 # eventlog replayed from zero must reproduce the live NV value (that is
 # exactly the chain_matches_eventlog verdict `status` computes). Needs a
-# usable TPM; on --no-tpm, degraded, or owner-auth-blocked hosts there
-# is no chain and the test skips (it runs on the CI vTPM runner).
+# usable TPM; init refuses to run without one, so a host with no chain
+# has no shirudo state and the test skips (it runs on the CI vTPM runner).
 
 cd "$(dirname "$0")"
 . ./integration-lib.sh
@@ -22,7 +22,7 @@ print(t.get(sys.argv[1], "") if t.get(sys.argv[1], None) is not None else "")
 }
 
 [ -n "$(tpm_chain chain)" ] ||
-	test_skip_all "no live TPM chain (degraded / --no-tpm / no usable TPM)"
+	test_skip_all "no live TPM chain (init not run / no usable TPM)"
 
 test_expect_success 'eventlog replay reproduces the live NV chain value' '
 	[ "$(tpm_chain chain_matches_eventlog)" = "True" ]

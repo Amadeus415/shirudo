@@ -521,8 +521,12 @@ static int curl_once_ex(struct bpm_oci_client *c, const char *method,
 	}
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-	curl_easy_setopt(curl, CURLOPT_SSL_CTX_FUNCTION, shirudo_sslctx_callback);
-	curl_easy_setopt(curl, CURLOPT_SSL_CTX_DATA, &c->tls_ca);
+	if (shirudo_tls_curl_policy(curl, &c->tls_ca)) {
+		pr_err("bpm OCI request %s: cannot apply TLS policy", url);
+		curl_slist_free_all(headers);
+		curl_easy_cleanup(curl);
+		return -EHOSTUNREACH;
+	}
 	if (body) {
 		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
 		curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)body_len);
@@ -647,8 +651,10 @@ static int get_bearer_token(struct bpm_oci_client *c, const char *challenge)
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &r);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-	curl_easy_setopt(curl, CURLOPT_SSL_CTX_FUNCTION, shirudo_sslctx_callback);
-	curl_easy_setopt(curl, CURLOPT_SSL_CTX_DATA, &c->tls_ca);
+	if (shirudo_tls_curl_policy(curl, &c->tls_ca)) {
+		rc = -EINVAL;
+		goto out;
+	}
 	cc = curl_easy_perform(curl);
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &r.status);
 	if (cc != CURLE_OK) {
@@ -1646,10 +1652,8 @@ static X509 *read_x509_memory(const unsigned char *body, size_t len)
 	if (!b)
 		return NULL;
 	x = d2i_X509_bio(b, NULL);
-	if (!x) {
-		BIO_reset(b);
+	if (!x && BIO_reset(b) == 1)
 		x = PEM_read_bio_X509(b, NULL, NULL, NULL);
-	}
 	BIO_free(b);
 	return x;
 }

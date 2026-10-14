@@ -871,13 +871,12 @@ static int append_init_event(const struct restore_entry *set, size_t n,
  * Extend the TPM2 NV measurement chain by one "init" event covering
  * the restored set, then append the matching eventlog entry. One
  * extension per boot regardless of upatch count (PLAN.md "Boot-restore
- * protocol"). With --no-tpm, or if the TPM/index is unusable, the
- * chain is left unmeasured (degraded mode) and init still completes.
- * An extend that fails after the index exists is a hard error: the LSM
- * is up but the chain is out of sync with reality (category tpm_error).
+ * protocol"). The chain is mandatory: a TPM that cannot be opened or an
+ * index that cannot be defined is a hard error (category tpm_error),
+ * never an unmeasured init, because an unmeasured target is
+ * indistinguishable from a tampered one to the operator.
  */
-static int chain_extend_init(const struct restore_entry *set, size_t n,
-			     bool allow_no_tpm)
+static int chain_extend_init(const struct restore_entry *set, size_t n)
 {
 	uint8_t cert_sha[32], auth[32], set_digest[32], init_digest[32];
 	uint8_t tag_buf[sizeof("shirudo-init") + 64];
@@ -885,11 +884,6 @@ static int chain_extend_init(const struct restore_entry *set, size_t n,
 	struct shirudo_tpm *tpm = NULL;
 	char *listing;
 	int rc;
-
-	if (allow_no_tpm) {
-		pr_warn("tpm: --no-tpm, measurement chain not extended (degraded)");
-		return 0;
-	}
 
 	{
 		struct shirudo_config cfg;
@@ -936,9 +930,9 @@ static int chain_extend_init(const struct restore_entry *set, size_t n,
 
 	rc = shirudo_tpm_open(&tpm);
 	if (rc) {
-		pr_warn("tpm: not usable (%s); measurement disabled (degraded)",
-			strerror(-rc));
-		return 0;
+		pr_err("tpm: not usable (%s); shirudo requires a TPM 2.0 "
+		       "(tpm_error)", strerror(-rc));
+		return rc;
 	}
 	{
 		struct shirudo_config cfg;
@@ -950,10 +944,12 @@ static int chain_extend_init(const struct restore_entry *set, size_t n,
 		explicit_bzero(&cfg, sizeof(cfg));
 	}
 	if (rc) {
-		pr_warn("tpm: NV index 0x%08X cannot be defined; "
-			"measurement disabled (degraded)", SHIRUDO_NV_INDEX);
+		pr_err("tpm: NV index 0x%08X cannot be defined (tpm_error); "
+		       "on a TPM with owner auth set, supply it via "
+		       "tpm.owner_auth in /etc/shirudo/shirudo.conf or "
+		       "SHIRUDO_TPM_OWNER_AUTH", SHIRUDO_NV_INDEX);
 		shirudo_tpm_close(tpm);
-		return 0;
+		return rc;
 	}
 	rc = shirudo_tpm_nv_extend(tpm, SHIRUDO_NV_INDEX, auth, init_digest);
 	if (rc) {
@@ -978,7 +974,6 @@ static int chain_extend_init(const struct restore_entry *set, size_t n,
 
 static const struct shirudo_help_item init_options[] = {
 	{ "--check-only", "run the pre-flight only; never touch kernel state" },
-	{ "--no-tpm",     "proceed without TPM (degraded mode)" },
 	{ "--no-seal",    "skip filesystem sealing when target LSM hooks are not sleepable" },
 };
 
@@ -988,7 +983,7 @@ static const struct shirudo_help_section init_help_sections[] = {
 };
 
 static const struct shirudo_help init_help = {
-	.usage      = "shirudo init [--check-only] [--no-tpm] [--no-seal]",
+	.usage      = "shirudo init [--check-only] [--no-seal]",
 	.summary    = "Bootstrap the BPF LSM on this target. Idempotent; safe "
 		      "to re-run.\nThe pinned link survives the process exit.",
 	.sections   = init_help_sections,
@@ -1003,7 +998,6 @@ static void usage(void)
 
 int cmd_init(int argc, const char **argv)
 {
-	struct shirudo_preflight_opts opts = {};
 	struct shirudo_preflight_result res;
 	bool check_only = false, no_seal = false;
 	int i, rc;
@@ -1013,8 +1007,6 @@ int cmd_init(int argc, const char **argv)
 
 		if (strcmp(a, "--check-only") == 0) {
 			check_only = true;
-		} else if (strcmp(a, "--no-tpm") == 0) {
-			opts.allow_no_tpm = true;
 		} else if (strcmp(a, "--no-seal") == 0) {
 			no_seal = true;
 		} else if (shirudo_is_help(a)) {
@@ -1027,7 +1019,7 @@ int cmd_init(int argc, const char **argv)
 		}
 	}
 
-	shirudo_preflight_run(&opts, &res);
+	shirudo_preflight_run(&res);
 	print_preflight(&res);
 
 	if (res.n_failed > 0) {
@@ -1075,7 +1067,7 @@ int cmd_init(int argc, const char **argv)
 			return 1;
 		}
 
-		rc = chain_extend_init(set, n, opts.allow_no_tpm);
+		rc = chain_extend_init(set, n);
 		xfree(set, n * sizeof(*set));
 		if (rc) {
 			pr_err("init: incomplete -- LSM active and upatches "

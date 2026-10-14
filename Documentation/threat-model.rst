@@ -53,6 +53,16 @@ not satisfy the signature/keyring policy. This includes root and
 processes with the ordinary administrative capabilities. Signed
 loader programs remain the controlled way to install an upatch.
 
+Unmeasured state
+----------------
+
+The TPM measurement chain is mandatory. ``shirudo init`` refuses to
+complete without a reachable TPM 2.0 and a definable NV index, and an
+operator-driven load or unload whose chain extension fails reports
+``tpm_error`` instead of succeeding unmeasured. A target without a
+live chain is therefore either not initialized or an incident, never
+an accepted configuration.
+
 Tampering with shirudo state
 ----------------------------
 
@@ -89,9 +99,10 @@ that cannot be re-keyed quickly are the reason: a signature scheme a
 quantum adversary can forge would let such an adversary install BPF on
 every target that still trusts the old certificate. ML-DSA-87 keeps the
 anchor ahead of the 2029 migration horizon published by the major
-browser and cloud programs. ``--algorithm rsa-2048`` remains an explicit,
-documented opt-out for kernels or toolchains without ML-DSA; operators
-choosing it accept the classical risk.
+browser and cloud programs. There is no classical option: ``genkey``
+produces nothing else, the builder refuses a classical signing key, and
+the target pre-flight refuses a classical certificate, so a fleet cannot
+drift back by misconfiguration.
 
 Digests stay SHA-256 (payload, program and TPM chain) and SHA-512 (the
 CMS signed-attributes digest). Hash functions retain roughly half their
@@ -103,11 +114,13 @@ Residual classical cryptography is outside shirudo's trust boundary:
 * The organization's SSH transport (OpenSSH already negotiates a
   hybrid ML-KEM key exchange by default; host-key signatures remain
   the operator's policy).
-* TLS to OCI registries for BPM fetches, which uses the platform
-  TLS stack (OpenSSL 3.5+ negotiates hybrid ML-KEM; mbedTLS in the
-  static target image does not yet). Artifacts fetched this way are
-  still authenticated by their ML-DSA CMS signature, so the exposure is
-  confidentiality of public artifact bytes and registry credentials.
+* TLS to OCI registries and telemetry collectors. shirudo's clients
+  on both profiles and the Go publisher require TLS 1.3 and a hybrid
+  ML-KEM key exchange; a server that offers only classical groups is
+  refused rather than downgraded. Server certificates remain classical
+  WebPKI, which is an authentication rather than a confidentiality
+  exposure. Artifacts fetched this way are still authenticated by their
+  ML-DSA CMS signature.
 * Future TPM attestation keys (``TPM2_NV_Certify``) would be RSA or
   ECC until TPM vendors ship post-quantum attestation.
 

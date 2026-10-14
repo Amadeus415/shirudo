@@ -3,11 +3,11 @@
  * Copyright (c) 2026 Authors of shirudo
  *
  * Small crypto interface shared by the operator and target profiles.
- * Hashing, X.509 and CMS verification run on libcrypto in both profiles
- * so every key algorithm the kernel verifies (RSA, ML-DSA) is handled
- * by one implementation; only the libcurl TLS trust-anchor glue is per
- * profile (OpenSSL on the operator, mbedTLS on the target). Callers
- * must not depend on either provider's types.
+ * Hashing, X.509, CMS verification and the libcurl TLS policy all run
+ * on OpenSSL (shared on the operator, static on the target), so every
+ * key algorithm the kernel verifies and the hybrid ML-KEM key exchange
+ * come from one implementation. Callers must not depend on the
+ * provider's types.
  */
 
 #ifndef SHIRUDO_CRYPTO_H
@@ -43,6 +43,9 @@ int shirudo_cert_read_file(const char *path, struct shirudo_cert *cert);
 void shirudo_cert_free(struct shirudo_cert *cert);
 int shirudo_cert_pubkey_digest(const struct shirudo_cert *cert,
 			       uint8_t out[SHIRUDO_CRYPTO_SHA256_LEN]);
+/* The provider's name for the cert's public key, e.g. "ML-DSA-87". */
+int shirudo_cert_key_algorithm(const struct shirudo_cert *cert,
+			       char *out, size_t out_sz);
 int shirudo_verify_detached(const uint8_t *payload, size_t payload_len,
 			    const uint8_t *signature, size_t signature_len,
 			    const struct shirudo_cert *cert);
@@ -56,5 +59,15 @@ void shirudo_tls_ca_cleanup(struct shirudo_tls_ca *ca);
 
 /* CURLOPT_SSL_CTX_FUNCTION callback. userptr points to shirudo_tls_ca. */
 CURLcode shirudo_sslctx_callback(CURL *curl, void *sslctx, void *userptr);
+
+/*
+ * shirudo's TLS policy for every libcurl handle it opens: TLS 1.3 only
+ * and hybrid ML-KEM key exchange only (X25519MLKEM768, with the P-256
+ * hybrid as fallback), so neither a version downgrade nor a classical
+ * group can be negotiated. ca may be NULL; otherwise it is the extra
+ * trust anchor fed to the SSL_CTX callback. Returns 0 or a negative
+ * errno; callers must not connect when it fails.
+ */
+int shirudo_tls_curl_policy(CURL *curl, struct shirudo_tls_ca *ca);
 
 #endif /* SHIRUDO_CRYPTO_H */

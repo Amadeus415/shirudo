@@ -17,6 +17,7 @@
 #include <linux/keyctl.h>
 
 #include "config.h"
+#include "crypto.h"
 #include "kernel_abi.h"
 #include "loader.h"
 #include "malloc.h"
@@ -214,6 +215,40 @@ static int read_cert(unsigned char **out, size_t *out_sz)
 }
 
 /*
+ * shirudo's trust anchor is ML-DSA-87 only: a classical certificate on
+ * disk is refused before any kernel state is touched, so a fleet cannot
+ * drift back to RSA by provisioning the wrong cert.der.
+ */
+static void check_cert_algorithm(struct shirudo_preflight_result *r)
+{
+	struct shirudo_preflight_check *c =
+		next_slot(r, SHIRUDO_PRE_CERT_ALGORITHM, "cert_algorithm");
+	struct shirudo_cert cert = {};
+	char name[64];
+	int rc;
+
+	if (shirudo_cert_read_file(SHIRUDO_CERT_PATH, &cert)) {
+		pass(c);
+		snprintf(c->detail, sizeof(c->detail),
+			 "skipped (cert unreadable)");
+		return;
+	}
+	rc = shirudo_cert_key_algorithm(&cert, name, sizeof(name));
+	shirudo_cert_free(&cert);
+	if (rc) {
+		fail(r, c, "%s: cannot determine public-key algorithm",
+		     SHIRUDO_CERT_PATH);
+		return;
+	}
+	if (strcmp(name, "ML-DSA-87") == 0)
+		pass(c);
+	else
+		fail(r, c, "%s is %s; shirudo accepts only ML-DSA-87 "
+		     "certificates (re-key with shirudo genkey)",
+		     SHIRUDO_CERT_PATH, name);
+}
+
+/*
  * The only authoritative answer to "can this kernel use the cert" is the
  * kernel's own X.509 parser. An ML-DSA cert on a kernel without
  * CONFIG_CRYPTO_MLDSA fails add_key(2) with ENOENT (parser knows the
@@ -293,17 +328,11 @@ static void check_embedded_loader(struct shirudo_preflight_result *r)
 		     bpf2_sz, seal_sz);
 }
 
-static void check_tpm(struct shirudo_preflight_result *r, bool allow_no_tpm)
+static void check_tpm(struct shirudo_preflight_result *r)
 {
 	struct shirudo_preflight_check *c =
 		next_slot(r, SHIRUDO_PRE_TPM, "tpm2_reachable");
 
-	if (allow_no_tpm) {
-		pass(c);
-		snprintf(c->detail, sizeof(c->detail),
-			 "skipped (--no-tpm, degraded mode)");
-		return;
-	}
 	/*
 	 * Either SHIRUDO_TPM_TCTI env or tpm.tcti in shirudo.conf
 	 * redirects the TCTI string consumed by util/tpm.c (e.g.
@@ -337,15 +366,13 @@ static void check_tpm(struct shirudo_preflight_result *r, bool allow_no_tpm)
 		pass(c);
 	else
 		fail(r, c,
-		     "/dev/tpmrm0: %s (pass --no-tpm for degraded mode, or "
+		     "/dev/tpmrm0: %s (shirudo requires a TPM 2.0; for swtpm "
 		     "set tpm.tcti = swtpm:host=...,port=... in "
-		     "/etc/shirudo/shirudo.conf -- or SHIRUDO_TPM_TCTI -- "
-		     "for swtpm)",
+		     "/etc/shirudo/shirudo.conf or SHIRUDO_TPM_TCTI)",
 		     strerror(errno));
 }
 
-void shirudo_preflight_run(const struct shirudo_preflight_opts *opts,
-			   struct shirudo_preflight_result *out)
+void shirudo_preflight_run(struct shirudo_preflight_result *out)
 {
 	memset(out, 0, sizeof(*out));
 	check_root(out);
@@ -353,8 +380,9 @@ void shirudo_preflight_run(const struct shirudo_preflight_opts *opts,
 	check_bpffs(out);
 	check_signed_loader_abi(out);
 	check_cert(out);
+	check_cert_algorithm(out);
 	check_cert_kernel_algo(out);
 	check_keyring(out);
 	check_embedded_loader(out);
-	check_tpm(out, opts->allow_no_tpm);
+	check_tpm(out);
 }

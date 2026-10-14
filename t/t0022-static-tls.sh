@@ -14,7 +14,14 @@ fi
 
 test_expect_success 'target binary has no shared TLS closure' '
 	test -x "$TARGET" &&
-	! readelf -d "$TARGET" | grep -Eq "lib(curl|ssl|crypto|mbedtls|mbedx509|mbedcrypto)\\.so"
+	! readelf -d "$TARGET" | grep -Eq "lib(curl|ssl|crypto|mbedtls|mbedx509|mbedcrypto|gnutls)\\.so"
+'
+
+test_expect_success 'target binary embeds OpenSSL 3.5 or newer' '
+	version=$(grep -a -o -m1 "OpenSSL 3\\.[0-9]*\\.[0-9]*" "$TARGET" | head -1) &&
+	test -n "$version" &&
+	minor=$(printf "%s" "$version" | cut -d. -f2) &&
+	[ "$minor" -ge 5 ]
 '
 
 test_expect_success 'target has no libssh dependency' '

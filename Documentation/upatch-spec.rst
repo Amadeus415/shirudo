@@ -149,16 +149,16 @@ the kernel's ``bpf_prog_verify_signature()`` checks it against the cert
 in the sealed ``shirudo`` keyring (the keyring's serial is passed as
 ``attr.keyring_id``) **before** the verifier and the LSM hooks run.
 
-The format is algorithm-agnostic: the SignerInfo names the key
+The container is algorithm-agnostic: the SignerInfo names the key
 algorithm, the signer is identified by subjectKeyIdentifier, and no
-certificate is embedded. With the default ML-DSA-87 key the writer
-emits one of two kernel-accepted forms, depending on the OpenSSL it
-links: signed attributes (contentType and messageDigest only, no
-signingTime, so the bytes are reproducible) with a SHA-512 message
-digest on OpenSSL 3.x, or a signature over the content itself with no
-attributes on OpenSSL 4. An ML-DSA-87 SignerInfo is about 4.9 KiB;
-RSA-2048 is under 400 bytes. The writer caps ``signature_len`` at
-16 KiB and the kernel at 64 KiB.
+certificate is embedded. shirudo's writer signs with ML-DSA-87 only
+(it refuses other keys) and emits one of two kernel-accepted forms,
+depending on the OpenSSL it links: signed attributes (contentType and
+messageDigest only, no signingTime, so the bytes are reproducible) with
+a SHA-512 message digest on OpenSSL 3.x, or a signature over the
+content itself with no attributes on OpenSSL 4. An ML-DSA-87 SignerInfo
+is about 4.9 KiB. The writer caps ``signature_len`` at 16 KiB and the
+kernel at 64 KiB.
 
 data
 ----

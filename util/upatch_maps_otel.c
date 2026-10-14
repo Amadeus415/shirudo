@@ -1668,6 +1668,11 @@ static int otel_post(struct otel_state *st, const char *json, size_t json_len)
 				 st->insecure_tls ? 0L : 1L);
 		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST,
 				 st->insecure_tls ? 0L : 2L);
+		if (shirudo_tls_curl_policy(curl, NULL)) {
+			curl_easy_cleanup(curl);
+			rc = -EINVAL;
+			break;
+		}
 		if (st->ca_file)
 			curl_easy_setopt(curl, CURLOPT_CAINFO, st->ca_file);
 		if (st->client_cert)
@@ -2486,6 +2491,11 @@ static int s3_put(struct otel_s3_state *st,
 				 st->insecure_tls ? 0L : 1L);
 		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST,
 				 st->insecure_tls ? 0L : 2L);
+		if (shirudo_tls_curl_policy(curl, NULL)) {
+			curl_easy_cleanup(curl);
+			rc = -EINVAL;
+			break;
+		}
 		if (st->ca_file)
 			curl_easy_setopt(curl, CURLOPT_CAINFO, st->ca_file);
 		cc = curl_easy_perform(curl);

@@ -269,20 +269,6 @@ command -v flock >/dev/null 2>&1 ||
 
 validate_package_cert
 
-# Fixture keys follow the genkey default (ML-DSA-87) when the host OpenSSL
-# can produce it; older toolchains fall back to RSA-2048 so the suite still
-# runs, and the log records which family the bundle was signed with.
-fixture_key_algorithm()
-{
-	if [[ -n "${SHIRUDO_TEST_KEY_ALGORITHM:-}" ]]; then
-		printf '%s' "$SHIRUDO_TEST_KEY_ALGORITHM"
-	elif openssl list -public-key-algorithms 2>/dev/null | grep -qi 'ML-DSA'; then
-		printf 'ml-dsa-87'
-	else
-		printf 'rsa-2048'
-	fi
-}
-
 mkdir -p "$(dirname "$BUNDLE_DIR")"
 exec 9>"$LOCK_FILE"
 flock 9
@@ -648,8 +634,6 @@ build_obs_fixture()
 {
 	local keys_dir="$1"
 	local source_dir="$FIXTURE_WORK/linux_obs"
-	local empty_source_dir="$FIXTURE_WORK/linux_obs_empty"
-	local benchmark_dir="$TMP_DIR/fixtures/benchmark"
 
 	# Keep the production blocklist out of the integration fixture. The
 	# fixture is deliberately built from a reserved address so TCP and UDP
@@ -678,40 +662,16 @@ EOF
 		--key "$keys_dir/signing_key.pem" \
 		--cert "$keys_dir/cert.der"
 	)
-
-	mkdir -p "$empty_source_dir/decoders" "$benchmark_dir/empty" \
-		"$benchmark_dir/firewall"
-	cp -a "$source_dir/." "$empty_source_dir/"
-	cat >"$empty_source_dir/ipv4.list" <<'EOF'
-# Empty IPv4 firewall list: benchmark the IPv4 observability path only.
-EOF
-	python3 "$empty_source_dir/gen_ipv4_shields.py" \
-		"$empty_source_dir/ipv4.list" \
-		"$empty_source_dir/ipv4_shields_generated.h"
-	cp "$TMP_DIR/fixtures/linux-observability.upatch" \
-		"$benchmark_dir/firewall/linux-observability.upatch"
-	(
-		cd "$REPO_ROOT"
-		"$REPO_ROOT/tools/shirudo-build/shirudo-build" \
-			"$empty_source_dir/linux-observability.bpf.c" \
-			-o "$benchmark_dir/empty/linux-observability.upatch" \
-			--name linux-observability --vmlinux "$REPO_ROOT/bpf/vmlinux.h" \
-			--key "$keys_dir/signing_key.pem" \
-			--cert "$keys_dir/cert.der"
-	)
 }
 
 log "building target-test fixtures on the operator host"
 mkdir -p "$TMP_DIR/fixtures/decoders" "$FIXTURE_WORK/trusted" \
 	"$FIXTURE_WORK/foreign" "$FIXTURE_WORK/own"
-fixture_algorithm=$(fixture_key_algorithm)
-log "signing fixtures with ${fixture_algorithm} keys"
-"$REPO_ROOT/shirudo" genkey --algorithm "$fixture_algorithm" \
-	--keys-dir "$FIXTURE_WORK/trusted" >/dev/null
-"$REPO_ROOT/shirudo" genkey --algorithm "$fixture_algorithm" \
-	--keys-dir "$FIXTURE_WORK/foreign" >/dev/null
-"$REPO_ROOT/shirudo" genkey --algorithm "$fixture_algorithm" \
-	--keys-dir "$FIXTURE_WORK/own" >/dev/null
+# Fixture keys are ML-DSA-87 like every shirudo key; the host OpenSSL must
+# be 3.5 or newer, which the operator build already requires.
+"$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/trusted" >/dev/null
+"$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/foreign" >/dev/null
+"$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/own" >/dev/null
 
 "${CC:-cc}" -O0 -g -Wl,--build-id=sha1 \
 	-o /tmp/shirudo-test-uprobe-target \
@@ -830,7 +790,7 @@ else
 fi
 (
 	cd "$TMP_DIR/fixtures"
-	sha256sum -- *.upatch benchmark/*/*.upatch cert.der own.der package-cert.der > manifest
+	sha256sum -- *.upatch cert.der own.der package-cert.der > manifest
 )
 
 printf 'shirudo-test-vm-bundle-v1\n' >"$TMP_DIR/format"

@@ -3,12 +3,13 @@
 # Copyright (c) 2026 Authors of shirudo
 #
 # t0029 -- the ML-DSA signing path end to end on the operator side:
-# genkey (default ML-DSA-87), build a tiny fentry upatch with it, and
-# check the embedded detached CMS against the kernel's expectations
-# (ML-DSA-87 SignerInfo, keyid signer, no embedded cert, SHA-512 signed
-# attributes without signingTime on OpenSSL 3.x) by verifying it with
-# openssl over the exact loader_insns || data bytes the kernel folds.
-# Needs clang, shirudo-build and an OpenSSL >= 3.5 (skips otherwise).
+# genkey (ML-DSA-87), build a tiny fentry upatch with it, and check the
+# embedded detached CMS against the kernel's expectations (ML-DSA-87
+# SignerInfo, keyid signer, no embedded cert, SHA-512 signed attributes
+# without signingTime on OpenSSL 3.x) by verifying it with openssl over
+# the exact loader_insns || data bytes the kernel folds. Also checks
+# that the builder refuses a classical (RSA) signing key outright.
+# Needs clang and shirudo-build; the ML-DSA cases need OpenSSL >= 3.5.
 
 cd "$(dirname "$0")"
 . ./test-lib.sh
@@ -19,8 +20,6 @@ SHB=../tools/shirudo-build/shirudo-build
 command -v clang >/dev/null 2>&1 || test_skip_all "no clang"
 command -v openssl >/dev/null 2>&1 || test_skip_all "no openssl"
 command -v python3 >/dev/null 2>&1 || test_skip_all "no python3"
-openssl list -public-key-algorithms 2>/dev/null | grep -qi 'ML-DSA' ||
-	test_skip_all "openssl without ML-DSA (needs OpenSSL >= 3.5)"
 [ -x "$S" ] || test_skip_all "shirudo not built"
 [ -x "$SHB" ] || test_skip_all "shirudo-build not built (make shirudo-build)"
 [ -e ../bpf/vmlinux.h ] || test_skip_all "no bpf/vmlinux.h (build the tree)"
@@ -48,6 +47,25 @@ case "$SHB" in
 /*) B="$SHB" ;;
 *)  B="$(pwd)/$SHB" ;;
 esac
+
+# A classical key must be refused before anything is signed, on any
+# OpenSSL: the kernel-side trust anchor is ML-DSA-87 only.
+openssl req -x509 -newkey rsa:2048 -nodes -keyout "$WORK/rsa.pem" \
+	-outform DER -out "$WORK/rsa.der" -days 1 -sha256 -subj "/CN=t0029" \
+	>/dev/null 2>&1 || test_skip_all "openssl RSA keygen failed"
+
+test_expect_success 'shirudo-build refuses to sign with an RSA key' '
+	! ( cd .. && "$B" "$WORK/t.bpf.c" -o "$WORK/rsa.upatch" --vmlinux bpf/vmlinux.h \
+		--name t0029rsa --key "$WORK/rsa.pem" --cert "$WORK/rsa.der" ) \
+		>"$WORK/rsa.out" 2>&1 &&
+	grep -q "ML-DSA only" "$WORK/rsa.out" &&
+	! test -e "$WORK/rsa.upatch"
+'
+
+if ! openssl list -public-key-algorithms 2>/dev/null | grep -qi 'ML-DSA'; then
+	printf '# openssl without ML-DSA (needs OpenSSL >= 3.5); signing cases not run\n'
+	test_done
+fi
 
 "$S" genkey --keys-dir "$WORK/keys" >/dev/null 2>&1 ||
 	test_skip_all "genkey failed"

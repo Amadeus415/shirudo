@@ -29,13 +29,9 @@ keyctl search @u keyring shirudo >/dev/null 2>&1 || test_skip_all "no shirudo ke
 restore() {
 	# Drop whatever "shirudo" keyring is in @u now (fake or stale), then
 	# let init recreate a fresh sealed one with the cert and re-pin it.
-	# Try a measured init first; fall back to --no-tpm so the keyring is
-	# still recreated on a TPM-less host (where a plain init fails
-	# pre-flight and would otherwise leave @u with no shirudo keyring).
 	k=$(keyctl search @u keyring shirudo 2>/dev/null) &&
 		keyctl unlink "$k" @u >/dev/null 2>&1
-	"$SHIRUDO_BIN" init >/dev/null 2>&1 ||
-		"$SHIRUDO_BIN" init --no-tpm >/dev/null 2>&1 || true
+	"$SHIRUDO_BIN" init >/dev/null 2>&1 || true
 }
 trap restore EXIT
 

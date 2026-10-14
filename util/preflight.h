@@ -18,6 +18,7 @@ enum shirudo_preflight_id {
 	SHIRUDO_PRE_BPFFS,
 	SHIRUDO_PRE_SIGNED_LOADER_ABI,
 	SHIRUDO_PRE_CERT_ON_DISK,
+	SHIRUDO_PRE_CERT_ALGORITHM,
 	SHIRUDO_PRE_CERT_KERNEL_ALGO,
 	SHIRUDO_PRE_KEYRING,
 	SHIRUDO_PRE_EMBEDDED_LOADER,
@@ -38,16 +39,13 @@ struct shirudo_preflight_result {
 	int				n_failed;
 };
 
-struct shirudo_preflight_opts {
-	bool	allow_no_tpm;
-};
-
 /*
- * Run every prerequisite check. All checks always run; n_failed is
- * the total number of failures. The function does not write to
- * stdout/stderr/syslog -- the caller presents the outcome.
+ * Run every prerequisite check. All checks always run and every one is
+ * hard: there is no opt-out for a missing TPM or a classical
+ * certificate. n_failed is the total number of failures. The function
+ * does not write to stdout/stderr/syslog -- the caller presents the
+ * outcome.
  */
-void shirudo_preflight_run(const struct shirudo_preflight_opts *opts,
-			   struct shirudo_preflight_result *out);
+void shirudo_preflight_run(struct shirudo_preflight_result *out);
 
 #endif /* SHIRUDO_PREFLIGHT_H */

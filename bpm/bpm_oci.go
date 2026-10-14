@@ -253,34 +253,28 @@ func bpmRegistryBaseURL(registry string) *url.URL {
 	}
 }
 
+// configureBPMOCIHTTPClient applies shirudo's TLS policy to the registry
+// client, matching the libcurl clients in the C tree: TLS 1.3 only and
+// the hybrid X25519MLKEM768 key exchange only, so neither a version
+// downgrade nor a classical group can be negotiated. BPM_OCI_CA_FILE adds
+// a trust anchor.
+// A client with an opaque RoundTripper (tests) is left untouched unless a
+// CA file is requested, which cannot be honoured there.
 func configureBPMOCIHTTPClient(client *http.Client) (*http.Client, error) {
 	scheme := strings.TrimSpace(os.Getenv("BPM_OCI_SCHEME"))
 	if scheme != "" && scheme != "https" && scheme != "http" {
 		return client, fmt.Errorf("BPM_OCI_SCHEME must be https or http, got %q", scheme)
 	}
 	caPath := strings.TrimSpace(os.Getenv("BPM_OCI_CA_FILE"))
-	if caPath == "" {
-		return client, nil
-	}
-	caPEM, err := os.ReadFile(caPath)
-	if err != nil {
-		return client, fmt.Errorf("read BPM_OCI_CA_FILE %s: %w", caPath, err)
-	}
-	pool, err := x509.SystemCertPool()
-	if err != nil {
-		pool = x509.NewCertPool()
-	}
-	if pool == nil || !pool.AppendCertsFromPEM(caPEM) {
-		return client, fmt.Errorf("BPM_OCI_CA_FILE %s does not contain a valid PEM CA certificate", caPath)
-	}
 
 	transport, ok := client.Transport.(*http.Transport)
-	if !ok {
-		if client.Transport == nil {
-			transport, ok = http.DefaultTransport.(*http.Transport)
-		}
+	if !ok && client.Transport == nil {
+		transport, ok = http.DefaultTransport.(*http.Transport)
 	}
 	if !ok {
+		if caPath == "" {
+			return client, nil
+		}
 		return client, fmt.Errorf("BPM_OCI_CA_FILE requires an HTTP TLS transport")
 	}
 	transport = transport.Clone()
@@ -289,7 +283,24 @@ func configureBPMOCIHTTPClient(client *http.Client) (*http.Client, error) {
 	} else {
 		transport.TLSClientConfig = &tls.Config{}
 	}
-	transport.TLSClientConfig.RootCAs = pool
+	transport.TLSClientConfig.MinVersion = tls.VersionTLS13
+	transport.TLSClientConfig.CurvePreferences = []tls.CurveID{tls.X25519MLKEM768}
+
+	if caPath != "" {
+		caPEM, err := os.ReadFile(caPath)
+		if err != nil {
+			return client, fmt.Errorf("read BPM_OCI_CA_FILE %s: %w", caPath, err)
+		}
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			pool = x509.NewCertPool()
+		}
+		if pool == nil || !pool.AppendCertsFromPEM(caPEM) {
+			return client, fmt.Errorf("BPM_OCI_CA_FILE %s does not contain a valid PEM CA certificate", caPath)
+		}
+		transport.TLSClientConfig.RootCAs = pool
+	}
+
 	configured := *client
 	configured.Transport = transport
 	return &configured, nil

@@ -35,27 +35,22 @@ completionsdir ?= $(sharedir)/bash-completion/completions
 # Absolute by default (systemd does not scan /usr/local); packagers override.
 systemdunitdir ?= /usr/lib/systemd/system
 
-# Local target dependency build defaults. These are overridable for a
-# non-system mbedTLS installation or a prebuilt dependency prefix.
+# Local target dependency build defaults. make target-deps builds a static
+# OpenSSL (3.5+), an OpenSSL-backed static libcurl and TPM2-TSS under
+# TARGET_DEPS_DIR; these are overridable for a prebuilt dependency prefix.
 TARGET_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || gcc -print-multiarch)
 TARGET_DEPS_DIR ?= $(CURDIR)/build/target-deps
-TARGET_DEPS_CURL_PREFIX ?= $(TARGET_DEPS_DIR)/mbedtls-curl
-TARGET_DEPS_MBEDTLS_PREFIX ?= /usr
-TARGET_DEPS_MBEDTLS_INCLUDEDIR ?= /usr/include
-TARGET_DEPS_MBEDTLS_LIBDIR ?= /usr/lib/$(TARGET_MULTIARCH)
-TARGET_DEPS_MBEDTLS_PKG_CONFIG_PATH ?= $(TARGET_DEPS_MBEDTLS_LIBDIR)/pkgconfig
-SHIRUDO_TARGET_PKG_CONFIG_PATH ?= $(TARGET_DEPS_CURL_PREFIX)/lib/pkgconfig:$(TARGET_DEPS_MBEDTLS_PKG_CONFIG_PATH)
-SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR ?= $(TARGET_DEPS_MBEDTLS_INCLUDEDIR)
-SHIRUDO_TARGET_MBEDTLS_LIBDIR ?= $(TARGET_DEPS_MBEDTLS_LIBDIR)
+TARGET_DEPS_OPENSSL_PREFIX ?= $(TARGET_DEPS_DIR)/openssl
+TARGET_DEPS_CURL_PREFIX ?= $(TARGET_DEPS_DIR)/curl
 SHIRUDO_TARGET_STATIC_LIBDIR ?= $(TARGET_DEPS_DIR)/lib
+SHIRUDO_TARGET_PKG_CONFIG_PATH ?= $(TARGET_DEPS_CURL_PREFIX)/lib/pkgconfig:$(TARGET_DEPS_OPENSSL_PREFIX)/lib/pkgconfig:$(SHIRUDO_TARGET_STATIC_LIBDIR)/pkgconfig
 
 export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdir \
        systemdunitdir SHIRUDO_TARGET_PKG_CONFIG_PATH \
-       SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR SHIRUDO_TARGET_MBEDTLS_LIBDIR \
        SHIRUDO_TARGET_STATIC_LIBDIR
 export VM_SSH_COMMAND
 
-.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build test-helpers linux-obs-ipv4-shields bundle test-vm-bundle kernel bpf-next kernel-small vm vm-small test-vm-small-bundle vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz bench test-vm test-vm-clean install \
+.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build test-helpers linux-obs-ipv4-shields bundle test-vm-bundle kernel bpf-next kernel-small vm vm-small test-vm-small-bundle vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg bintar-pkg clean \
         distclean test examples config
 
@@ -104,11 +99,8 @@ else
 	+$(Q)$(MAKE) -f Makefile.target-deps \
 		TARGET_DEPS_DIR="$(TARGET_DEPS_DIR)" \
 		TARGET_STATIC_LIBDIR="$(SHIRUDO_TARGET_STATIC_LIBDIR)" \
-		TARGET_CURL_PREFIX="$(TARGET_DEPS_CURL_PREFIX)" \
-		TARGET_MBEDTLS_PREFIX="$(TARGET_DEPS_MBEDTLS_PREFIX)" \
-		TARGET_MBEDTLS_INCLUDEDIR="$(TARGET_DEPS_MBEDTLS_INCLUDEDIR)" \
-		TARGET_MBEDTLS_LIBDIR="$(TARGET_DEPS_MBEDTLS_LIBDIR)" \
-		TARGET_MBEDTLS_PKG_CONFIG_PATH="$(TARGET_DEPS_MBEDTLS_PKG_CONFIG_PATH)"
+		TARGET_OPENSSL_PREFIX="$(TARGET_DEPS_OPENSSL_PREFIX)" \
+		TARGET_CURL_PREFIX="$(TARGET_DEPS_CURL_PREFIX)"
 endif
 
 target-deps-clean:
@@ -126,8 +118,6 @@ target-config:
 	+$(Q)$(MAKE) -f Makefile.config -B SHIRUDO_PROFILE=target \
 		CONFIG_OUT=config-target.mk \
 		SHIRUDO_TARGET_PKG_CONFIG_PATH="$(SHIRUDO_TARGET_PKG_CONFIG_PATH)" \
-		SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR="$(SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR)" \
-		SHIRUDO_TARGET_MBEDTLS_LIBDIR="$(SHIRUDO_TARGET_MBEDTLS_LIBDIR)" \
 		SHIRUDO_TARGET_STATIC_LIBDIR="$(SHIRUDO_TARGET_STATIC_LIBDIR)" config.mk
 
 define HELP_TEXT
@@ -138,8 +128,8 @@ shirudo make targets (run from the repo root):
     make                   build the shirudo binary (default target)
     make target-deps       build and stage static target dependencies
     make target             alias for make shirudo-target
-    make shirudo-target    build the target binary with static mbedTLS and
-                           a static mbedTLS-backed libcurl and runtime
+    make shirudo-target    build the target binary with static OpenSSL and
+                           a static OpenSSL-backed libcurl and runtime
                            libraries (set SHIRUDO_TARGET_STATIC_LIBDIR when
                            static system archives use a custom directory)
     make ... SHIRUDO_DEBUG=0
@@ -184,8 +174,6 @@ shirudo make targets (run from the repo root):
     make test-tgt-obs-fuzz boot the observability VM and additionally run the
                            seeded DNS mutation corpus (defaults: 5000 cases,
                            seed 0x53484952)
-    make bench             run paired target-VM Linux observability benchmarks;
-                           results are written under build/benchmarks
     make test-vm            compatibility alias for make test-tgt
     make test-vm-bundle    build/reuse the host-side Shirudo payload used by
                            make vm and make test-tgt, plus target-test fixtures;
@@ -215,8 +203,8 @@ shirudo make targets (run from the repo root):
                            shirudo-build).
                            Rebuilds from clean with prefix=/usr.
     make bintar-pkg        Two distro-agnostic target-installer tarballs:
-                           both use the target binary with static mbedTLS and
-                           mbedTLS-backed libcurl; shirudo-static.tar.gz also
+                           both use the target binary with static OpenSSL and
+                           OpenSSL-backed libcurl; shirudo-static.tar.gz also
                            bundles the remaining dynamic libraries via rpath.
 
   Other
@@ -225,10 +213,9 @@ shirudo make targets (run from the repo root):
     make help              show this overview
 
   Variables: prefix (=/usr/local), bindir, libexecdir, systemdunitdir,
-             SHIRUDO_TARGET_PKG_CONFIG_PATH (target mbedTLS/libcurl .pc dirs),
-             SHIRUDO_TARGET_MBEDTLS_INCLUDEDIR/LIBDIR (non-system mbedTLS),
+             SHIRUDO_TARGET_PKG_CONFIG_PATH (target OpenSSL/libcurl .pc dirs),
              SHIRUDO_TARGET_STATIC_LIBDIR (static runtime archive directory),
-             TARGET_DEPS_MBEDTLS_PREFIX/PKG_CONFIG_PATH (target-deps inputs),
+             TARGET_DEPS_OPENSSL_PREFIX/CURL_PREFIX (target-deps outputs),
              VM_NAME (optional unique VM name), VM_TENANT (OTEL tenant),
              KERNEL (VM kernel: bpf-next, 7.2, 6.18, 6.12, 6.6, or 6.1),
              KERNEL_TAG (kernel target tag, e.g. v6.18; TAG is an alias),
@@ -295,7 +282,6 @@ TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
 	t/helper/*.c t/helper/*.py completion/* systemd/*.in systemd/*.timer \
 	test-vm/fixtures/*.c test-vm/fixtures/*.lua \
 	test-vm/fixtures/decoders/* \
-	contrib/benchmark-linux-observability.sh t/linux_obs_benchmark.py \
 	shields/linux_obs/*.c shields/linux_obs/*.h shields/linux_obs/*.list \
 		shields/linux_obs/*.py shields/linux_obs/Beefile \
 	shields/linux_obs/decoders/*))
@@ -566,11 +552,6 @@ test-tgt-obs-fuzz: $(VM_KERNEL_DEP) test-vm-bundle
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
 
-bench: $(VM_KERNEL_DEP) test-vm-bundle
-	$(Q)TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
-		TEST_VM_KERNEL_ARTIFACT_DIR="$(abspath $(VM_KERNEL_ARTIFACT_DIR))" \
-		bash contrib/benchmark-linux-observability.sh
-
 vm-stop:
 	$(Q)VM_NAME="$(VM_NAME)" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" contrib/test-vm.sh --stop
@@ -582,7 +563,7 @@ vm-clean:
 test-vm-clean: vm-clean
 
 # Build two target-installer tarballs (kernel-style `bin*-pkg`). Both target
-# binaries statically link mbedTLS and mbedTLS-backed libcurl. The static image
+# binaries statically link OpenSSL and OpenSSL-backed libcurl. The static image
 # additionally bundles the remaining dynamic libraries into lib/shirudo/ via
 # an $ORIGIN-relative rpath for embedded / legacy / minimal targets.
 # Each tarball contains a staged install-target tree under root/ plus an

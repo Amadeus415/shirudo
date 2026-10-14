@@ -208,13 +208,15 @@ exception is the operator-only ``shirudo build`` dispatch to
 source.
 
 The target profile is independent of the operator profile. Both
-profiles parse certificates and verify CMS signatures with libcrypto
-(OpenSSL 3.5 or newer, so ML-DSA keys are handled by one
-implementation); the target profile additionally links a static
-mbedTLS-backed libcurl for registry TLS, plus libbpf, libelf, zlib,
-and TPM2-TSS. Neither profile includes an SSH transport library. The
-default signing algorithm is ML-DSA-87; see :doc:`requirements` for
-the kernel and toolchain prerequisites that implies.
+profiles run on OpenSSL 3.5 or newer: libcrypto for certificates, CMS
+and digests, libssl behind libcurl for TLS, so ML-DSA signatures and
+the hybrid ML-KEM key exchange come from one implementation. The
+operator links the system shared libraries; the target links a static
+OpenSSL, an OpenSSL-backed static libcurl and static TPM2-TSS that
+``make target-deps`` builds from source, plus libbpf, libelf and zlib.
+Neither profile includes an SSH transport library. The default signing
+algorithm is ML-DSA-87; see :doc:`requirements` for the kernel and
+toolchain prerequisites that implies.
 
 The signed-loader path
 ======================

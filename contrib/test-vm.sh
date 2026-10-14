@@ -61,11 +61,6 @@ VM_MODE="${VM_MODE:-test}"
 KERNEL_PROFILE="${TEST_VM_KERNEL_PROFILE:-full}"
 VM_SUITE="${TEST_VM_SUITE:-all}"
 SKIP_SEAL="${TEST_VM_SKIP_SEAL:-0}"
-VM_BENCH_VARIANT="${TEST_VM_BENCH_VARIANT:-}"
-BENCH_WARMUP_SEC="${BENCH_WARMUP_SEC:-}"
-BENCH_DURATION_SEC="${BENCH_DURATION_SEC:-}"
-BENCH_SAMPLES="${BENCH_SAMPLES:-}"
-BENCH_EXEC_WORKERS="${BENCH_EXEC_WORKERS:-}"
 VM_VERBOSE="${VM_VERBOSE:-0}"
 DNS_FUZZ="${TEST_VM_DNS_FUZZ:-0}"
 DNS_FUZZ_SEED="${TEST_VM_DNS_FUZZ_SEED:-0x53484952}"
@@ -164,15 +159,7 @@ validate_mode()
 	tree)
 		[[ "$VM_MODE" == test ]] || die "tree suite requires VM_MODE=test"
 		;;
-	bench)
-		[[ "$VM_MODE" == test ]] || die "benchmark suite requires VM_MODE=test"
-		case "$VM_BENCH_VARIANT" in
-		baseline|empty|firewall) ;;
-		*) die "TEST_VM_BENCH_VARIANT must be baseline, empty, or firewall" ;;
-		esac
-		(( CPUS >= 2 )) || die "benchmark suite requires at least two VM CPUs"
-		;;
-	*) die "TEST_VM_SUITE must be 'all', 'obs', or 'bench'" ;;
+	*) die "TEST_VM_SUITE must be 'all', 'obs', or 'tree'" ;;
 	esac
 	case "$DNS_FUZZ" in
 	0|1) ;;
@@ -381,10 +368,6 @@ validate_host_bundle()
 	if [[ "$VM_SUITE" == obs ]]; then
 		[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/linux-observability.upatch" ]] ||
 			die "host VM bundle has no Linux observability fixture: $TEST_VM_HOST_BUNDLE"
-	elif [[ "$VM_SUITE" == bench ]]; then
-		[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/benchmark/empty/linux-observability.upatch" &&
-		   -s "$TEST_VM_HOST_BUNDLE/fixtures/benchmark/firewall/linux-observability.upatch" ]] ||
-			die "host VM bundle has no benchmark observability fixtures: $TEST_VM_HOST_BUNDLE"
 	elif [[ "$VM_SUITE" == tree ]]; then
 		[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/tree-oci/shirudo/upatch-tree/manifests/stable" &&
 		   -s "$TEST_VM_HOST_BUNDLE/fixtures/shirudo-test-tree-match.upatch" &&
@@ -1217,12 +1200,6 @@ fi
 printf '      export VM_MODE=%q\n' "$VM_MODE" >>"$USER_DATA"
 printf '      export TEST_VM_SUITE=%q\n' "$VM_SUITE" >>"$USER_DATA"
 printf '      export TEST_VM_SKIP_SEAL=%q\n' "$SKIP_SEAL" >>"$USER_DATA"
-printf '      export TEST_VM_BENCH_VARIANT=%q\n' "$VM_BENCH_VARIANT" >>"$USER_DATA"
-for bench_env in BENCH_WARMUP_SEC BENCH_DURATION_SEC BENCH_SAMPLES BENCH_EXEC_WORKERS; do
-	if [[ -n "${!bench_env}" ]]; then
-		printf '      export %s=%q\n' "$bench_env" "${!bench_env}" >>"$USER_DATA"
-	fi
-done
 printf '      export TEST_VM_DNS_FUZZ=%q\n' "$DNS_FUZZ" >>"$USER_DATA"
 printf '      export TEST_VM_DNS_FUZZ_SEED=%q\n' "$DNS_FUZZ_SEED" >>"$USER_DATA"
 printf '      export TEST_VM_DNS_FUZZ_CASES=%q\n' "$DNS_FUZZ_CASES" >>"$USER_DATA"
