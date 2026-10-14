@@ -637,7 +637,11 @@ int bpm_oci_get_file(struct bpm_oci_client *c, const char *url,
 	rc = curl_once(c, "GET", url, accept, NULL, &r, fp);
 	if (!rc && r.status == 401 && r.www_auth[0] && !strncasecmp(r.www_auth, "Bearer", 6)) {
 		fclose(fp); unlink(path); fp = fopen(path, "wb");
-		if (!fp) { bpm_buffer_free(&r.body); return -errno; }
+		if (!fp) {
+			rc = -errno;
+			bpm_buffer_free(&r.body);
+			return rc;
+		}
 		rc = get_bearer_token(c, r.www_auth);
 		if (!rc) {
 			snprintf(auth, sizeof(auth), "Bearer %s", c->token);
@@ -648,7 +652,11 @@ int bpm_oci_get_file(struct bpm_oci_client *c, const char *url,
 		   !strncasecmp(r.www_auth, "Basic", 5) && c->username[0]) {
 		char encoded[2048];
 		fclose(fp); unlink(path); fp = fopen(path, "wb");
-		if (!fp) { bpm_buffer_free(&r.body); return -errno; }
+		if (!fp) {
+			rc = -errno;
+			bpm_buffer_free(&r.body);
+			return rc;
+		}
 		rc = encode_basic(c->username, c->password, encoded, sizeof(encoded));
 		if (!rc) {
 			snprintf(auth, sizeof(auth), "Basic %s", encoded);
