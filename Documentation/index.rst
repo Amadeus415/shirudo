@@ -25,6 +25,7 @@ design; the code is authoritative for behaviour.
    threat-model
    getting-started
    upatch-spec
+   contributing
    coding-style
 
 Quick orientation
@@ -41,8 +42,9 @@ Quick orientation
 - **Reviewing the design or considering shirudo for your fleet?**
   Read :doc:`threat-model`, which enumerates the adversary classes,
   target- and operator-node threats, and residual risks.
-- **Contributing C or BPF code?** :doc:`coding-style` is the kernel
-  coding-style document, copied verbatim from the Linux kernel's
+- **Contributing C or BPF code?** :doc:`contributing` covers the
+  sign-off requirement and commit tags; :doc:`coding-style` is the
+  kernel coding-style document, copied verbatim from the Linux kernel's
   ``Documentation/process/coding-style.rst``; shirudo applies it to
   userspace too.
 

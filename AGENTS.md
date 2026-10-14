@@ -208,6 +208,10 @@ one usually still compiles and passes tests.
 - When a checkout is used in place of an installed operator package,
   `SHIRUDO_BUILD=<path>` names the helper, or put
   `tools/shirudo-build` and the checkout root on `PATH`.
+- Commits follow `Documentation/contributing.rst`: a kernel-style
+  subject (`area: imperative summary`), a body that explains why, and
+  a mandatory `Signed-off-by:` from a real identity. Do not add a
+  sign-off on someone's behalf; leave it for the committer.
 
 ## Out of scope
 
