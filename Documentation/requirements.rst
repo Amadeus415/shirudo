@@ -268,9 +268,10 @@ the private key under ``/var/lib/shirudo/keys/``.
 * Root (``CAP_SYS_ADMIN``, ``CAP_BPF``) for ``shirudo init`` and every
   state-changing command.
 * The target binary from ``make target`` links OpenSSL, libcurl,
-  tpm2-tss, libbpf, libelf, zlib, zstd and LuaJIT statically and
-  needs only the C library at runtime, so it runs on a distribution
-  whose own OpenSSL predates ML-DSA.
+  tpm2-tss with its device TCTI, libbpf, libelf, zlib, zstd and
+  LuaJIT statically and needs only the C library at runtime, so it
+  runs on a distribution whose own OpenSSL predates ML-DSA and reaches
+  the TPM from an initrd that holds no tpm2-tss shared objects.
 * A TPM 2.0 exposed as ``/dev/tpmrm0`` (discrete, firmware or cloud
   vTPM), or a software TPM reachable through ``tpm.tcti``.  TPM 1.2 is
   refused; there is no opt-out.

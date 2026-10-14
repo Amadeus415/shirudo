@@ -77,6 +77,7 @@ OPENSSL_ARCHIVES := \
 TSS_ARCHIVES := \
 	libtss2-esys.a \
 	libtss2-tctildr.a \
+	libtss2-tcti-device.a \
 	libtss2-sys.a \
 	libtss2-mu.a
 
@@ -146,6 +147,7 @@ $(TSS_STAMP): $(OPENSSL_STAMP)
 			--libdir="$(TARGET_STATIC_LIBDIR)" \
 			--enable-static \
 			--disable-shared \
+			--enable-nodl \
 			--disable-fapi \
 			--disable-policy \
 			--disable-tcti-cmd \
