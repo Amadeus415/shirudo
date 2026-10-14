@@ -1,0 +1,34 @@
+name: Documentation
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install docutils
+        run: |
+          sudo apt-get -q update
+          sudo apt-get -q install -y --no-install-recommends python3-docutils
+
+      - name: Render the documentation
+        run: make html-docs
+
+      - name: Upload the rendered documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: shirudo-html-docs
+          path: Documentation/output/
