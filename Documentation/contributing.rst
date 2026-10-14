@@ -15,14 +15,69 @@ reference for anything not covered.
 Commit messages
 ===============
 
+The kernel's ``submitting-patches.rst`` ("Describe your changes") and
+``maintainer-tip.rst`` ("Changelog") set the standard; the rules below
+are theirs, applied here.
+
 The subject line is ``area: imperative summary`` in at most about 70
 characters, where ``area`` names the part of the tree being changed
 (``bpm:``, ``packaging:``, ``docs:``, ``tree:``, ``build:`` and so on).
-The body, wrapped at 75 columns, explains why the change is made and
-what it does, in that order; it is the permanent record read by
-reviewers and by whoever bisects to the commit later. Describe the
-user-visible behaviour, the invariant that motivated it and anything
-that was tried and rejected. The body never contains emojis.
+The body, wrapped at 75 columns, is the permanent record read by
+reviewers now and by whoever bisects to the commit years later, so it
+is written for them:
+
+* Describe the problem first. Whether the change is a one-line fix or
+  a new feature, something motivated it; say what, and convince the
+  reader it is worth fixing. The diff already shows *what* changed;
+  the message exists to record *why*.
+* Describe the user-visible impact: the crash, the refused load, the
+  wrong report, the invariant that was violated. Quote the actual
+  error or log line when there is one.
+* Then describe what the change does about it, in plain English, so
+  the reviewer can check that the code does what was intended. Mention
+  alternatives that were tried and rejected, and the costs of the one
+  chosen.
+* Quantify claims: a performance, size or latency improvement comes
+  with numbers; a heuristic comes with its trade-off.
+* Use the imperative mood ("make X do Y", "refuse Z"), as if giving an
+  order to the code base. Not "this patch", not "I changed", not "we
+  modify". Write in abstract terms about the code, not as a story of
+  what the author did.
+* Structure it as short paragraphs in the order context, problem,
+  solution. If the explanation is getting long, the commit is probably
+  doing more than one thing; split it.
+* Refer to other commits by at least twelve hash characters plus the
+  subject in parentheses, so the reference stays readable without a
+  repository at hand.
+* Make it self-contained. Links to reports or discussions are welcome
+  (``Link:``, ``Closes:``), but the message must make sense without
+  following them.
+* Short and to the point. Leave out what the diff says, repeat nothing
+  from the subject, and never use emojis.
+
+An example of the form, from the kernel (commit 43a1e3744548 by Linus
+Torvalds, ``security/keys: fix missed RCU read section on lookup``)::
+
+    security/keys: fix missed RCU read section on lookup
+
+    Nicholas Carlini reports that the keyring code calls assoc_array_find()
+    in find_key_to_update() without holding the RCU read lock, while the
+    assoc_array_gc() code really is designed around removing the node from
+    the tree and then freeing it after an RCU grace-period.
+
+    The regular key handling doesn't see this because holding the keyring
+    semaphore hides any lifetime issues, but the persistent key handling
+    uses a different model.
+
+    Instead of extending the keyring locking, just do the simple RCU locking
+    that the assoc_array was designed for.
+
+    Reported-by: Nicholas Carlini <npc@anthropic.com>
+    Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+
+Three paragraphs: who found what and why it is a real bug, why it went
+unnoticed, and which of the possible fixes was chosen and why. Nothing
+about which lines moved; the diff shows that.
 
 Sign your work
 ==============
