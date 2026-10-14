@@ -23,7 +23,7 @@ test_expect_success 'status --otel sends a structured keepalive log' '
 		"$S" status --otel --include-tpm >"$work/stdout" 2>"$work/stderr" &&
 	wait "$server" &&
 	test ! -s "$work/stdout" &&
-	python3 - "$work/body" "$work/meta" <<'PY'
+	python3 - "$work/body" "$work/meta" <<"PY"
 import json
 import sys
 
@@ -68,7 +68,7 @@ test_expect_success 'status --json --otel keeps JSON output available' '
 	OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="http://127.0.0.1:$port/v1/logs" \
 		"$S" status --json --otel --include-tpm >"$work/stdout" 2>"$work/stderr" &&
 	wait "$server" &&
-	python3 - "$work/stdout" <<'PY'
+	python3 - "$work/stdout" <<"PY"
 import json
 import sys
 
@@ -84,7 +84,7 @@ test_expect_success 'status --otel without an endpoint does not send' '
 	env -u OTEL_EXPORTER_OTLP_LOGS_ENDPOINT \
 		-u OTEL_EXPORTER_OTLP_ENDPOINT \
 		"$S" status --json --otel >"$work/stdout" 2>"$work/stderr" &&
-	python3 - "$work/stdout" <<'PY'
+	python3 - "$work/stdout" <<"PY"
 import json
 import sys
 
@@ -98,7 +98,7 @@ PY
 test_expect_success 'status --json --include-system includes kernel config' '
 	work=$(mktemp -d) &&
 	"$S" status --json --include-system >"$work/status.json" 2>"$work/stderr" &&
-	python3 - "$work/status.json" <<'PY'
+	cat >"$work/check.py" <<"PY" &&
 import json
 import os
 import sys
@@ -114,21 +114,22 @@ assert list(config) == sorted(config)
 
 path = "/boot/config-" + system["kernel_release"]
 if os.path.isfile(path):
-for line in open(path, encoding="utf-8", errors="replace"):
-    line = line.rstrip("\r\n")
-    if line.startswith("# CONFIG_") and line.endswith(" is not set"):
-        key = line[2:].split(" is not set", 1)[0]
-        assert config[key] == "n"
-        continue
-    if line.startswith("CONFIG_") and "=" in line:
-        key, value = line.split("=", 1)
-            if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+    for line in open(path, encoding="utf-8", errors="replace"):
+        line = line.rstrip("\r\n")
+        if line.startswith("# CONFIG_") and line.endswith(" is not set"):
+            key = line[2:].split(" is not set", 1)[0]
+            assert config[key] == "n"
+            continue
+        if line.startswith("CONFIG_") and "=" in line:
+            key, value = line.split("=", 1)
+            if len(value) >= 2 and value[0] == value[-1] == "\"":
                 value = value[1:-1]
             assert config[key] == value
             break
     else:
         raise AssertionError("kernel config has no CONFIG_ entries")
 PY
+	python3 -I "$work/check.py" "$work/status.json" &&
 	rm -rf "$work"
 '
 
