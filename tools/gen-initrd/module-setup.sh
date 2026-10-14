@@ -77,6 +77,9 @@ install() {
 	# The root's copy of this binary, at this path, is the identity init
 	# records for the bpffs guards; the initrd must run it from there.
 	inst_binary "$bin" "$path" || return 1
+	# bpm key keeps cert.der as a symlink into keys/; the initrd gets
+	# the file, not a link into a tree it does not have.
+	cert=$(readlink -f "$cert") || return 1
 	inst_simple "$cert" /etc/shirudo/cert.der || return 1
 	if [[ -r $conf ]]; then
 		inst_simple "$conf" /etc/shirudo/shirudo.conf || return 1
