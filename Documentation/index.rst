@@ -80,6 +80,10 @@ Contributing
 ``README.md``
     A short overview of what shirudo is and where to look.
 
+``CODE_OF_CONDUCT.md``
+    The community Code of Conduct, based on the CNCF one; conduct
+    concerns go to conduct@shirudo.ai.
+
 ``LICENSE``
     BSD-2-Clause for userspace.  BPF programs declare ``Dual BSD/GPL``
     because the kernel's LSM hook framework requires a GPL-compatible

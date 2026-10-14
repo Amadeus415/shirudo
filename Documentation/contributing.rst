@@ -12,6 +12,10 @@ tags. This page states the parts of that process that apply here; the
 kernel's ``Documentation/process/submitting-patches.rst`` is the
 reference for anything not covered.
 
+Participation in the project is governed by the Code of Conduct in
+``CODE_OF_CONDUCT.md`` at the repository root; conduct concerns go to
+conduct@shirudo.ai.
+
 Commit messages
 ===============
 
