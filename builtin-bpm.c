@@ -1129,20 +1129,18 @@ static int tree_pull_artifact(const struct shirudo_tree_operation *op,
 	struct bpm_buffer manifest = {}, blob = {};
 	char repository[BPM_MAX_ENDPOINT], url[PATH_MAX], cache[PATH_MAX];
 	char hex[65];
-	unsigned int expected_flags;
 	int nl = 0, rc;
 
-	if (tree_digest_hex(op->artifact.payload_sha256, (uint8_t[32]){}))
+	if (tree_digest_hex(op->artifact.layer_digest, (uint8_t[32]){}))
 		return -EINVAL;
-	/* Load and unload directives intentionally share payload_sha256.  Keep
-	 * both variants in the local cache by including the expected directive
-	 * flags in the cache key. */
-	expected_flags = !strcmp(op->op, "delete") ? SHIRUDO_DIRECTIVE_UNLOAD : 0;
-	if (snprintf(cache, sizeof(cache), "%s/%s-flags-%u.upatch",
+	/*
+	 * The cache holds the blob exactly as fetched, so its content
+	 * address names it. The payload digest would not: equally built
+	 * upatches published under different names share it.
+	 */
+	if (snprintf(cache, sizeof(cache), "%s/%s.upatch",
 		     SHIRUDO_BPM_TREE_ARTIFACTS_DIR,
-		     op->artifact.payload_sha256 +
-		     (!strncmp(op->artifact.payload_sha256, "sha256:", 7) ? 7 : 0),
-		     expected_flags) >=
+		     op->artifact.layer_digest + strlen("sha256:")) >=
 	    (int)sizeof(cache))
 		return -ENAMETOOLONG;
 	if (!access(cache, R_OK)) {
