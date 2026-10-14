@@ -32,12 +32,14 @@ what is present on the machine, never by separate builds:
 - the *target* holds only the public certificate in a sealed kernel
   keyring plus a TPM2 NV-extend chain, verifies every load and is
   agentless: no daemon, no listening socket, every operation is a
-  one-shot CLI invocation that the operator reaches over existing
-  `ssh`/`scp`.
+  one-shot CLI invocation run locally or by the systemd timers that
+  pull packages (`bpm repo update`, `bpm upgrade`, `bpm tree sync`) and
+  export status (OTLP).
 
-Artifacts flow outward from the credential holder, like `git push`.
-shirudo owns neither the transport nor fleet state; do not reintroduce
-the removed fleet, remote-management or SSH layers.
+Delivery is pull-based: the operator publishes to an OCI registry, the
+target fetches and verifies. shirudo has no push transport, no SSH
+integration and no fleet state; do not reintroduce the removed fleet,
+remote-management or transport layers.
 
 ## Where things are documented
 
@@ -49,7 +51,6 @@ the removed fleet, remote-management or SSH layers.
 | `Documentation/requirements.rst` | Kernel options, operator toolchain, target runtime. |
 | `Documentation/getting-started.rst` | Operator quickstart: build, package, transfer, load, status, unload. |
 | `Documentation/coding-style.rst` | The kernel's coding style, applied to all C here. |
-| `TODO.kernel` | Kernel and libbpf limitations the design works around, by item number. |
 
 The kernel side of the signing design is the kernel's own
 `Documentation/bpf/signing.rst`; `bpf_prog_verify_signature()` runs
@@ -212,8 +213,10 @@ one usually still compiles and passes tests.
 
 Do not propose features in these areas; the design delegates them:
 
-- SSH key management and transport: shirudo uses whatever SSH
-  infrastructure already exists.
+- Transport and remote access: delivery is pull-based from OCI
+  registries; there is no push channel, no SSH integration and no
+  fleet orchestration. How an administrator reaches a target is not
+  shirudo's concern.
 - Audit and log retention: journald's job. The TPM chain is append-only
   and unbounded by design.
 - Operator-host and on-disk binary integrity: signed packages, IMA,

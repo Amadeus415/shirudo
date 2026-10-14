@@ -29,8 +29,9 @@ never needs the private signing key.
 shirudo is agentless on the target. There is no long-lived shirudo
 daemon and no shirudo-owned listening socket. The systemd unit used
 for reboot persistence is ``Type=oneshot``; ordinary target
-operations are one-shot CLI invocations run locally or through the
-system's existing ``sshd``.
+operations are one-shot CLI invocations, run locally by an
+administrator or by the systemd timers that pull packages and export
+status.
 
 The operator/target split
 =========================
@@ -45,31 +46,29 @@ the target-profile ``shirudo`` binary and its target runtime
 dependencies. The target does not need the operator build helper or
 the operator's private key.
 
-Artifact movement is deliberately outside shirudo:
+Delivery is pull-based through OCI registries; shirudo owns no push
+transport:
 
 ::
 
     # operator
     shirudo genkey
-    shirudo build fix.bpf.c -o fix.upatch
-    scp fix.upatch user@target:/tmp/
+    shirudo bpm build ./pkg --version 1.0.0
+    shirudo bpm push ./pkg-1.0.0.bee oci://registry/ns/pkg --keys-dir ...
 
-    # target
-    ssh user@target sudo shirudo upatch load /tmp/fix.upatch
-    ssh user@target sudo shirudo status --include-tpm
+    # target (once)
+    shirudo bpm config register add ns oci://registry --key-file cert.der
+    # target (timers, or by hand)
+    shirudo bpm repo update
+    shirudo bpm install ns/pkg
+    shirudo status --include-tpm
 
-The same path applies to signed unload directives:
-
-::
-
-    shirudo build --unload fix -o fix.unload.upatch
-    scp fix.unload.upatch user@target:/tmp/
-    ssh user@target sudo shirudo upatch unload fix
-
-The standard OpenSSH client, bastion configuration, credentials, and
-host-key policy remain the operator's responsibility. shirudo does not
-implement transport, remote registries, fleet selection, or fleet
-aggregation.
+``shirudo bpm uninstall`` detaches a package through the signed unload
+directives it shipped. A single ``.upatch`` or unload directive can also
+be loaded from a local path with ``shirudo upatch load`` / ``unload``
+after it was copied to the target by whatever means the administrator
+uses; the verification path is the same. shirudo does not implement a
+registry, fleet selection, rollout ordering or fleet aggregation.
 
 End-to-end flow charts
 ======================
@@ -244,8 +243,8 @@ pushes OTLP data to the Collector, while ClickHouse is a downstream
 Collector destination.
 
 There are no other channels. There is no shirudo-specific listener on
-the target, no agent daemon, no out-of-band heartbeat. ``sshd`` is the
-only always-on infrastructure shirudo needs.
+the target, no agent daemon, no out-of-band heartbeat. The systemd
+timers are the only always-on infrastructure shirudo needs.
 Runtime design
 ==============
 
@@ -263,7 +262,7 @@ the hybrid ML-KEM key exchange come from one implementation. The
 operator links the system shared libraries; the target links a static
 OpenSSL, an OpenSSL-backed static libcurl and static TPM2-TSS that
 ``make target-deps`` builds from source, plus libbpf, libelf and zlib.
-Neither profile includes an SSH transport library. The default signing
+The default signing
 algorithm is ML-DSA-87; see :doc:`requirements` for the kernel and
 toolchain prerequisites that implies.
 
@@ -292,7 +291,7 @@ Target-local status and safety checks
 ``shirudo status`` reports the local target state. It can include
 TPM chain data, system information, eventlog entries, kernel log
 lines, loaded modules, and pinned map contents. It never takes a
-destination argument and never opens an SSH session.
+destination argument; it reports the machine it runs on.
 
 State-changing ``upatch load`` and ``upatch unload``
 operations perform target-local preflight checks before loading or
@@ -326,6 +325,5 @@ Project layout
     └── Documentation/         # contributor and operator documentation
 
 The supported top-level command set is shown by
-``shirudo help --list-cmds``. Target access is intentionally
-provided by ordinary SSH tooling rather than by a shirudo transport
-layer.
+``shirudo help --list-cmds``. Delivery is pull-based through OCI
+registries; shirudo deliberately has no push transport of its own.

@@ -5,14 +5,16 @@
 Getting started
 ==================
 
-This guide covers the current two-part workflow:
+This guide covers the current workflow:
 
-* an operator builds and signs a ``.upatch`` artifact;
-* an operator uses existing ``scp``/``ssh`` access to copy the
-  artifact and invoke the target-local shirudo command.
+* an operator builds and signs ``.upatch`` artifacts and publishes
+  them as packages to an OCI registry;
+* a target registers that repository and installs or upgrades from it,
+  on systemd timers or by hand.
 
-There is no shirudo-managed node registry, rollout service, or remote
-status collector.
+A single artifact can also be loaded from a local file. There is no
+shirudo-managed node registry, rollout service, or remote status
+collector; delivery is pull-based.
 
 Prerequisites
 =============
@@ -23,8 +25,7 @@ development files required by the selected build profile. The target
 needs a supported Linux kernel built with ``CONFIG_CRYPTO_MLDSA`` and
 ``CONFIG_CRYPTO_SHA512`` for the default ML-DSA-87 signatures, the
 target runtime libraries, and root access for initialization and BPF
-operations. Neither package includes an SSH transport library. The
-complete list is in :doc:`requirements`.
+operations. The complete list is in :doc:`requirements`.
 
 Build the binaries
 ==================
@@ -158,16 +159,35 @@ loader, and writes the artifact. Review it before transfer:
 
     shirudo upatch info --json cve-2026-31431.upatch
 
-Copy and load
-=============
+Install from the registry
+=========================
 
-Use the existing SSH setup for the target:
+On the target, register the repository once with the operator's
+certificate, then let the timers refresh the signed index and upgrade,
+or do it by hand:
 
 ::
 
-    scp cve-2026-31431.upatch user@target:/tmp/
-    ssh user@target sudo shirudo upatch load \
-        /tmp/cve-2026-31431.upatch
+    sudo shirudo bpm config register add ns oci://quay.io \
+        --key-file cert.der
+    sudo shirudo bpm repo update
+    sudo shirudo bpm install ns/pkg
+    sudo shirudo bpm list
+
+``shirudo bpm install oci://quay.io/namespace/pkg:1.0.0`` installs a
+package directly by reference. Targets that follow a signed upatch tree
+configure it in ``/etc/shirudo/bpm/upatch-tree.conf`` and run
+``shirudo bpm tree sync`` on its timer.
+
+Load a local artifact
+=====================
+
+A single ``.upatch`` copied to the target loads the same way a package
+member does:
+
+::
+
+    sudo shirudo upatch load /tmp/cve-2026-31431.upatch
 
 The load and its signature verification happen on the target. A
 preflight can be made stricter by supplying the expected chain or
@@ -175,7 +195,7 @@ version values:
 
 ::
 
-    ssh user@target sudo shirudo upatch load \
+    sudo shirudo upatch load \
         --expect-chain=<hex> --expect-version-id=<hex> \
         /tmp/cve-2026-31431.upatch
 
@@ -187,11 +207,10 @@ they run:
 
 ::
 
-    ssh user@target sudo shirudo status --include-tpm
-    ssh user@target sudo shirudo upatch list
-    ssh user@target sudo shirudo bpm list
-    ssh user@target sudo shirudo upatch info --json \
-        /tmp/cve-2026-31431.upatch
+    sudo shirudo status --include-tpm
+    sudo shirudo upatch list
+    sudo shirudo bpm list
+    sudo shirudo upatch info --json /tmp/cve-2026-31431.upatch
 
 ``shirudo bpm uninstall <package>`` detaches a package's upatches through
 the signed unload directives it shipped and removes it.
@@ -200,24 +219,26 @@ For an artifact already loaded on the target:
 
 ::
 
-    ssh user@target sudo shirudo upatch get cve-2026-31431
-    ssh user@target sudo shirudo upatch map cve-2026-31431 <map-name>
+    sudo shirudo upatch get cve-2026-31431
+    sudo shirudo upatch map cve-2026-31431 <map-name>
 
 Structured load/unload reports can be written on the target with
-``--report=<path>``. If a report is needed elsewhere, copy it
-back with ``scp``.
+``--report=<path>``; ``shirudo status --otel`` and the map exporter
+push state to an OTLP collector.
 
 Unload a signed upatch
 ======================
 
-Create an unload directive on the operator, then transfer it:
+Packages carry their unload directives, so ``sudo shirudo bpm
+uninstall <package>`` detaches everything a package loaded. For a
+locally loaded artifact, create the directive on the operator and copy
+it to the target:
 
 ::
 
     shirudo build --unload cve-2026-31431 \
         -o cve-2026-31431.unload.upatch
-    scp cve-2026-31431.unload.upatch user@target:/tmp/
-    ssh user@target sudo shirudo upatch unload cve-2026-31431
+    sudo shirudo upatch unload /tmp/cve-2026-31431.unload.upatch
 
 The target validates the directive and its payload binding before
 detaching the upatch.
@@ -244,6 +265,7 @@ Troubleshooting
 * ``tampered``: inspect local bpffs, LSM, keyring, and TPM state
   with ``shirudo status``; retry only after the local state is
   understood.
-* SSH transport failures are handled by the existing SSH setup. Check
-  the destination, credentials, host keys, and sudo policy independently
-  of shirudo.
+* Registry fetch failures: check the ``oci://`` endpoint, the
+  ``BPM_OCI_*`` environment, the registered certificate under
+  ``/etc/shirudo/bpm``, and that the registry offers TLS 1.3 with a
+  hybrid ML-KEM group; shirudo never falls back to classical TLS.

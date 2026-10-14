@@ -8,8 +8,9 @@ shirudo manual
 
 shirudo is a BPF LSM-based security platform that locks down the
 ``bpf()`` syscall so only signed in-kernel BPF loader programs can
-install BPF code. The userspace tool is agentless on the target side
-and is operated through SSH.
+install BPF code. The userspace tool is agentless on the target side;
+targets pull signed packages from OCI registries and export status over
+OTLP.
 
 This index points at the documents in the shirudo source tree. The
 architecture and threat model are the source of truth for the current
@@ -49,10 +50,7 @@ Companion files in the repository root
 ======================================
 
 - ``AGENTS.md`` — guidance for coding agents contributing to shirudo
-  (``CLAUDE.md`` is a symlink to it).
-- ``TODO.kernel`` — kernel/libbpf limitations shirudo's design bumps
-  into, with the userspace workaround for each (the docs reference
-  these by item number).
+  (``CLAUDE.md`` imports it for Claude Code).
 - ``README.md`` — short overview of what shirudo is and where to look.
 - ``LICENSE`` — BSD-2-Clause (userspace). BPF programs declare
   ``Dual BSD/GPL`` (kernel LSM-hook framework requirement). Vendored

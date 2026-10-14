@@ -122,8 +122,9 @@ Cryptographic algorithms
        Server certificates are whatever the registry or collector
        presents.
 
-Artifact transfer rides on the organization's SSH and is outside
-shirudo; see :doc:`threat-model` for the residual classical pieces.
+Artifact delivery is TLS to an OCI registry and is authenticated end
+to end by the ML-DSA signatures; see :doc:`threat-model` for the
+residual classical pieces.
 
 Operator host
 =============

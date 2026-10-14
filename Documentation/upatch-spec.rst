@@ -434,7 +434,8 @@ Production and consumption
   list``.
 - **Consumed by** ``shirudo upatch load`` / ``unload`` on the target
   (signature-gated ``BPF_PROG_LOAD`` via the sealed keyring serial).
-  Operators transfer the artifact with their existing SSH tooling.
+  Artifacts reach the target inside a ``.bee`` package pulled from an
+  OCI registry, or as a file the administrator copied there.
 - **Introspected after load** by ``shirudo upatch get <name>``, which
   reads the loaded program's line_info + BTF from the kernel (the
   authoritative view of what is loaded).

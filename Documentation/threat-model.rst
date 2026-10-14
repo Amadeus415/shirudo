@@ -13,11 +13,12 @@ its BPF LSM enforcement programs. The target's kernel verifies signed
 loader programs, and the target-local CLI manages the resulting links,
 maps, and audit state.
 
-The operator builds and signs artifacts. Artifact transfer and command
-invocation use the organization's existing SSH tooling; they are
-outside shirudo's trust boundary. shirudo does not provide an SSH
-client, remote registry, fleet selector, rollout coordinator, or
-remote status aggregator.
+The operator builds and signs artifacts and publishes them to an OCI
+registry; targets pull and verify them. The registry and its TLS
+transport are outside shirudo's trust boundary because every package,
+index and tree is authenticated by its ML-DSA signature on the target.
+shirudo does not provide a registry, a fleet selector, a rollout
+coordinator or a remote status aggregator.
 
 Assets
 ======
@@ -37,10 +38,11 @@ verification, keyrings, and the configured TPM interfaces. The target
 binary, its signed enforcement programs, and the certificate in the
 keyring are part of the target TCB.
 
-The operator host, build toolchain, package manager, private key, and
-existing SSH infrastructure are trusted according to the operator's
-deployment policy. shirudo does not make SSH credentials, bastions,
-host-key files, or the SSH server part of its own TCB.
+The operator host, build toolchain, package manager and private key
+are trusted according to the operator's deployment policy. The OCI
+registry and whatever remote access an administrator uses to reach a
+target are not part of shirudo's TCB: a registry can withhold or
+replay signed content but cannot forge it.
 
 Threats addressed
 =================
@@ -83,7 +85,8 @@ State ambiguity
 
 Target-local status and structured reports expose the local result,
 TPM chain, verifier log, and failure category. External automation can
-collect those reports over its own SSH or monitoring path. shirudo
+collect those reports through the OTLP exporters or its own monitoring
+path. shirudo
 does not claim to provide a complete or synchronized fleet view.
 
 Cryptographic algorithms
@@ -111,9 +114,6 @@ the 128-bit margin.
 
 Residual classical cryptography is outside shirudo's trust boundary:
 
-* The organization's SSH transport (OpenSSH already negotiates a
-  hybrid ML-KEM key exchange by default; host-key signatures remain
-  the operator's policy).
 * TLS to OCI registries and telemetry collectors. shirudo's clients
   on both profiles require TLS 1.3 and a hybrid ML-KEM key exchange; a
   server that offers only classical groups is
@@ -130,8 +130,8 @@ Threats outside scope
 * Compromise of the operator or signing key.
 * A malicious or compromised Linux kernel, BPF verifier, TPM, or
   hardware.
-* Compromise of the existing SSH client, SSH server, credentials,
-  bastion, host-key policy, or network.
+* Compromise of the administrator's remote access to targets, the
+  registry's availability, or the network.
 * Denial of service, including removal of the target binary or making
   the target unreachable.
 * Correctness of the BPF payload written by an authorized signer.
@@ -142,8 +142,8 @@ Operational mitigations
 =======================
 
 Protect the signing key with filesystem and operator-host controls.
-Use the organization's normal SSH host-key, credential, bastion, and
-sudo policies. Generate artifacts against the target kernel's BTF,
+Restrict who can register repositories and run state-changing commands
+on a target. Generate artifacts against the target kernel's BTF,
 review structured verifier failures, and inspect target-local status
 after every load or unload.
 
