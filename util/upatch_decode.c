@@ -971,8 +971,11 @@ static void lua_push_map_input(lua_State *L, const struct shirudo_map_view *v)
 		char *key_hex = hex_alloc(entry->key, v->key_size);
 		char *value_hex = hex_alloc(entry->value, value_bytes);
 
-		if (!key_hex || !value_hex)
+		if (!key_hex || !value_hex) {
+			xfree(key_hex, (size_t)v->key_size * 2 + 1);
+			xfree(value_hex, value_bytes * 2 + 1);
 			luaL_error(L, "decoder map data is too large");
+		}
 		lua_newtable(L);
 		lua_pushstring(L, key_hex);
 		lua_setfield(L, -2, "key_hex");
