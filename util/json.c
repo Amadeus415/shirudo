@@ -244,6 +244,16 @@ void shirudo_json_str(struct shirudo_json_emit *e, const char *val)
 	put_string(e, val);
 }
 
+void shirudo_json_raw(struct shirudo_json_emit *e, const char *value,
+		      size_t value_len)
+{
+	size_t i;
+
+	sep(e);
+	for (i = 0; i < value_len && !e->err; i++)
+		put(e, value[i]);
+}
+
 int shirudo_json_emit_flush(struct shirudo_json_emit *e)
 {
 	if (!e)

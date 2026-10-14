@@ -64,6 +64,9 @@ void shirudo_json_kv_raw(struct shirudo_json_emit *e, const char *key,
 			 const char *value, size_t value_len);
 /* Bare array element (string), for arrays of scalars. */
 void shirudo_json_str(struct shirudo_json_emit *e, const char *val);
+/* Bare array element copied verbatim: an already encoded JSON value. */
+void shirudo_json_raw(struct shirudo_json_emit *e, const char *value,
+		      size_t value_len);
 
 /* Flush pending bytes to a configured sink.  A no-op for buffer emitters. */
 int shirudo_json_emit_flush(struct shirudo_json_emit *e);
