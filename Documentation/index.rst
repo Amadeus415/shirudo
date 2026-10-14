@@ -53,6 +53,12 @@ Reviewing the security design
     the adversaries, the threats shirudo addresses with the mechanism
     behind each, and the residual risks.
 
+Measuring and attesting a target
+    `tpm <tpm.rst>`__ describes the per-boot measurement register,
+    the events and the eventlog, the TPM-signed evidence and its
+    verification, how they relate to systemd's NvPCRs and what they
+    do not yet do.
+
 Shipping state to a collector
     `telemetry <telemetry.rst>`__ explains the OTLP export of map
     snapshots and status keepalives and how to feed them into the

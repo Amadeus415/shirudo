@@ -49,6 +49,7 @@ remote-management or transport layers.
 |---|---|
 | `Documentation/threat-model.rst` | Authoritative security design: trust boundaries, threats, residual risks, deferred mitigations. Consult before touching any security-relevant path. |
 | `Documentation/architecture.rst` | Implemented architecture, operator/target boundary, BPM package and upatch tree formats. |
+| `Documentation/tpm.rst` | The measurement register, its events and eventlog, `shirudo attest` and its verification, the relation to systemd's NvPCRs and the known limits. Read it with the threat model before touching the TPM paths. |
 | `Documentation/upatch-spec.rst` | The `.upatch` container and signing scheme. |
 | `Documentation/requirements.rst` | Kernel options, operator toolchain, target runtime. |
 | `Documentation/getting-started.rst` | Quickstart: build, sign, initialise a target, load and unload, publish and install packages. |
