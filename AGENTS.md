@@ -51,6 +51,7 @@ remote-management or transport layers.
 | `Documentation/requirements.rst` | Kernel options, operator toolchain, target runtime. |
 | `Documentation/getting-started.rst` | Operator quickstart: build, package, transfer, load, status, unload. |
 | `Documentation/coding-style.rst` | The kernel's coding style, applied to all C here. |
+| `Documentation/contributing.rst` | Commit message form, the mandatory `Signed-off-by:` and the kernel's attribution tags. Read it before crafting a commit. |
 
 The kernel side of the signing design is the kernel's own
 `Documentation/bpf/signing.rst`; `bpf_prog_verify_signature()` runs
@@ -106,6 +107,19 @@ before the LSM hooks and `attr.keyring_id` is a key serial, not a name.
 - **Comments are scarce.** Kernel style: explain the *why*, not the *what*.
   No multi-paragraph docstrings. No "added for issue X" or "used by Y" — those
   go in commit messages.
+
+## Commits
+
+`Documentation/contributing.rst` is the kernel's process applied here
+and is the reference for every commit an agent prepares: a subject of
+the form `area: imperative summary`, a body that explains why before
+what, and the `Co-developed-by`, `Fixes`, `Reported-by`, `Suggested-by`,
+`Tested-by`, `Reviewed-by`, `Acked-by` and `Cc` tags used as the kernel
+uses them. Every commit needs a `Signed-off-by:` from a real identity,
+and only a person can give one: an agent never adds a sign-off, on its
+own or anyone else's behalf, and leaves that line to the human who
+reviews and submits the work. One logical change per commit, each one
+building and passing on its own.
 
 ## Invariants that are easy to break
 
@@ -208,10 +222,6 @@ one usually still compiles and passes tests.
 - When a checkout is used in place of an installed operator package,
   `SHIRUDO_BUILD=<path>` names the helper, or put
   `tools/shirudo-build` and the checkout root on `PATH`.
-- Commits follow `Documentation/contributing.rst`: a kernel-style
-  subject (`area: imperative summary`), a body that explains why, and
-  a mandatory `Signed-off-by:` from a real identity. Do not add a
-  sign-off on someone's behalf; leave it for the committer.
 
 ## Out of scope
 
