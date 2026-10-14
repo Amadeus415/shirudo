@@ -279,19 +279,39 @@ Each of these is known, documented and bounded; none is silent.
     anchors and a register the eventlog does not explain; the window is
     the same one residual risk 7 describes.
 
+13. Rebinding through ``init`` after boot.  ``init`` binds a register
+    whenever the live index is not the one this boot recorded, so root
+    with the owner authorisation can undefine the written index at
+    runtime and run ``init`` again: the new register holds the init
+    event alone, the loads and unloads before it are gone from it, and
+    a second init record and a second anchor are the only traces.
+    ``attest verify`` recomputes the binding from the ``pcr_before`` of
+    the last init record and replays from it, so it passes such
+    evidence unless the operator pins PCR 15 with ``--expect-pcr=15``
+    to the value the legitimate anchor produced or counts the init
+    records of the boot.  Closing it needs ``init`` to refuse a
+    rebinding when the boot already has a record, and ``verify`` and
+    ``status`` to fail on more than one init record per boot (deferred
+    below).
+
 Deferred mitigations
 ~~~~~~~~~~~~~~~~~~~~
 
-In scope and not yet built: credential activation
-(``TPM2_MakeCredential`` on the operator, ``TPM2_ActivateCredential`` on
-the target) that proves the attestation key sits beside the endorsement
-key whose certificate the evidence carries; registering the register as
-a systemd NvPCR through ``io.systemd.PCRExtend`` once systemd-aware
-verifiers consume third-party NvPCRs, so that systemd anchors it from
-the initrd; signed PCR policies for the kernel and initrd PCRs so a
-verifier needs no golden values; an in-kernel detach so the unload
-compare runs against signed ``.rodata`` (residual risk 1); and the
-keyring kfunc of residual risk 6.
+In scope and not yet built: ``init`` refusing to rebind a register the
+boot already recorded, with the TPM's reset count beside the boot ID as
+the boot identity so a TPM reset without a reboot stays legitimate, and
+``verify`` and ``status`` failing on more than one init record per boot
+(residual risk 13); credential activation (``TPM2_MakeCredential`` on
+the operator, ``TPM2_ActivateCredential`` on the target) that proves
+the attestation key sits beside the endorsement key whose certificate
+the evidence carries (residual risk 10); registering the register as a
+systemd NvPCR so that the initrd initialises it under the signed PCR 11
+policy and anchors it in PCR 9, and measuring through
+``systemd-pcrextend`` so systemd's measurement log explains the anchor
+(residual risks 11 and 12); signed PCR policies for the kernel and
+initrd PCRs so a verifier needs no golden values; an in-kernel detach
+so the unload compare runs against signed ``.rodata`` (residual risk
+1); and the keyring kfunc of residual risk 6.
 
 
 6) Out of scope
