@@ -6,8 +6,8 @@
  *
  * Every file/directory under /var/lib/shirudo/ (except the private
  * bpffs mount, which bpf/bpf2.c guards) is labelled with the inode
- * xattr security.bpf.shirudo whose value is the installed shirudo's
- * SHIRUDO_VERSION_ID; the shirudo binary carries the same label. The
+ * xattr security.bpf.shirudo whose value is one fixed 64-character
+ * string; the shirudo binary carries the same label. The
  * filesystem hooks read the target's label and, if present, require the
  * calling task's executable to carry an equal label -- so only shirudo
  * may write, unlink, rename, or relabel its own on-disk state. The exec
@@ -42,7 +42,7 @@
 char _license[] SEC("license") = "Dual BSD/GPL";
 
 #define SHIRUDO_XATTR	"security.bpf.shirudo"
-/* SHIRUDO_VERSION_ID is a SHA-256 hex string -- always 64 bytes. */
+/* The label is a SHA-256 hex string (util/seal.h) -- always 64 bytes. */
 #define LABEL_LEN	64
 
 struct seal_scratch {

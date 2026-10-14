@@ -18,13 +18,10 @@
 #include "paths.h"
 #include "seal.h"
 
-/* util/version_id.c -- the architecture-stripped SHA-256 hex, 64 chars. */
-extern const char shirudo_version_id[];
-
 int shirudo_seal_label(const char *path)
 {
-	if (setxattr(path, SHIRUDO_XATTR_NAME, shirudo_version_id,
-		     strlen(shirudo_version_id), 0) != 0)
+	if (setxattr(path, SHIRUDO_XATTR_NAME, SHIRUDO_SEAL_LABEL,
+		     sizeof(SHIRUDO_SEAL_LABEL) - 1, 0) != 0)
 		return -errno;
 	return 0;
 }

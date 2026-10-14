@@ -254,8 +254,9 @@ otherwise detach everything.
 
 Filesystem seal.  ``bpf/seal.c`` relies on every inode under
 ``/var/lib/shirudo/`` and the installed binary carrying the xattr
-``security.bpf.shirudo`` with the 64-byte ``SHIRUDO_VERSION_ID`` as
-value.  Its ``file_open`` (for write), ``inode_unlink``,
+``security.bpf.shirudo`` with one fixed 64-byte value, the same for
+every build, so that a newer shirudo keeps its access to the state an
+older one labelled.  Its ``file_open`` (for write), ``inode_unlink``,
 ``inode_rename``, ``inode_setxattr`` and ``inode_removexattr`` hooks
 read the label of the target inode and the label of the caller's
 ``exe_file`` and allow only when both exist and match, compared in
