@@ -15,7 +15,7 @@
 #include "tpm_wire.h"
 
 #define SHIRUDO_TPM_NV_DIGEST_LEN	SHIRUDO_TPM_DIGEST_LEN
-#define SHIRUDO_TPM_PUBLIC_MAX		256
+#define SHIRUDO_TPM_PUBLIC_MAX		512
 #define SHIRUDO_TPM_ATTEST_MAX		1024
 #define SHIRUDO_TPM_SIGNATURE_MAX	160
 #define SHIRUDO_TPM_NONCE_MAX		64
@@ -98,6 +98,26 @@ struct shirudo_tpm_attestation {
 };
 
 int shirudo_tpm_ak_create(struct shirudo_tpm *t, struct shirudo_tpm_key *ak);
+
+/*
+ * The endorsement key from the TCG default template of the given
+ * type, the key the TPM's endorsement certificate describes.
+ */
+int shirudo_tpm_ek_create(struct shirudo_tpm *t, bool rsa,
+			  struct shirudo_tpm_key *ek);
+
+/*
+ * TPM2_ActivateCredential: recover the credential an operator
+ * protected for the key ak under the endorsement key ek.
+ * -EKEYREJECTED when the TPM refuses it, as it does for a blob made
+ * for another key or another TPM.
+ */
+int shirudo_tpm_activate_credential(struct shirudo_tpm *t,
+				    const struct shirudo_tpm_key *ak,
+				    const struct shirudo_tpm_key *ek,
+				    const uint8_t *blob, size_t blob_len,
+				    const uint8_t *secret, size_t secret_len,
+				    uint8_t *out, size_t cap, size_t *out_len);
 void shirudo_tpm_key_flush(struct shirudo_tpm *t, struct shirudo_tpm_key *key);
 int shirudo_tpm_quote(struct shirudo_tpm *t, const struct shirudo_tpm_key *ak,
 		      const uint8_t *nonce, size_t nonce_len, uint32_t pcr_mask,
@@ -107,8 +127,11 @@ int shirudo_tpm_nv_certify(struct shirudo_tpm *t,
 			   const uint8_t *nonce, size_t nonce_len,
 			   struct shirudo_tpm_attestation *out);
 
-/* The endorsement key certificate from its TCG NV index; -ENOENT if none. */
+/*
+ * The endorsement key certificate from its TCG NV index, the ECC one
+ * first; *rsa tells which key it describes. -ENOENT if none.
+ */
 int shirudo_tpm_ek_certificate(struct shirudo_tpm *t, uint8_t *out,
-			       size_t cap, size_t *len);
+			       size_t cap, size_t *len, bool *rsa);
 
 #endif /* SHIRUDO_TPM_H */

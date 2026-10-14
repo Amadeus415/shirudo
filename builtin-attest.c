@@ -32,14 +32,16 @@
 #define EVENTS_MAX		256
 
 static const struct shirudo_help_item attest_subcmds[] = {
-	{ "verify",  "check an evidence document against the expected state" },
-	{ "predict", "compute the register value a set of upatches yields" },
+	{ "verify",    "check an evidence document against the expected state" },
+	{ "predict",   "compute the register value a set of upatches yields" },
+	{ "challenge", "make a credential challenge for a target's attestation key" },
 };
 
 static const struct shirudo_help_item attest_options[] = {
-	{ "--nonce=<hex>",  "freshness value from the verifier (up to 64 bytes)" },
-	{ "--pcrs=<list>",  "PCRs to quote, comma separated (default 0-7,9,11-15)" },
-	{ "--out=<path>",   "write the evidence there (0600) instead of stdout" },
+	{ "--nonce=<hex>",      "freshness value from the verifier (up to 64 bytes)" },
+	{ "--pcrs=<list>",      "PCRs to quote, comma separated (default 0-7,9,11-15)" },
+	{ "--challenge=<path>", "a challenge from the verifier to activate while attesting" },
+	{ "--out=<path>",       "write the evidence there (0600) instead of stdout" },
 };
 
 static const struct shirudo_help_item verify_options[] = {
@@ -54,6 +56,13 @@ static const struct shirudo_help_item verify_options[] = {
 	{ "--expect-pcr=<n>=<hex>", "a PCR value the quote must carry (repeatable)" },
 	{ "--allow-runtime-events", "accept loads and unloads after boot" },
 	{ "--strict-anchor",       "require the anchoring PCR to hold only the anchor" },
+	{ "--expect-credential=<hex>", "the credential the challenge given to the target carried" },
+};
+
+static const struct shirudo_help_item challenge_options[] = {
+	{ "--evidence=<path>",  "a document the target produced, carrying its keys" },
+	{ "--ek-ca=<bundle>",   "PEM issuers the endorsement certificate must chain to" },
+	{ "--out=<path>",       "write the challenge there (0600)" },
 };
 
 static const struct shirudo_help_item predict_options[] = {
@@ -72,18 +81,25 @@ static const struct shirudo_help_section attest_help_sections[] = {
 	  ARRAY_SIZE(verify_options) },
 	{ "predict options (operator):", predict_options,
 	  ARRAY_SIZE(predict_options) },
+	{ "challenge options (operator):", challenge_options,
+	  ARRAY_SIZE(challenge_options) },
 };
 
 static const struct shirudo_help attest_help = {
-	.usage      = "shirudo attest [--nonce=<hex>] [--pcrs=<list>] [--out=<path>]\n"
+	.usage      = "shirudo attest [--nonce=<hex>] [--pcrs=<list>] "
+		      "[--challenge=<path>] [--out=<path>]\n"
 		      "       shirudo attest verify --evidence=<path> --nonce=<hex> "
 		      "--ak-name=<hex> [options]\n"
-		      "       shirudo attest predict --cert=<cert.der> [options]",
+		      "       shirudo attest predict --cert=<cert.der> [options]\n"
+		      "       shirudo attest challenge --evidence=<path> "
+		      "--out=<path> [--ek-ca=<bundle>]",
 	.summary    = "Without a subcommand: emit a TPM-signed evidence document "
 		      "for this\ntarget (quote over the PCRs, certification of "
 		      "the measurement register,\nthis boot's eventlog, the "
-		      "firmware and systemd measurement logs).\n"
-		      "verify and predict run on the operator and touch no TPM.",
+		      "firmware and systemd measurement logs), activating\n"
+		      "the verifier's challenge when given one.\n"
+		      "verify, predict and challenge run on the operator and "
+		      "touch no TPM.",
 	.sections   = attest_help_sections,
 	.n_sections = ARRAY_SIZE(attest_help_sections),
 };
@@ -425,6 +441,11 @@ static int cmd_attest_verify(int argc, const char **argv)
 			x.allow_runtime_events = true;
 		} else if (!strcmp(a, "--strict-anchor")) {
 			x.strict_anchor = true;
+		} else if (!strncmp(a, "--expect-credential=", 20)) {
+			if (parse_hex32("--expect-credential", a + 20,
+					x.credential))
+				goto out;
+			x.have_credential = true;
 		} else if (shirudo_is_help(a)) {
 			shirudo_print_help(&attest_help);
 			ret = 0;
@@ -471,11 +492,87 @@ out:
 	return ret;
 }
 
+static int cmd_attest_challenge(int argc, const char **argv)
+{
+	uint8_t credential[SHIRUDO_TPM_CREDENTIAL_LEN];
+	const char *evidence_path = NULL, *out_path = NULL, *ek_ca = NULL;
+	char *evidence = NULL, *doc = NULL, *report;
+	char hex[2 * SHIRUDO_TPM_CREDENTIAL_LEN + 1];
+	size_t evidence_len = 0, len = 0, cap = 0, i;
+	int rc, ret = 2;
+
+	report = xmalloc(SHIRUDO_ATTEST_REPORT_MAX);
+	if (!report)
+		return 1;
+	for (i = 2; i < (size_t)argc; i++) {
+		const char *a = argv[i];
+
+		if (!strncmp(a, "--evidence=", 11)) {
+			evidence_path = a + 11;
+		} else if (!strncmp(a, "--ek-ca=", 8)) {
+			ek_ca = a + 8;
+		} else if (!strncmp(a, "--out=", 6)) {
+			out_path = a + 6;
+		} else if (shirudo_is_help(a)) {
+			shirudo_print_help(&attest_help);
+			ret = 0;
+			goto out;
+		} else {
+			pr_err("attest challenge: unknown option '%s'", a);
+			goto out;
+		}
+	}
+	if (!evidence_path || !out_path) {
+		pr_err("attest challenge: --evidence and --out are required");
+		goto out;
+	}
+	if (read_evidence(evidence_path, &evidence, &evidence_len))
+		goto out;
+	rc = shirudo_attest_challenge_make(evidence, evidence_len, ek_ca,
+					   credential, &doc, &len, &cap, report,
+					   SHIRUDO_ATTEST_REPORT_MAX);
+	fputs(report, stdout);
+	if (rc == -EINVAL) {
+		pr_err("attest challenge: %s carries no endorsement key",
+		       evidence_path);
+		goto out;
+	}
+	if (rc) {
+		printf("verdict: FAIL\n");
+		ret = 1;
+		goto out;
+	}
+	{
+		int fd = open(out_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
+			      0600);
+
+		if (fd < 0 || shirudo_write_all(fd, doc, len) ||
+		    shirudo_write_all(fd, "\n", 1) || close(fd)) {
+			pr_err("attest challenge: write %s: %s", out_path,
+			       strerror(errno));
+			if (fd >= 0)
+				close(fd);
+			ret = 1;
+			goto out;
+		}
+	}
+	shirudo_hex_encode(credential, sizeof(credential), hex);
+	printf("challenge: %s\ncredential: %s\n", out_path, hex);
+	ret = 0;
+out:
+	explicit_bzero(credential, sizeof(credential));
+	xfree(doc, cap);
+	xfree(evidence, evidence ? evidence_len + 1 : 0);
+	xfree(report, SHIRUDO_ATTEST_REPORT_MAX);
+	return ret;
+}
+
 static int cmd_attest_evidence(int argc, const char **argv)
 {
+	struct shirudo_attest_challenge challenge = {};
 	uint8_t nonce[SHIRUDO_ATTEST_NONCE_MAX];
 	uint32_t mask = SHIRUDO_ATTEST_PCR_DEFAULT;
-	const char *out_path = NULL;
+	const char *out_path = NULL, *challenge_path = NULL;
 	char *doc = NULL;
 	size_t nonce_len = 0, len = 0, cap = 0, i;
 	int rc;
@@ -483,7 +580,9 @@ static int cmd_attest_evidence(int argc, const char **argv)
 	for (i = 1; i < (size_t)argc; i++) {
 		const char *a = argv[i];
 
-		if (!strncmp(a, "--nonce=", 8)) {
+		if (!strncmp(a, "--challenge=", 12)) {
+			challenge_path = a + 12;
+		} else if (!strncmp(a, "--nonce=", 8)) {
 			if (parse_hex(a + 8, nonce, sizeof(nonce),
 				      &nonce_len)) {
 				pr_err("attest: --nonce must be hex of up to "
@@ -508,11 +607,23 @@ static int cmd_attest_evidence(int argc, const char **argv)
 	}
 	if (!nonce_len)
 		pr_warn("attest: no --nonce; the evidence proves no freshness");
+	if (challenge_path &&
+	    shirudo_attest_challenge_read(challenge_path, &challenge)) {
+		pr_err("attest: %s is not a shirudo credential challenge",
+		       challenge_path);
+		return 2;
+	}
 
-	rc = shirudo_attest_evidence(nonce, nonce_len, mask, &doc, &len, &cap);
+	rc = shirudo_attest_evidence(nonce, nonce_len, mask,
+				     challenge_path ? &challenge : NULL, &doc,
+				     &len, &cap);
 	if (rc == -ENODEV) {
 		pr_err("attest: no bound register (tpm_error); run shirudo "
 		       "init first");
+		return 1;
+	}
+	if (rc == -EKEYREJECTED) {
+		pr_err("attest: the challenge was refused (tampered?)");
 		return 1;
 	}
 	if (rc) {
@@ -561,6 +672,8 @@ int cmd_attest(int argc, const char **argv)
 			return 2;
 		if (!strcmp(sub, "verify"))
 			return cmd_attest_verify(argc, argv);
+		if (!strcmp(sub, "challenge"))
+			return cmd_attest_challenge(argc, argv);
 		return cmd_attest_predict(argc, argv);
 	}
 	return cmd_attest_evidence(argc, argv);

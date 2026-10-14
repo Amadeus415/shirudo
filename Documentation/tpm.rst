@@ -259,6 +259,13 @@ one JSON document, ``kind`` ``shirudo-attestation``, ``schema`` 1:
 ``ak``
     ``public`` (the marshalled ``TPMT_PUBLIC``) and ``name``.
 
+``ek``
+    ``type`` (``ecc`` or ``rsa``), ``public`` and ``name`` of the
+    endorsement key, created from the TCG default template of the type
+    the endorsement certificate describes, the ECC one on a TPM that
+    holds no certificate.  Section "Binding the key to the TPM" below
+    says what it is for.
+
 ``quote``
     ``attest`` and ``signature``: ``TPM2_Quote`` over the selection
     with the nonce as qualifying data.  The PCRs are read beside the
@@ -275,6 +282,11 @@ one JSON document, ``kind`` ``shirudo-attestation``, ``schema`` 1:
 ``eventlog``
     This boot's records, verbatim.
 
+``credential``
+    ``value``, the credential recovered from the verifier's challenge
+    when the evidence was requested with ``--challenge``, else
+    ``null``.
+
 ``ek_certificate``
     The endorsement key certificate from NV ``0x01C0000A`` (ECC) or
     ``0x01C00002`` (RSA), base64, or ``null`` when the TPM holds none.
@@ -289,6 +301,59 @@ one JSON document, ``kind`` ``shirudo-attestation``, ``schema`` 1:
 not TPM-backed.  Without ``--nonce`` the document proves no freshness
 and says so.
 
+Binding the key to the TPM
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A signature by a key named ``000b...`` proves nothing about where that
+key lives until the name is tied to a TPM.  The endorsement key does
+that: it is derived from the TPM's endorsement seed by a template the
+TCG fixes, and the endorsement certificate the manufacturer put in NV
+describes exactly that key.  Credential activation makes the two keys
+vouch for each other without ever exposing either.
+
+On the operator, ``shirudo attest challenge --evidence=<path>
+--out=<challenge> [--ek-ca=<bundle>]`` takes the endorsement key and
+the attestation key name from an evidence document and checks that
+the endorsement key's name matches its public area and that the area
+is the TCG default template under the endorsement policy, so no
+ordinary decryption key can pose as one.  When the evidence carries
+an endorsement certificate, the certificate's key must be that key,
+and with ``--ek-ca`` the certificate must chain to the PEM bundle of
+issuers given; without ``--ek-ca`` the command says the certificate was
+not checked, and without a certificate it says the endorsement key is
+trusted as presented.  It then draws a random 32-byte credential and
+protects it the way ``TPM2_MakeCredential`` does (Part 1, 24.4): a
+seed only the endorsement key can recover, wrapped with RSA-OAEP under
+the label ``IDENTITY`` for an RSA key or derived by KDFe from an
+ephemeral P-256 ECDH agreement for an ECC key; a symmetric key from
+``KDFa(seed, "STORAGE", name)`` that encrypts the credential with
+AES-128-CFB; and an HMAC under ``KDFa(seed, "INTEGRITY")`` over the
+encrypted credential and the attestation key name.  The challenge
+document carries the blob and the wrapped seed; the credential itself
+is printed once for the operator to keep and stored nowhere.
+
+On the target, ``shirudo attest --nonce=<hex> --challenge=<path>``
+loads the endorsement key of the challenge's type, refuses a challenge
+made for another attestation key name, and has the TPM run
+``TPM2_ActivateCredential`` under a ``PolicySecret`` session on the
+endorsement hierarchy.  The TPM recovers the seed with the endorsement
+key, recomputes the HMAC over the name of the loaded attestation key,
+and decrypts the credential only when it matches; the value goes into
+the evidence as ``credential``.  A blob made for another key or
+another TPM is refused and the command fails rather than emit evidence
+without the proof.
+
+``shirudo attest verify ... --expect-credential=<hex>`` then checks the
+recovered value.  Together with the signature checks this proves that
+the key which signed the quote and the certification is a restricted
+key inside the TPM that holds the endorsement key, and, through the
+certificate, inside the TPM the manufacturer certified.  Everything
+here is classical: TPMs hold RSA and P-256 endorsement keys and sign
+with ECDSA, and no post-quantum algorithm is implemented by a TPM one
+can buy or emulate, so the evidence stays classical even though the
+artifacts it describes are not (residual risk 9).  The RSA branch
+exists because many TPMs carry only an RSA endorsement certificate.
+
 
 5) Verification and prediction
 ------------------------------
@@ -298,15 +363,18 @@ Both run on the operator and touch no TPM.
 ``shirudo attest verify --evidence=<path> --nonce=<hex> --ak-name=<hex>
 [--cert=<cert.der> --upatch=<file>... --expect=<name>=<hex>...
 --tree-root=<hex>] [--expect-chain=<hex>] [--expect-pcr=<n>=<hex>...]
-[--allow-runtime-events] [--strict-anchor]`` prints one line per check
-and a verdict.  The checks, in order:
+[--expect-credential=<hex>] [--allow-runtime-events] [--strict-anchor]``
+prints one line per check and a verdict.  The checks, in order:
 
 1. The nonce in the document is the one given.
 2. The attestation key's public area is a P-256 ECDSA key with
    ``restricted``, ``sign``, ``fixedTPM``, ``fixedParent`` and
    ``sensitiveDataOrigin`` set; its name matches that public area; and
    it is the pinned name.  Without ``--ak-name`` the signer is only
-   noted, and the command warns.
+   noted, and the command warns.  The endorsement key's name matches
+   its public area and that area is the TCG default template under
+   the endorsement policy; with ``--expect-credential`` the document's
+   ``credential`` equals the value the challenge carried.
 3. The quote: ECDSA signature by that key over the ``TPMS_ATTEST``,
    signer equal to the key's qualified name under the endorsement
    hierarchy, the nonce as extra data, the selection equal to
@@ -349,6 +417,10 @@ not shirudo evidence exits 2.
 --event=tree:<seq>=<operation_digest>...]`` prints ``set_digest``,
 ``init_event``, ``register_at_boot`` and, with events,
 ``register_after_events``, from the same functions the target uses.
+
+``shirudo attest challenge --evidence=<path> --out=<path>
+[--ek-ca=<bundle>]`` is described in section 4; it prints its checks,
+the path of the challenge it wrote and the credential to expect.
 
 
 6) Relation to systemd's NvPCRs
@@ -419,12 +491,13 @@ context and the deferred mitigations the plan.
   extension and ``init`` itself refuse ``tampered`` until the next TPM
   reset, a denial of service and not an erasure.
 
-* **The attestation key is trusted on first use.**  The operator pins
-  its name when enrolling the target.  The evidence carries the
-  endorsement key certificate, but nothing yet proves that the
-  attestation key sits in the TPM that certificate describes; a
-  credential activation (``TPM2_MakeCredential`` on the operator,
-  ``TPM2_ActivateCredential`` on the target) is deferred.
+* **The endorsement key's trust is the certificate's.**  Credential
+  activation proves the attestation key sits beside the endorsement
+  key in the evidence; whether that endorsement key belongs to a
+  genuine TPM is what the endorsement certificate says, and only
+  ``--ek-ca`` with the manufacturer's issuers checks it.  A TPM
+  without a certificate, as virtual TPMs usually are, leaves the
+  endorsement key pinned by its name as presented at enrolment.
 
 * **PCR 15 is shared.**  systemd measures the machine ID and file
   system identities into PCR 15, before and possibly after ``init``;
@@ -447,9 +520,12 @@ context and the deferred mitigations the plan.
 8) Testing
 ----------
 
-``t/t0033-tpm-wire.sh`` checks the policy digests, names and wire
-parsers against known vectors without a TPM.  ``t/t0034-register.sh``
-drives the whole register and attestation path against libtpms:
+``t/t0033-tpm-wire.sh`` checks the policy digests, names, wire
+parsers, the key derivations, the endorsement policy and the
+credential blob against known vectors and an independent
+implementation, without a TPM.  ``t/t0034-register.sh`` drives the
+whole register and attestation path, the credential challenge with an
+ECC and an RSA endorsement key included, against libtpms:
 ``t/helper/tpmsim-cmd`` is a ``cmd:`` TCTI driver around the simulator,
 built when ``pkg-config libtpms`` succeeds, and ``t/helper/test-register``
 exercises binding, extending, replay, recreation, a TPM reset and

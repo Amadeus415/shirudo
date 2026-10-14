@@ -170,7 +170,10 @@ one usually still compiles and passes tests.
   unmeasured mode.
 - **Evidence is signed by the TPM, verified by the operator.** The
   attestation key is a fixed-template primary under the endorsement
-  hierarchy, pinned by name; `shirudo attest verify` recomputes the
+  hierarchy, pinned by name and tied to the endorsement key by
+  credential activation (`shirudo attest challenge` computes the
+  credential in software on the operator, `attest --challenge`
+  activates it on the target); `shirudo attest verify` recomputes the
   register's public area from the recorded PCR binding and the expected
   value from the certificate and the artifacts. A check that trusts a
   value the target wrote about itself is not a check.

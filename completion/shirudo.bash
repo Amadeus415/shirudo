@@ -119,17 +119,21 @@ _shirudo()
 		;;
 	attest)
 		if [[ $cword -eq 2 && $cur != -* ]]; then
-			COMPREPLY=( $(compgen -W "verify predict" -- "$cur") )
+			COMPREPLY=( $(compgen -W "verify predict challenge" -- "$cur") )
 		elif [[ $sub == verify ]]; then
 			COMPREPLY=( $(compgen -W "--evidence= --nonce= --ak-name= \
 				--cert= --upatch= --expect= --tree-root= \
-				--expect-chain= --expect-pcr= \
+				--expect-chain= --expect-pcr= --expect-credential= \
 				--allow-runtime-events --strict-anchor" -- "$cur") )
 		elif [[ $sub == predict ]]; then
 			COMPREPLY=( $(compgen -W "--cert= --upatch= --expect= \
 				--tree-root= --event=" -- "$cur") )
+		elif [[ $sub == challenge ]]; then
+			COMPREPLY=( $(compgen -W "--evidence= --ek-ca= --out=" \
+				-- "$cur") )
 		else
-			COMPREPLY=( $(compgen -W "--nonce= --pcrs= --out=" -- "$cur") )
+			COMPREPLY=( $(compgen -W "--nonce= --pcrs= --challenge= \
+				--out=" -- "$cur") )
 		fi
 		;;
 	keys)

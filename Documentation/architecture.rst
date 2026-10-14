@@ -360,7 +360,13 @@ and systemd measurement logs.  The attestation key is a restricted
 P-256 ECDSA primary under the endorsement hierarchy with a fixed
 template, so the same TPM always yields the same key; an operator
 records its name once when enrolling the target.  ``shirudo attest
-verify`` on the operator checks the signatures and the nonce, that the
+challenge`` makes a credential under the target's endorsement key for
+that name, ``attest --challenge`` activates it in the TPM while
+attesting, and ``verify --expect-credential`` checks the recovered
+value, so the key is shown to sit in the TPM the endorsement
+certificate describes instead of being taken on trust.  ``shirudo
+attest verify`` on the operator checks the signatures and the nonce,
+that the
 quote covers the listed PCRs, that the certified index has the public
 area a register bound to the recorded PCR value must have, that the
 records replay to the certified value, that the anchoring PCR carries

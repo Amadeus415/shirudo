@@ -189,7 +189,11 @@ T9  A target lying about its state
     by itself.  ``shirudo attest`` makes the TPM speak: a quote over
     the firmware, boot loader, kernel, initrd and systemd PCRs and a
     certification of the register, both signed by an attestation key
-    the operator pinned by name and carrying the operator's nonce.
+    the operator pinned by name and carrying the operator's nonce.  A
+    challenge the operator made under the target's endorsement key
+    (``shirudo attest challenge``) and the target activated while
+    attesting proves that the attestation key sits in the TPM whose
+    endorsement key and certificate the evidence carries.
     ``shirudo attest verify`` ties the certified index to the recorded
     PCR binding, replays the eventlog to the certified value and
     compares it with the value predicted from the certificate and the
@@ -265,12 +269,13 @@ Each of these is known, documented and bounded; none is silent.
     because TPMs sign with nothing post-quantum today.  The evidence is
     therefore classical even though the artifacts it describes are not.
 
-10. Attestation key trust.  The operator pins the key by its name when
-    enrolling a target, over whatever channel they trust at that
-    moment, and nothing in the evidence proves by itself that the key
-    lives in the TPM whose endorsement certificate it carries.  A
-    credential activation against that certificate is deferred (see
-    below); until then the pin is a first-use trust.
+10. Endorsement key trust.  Credential activation ties the attestation
+    key to the endorsement key in the evidence, and the endorsement
+    certificate ties that key to a manufacturer; only ``--ek-ca`` with
+    the manufacturer's issuers checks the certificate, and the operator
+    decides which issuers to trust.  A TPM without a certificate, as
+    virtual TPMs usually are, leaves the endorsement key pinned by its
+    name as presented at enrolment.
 
 11. The anchor shares PCR 15 with systemd's own system-identity
     measurements, so ``attest verify`` proves the anchor exactly only
@@ -288,10 +293,7 @@ Each of these is known, documented and bounded; none is silent.
 Deferred mitigations
 ~~~~~~~~~~~~~~~~~~~~
 
-In scope and not yet built: credential activation (``TPM2_MakeCredential`` on
-the operator, ``TPM2_ActivateCredential`` on the target) that proves
-the attestation key sits beside the endorsement key whose certificate
-the evidence carries (residual risk 10); registering the register as a
+In scope and not yet built: registering the register as a
 systemd NvPCR so that the initrd initialises it under the signed PCR 11
 policy and anchors it in PCR 9, and measuring through
 ``systemd-pcrextend`` so systemd's measurement log explains the anchor

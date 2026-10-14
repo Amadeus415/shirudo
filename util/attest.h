@@ -23,13 +23,50 @@
 #define SHIRUDO_ATTEST_REPORT_MAX	8192
 
 /*
+ * A challenge an operator made with `shirudo attest challenge`: the
+ * blob and the encrypted seed TPM2_ActivateCredential takes, for the
+ * attestation key of the given name under the endorsement key of the
+ * given type.
+ */
+struct shirudo_attest_challenge {
+	bool		ek_rsa;
+	uint8_t		ak_name[SHIRUDO_TPM_NAME_LEN];
+	uint8_t		blob[SHIRUDO_TPM_ID_OBJECT_LEN];
+	size_t		blob_len;
+	uint8_t		secret[256];
+	size_t		secret_len;
+};
+
+#define SHIRUDO_ATTEST_CHALLENGE_MAX	(16 * 1024)
+
+int shirudo_attest_challenge_read(const char *path,
+				  struct shirudo_attest_challenge *out);
+
+/*
  * Target side: the evidence document for nonce over the PCRs in
- * pcr_mask. The buffer is xmalloc'd to *cap bytes and NUL-terminated;
- * the caller frees it with xfree(buf, cap).
+ * pcr_mask, activating the challenge when one is given. The buffer is
+ * xmalloc'd to *cap bytes and NUL-terminated; the caller frees it with
+ * xfree(buf, cap). -EKEYREJECTED when the TPM refuses the challenge.
  */
 int shirudo_attest_evidence(const uint8_t *nonce, size_t nonce_len,
-			    uint32_t pcr_mask, char **out, size_t *len,
-			    size_t *cap);
+			    uint32_t pcr_mask,
+			    const struct shirudo_attest_challenge *challenge,
+			    char **out, size_t *len, size_t *cap);
+
+/*
+ * Operator side: from an evidence document, a challenge for its
+ * attestation key under its endorsement key. The credential the
+ * target has to recover is handed to the caller and kept nowhere
+ * else. ek_ca names a PEM bundle the endorsement certificate must
+ * chain to, or NULL. report receives one line per check; the document
+ * is xmalloc'd to *cap bytes. -EKEYREJECTED when a check failed and no
+ * challenge was made.
+ */
+int shirudo_attest_challenge_make(const char *evidence, size_t len,
+				  const char *ek_ca,
+				  uint8_t credential[SHIRUDO_TPM_CREDENTIAL_LEN],
+				  char **out, size_t *out_len, size_t *cap,
+				  char *report, size_t report_cap);
 
 struct shirudo_attest_expect {
 	const uint8_t	*nonce;
@@ -44,6 +81,8 @@ struct shirudo_attest_expect {
 	bool		strict_anchor;
 	uint32_t	pcr_expect_mask;
 	uint8_t		pcrs[24][32];
+	bool		have_credential;
+	uint8_t		credential[SHIRUDO_TPM_CREDENTIAL_LEN];
 };
 
 /*

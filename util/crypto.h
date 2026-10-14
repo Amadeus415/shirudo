@@ -13,6 +13,7 @@
 #ifndef SHIRUDO_CRYPTO_H
 #define SHIRUDO_CRYPTO_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -78,5 +79,58 @@ CURLcode shirudo_sslctx_callback(CURL *curl, void *sslctx, void *userptr);
  * errno; callers must not connect when it fails.
  */
 int shirudo_tls_curl_policy(CURL *curl, struct shirudo_tls_ca *ca);
+
+/* HMAC-SHA-256 of data under key. */
+int shirudo_hmac_sha256(const uint8_t *key, size_t key_len,
+			const void *data, size_t len,
+			uint8_t out[SHIRUDO_CRYPTO_SHA256_LEN]);
+
+/* AES-128 in CFB mode with a zero IV and no padding. */
+int shirudo_aes128_cfb_encrypt(const uint8_t key[16], const uint8_t *in,
+			       size_t len, uint8_t *out);
+
+/*
+ * RSA-OAEP with SHA-256, MGF1-SHA-256 and the given label to the
+ * modulus n with the public exponent e (0 for 65537).
+ */
+int shirudo_rsa_oaep_encrypt(const uint8_t *n, size_t n_len, uint32_t e,
+			     const void *label, size_t label_len,
+			     const uint8_t *in, size_t in_len,
+			     uint8_t *out, size_t cap, size_t *out_len);
+
+/*
+ * One ephemeral P-256 ECDH against the point (x, y): the ephemeral
+ * public point and the shared secret's x coordinate.
+ */
+int shirudo_ecdh_p256_ephemeral(const uint8_t x[32], const uint8_t y[32],
+				uint8_t eph_x[32], uint8_t eph_y[32],
+				uint8_t z[32]);
+
+int shirudo_base64_decode(const char *in, size_t in_len, uint8_t *out,
+			  size_t cap, size_t *out_len);
+
+int shirudo_cert_read_der(const uint8_t *der, size_t len,
+			  struct shirudo_cert *cert);
+
+/* The raw public key of a certificate: RSA (n, e) or EC P-256 (x, y). */
+struct shirudo_cert_pubkey {
+	bool		rsa;
+	uint8_t		n[512];
+	size_t		n_len;
+	uint32_t	e;
+	uint8_t		x[32];
+	uint8_t		y[32];
+};
+
+int shirudo_cert_pubkey(const struct shirudo_cert *cert,
+			struct shirudo_cert_pubkey *out);
+
+/*
+ * Chain the certificate to the PEM bundle of trusted issuers at path.
+ * -EKEYREJECTED when it does not chain, with *reason set to libcrypto's
+ * static explanation; -EINVAL when the bundle cannot be loaded.
+ */
+int shirudo_cert_verify_chain(const struct shirudo_cert *cert,
+			      const char *bundle_path, const char **reason);
 
 #endif /* SHIRUDO_CRYPTO_H */

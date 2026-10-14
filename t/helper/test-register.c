@@ -24,9 +24,9 @@
 
 static void puthex(const uint8_t *b, size_t n)
 {
-	char h[2 * 256 + 1];
+	char h[2 * 1024 + 1];
 
-	if (n > 256)
+	if (n > 1024)
 		return;
 	shirudo_hex_encode(b, n, h);
 	printf("%s\n", h);
@@ -190,6 +190,29 @@ int main(int argc, char **argv)
 		puthex(v, 32);
 		return 0;
 	}
+	/*
+	 * The endorsement key of a type, as a target without a certificate
+	 * presents it.
+	 */
+	if (strcmp(argv[1], "ek-public") == 0 && argc == 3) {
+		struct shirudo_tpm_key ek = { .handle = 0 };
+		struct shirudo_tpm *tpm = NULL;
+
+		if (shirudo_tpm_open(&tpm))
+			return 1;
+		rc = shirudo_tpm_ek_create(tpm, strcmp(argv[2], "rsa") == 0,
+					   &ek);
+		if (!rc) {
+			printf("public=");
+			puthex(ek.public, ek.public_len);
+			printf("name=");
+			puthex(ek.name, ek.name_len);
+			shirudo_tpm_key_flush(tpm, &ek);
+		}
+		shirudo_tpm_close(tpm);
+		printf("rc=%d\n", rc);
+		return rc ? 1 : 0;
+	}
 	/* The attack: recreate the index with the same public area. */
 	if (strcmp(argv[1], "recreate") == 0) {
 		struct shirudo_tpm_nv_info nv;
@@ -236,7 +259,8 @@ int main(int argc, char **argv)
 		printf("rc=%d\n", rc);
 		return rc ? 1 : 0;
 	}
-	if (strcmp(argv[1], "evidence") == 0 && argc == 3) {
+	if (strcmp(argv[1], "evidence") == 0 && (argc == 3 || argc == 4)) {
+		struct shirudo_attest_challenge challenge = {};
 		uint8_t nonce[64];
 		size_t nonce_len = strlen(argv[2]) / 2, len, cap;
 		char *doc;
@@ -244,9 +268,15 @@ int main(int argc, char **argv)
 		if (nonce_len > sizeof(nonce) ||
 		    shirudo_hex_decode(argv[2], nonce, nonce_len))
 			return 2;
+		if (argc == 4 &&
+		    shirudo_attest_challenge_read(argv[3], &challenge)) {
+			fprintf(stderr, "evidence: bad challenge\n");
+			return 2;
+		}
 		rc = shirudo_attest_evidence(nonce, nonce_len,
-					     SHIRUDO_ATTEST_PCR_DEFAULT, &doc,
-					     &len, &cap);
+					     SHIRUDO_ATTEST_PCR_DEFAULT,
+					     argc == 4 ? &challenge : NULL,
+					     &doc, &len, &cap);
 		if (rc) {
 			fprintf(stderr, "evidence: %s\n", strerror(-rc));
 			return 1;

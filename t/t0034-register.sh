@@ -123,6 +123,67 @@ test_expect_success 'a wrong nonce, a wrong key name or a tampered value fails' 
 	grep -q "^FAIL: register: certified contents" "$WORK/report4"
 '
 
+test_expect_success 'a challenge made from the evidence activates on the target' '
+	nonce=1112 &&
+	$S attest challenge --evidence="$WORK/evidence.json" \
+		--out="$WORK/challenge.json" >"$WORK/challenge.out" &&
+	grep -q "^ok:   endorsement key: name matches" "$WORK/challenge.out" &&
+	grep -q "^ok:   endorsement key: TCG default template" "$WORK/challenge.out" &&
+	grep -q "^note: no endorsement certificate" "$WORK/challenge.out" &&
+	sed -n "s/^credential: //p" "$WORK/challenge.out" >"$WORK/credential" &&
+	[ "$(wc -c <"$WORK/credential")" = 65 ] &&
+	./helper/test-tpm-wire public "$(py "import json; print(json.load(open(\"$WORK/evidence.json\"))[\"ek\"][\"public\"])")" |
+		grep -q "same=1" &&
+	./$R evidence $nonce "$WORK/challenge.json" >"$WORK/evidence-cred.json" &&
+	[ "$(py "import json; print(json.load(open(\"$WORK/evidence-cred.json\"))[\"credential\"][\"value\"])")" = "$(cat "$WORK/credential")" ] &&
+	$S attest verify --evidence="$WORK/evidence-cred.json" --nonce=$nonce \
+		--ak-name="$(cat "$WORK/ak")" --cert="$WORK/keys/cert.der" \
+		--allow-runtime-events \
+		--expect-credential="$(cat "$WORK/credential")" >"$WORK/report-cred" &&
+	grep -qx "verdict: ok" "$WORK/report-cred" &&
+	grep -q "^ok:   attestation key: activated the credential" "$WORK/report-cred" &&
+	grep -q "^ok:   endorsement key: TCG default template" "$WORK/report-cred"
+'
+
+test_expect_success 'a wrong credential, a tampered blob and a foreign challenge are refused' '
+	nonce=1112 &&
+	! $S attest verify --evidence="$WORK/evidence-cred.json" --nonce=$nonce \
+		--ak-name="$(cat "$WORK/ak")" --allow-runtime-events \
+		--expect-credential="$(py "print(\"00\"*32)")" >"$WORK/report-cred2" &&
+	grep -q "^FAIL: attestation key: activated the credential" "$WORK/report-cred2" &&
+	sed "s/\"credential_blob\":\"\([0-9a-f]\{4\}\)[0-9a-f]\{4\}/\"credential_blob\":\"\10000/" \
+		"$WORK/challenge.json" >"$WORK/challenge-tampered.json" &&
+	! ./$R evidence $nonce "$WORK/challenge-tampered.json" >/dev/null 2>&1 &&
+	sed "s/\"ak_name\":\"000b[0-9a-f]\{4\}/\"ak_name\":\"000b0000/" \
+		"$WORK/challenge.json" >"$WORK/challenge-foreign.json" &&
+	! ./$R evidence $nonce "$WORK/challenge-foreign.json" >/dev/null 2>&1
+'
+
+test_expect_success 'an RSA endorsement key protects and activates the challenge too' '
+	out=$(./$R ek-public rsa) &&
+	echo "$out" | grep -qx "rc=0" &&
+	./helper/test-tpm-wire public "$(echo "$out" | field public)" |
+		grep -q "^type=0x0001 attrs=0x000300b2 policy_len=32 sym=0x0006/128/0x0043" &&
+	printf "{\"ak\":{\"name\":\"%s\"},\"ek\":{\"type\":\"rsa\",\"public\":\"%s\",\"name\":\"%s\"}}\n" \
+		"$(cat "$WORK/ak")" "$(echo "$out" | field public)" \
+		"$(echo "$out" | field name)" >"$WORK/rsa.json" &&
+	$S attest challenge --evidence="$WORK/rsa.json" \
+		--out="$WORK/challenge-rsa.json" |
+		sed -n "s/^credential: //p" >"$WORK/credential-rsa" &&
+	nonce=1314 &&
+	./$R evidence $nonce "$WORK/challenge-rsa.json" >"$WORK/evidence-rsa.json" &&
+	[ "$(py "import json; d=json.load(open(\"$WORK/evidence-rsa.json\")); print(d[\"ek\"][\"type\"], d[\"credential\"][\"value\"])")" = "rsa $(cat "$WORK/credential-rsa")" ]
+'
+
+test_expect_success 'challenge refuses a key that is not an endorsement key' '
+	py "import json; d=json.load(open(\"$WORK/evidence.json\")); d[\"ek\"]={\"type\":\"ecc\",\"public\":d[\"ak\"][\"public\"],\"name\":d[\"ak\"][\"name\"]}; open(\"$WORK/fake-ek.json\",\"w\").write(json.dumps(d))" &&
+	! $S attest challenge --evidence="$WORK/fake-ek.json" \
+		--out="$WORK/challenge-fake.json" >"$WORK/fake.out" &&
+	grep -q "^FAIL: endorsement key: TCG default template" "$WORK/fake.out" &&
+	grep -qx "verdict: FAIL" "$WORK/fake.out" &&
+	[ ! -e "$WORK/challenge-fake.json" ]
+'
+
 test_expect_success 'a recreated index is unwritable and no longer anchored' '
 	out=$(./$R recreate) &&
 	echo "$out" | grep -qx "rc=0" &&

@@ -515,14 +515,6 @@ static void put16(uint8_t *p, uint16_t v)
 	p[1] = (uint8_t)v;
 }
 
-static void put32(uint8_t *p, uint32_t v)
-{
-	p[0] = (uint8_t)(v >> 24);
-	p[1] = (uint8_t)(v >> 16);
-	p[2] = (uint8_t)(v >> 8);
-	p[3] = (uint8_t)v;
-}
-
 static size_t put2b(uint8_t *p, const uint8_t *data, uint16_t len)
 {
 	put16(p, len);
@@ -530,43 +522,56 @@ static size_t put2b(uint8_t *p, const uint8_t *data, uint16_t len)
 	return 2u + len;
 }
 
-/* Marshal the TPMT_PUBLIC of the attestation key template. */
-static int marshal_ecc_public(const TPMT_PUBLIC *pub, uint8_t *out,
-			      size_t cap, size_t *len)
+/* The marshalled form of a public area libtss2 handed back. */
+static int public_from_tss(const TPMT_PUBLIC *p, uint8_t *out, size_t cap,
+			   size_t *len)
 {
-	const TPMS_ECC_PARMS *ecc = &pub->parameters.eccDetail;
-	size_t off = 0;
+	struct shirudo_tpm_public pub = {};
 
-	if (pub->type != TPM2_ALG_ECC || pub->nameAlg != TPM2_ALG_SHA256 ||
-	    ecc->symmetric.algorithm != TPM2_ALG_NULL ||
-	    ecc->scheme.scheme != TPM2_ALG_ECDSA ||
-	    ecc->kdf.scheme != TPM2_ALG_NULL || pub->authPolicy.size > 64 ||
-	    pub->unique.ecc.x.size > 64 || pub->unique.ecc.y.size > 64 ||
-	    cap < 160u + pub->authPolicy.size)
+	if (p->nameAlg != TPM2_ALG_SHA256 || p->authPolicy.size > 32)
 		return -EINVAL;
-	put16(out + off, pub->type);
-	off += 2;
-	put16(out + off, pub->nameAlg);
-	off += 2;
-	put32(out + off, pub->objectAttributes);
-	off += 4;
-	off += put2b(out + off, pub->authPolicy.buffer, pub->authPolicy.size);
-	put16(out + off, ecc->symmetric.algorithm);
-	off += 2;
-	put16(out + off, ecc->scheme.scheme);
-	off += 2;
-	put16(out + off, ecc->scheme.details.ecdsa.hashAlg);
-	off += 2;
-	put16(out + off, ecc->curveID);
-	off += 2;
-	put16(out + off, ecc->kdf.scheme);
-	off += 2;
-	off += put2b(out + off, pub->unique.ecc.x.buffer,
-		     pub->unique.ecc.x.size);
-	off += put2b(out + off, pub->unique.ecc.y.buffer,
-		     pub->unique.ecc.y.size);
-	*len = off;
-	return 0;
+	pub.type = p->type;
+	pub.attrs = p->objectAttributes;
+	pub.policy_len = p->authPolicy.size;
+	memcpy(pub.policy, p->authPolicy.buffer, pub.policy_len);
+	if (p->type == TPM2_ALG_ECC) {
+		const TPMS_ECC_PARMS *ecc = &p->parameters.eccDetail;
+
+		pub.sym_alg = ecc->symmetric.algorithm;
+		if (pub.sym_alg != TPM2_ALG_NULL) {
+			pub.sym_bits = ecc->symmetric.keyBits.aes;
+			pub.sym_mode = ecc->symmetric.mode.aes;
+		}
+		pub.scheme = ecc->scheme.scheme;
+		if (pub.scheme != TPM2_ALG_NULL)
+			pub.scheme_hash = ecc->scheme.details.anySig.hashAlg;
+		pub.curve = ecc->curveID;
+		if (ecc->kdf.scheme != TPM2_ALG_NULL ||
+		    p->unique.ecc.x.size != 32 || p->unique.ecc.y.size != 32)
+			return -EINVAL;
+		memcpy(pub.x, p->unique.ecc.x.buffer, 32);
+		memcpy(pub.y, p->unique.ecc.y.buffer, 32);
+	} else if (p->type == TPM2_ALG_RSA) {
+		const TPMS_RSA_PARMS *rsa = &p->parameters.rsaDetail;
+
+		pub.sym_alg = rsa->symmetric.algorithm;
+		if (pub.sym_alg != TPM2_ALG_NULL) {
+			pub.sym_bits = rsa->symmetric.keyBits.aes;
+			pub.sym_mode = rsa->symmetric.mode.aes;
+		}
+		pub.scheme = rsa->scheme.scheme;
+		if (pub.scheme != TPM2_ALG_NULL)
+			pub.scheme_hash = rsa->scheme.details.anySig.hashAlg;
+		pub.rsa_bits = rsa->keyBits;
+		pub.rsa_exponent = rsa->exponent;
+		if (p->unique.rsa.size > sizeof(pub.n))
+			return -EINVAL;
+		pub.n_len = p->unique.rsa.size;
+		memcpy(pub.n, p->unique.rsa.buffer, pub.n_len);
+	} else {
+		return -EPROTONOSUPPORT;
+	}
+	return shirudo_tpm_public_marshal(&pub, out, cap, len);
 }
 
 static int marshal_signature(const TPMT_SIGNATURE *sig, uint8_t *out,
@@ -588,12 +593,18 @@ static int marshal_signature(const TPMT_SIGNATURE *sig, uint8_t *out,
 	return 0;
 }
 
-int shirudo_tpm_ak_create(struct shirudo_tpm *t, struct shirudo_tpm_key *ak)
+/*
+ * Create a primary under the endorsement hierarchy and take its
+ * marshalled public area and its name, the latter checked against the
+ * area so that what the evidence carries is what the TPM named.
+ */
+static int endorsement_primary(struct shirudo_tpm *t,
+			       const TPM2B_PUBLIC *in_pub, const char *what,
+			       struct shirudo_tpm_key *key)
 {
 	TPM2B_SENSITIVE_CREATE sensitive = {};
 	TPML_PCR_SELECTION creation_pcr = {};
 	TPM2B_PUBLIC *out_pub = NULL;
-	TPM2B_PUBLIC in_pub = {};
 	TPM2B_NAME *name = NULL;
 	TPM2B_DATA outside = {};
 	uint8_t computed[SHIRUDO_TPM_NAME_LEN];
@@ -601,7 +612,50 @@ int shirudo_tpm_ak_create(struct shirudo_tpm *t, struct shirudo_tpm_key *ak)
 	TSS2_RC rc;
 	int err;
 
-	memset(ak, 0, sizeof(*ak));
+	memset(key, 0, sizeof(*key));
+	rc = Esys_CreatePrimary(t->esys, ESYS_TR_RH_ENDORSEMENT,
+				ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
+				&sensitive, in_pub, &outside, &creation_pcr,
+				&handle, &out_pub, NULL, NULL, NULL);
+	if (rc != TSS2_RC_SUCCESS) {
+		if (rc_is_auth_failure(rc))
+			pr_err("tpm: CreatePrimary(%s): the endorsement "
+			       "hierarchy has an auth value (rc=0x%08x)", what,
+			       (unsigned)rc);
+		else
+			pr_err("tpm: CreatePrimary(%s): rc=0x%08x", what,
+			       (unsigned)rc);
+		return -EIO;
+	}
+	key->handle = handle;
+	err = public_from_tss(&out_pub->publicArea, key->public,
+			      sizeof(key->public), &key->public_len);
+	Esys_Free(out_pub);
+	if (!err)
+		err = shirudo_tpm_object_name(key->public, key->public_len,
+					      computed);
+	if (!err) {
+		rc = Esys_TR_GetName(t->esys, handle, &name);
+		if (rc != TSS2_RC_SUCCESS || name->size != sizeof(computed) ||
+		    memcmp(name->name, computed, sizeof(computed)) != 0) {
+			pr_err("tpm: %s name does not match its marshalled "
+			       "public area", what);
+			err = -EPROTO;
+		} else {
+			memcpy(key->name, name->name, name->size);
+			key->name_len = name->size;
+		}
+		Esys_Free(name);
+	}
+	if (err)
+		shirudo_tpm_key_flush(t, key);
+	return err;
+}
+
+int shirudo_tpm_ak_create(struct shirudo_tpm *t, struct shirudo_tpm_key *ak)
+{
+	TPM2B_PUBLIC in_pub = {};
+
 	in_pub.publicArea.type = TPM2_ALG_ECC;
 	in_pub.publicArea.nameAlg = TPM2_ALG_SHA256;
 	in_pub.publicArea.objectAttributes =
@@ -615,44 +669,43 @@ int shirudo_tpm_ak_create(struct shirudo_tpm *t, struct shirudo_tpm_key *ak)
 		TPM2_ALG_SHA256;
 	in_pub.publicArea.parameters.eccDetail.curveID = TPM2_ECC_NIST_P256;
 	in_pub.publicArea.parameters.eccDetail.kdf.scheme = TPM2_ALG_NULL;
+	return endorsement_primary(t, &in_pub, "attestation key", ak);
+}
 
-	rc = Esys_CreatePrimary(t->esys, ESYS_TR_RH_ENDORSEMENT,
-				ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
-				&sensitive, &in_pub, &outside, &creation_pcr,
-				&handle, &out_pub, NULL, NULL, NULL);
-	if (rc != TSS2_RC_SUCCESS) {
-		if (rc_is_auth_failure(rc))
-			pr_err("tpm: CreatePrimary(endorsement): the "
-			       "endorsement hierarchy has an auth value "
-			       "(rc=0x%08x)", (unsigned)rc);
-		else
-			pr_err("tpm: CreatePrimary(endorsement): rc=0x%08x",
-			       (unsigned)rc);
-		return -EIO;
+int shirudo_tpm_ek_create(struct shirudo_tpm *t, bool rsa,
+			  struct shirudo_tpm_key *ek)
+{
+	TPM2B_PUBLIC in_pub = {};
+	TPMT_PUBLIC *pub = &in_pub.publicArea;
+
+	pub->type = rsa ? TPM2_ALG_RSA : TPM2_ALG_ECC;
+	pub->nameAlg = TPM2_ALG_SHA256;
+	pub->objectAttributes = SHIRUDO_TPM_EK_ATTRS;
+	pub->authPolicy.size = 32;
+	memcpy(pub->authPolicy.buffer, shirudo_tpm_ek_policy, 32);
+	if (rsa) {
+		TPMS_RSA_PARMS *p = &pub->parameters.rsaDetail;
+
+		p->symmetric.algorithm = TPM2_ALG_AES;
+		p->symmetric.keyBits.aes = 128;
+		p->symmetric.mode.aes = TPM2_ALG_CFB;
+		p->scheme.scheme = TPM2_ALG_NULL;
+		p->keyBits = 2048;
+		p->exponent = 0;
+		pub->unique.rsa.size = 256;
+	} else {
+		TPMS_ECC_PARMS *p = &pub->parameters.eccDetail;
+
+		p->symmetric.algorithm = TPM2_ALG_AES;
+		p->symmetric.keyBits.aes = 128;
+		p->symmetric.mode.aes = TPM2_ALG_CFB;
+		p->scheme.scheme = TPM2_ALG_NULL;
+		p->curveID = TPM2_ECC_NIST_P256;
+		p->kdf.scheme = TPM2_ALG_NULL;
+		pub->unique.ecc.x.size = 32;
+		pub->unique.ecc.y.size = 32;
 	}
-	ak->handle = handle;
-	err = marshal_ecc_public(&out_pub->publicArea, ak->public,
-				 sizeof(ak->public), &ak->public_len);
-	Esys_Free(out_pub);
-	if (!err)
-		err = shirudo_tpm_object_name(ak->public, ak->public_len,
-					      computed);
-	if (!err) {
-		rc = Esys_TR_GetName(t->esys, handle, &name);
-		if (rc != TSS2_RC_SUCCESS || name->size != sizeof(computed) ||
-		    memcmp(name->name, computed, sizeof(computed)) != 0) {
-			pr_err("tpm: attestation key name does not match "
-			       "its marshalled public area");
-			err = -EPROTO;
-		} else {
-			memcpy(ak->name, name->name, name->size);
-			ak->name_len = name->size;
-		}
-		Esys_Free(name);
-	}
-	if (err)
-		shirudo_tpm_key_flush(t, ak);
-	return err;
+	return endorsement_primary(t, &in_pub, "endorsement key", ek);
 }
 
 void shirudo_tpm_key_flush(struct shirudo_tpm *t, struct shirudo_tpm_key *key)
@@ -739,6 +792,57 @@ int shirudo_tpm_nv_certify(struct shirudo_tpm *t,
 	return err;
 }
 
+int shirudo_tpm_activate_credential(struct shirudo_tpm *t,
+				    const struct shirudo_tpm_key *ak,
+				    const struct shirudo_tpm_key *ek,
+				    const uint8_t *blob, size_t blob_len,
+				    const uint8_t *secret, size_t secret_len,
+				    uint8_t *out, size_t cap, size_t *out_len)
+{
+	TPM2B_ENCRYPTED_SECRET sec = {};
+	TPM2B_DIGEST *cert_info = NULL;
+	ESYS_TR session = ESYS_TR_NONE;
+	TPM2B_ID_OBJECT id = {};
+	TSS2_RC rc;
+	int err;
+
+	if (blob_len > sizeof(id.credential) || secret_len > sizeof(sec.secret))
+		return -EINVAL;
+	id.size = (uint16_t)blob_len;
+	memcpy(id.credential, blob, blob_len);
+	sec.size = (uint16_t)secret_len;
+	memcpy(sec.secret, secret, secret_len);
+	err = policy_session_start(t, &session);
+	if (err)
+		return err;
+	/* The endorsement key's policy: the hierarchy's own authorisation. */
+	rc = Esys_PolicySecret(t->esys, ESYS_TR_RH_ENDORSEMENT, session,
+			       ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
+			       NULL, NULL, NULL, 0, NULL, NULL);
+	if (rc != TSS2_RC_SUCCESS) {
+		pr_err("tpm: PolicySecret(endorsement): rc=0x%08x",
+		       (unsigned)rc);
+		session_flush(t, session);
+		return -EACCES;
+	}
+	rc = Esys_ActivateCredential(t->esys, ak->handle, ek->handle,
+				     ESYS_TR_PASSWORD, session, ESYS_TR_NONE,
+				     &id, &sec, &cert_info);
+	session_flush(t, session);
+	if (rc != TSS2_RC_SUCCESS) {
+		pr_err("tpm: ActivateCredential: rc=0x%08x", (unsigned)rc);
+		return (rc & 0xFFFF0000u) == 0 ? -EKEYREJECTED : -EIO;
+	}
+	if (cert_info->size > cap) {
+		Esys_Free(cert_info);
+		return -E2BIG;
+	}
+	memcpy(out, cert_info->buffer, cert_info->size);
+	*out_len = cert_info->size;
+	Esys_Free(cert_info);
+	return 0;
+}
+
 static int nv_read_all(struct shirudo_tpm *t, uint32_t index, uint8_t *out,
 		       size_t cap, size_t *len)
 {
@@ -791,12 +895,15 @@ static int nv_read_all(struct shirudo_tpm *t, uint32_t index, uint8_t *out,
 }
 
 int shirudo_tpm_ek_certificate(struct shirudo_tpm *t, uint8_t *out,
-			       size_t cap, size_t *len)
+			       size_t cap, size_t *len, bool *rsa)
 {
 	int err;
 
+	*rsa = false;
 	err = nv_read_all(t, EK_CERT_NV_ECC, out, cap, len);
-	if (err == -ENOENT)
+	if (err == -ENOENT) {
 		err = nv_read_all(t, EK_CERT_NV_RSA, out, cap, len);
+		*rsa = err == 0;
+	}
 	return err;
 }

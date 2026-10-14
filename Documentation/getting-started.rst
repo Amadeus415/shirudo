@@ -307,10 +307,27 @@ its TPM signs.  On the target, with a nonce the verifier chose::
 
 The document carries a quote over the firmware, boot loader, kernel,
 initrd and systemd PCRs, a certification of the measurement register,
-the attestation key, this boot's eventlog and the measurement logs.
-When a target is enrolled, run it once and record the attestation key
-name (``jq -r .ak.name evidence.json``); the same TPM always yields
-the same key.
+the attestation key, the endorsement key and its certificate, this
+boot's eventlog and the measurement logs.  When a target is enrolled,
+run it once, record the attestation key name (``jq -r .ak.name
+evidence.json``; the same TPM always yields the same key) and make
+that key prove where it lives.  On the operator::
+
+    shirudo attest challenge --evidence=evidence.json \
+        --out=challenge.json --ek-ca=tpm-vendor-roots.pem
+
+prints the checks on the endorsement key and its certificate and a
+``credential:`` line to keep.  Give ``challenge.json`` to the target
+and request the next evidence with it::
+
+    sudo shirudo attest --nonce=$nonce --challenge=challenge.json \
+        --out=/tmp/evidence.json
+
+The target's TPM recovers the credential only if the attestation key
+and the endorsement key live in it; pass the value as
+``--expect-credential=<hex>`` to ``verify`` below.  Leave ``--ek-ca``
+out and the certificate is not checked against an issuer; a virtual
+TPM without a certificate is pinned by its endorsement key name.
 
 On the operator, with the artifacts the target was given::
 
@@ -319,9 +336,10 @@ On the operator, with the artifacts the target was given::
         --upatch=fix.upatch --upatch=shield.upatch
 
 ``verify`` prints one line per check and a verdict: the signatures and
-the nonce, the quote against the listed PCRs, the certified index
-against the recorded binding, the eventlog replay, the anchor in PCR
-15, and the register against the value predicted for that set.  Loads
+the nonce, the endorsement key and the credential it opened, the
+quote against the listed PCRs, the certified index against the
+recorded binding, the eventlog replay, the anchor in PCR 15, and the
+register against the value predicted for that set.  Loads
 and unloads after boot change the register; either pass
 ``--allow-runtime-events`` to see them listed, or compute the exact
 value with ``shirudo attest predict --cert cert.der --upatch ...

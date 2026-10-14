@@ -101,4 +101,40 @@ test_expect_success 'a truncated or mis-tagged attestation is rejected' '
 	./$H attest "ff544348801800020000" | grep -qx "rc=-22"
 '
 
+test_expect_success 'the endorsement policy is PolicySecret over the endorsement hierarchy' '
+	[ "$(./$H ek-policy)" = "$(py "import hashlib; h = hashlib.sha256(bytes(32) + bytes.fromhex(\"00000151\") + bytes.fromhex(\"4000000b\")).digest(); print(hashlib.sha256(h).hexdigest())")" ]
+'
+
+test_expect_success 'KDFa and KDFe derive as the TPM does' '
+	key=$(py "print(\"11\" * 32)") &&
+	name=000b$(py "print(\"22\" * 32)") &&
+	[ "$(./$H kdfa $key STORAGE $name 16)" = "$(py "import hmac, hashlib; print(hmac.new(bytes.fromhex(\"$key\"), (1).to_bytes(4, \"big\") + b\"STORAGE\\0\" + bytes.fromhex(\"$name\") + (128).to_bytes(4, \"big\"), hashlib.sha256).hexdigest()[:32])")" ] &&
+	[ "$(./$H kdfa $key INTEGRITY - 32)" = "$(py "import hmac, hashlib; print(hmac.new(bytes.fromhex(\"$key\"), (1).to_bytes(4, \"big\") + b\"INTEGRITY\\0\" + (256).to_bytes(4, \"big\"), hashlib.sha256).hexdigest())")" ] &&
+	[ "$(./$H kdfe $key IDENTITY $name $name)" = "$(py "import hashlib; print(hashlib.sha256((1).to_bytes(4, \"big\") + bytes.fromhex(\"$key\") + b\"IDENTITY\\0\" + bytes.fromhex(\"$name\") * 2).hexdigest())")" ]
+'
+
+test_expect_success 'the credential blob is the TPM2B_ID_OBJECT of Part 1, 24.4' '
+	seed=$(py "print(\"33\" * 32)") &&
+	name=000b$(py "print(\"44\" * 32)") &&
+	cred=$(py "print(\"55\" * 32)") &&
+	blob=$(./$H credential $seed $name $cred) &&
+	[ "${#blob}" = 136 ] &&
+	[ "$(echo "$blob" | cut -c1-4)" = 0020 ] &&
+	if py "import cryptography" 2>/dev/null; then
+		[ "$blob" = "$(py "
+import hmac, hashlib
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+seed, name, cred = (bytes.fromhex(h) for h in (\"$seed\", \"$name\", \"$cred\"))
+def kdfa(key, label, ctx, n):
+    return hmac.new(key, (1).to_bytes(4, \"big\") + label + b\"\\0\" + ctx + (n * 8).to_bytes(4, \"big\"), hashlib.sha256).digest()[:n]
+enc = Cipher(algorithms.AES(kdfa(seed, b\"STORAGE\", name, 16)), modes.CFB(bytes(16))).encryptor()
+e = enc.update((32).to_bytes(2, \"big\") + cred) + enc.finalize()
+mac = hmac.new(kdfa(seed, b\"INTEGRITY\", b\"\", 32), e + name, hashlib.sha256).digest()
+print(((32).to_bytes(2, \"big\") + mac + e).hex())
+")" ]
+	else
+		echo "python cryptography missing; blob format not cross-checked" >&2
+	fi
+'
+
 test_done

@@ -113,6 +113,75 @@ int main(int argc, char **argv)
 		puthex(pub.y, 32);
 		return 0;
 	}
+	if (strcmp(argv[1], "public") == 0 && argc == 3) {
+		struct shirudo_tpm_public pub;
+		uint8_t again[512];
+		size_t again_len = 0;
+		int rc;
+
+		if (gethex(argv[2], buf, sizeof(buf), &len))
+			return 2;
+		rc = shirudo_tpm_public_parse(buf, len, &pub);
+		printf("rc=%d\n", rc);
+		if (rc)
+			return 0;
+		printf("type=0x%04x attrs=0x%08x policy_len=%zu sym=0x%04x/%u/0x%04x "
+		       "scheme=0x%04x/0x%04x curve=0x%04x rsa_bits=%u exponent=%u "
+		       "n_len=%zu\n", pub.type, pub.attrs, pub.policy_len,
+		       pub.sym_alg, pub.sym_bits, pub.sym_mode, pub.scheme,
+		       pub.scheme_hash, pub.curve, pub.rsa_bits,
+		       pub.rsa_exponent, pub.n_len);
+		rc = shirudo_tpm_public_marshal(&pub, again, sizeof(again),
+						&again_len);
+		printf("marshal_rc=%d same=%d\n", rc,
+		       rc == 0 && again_len == len && !memcmp(again, buf, len));
+		return 0;
+	}
+	if (strcmp(argv[1], "kdfa") == 0 && argc == 6) {
+		uint8_t key[64], ctx[64], res[64];
+		size_t key_len, ctx_len, res_len = (size_t)atoi(argv[5]);
+
+		if (gethex(argv[2], key, sizeof(key), &key_len) ||
+		    gethex(strcmp(argv[4], "-") ? argv[4] : "", ctx, sizeof(ctx),
+			   &ctx_len) || res_len > sizeof(res))
+			return 2;
+		if (shirudo_tpm_kdfa(key, key_len, argv[3], ctx, ctx_len, NULL, 0,
+				     res, res_len))
+			return 1;
+		puthex(res, res_len);
+		return 0;
+	}
+	if (strcmp(argv[1], "kdfe") == 0 && argc == 6) {
+		uint8_t z[32], u[64], v[64], res[32];
+		size_t z_len, u_len, v_len;
+
+		if (gethex(argv[2], z, sizeof(z), &z_len) || z_len != 32 ||
+		    gethex(argv[4], u, sizeof(u), &u_len) ||
+		    gethex(argv[5], v, sizeof(v), &v_len))
+			return 2;
+		shirudo_tpm_kdfe(z, argv[3], u, u_len, v, v_len, res);
+		puthex(res, 32);
+		return 0;
+	}
+	if (strcmp(argv[1], "ek-policy") == 0) {
+		puthex(shirudo_tpm_ek_policy, 32);
+		return 0;
+	}
+	if (strcmp(argv[1], "credential") == 0 && argc == 5) {
+		uint8_t seed[32], name[SHIRUDO_TPM_NAME_LEN], cred[32];
+		uint8_t blob[SHIRUDO_TPM_ID_OBJECT_LEN];
+		size_t n;
+
+		if (gethex(argv[2], seed, sizeof(seed), &n) || n != 32 ||
+		    gethex(argv[3], name, sizeof(name), &n) ||
+		    n != SHIRUDO_TPM_NAME_LEN ||
+		    gethex(argv[4], cred, sizeof(cred), &n) || n != 32)
+			return 2;
+		if (shirudo_tpm_credential_protect(seed, name, cred, blob))
+			return 1;
+		puthex(blob, sizeof(blob));
+		return 0;
+	}
 	if (strcmp(argv[1], "signature") == 0 && argc == 3) {
 		uint8_t r[32], s[32];
 		int rc;
