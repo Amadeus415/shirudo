@@ -334,32 +334,26 @@ build_fixture()
 build_tree_test_registry()
 {
 	local registry_dir="$TMP_DIR/fixtures/tree-oci"
-	local tree_payload="$FIXTURE_WORK/tree-payload.json"
-	local tree_signature="$FIXTURE_WORK/tree-payload.sig"
-	local tree_initial_payload="$FIXTURE_WORK/tree-payload-initial.json"
-	local tree_initial_signature="$FIXTURE_WORK/tree-payload-initial.sig"
-	local tree_updated_payload="$FIXTURE_WORK/tree-payload-updated.json"
-	local tree_updated_signature="$FIXTURE_WORK/tree-payload-updated.sig"
-	local tree_restored_payload="$FIXTURE_WORK/tree-payload-delete-restored.json"
-	local tree_restored_signature="$FIXTURE_WORK/tree-payload-delete-restored.sig"
+	local payloads="$FIXTURE_WORK/tree-payload"
+	local reference
 
+	# One append-only tree that t1118, t1119 and t1120 walk in order:
+	# the tree state a target writes is sealed, so no test can start
+	# over, and each generation extends the one before it.
 	python3 - "$registry_dir" \
 		"$TMP_DIR/fixtures/shirudo-test-tree-match.upatch" \
 		"$TMP_DIR/fixtures/shirudo-test-tree-skip.upatch" \
 		"$TMP_DIR/fixtures/shirudo-test-tree-match.unload.upatch" \
-		"$tree_payload" "$tree_initial_payload" "$tree_updated_payload" \
-		"$tree_restored_payload" "$tree_match_payload" \
-		"$tree_skip_payload" "$tree_match_unload_payload" <<'PY'
+		"$payloads" "$tree_match_payload" "$tree_skip_payload" \
+		"$tree_match_unload_payload" <<'PY'
 import hashlib
 import json
 import pathlib
 import sys
 
-registry, match_path, skip_path, match_unload_path, tree_payload, \
-    initial_payload, updated_payload, restored_payload = \
-    map(pathlib.Path, sys.argv[1:9])
-match_payload, skip_payload, match_unload_payload = sys.argv[9:12]
-tree_endpoint = "oci://127.0.0.1:5443/shirudo/upatch-tree"
+registry, match_path, skip_path, match_unload_path, payloads = \
+    map(pathlib.Path, sys.argv[1:6])
+match_payload, skip_payload, match_unload_payload = sys.argv[6:9]
 
 
 def digest(body):
@@ -401,16 +395,6 @@ def artifact(repository, path, title, payload_sha256):
     }
 
 
-match_artifact = artifact("shirudo/tree-match", match_path,
-                         "shirudo-test-tree-match.upatch", match_payload)
-skip_artifact = artifact("shirudo/tree-skip", skip_path,
-                        "shirudo-test-tree-skip.upatch", skip_payload)
-match_unload_artifact = artifact("shirudo/tree-match-unload",
-                                 match_unload_path,
-                                 "shirudo-test-tree-match.unload.upatch",
-                                 match_unload_payload)
-
-
 def operation(seq, name, selector, artifact_info, op="add"):
     unsigned = {
         "seq": seq,
@@ -424,160 +408,59 @@ def operation(seq, name, selector, artifact_info, op="add"):
     return dict(unsigned, operation_digest=operation_digest)
 
 
-publication = {
-    "schema": 2,
-    "tree_id": "shirudo-test-tree",
-    "generation": 1,
-    "base": {"seq": 0},
-    "operations": [
-        operation(1, "shirudo-test-tree-match",
-                  {}, match_artifact),
-        operation(2, "shirudo-test-tree-skip",
-                  {"architecture": ["x86_64"],
-                   "labels": {"env": ["not-this-node"]}}, skip_artifact),
-    ],
-    "head": {"seq": 2},
-}
-tree_payload.write_bytes(json.dumps(publication, separators=(",", ":"))
-                         .encode())
+match_artifact = artifact("shirudo/tree-match", match_path,
+                         "shirudo-test-tree-match.upatch", match_payload)
+skip_artifact = artifact("shirudo/tree-skip", skip_path,
+                        "shirudo-test-tree-skip.upatch", skip_payload)
+match_unload_artifact = artifact("shirudo/tree-match-unload",
+                                 match_unload_path,
+                                 "shirudo-test-tree-match.unload.upatch",
+                                 match_unload_payload)
 
-initial = {
-    "schema": 2,
-    "tree_id": "shirudo-test-tree-sequential",
-    "generation": 1,
-    "base": {"seq": 0},
-    "operations": [
-        operation(1, "shirudo-test-tree-match",
-                  {"architecture": ["x86_64"],
-                   "labels": {"env": ["tree-test"]}}, match_artifact),
-    ],
-    "head": {"seq": 1},
-}
-initial_payload.write_bytes(json.dumps(initial, separators=(",", ":"))
-                              .encode())
-
-updated = {
-    "schema": 2,
-    "tree_id": "shirudo-test-tree-sequential",
-    "generation": 2,
-    "base": {"seq": 0},
-    "operations": [
-        initial["operations"][0],
-        operation(2, "shirudo-test-tree-skip",
-                  {"architecture": ["x86_64"],
-                   "labels": {"env": ["tree-test"]}}, skip_artifact),
-    ],
-    "head": {"seq": 2},
-}
-updated_payload.write_bytes(json.dumps(updated, separators=(",", ":"))
-                              .encode())
-
-delete_initial = {
-    "schema": 2,
-    "tree_id": "shirudo-test-tree-delete",
-    "generation": 1,
-    "base": {"seq": 0},
-    "operations": [
-        operation(1, "shirudo-test-tree-match",
-                  {"architecture": ["x86_64"],
-                   "labels": {"env": ["tree-test"]}}, match_artifact),
-    ],
-    "head": {"seq": 1},
-}
-delete_initial_payload = initial_payload.with_name("tree-payload-delete-initial.json")
-delete_initial_payload.write_bytes(
-    json.dumps(delete_initial, separators=(",", ":")).encode())
-
-delete_updated = {
-    "schema": 2,
-    "tree_id": "shirudo-test-tree-delete",
-    "generation": 2,
-    "base": {"seq": 0},
-    "operations": [
-        delete_initial["operations"][0],
-        operation(2, "shirudo-test-tree-match",
-                  {"architecture": ["x86_64"],
-                   "labels": {"env": ["tree-test"]}},
-                  match_unload_artifact, op="delete"),
-    ],
-    "head": {"seq": 2},
-}
-delete_updated_payload = updated_payload.with_name("tree-payload-delete-updated.json")
-delete_updated_payload.write_bytes(
-    json.dumps(delete_updated, separators=(",", ":")).encode())
-
-delete_restored = {
-    "schema": 2,
-    "tree_id": "shirudo-test-tree-delete",
-    "generation": 3,
-    "base": {"seq": 0},
-    "operations": [
-        delete_initial["operations"][0],
-        delete_updated["operations"][1],
-        operation(3, "shirudo-test-tree-match",
-                  {"architecture": ["x86_64"],
-                   "labels": {"env": ["tree-test"]}}, match_artifact),
-    ],
-    "head": {"seq": 3},
-}
-restored_payload.write_bytes(
-    json.dumps(delete_restored, separators=(",", ":")).encode())
+this_node = {"architecture": ["x86_64"], "labels": {"env": ["tree-test"]}}
+other_node = {"architecture": ["x86_64"],
+              "labels": {"env": ["not-this-node"]}}
+operations = [
+    operation(1, "shirudo-test-tree-match", {}, match_artifact),
+    operation(2, "shirudo-test-tree-skip", other_node, skip_artifact),
+    operation(3, "shirudo-test-tree-skip", this_node, skip_artifact),
+    operation(4, "shirudo-test-tree-match", this_node,
+              match_unload_artifact, op="delete"),
+    operation(5, "shirudo-test-tree-match", this_node, match_artifact),
+]
+references = ("stable", "updated", "deleted", "restored")
+for generation, reference in enumerate(references, start=1):
+    head = generation + 1
+    publication = {
+        "schema": 2,
+        "tree_id": "shirudo-test-tree",
+        "generation": generation,
+        "base": {"seq": 0},
+        "operations": operations[:head],
+        "head": {"seq": head},
+    }
+    payloads.with_name(payloads.name + "-" + reference + ".json") \
+        .write_bytes(json.dumps(publication, separators=(",", ":"))
+                     .encode())
 PY
 
-	for tree_variant in stable initial updated delete-initial delete-updated delete-restored; do
-		case "$tree_variant" in
-		stable)
-			payload="$tree_payload"
-			signature="$tree_signature"
-			;;
-		initial)
-			payload="$tree_initial_payload"
-			signature="$tree_initial_signature"
-			;;
-		updated)
-			payload="$tree_updated_payload"
-			signature="$tree_updated_signature"
-			;;
-		delete-initial)
-			payload="${tree_initial_payload%/*}/tree-payload-delete-initial.json"
-			signature="${tree_initial_signature%/*}/tree-payload-delete-initial.sig"
-			;;
-		delete-updated)
-			payload="${tree_updated_payload%/*}/tree-payload-delete-updated.json"
-			signature="${tree_updated_signature%/*}/tree-payload-delete-updated.sig"
-			;;
-		delete-restored)
-			payload="$tree_restored_payload"
-			signature="$tree_restored_signature"
-			;;
-		esac
-		openssl cms -sign -binary -md sha512 -in "$payload" \
+	for reference in stable updated deleted restored; do
+		openssl cms -sign -binary -md sha512 \
+			-in "$payloads-$reference.json" \
 			-signer "$FIXTURE_WORK/trusted/cert.der" \
 			-inkey "$FIXTURE_WORK/trusted/signing_key.pem" \
-			-outform DER -out "$signature" -nosmimecap \
-			-nocerts -keyid
+			-outform DER -out "$payloads-$reference.sig" \
+			-nosmimecap -nocerts -keyid
 	done
 
-	python3 - "$registry_dir" \
-		"$tree_payload" "$tree_signature" \
-		"$tree_initial_payload" "$tree_initial_signature" \
-		"$tree_updated_payload" "$tree_updated_signature" \
-		"${tree_initial_payload%/*}/tree-payload-delete-initial.json" \
-		"${tree_initial_signature%/*}/tree-payload-delete-initial.sig" \
-		"${tree_updated_payload%/*}/tree-payload-delete-updated.json" \
-		"${tree_updated_signature%/*}/tree-payload-delete-updated.sig" \
-		"$tree_restored_payload" "$tree_restored_signature" <<'PY'
+	python3 - "$registry_dir" "$payloads" <<'PY'
 import hashlib
 import json
 import pathlib
 import sys
 
-registry, stable_payload, stable_signature, initial_payload, \
-    initial_signature, updated_payload, updated_signature, \
-    delete_initial_payload, delete_initial_signature, \
-    delete_updated_payload, delete_updated_signature, \
-    delete_restored_payload, delete_restored_signature = \
-    map(pathlib.Path, sys.argv[1:])
+registry, payloads = map(pathlib.Path, sys.argv[1:3])
+repo = registry / "shirudo" / "upatch-tree"
 
 
 def digest(body):
@@ -589,9 +472,10 @@ def write(path, body):
     path.write_bytes(body)
 
 
-def write_manifest(repo, reference, payload_path, signature_path):
-    payload = payload_path.read_bytes()
-    signature = signature_path.read_bytes()
+for reference in ("stable", "updated", "deleted", "restored"):
+    stem = payloads.name + "-" + reference
+    payload = payloads.with_name(stem + ".json").read_bytes()
+    signature = payloads.with_name(stem + ".sig").read_bytes()
     payload_digest = digest(payload)
     signature_digest = digest(signature)
     write(repo / "blobs" / payload_digest, payload)
@@ -608,20 +492,6 @@ def write_manifest(repo, reference, payload_path, signature_path):
     }
     write(repo / "manifests" / reference,
           json.dumps(manifest, separators=(",", ":")).encode())
-
-
-write_manifest(registry / "shirudo" / "upatch-tree", "stable",
-               stable_payload, stable_signature)
-sequential_repo = registry / "shirudo" / "upatch-tree-sequential"
-write_manifest(sequential_repo, "stable", initial_payload, initial_signature)
-write_manifest(sequential_repo, "updated", updated_payload, updated_signature)
-delete_repo = registry / "shirudo" / "upatch-tree-delete"
-write_manifest(delete_repo, "stable", delete_initial_payload,
-               delete_initial_signature)
-write_manifest(delete_repo, "updated", delete_updated_payload,
-               delete_updated_signature)
-write_manifest(delete_repo, "restored", delete_restored_payload,
-               delete_restored_signature)
 PY
 }
 
