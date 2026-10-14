@@ -261,6 +261,10 @@ one usually still compiles and passes tests.
   `make SANITIZE=address,undefined test-op` runs it under ASan and
   UBSan (CI does too); `make test-tgt` runs the target suite in the
   QEMU/swtpm VM (`make help` lists the VM targets and variables).
+- `make test-tgt TEST_VM_INITRD=1` boots the guest from a dracut initrd
+  that runs `shirudo-initrd.service`; `make test-installer` runs
+  `testing/t1300-installer-e2e.sh`, the installer end to end in a QEMU
+  guest with a vTPM, two reboots included.
 - `make html-docs` renders `Documentation/*.rst` with docutils in strict
   mode into `Documentation/output/`; CI runs it on every push, so run it
   after touching any document (python3-docutils provides `rst2html`).

@@ -51,7 +51,7 @@ export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdi
        SHIRUDO_TARGET_STATIC_LIBDIR
 export VM_SSH_COMMAND
 
-.PHONY: all help html-docs target target-deps target-deps-clean shirudo-target target-config shirudo-build bpf-deps test-helpers linux-obs-ipv4-shields bundle test-vm-bundle kernel bpf-next kernel-small vm vm-small test-vm-small-bundle vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
+.PHONY: all help html-docs target target-deps target-deps-clean shirudo-target target-config shirudo-build bpf-deps test-helpers linux-obs-ipv4-shields bundle test-vm-bundle kernel bpf-next kernel-small vm vm-small test-vm-small-bundle vm-console vm-ssh vm-stop vm-clean test-op test-installer test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg binrpm-pkg bintar-pkg clean \
         distclean test config
 
@@ -285,6 +285,13 @@ shirudo make targets (run from the repo root):
              TEST_VM_SUITE=tree (run only the tree-sync target tests),
              TEST_VM_INITRD=1 (boot the guest from a dracut initrd that runs
              shirudo-initrd.service; needs dracut and root on the host),
+  test-installer  Run testing/t1300-installer-e2e.sh: boot a stock cloud image
+             with a vTPM, install the bpf-next kernel packages and the target
+             package through tools/gen-initrd/install.sh, reboot twice and
+             check the production configuration. Needs
+             artifacts/bpf-next-kernel-debs (make bpf-next), a
+             shirudo-target .deb (make bindeb-pkg PKG_ROLES=target) and a
+             bundle certificate (make test-vm-bundle).
              DNS_OBS_FUZZ_SEED / DNS_OBS_FUZZ_CASES (override the optional DNS
              mutation run),
              DESTDIR (staged install), V=1 (echo full command lines).
@@ -743,6 +750,12 @@ install-operator: all
 
 test-op: all shirudo-build test-helpers
 	+$(Q)$(MAKE) -f Makefile.shirudo check
+
+# The installer end to end: a stock cloud image in QEMU with a vTPM, the
+# bpf-next kernel packages, tools/gen-initrd/install.sh with a local
+# target package, two reboots and the production configuration.
+test-installer:
+	$(Q)cd testing && bash ./t1300-installer-e2e.sh
 
 bundle: test-vm-bundle
 
