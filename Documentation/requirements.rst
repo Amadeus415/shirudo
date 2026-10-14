@@ -39,13 +39,20 @@ carries the same list for the test VM kernel.
    * - ``CONFIG_BPF_LSM``, ``CONFIG_BPF_EVENTS``, ``CONFIG_SECURITY``,
        ``bpf`` in ``CONFIG_LSM`` (or ``lsm=`` on the kernel command line)
      - The ``lsm/bpf`` and ``lsm/bpf_prog_load`` gates, the bpffs and
-       mount guards, and the filesystem seal.  ``CONFIG_BPF_LSM``
-       depends on ``CONFIG_BPF_EVENTS``.
+       mount guards, and the filesystem seal are all BPF LSM programs.
+       ``CONFIG_BPF_EVENTS`` is listed because ``CONFIG_BPF_LSM``
+       depends on it, not for tracing.
    * - ``CONFIG_FUNCTION_TRACER``,
        ``CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS``
-     - The BPF trampolines through which shirudo's own LSM programs
-       attach.  With function tracing but no direct-call support the
-       kernel refuses every trampoline attach with ``ENOTSUPP``.
+     - Base, not an attach-point option: shirudo's own enforcement
+       programs attach through BPF trampolines, and a trampoline is
+       installed at the function entry that function tracing
+       reserves, through an ftrace direct call.  Without function
+       tracing there is no entry to patch; with tracing but without
+       direct calls the kernel refuses every trampoline attach with
+       ``ENOTSUPP``.  Either way ``shirudo init`` cannot attach its
+       enforcement.  The same trampolines later carry ``fentry``,
+       ``fexit``, ``fmod_ret`` and ``lsm`` upatches at no extra cost.
    * - ``CONFIG_SECURITYFS``
      - ``/sys/kernel/security/lsm``, which the pre-flight reads to
        confirm the BPF LSM is active (``bpf_lsm_active``).
@@ -91,7 +98,8 @@ Attach points for upatches
 Everything from here on is optional.  shirudo itself runs without any
 of it; these options only decide where the upatches an operator ships
 can attach.  ``fentry``, ``fexit``, ``lsm`` and ``tp_btf`` upatches
-attach through the trampolines and BTF the base already requires, and
+attach through the trampolines and BTF the base table already
+requires for shirudo itself, and
 ``fmod_ret`` works on the ``security_*`` hooks without anything more.
 Enable the rest for the kinds of upatch a fleet will run.  An upatch
 that needs a missing one fails at load with the kernel's error in the
