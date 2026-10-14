@@ -53,6 +53,7 @@ remote-management or transport layers.
 | `Documentation/initrd.rst` | The production configuration: `init` run from the initrd and finished by the root file system, what survives switch-root, what the initrd needs, the dracut module, generator and installer under `tools/gen-initrd/`. |
 | `Documentation/upatch.rst` | Authoring and shipping upatches: the BPF side, build and sign, test, the Beefile, `bpm build`, `push`, `tree append`, and the target's `bpm` commands. |
 | `Documentation/key-lifecycle.rst` | The signing key and certificate: distribution to targets and initrds, rotation (its order and constraints), revocation, custody. |
+| `Documentation/operations.rst` | Day-two operation: units and timers, conditions, upgrades of shirudo and the kernel, decommissioning, backup, recovery, failure categories and exit status. |
 | `Documentation/upatch-spec.rst` | The `.upatch` container and signing scheme. |
 | `Documentation/requirements.rst` | Kernel options, operator toolchain, target runtime. |
 | `Documentation/getting-started.rst` | Quickstart: build, sign, initialise a target, load and unload, publish and install packages. |

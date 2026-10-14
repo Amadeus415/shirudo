@@ -442,3 +442,6 @@ Registry fetch failures
     certificate registered under ``/etc/shirudo/bpm``, and that the
     registry offers TLS 1.3 with a hybrid ML-KEM group; shirudo never
     falls back to classical TLS.
+
+The `operations <operations.rst>`__ guide has the full table of
+categories with the action for each, and the recovery procedures.

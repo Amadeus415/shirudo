@@ -53,6 +53,11 @@ Keys
     its certificate from creation to retirement: where the certificate
     goes, how targets trust it, rotation, revocation and custody.
 
+Running targets
+    `operations <operations.rst>`__ is the day-two guide: the units
+    and timers, what to watch, upgrading shirudo and the kernel,
+    decommissioning, backup, recovery, and every failure category.
+
 Understanding what shirudo does
     `architecture <architecture.rst>`__ describes why shirudo exists,
     its design properties, the signed-loader path, the kernel

@@ -73,6 +73,9 @@ development both roles can live on the same node.
   and signing, packaging, publishing to a registry and the signed tree.
 * [Key lifecycle](Documentation/key-lifecycle.rst): the signing key and
   certificate, distribution, rotation, revocation and custody.
+* [Operations](Documentation/operations.rst): watching a target,
+  upgrades, decommissioning, backup, recovery and the failure
+  categories.
 * [Requirements](Documentation/requirements.rst): kernel options,
   operator toolchain, target runtime.
 * [Architecture](Documentation/architecture.rst): why shirudo exists,
