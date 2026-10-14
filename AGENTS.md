@@ -213,8 +213,9 @@ one usually still compiles and passes tests.
   `make target` the static-OpenSSL target profile (`make target-deps`
   builds OpenSSL, libcurl and tpm2-tss from source first).
 - `make test-op` runs the host-side suite (`t/t0*`), no root needed;
-  `make test-tgt` runs the target suite in the QEMU/swtpm VM
-  (`make help` lists the VM targets and variables).
+  `make SANITIZE=address,undefined test-op` runs it under ASan and
+  UBSan (CI does too); `make test-tgt` runs the target suite in the
+  QEMU/swtpm VM (`make help` lists the VM targets and variables).
 - `make html-docs` renders `Documentation/*.rst` with docutils in strict
   mode into `Documentation/output/`; CI runs it on every push, so run it
   after touching any document (python3-docutils provides `rst2html`).

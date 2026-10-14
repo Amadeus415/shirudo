@@ -76,6 +76,15 @@ CFLAGS_BASE := -O2 $(DEBUG_CFLAGS) -std=gnu11 $(WARNINGS) \
                -DSHIRUDO_BPF_INCDIR='"$(SHIRUDO_BPF_INCDIR)"' \
                -DSHIRUDO_VMLINUX_PATH='"$(SHIRUDO_VMLINUX_PATH)"'
 
+# make SANITIZE=address,undefined instruments the host-side binaries and
+# the test helpers; BPF objects come from clang -target bpf and are never
+# affected. Recovery is off so that every report fails the run.
+SANITIZE ?=
+ifneq ($(SANITIZE),)
+CFLAGS_BASE += -O1 -fno-omit-frame-pointer -fsanitize=$(SANITIZE) \
+               -fno-sanitize-recover=all
+endif
+
 INCLUDES := \
     -I. \
     -Iinclude \

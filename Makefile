@@ -159,6 +159,9 @@ shirudo make targets (run from the repo root):
                            static system archives use a custom directory)
     make ... SHIRUDO_DEBUG=0
                            omit DWARF debug information from C objects
+    make ... SANITIZE=address,undefined
+                           build the host-side binaries and test helpers
+                           with the given sanitizers (combine with test-op)
     make shirudo-build     build the operator-only artifact builder
                            (compile + sign .upatch; ships in the operator
                            package, never to a target)
