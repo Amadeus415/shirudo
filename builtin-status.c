@@ -554,6 +554,18 @@ static bool status_otel_endpoint_configured(const struct shirudo_config *cfg)
 	return endpoint && endpoint[0];
 }
 
+/* shirudo_keyring_list callback: count the asymmetric keys. */
+static void count_asymmetric(key_serial_t serial, const char *type,
+			     const char *description, void *ud)
+{
+	size_t *n = ud;
+
+	(void)serial;
+	(void)description;
+	if (strcmp(type, "asymmetric") == 0)
+		(*n)++;
+}
+
 int cmd_status(int argc, const char **argv)
 {
 	bool json = false;
@@ -567,6 +579,7 @@ int cmd_status(int argc, const char **argv)
 	const char *keyring_mode, *mode;
 	struct shirudo_sysinfo sysi = {};
 	struct shirudo_trusted_set certs = {};
+	int certs_enrolled = -1;
 	struct shirudo_identity ident;
 	int certs_rc = -ENOENT;
 	struct shirudo_config otel_cfg = {};
@@ -688,9 +701,20 @@ int cmd_status(int argc, const char **argv)
 		keyring_mode = keyring_serial >= 0 ? "user" : "none";
 	}
 	keyring_present = keyring_serial >= 0;
-	/* The certificates the keyring of that kind would have been given. */
+	/*
+	 * The certificates the keyring of that kind would have been given,
+	 * and how many keys the bpf keyring holds right now: the two part
+	 * when a certificate was added or revoked since the boot.
+	 */
 	certs_rc = shirudo_keys_load(SHIRUDO_KEYS_DIR, NULL,
 				     !strcmp(keyring_mode, "bpf"), &certs);
+	if (!strcmp(keyring_mode, "bpf") && keyring_present) {
+		size_t n = 0;
+
+		if (shirudo_keyring_list(keyring_serial, count_asymmetric,
+					 &n) == 0)
+			certs_enrolled = (int)n;
+	}
 	/*
 	 * Enforcing with the certificate in the user keyring is staging:
 	 * the kernel's bpf keyring was sealed empty at boot, so the trust
@@ -852,6 +876,13 @@ int cmd_status(int argc, const char **argv)
 		shirudo_json_arr_close(&e);
 		shirudo_json_kv_int(&e, "certs_revoked",
 				    certs_rc == 0 ? (int)certs.n_revoked : 0);
+		shirudo_json_kv_int(&e, "certs_unvouched",
+				    certs_rc == 0 ? (int)certs.n_unvouched : 0);
+		if (certs_enrolled >= 0)
+			shirudo_json_kv_int(&e, "certs_enrolled",
+					    certs_enrolled);
+		else
+			shirudo_json_kv_null(&e, "certs_enrolled");
 		shirudo_json_kv_bool(&e, "signing_key_present", is_operator);
 		{
 			struct shirudo_upatch_table_row *rows = NULL;
@@ -1110,8 +1141,13 @@ int cmd_status(int argc, const char **argv)
 				       "  (matches)" :
 				       "  (MISMATCH -- swapped?)");
 		if (certs_rc == 0) {
-			printf("  %-22s %zu enrolled, %zu revoked\n",
-			       "Certificates:", certs.n, certs.n_revoked);
+			printf("  %-22s %zu trusted, %zu revoked, %zu "
+			       "unvouched", "Certificates:", certs.n,
+			       certs.n_revoked, certs.n_unvouched);
+			if (certs_enrolled >= 0)
+				printf(", %d in the bpf keyring",
+				       certs_enrolled);
+			printf("\n");
 			for (i = 0; i < (int)certs.n; i++) {
 				char fp_hex[65];
 

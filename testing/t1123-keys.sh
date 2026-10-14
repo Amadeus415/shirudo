@@ -20,6 +20,8 @@ OWN_CERT="$FIXTURES/own.der"
 OWN_PIN=/run/shirudo/bpffs/upatches/shirudo-test-own-keyring/link
 [ -s "$OWN" ] && [ -s "$OWN_CERT" ] || test_skip_all "missing own-keyring fixtures"
 OWN_FP=$("$SHIRUDO_BIN" bpm key fingerprint "$OWN_CERT" 2>/dev/null)
+W=$(mktemp -d)
+trap 'rm -rf "$W"' EXIT
 [ -e "/var/lib/shirudo/keys/trusted/$OWN_FP.der" ] ||
 	test_skip_all "the own-keyring certificate is not installed as trusted"
 
@@ -36,7 +38,18 @@ assert d[\"certs_revoked\"] == 0, d
 '
 
 test_expect_success 'the bpf keyring holds both keys' '
-	grep -qE "keyring +\.bpf: 2" /proc/keys
+	grep -qE "keyring +\.bpf: 2" /proc/keys &&
+	"$SHIRUDO_BIN" status --json | python3 -c "
+import json, sys
+assert json.load(sys.stdin)[\"certs_enrolled\"] == 2
+"
+'
+
+test_expect_success 'the second certificate is a member by the primary vouch' '
+	"$SHIRUDO_BIN" keys 2>/dev/null >"$W/keys" &&
+	grep -q "^  $OWN_FP\$" "$W/keys" &&
+	grep -q "vouched by" "$W/keys" &&
+	[ -s "/var/lib/shirudo/keys/trusted/$OWN_FP.vouch" ]
 '
 
 test_expect_success 'the init record covers the set' '

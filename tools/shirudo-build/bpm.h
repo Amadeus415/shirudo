@@ -82,4 +82,7 @@ bool shirudo_build_is_help(const char *arg);
 /* Readable 0600 private key and readable certificate, else 1 with a diagnostic. */
 int shirudo_build_check_keys(const char *pkey, const char *cert);
 
+/* `shirudo-build keys vouch ...`, argv[0] being "vouch". */
+int shirudo_build_keys_vouch(int argc, char **argv);
+
 #endif /* SHIRUDO_BUILD_BPM_H */

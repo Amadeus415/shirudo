@@ -84,10 +84,11 @@ install() {
 	trusted=${shirudo_trusted_dir:-$(dirname "$cert")/trusted}
 	cert=$(readlink -f "$cert") || return 1
 	inst_simple "$cert" /etc/shirudo/keys/cert.der || return 1
-	# The trusted set is enrolled with the primary; the revoked ones
-	# stay on the root, where init reads them through its bind.
+	# The trusted set is enrolled with the primary, each certificate
+	# with the vouch that admits it; the revoked ones stay on the root,
+	# where init reads them through its bind.
 	if [[ -d $trusted ]]; then
-		for f in "$trusted"/*.der; do
+		for f in "$trusted"/*.der "$trusted"/*.vouch; do
 			[[ -f $f ]] || continue
 			inst_simple "$(readlink -f "$f")" \
 				"/etc/shirudo/keys/trusted/${f##*/}" || return 1

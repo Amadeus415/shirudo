@@ -215,7 +215,8 @@ BUILD_SRCS := \
     tools/shirudo-build/package.c \
     tools/shirudo-build/vmlinux.c \
     tools/shirudo-build/bpm-build.c \
-    tools/shirudo-build/bpm-publish.c
+    tools/shirudo-build/bpm-publish.c \
+    tools/shirudo-build/vouch.c
 
 # ----- derived names ----------------------------------------------
 
@@ -360,7 +361,7 @@ tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o \
                                    util/parse-options.o util/upatch.o \
                                    util/log.o util/json.o util/loader.o \
                                    util/io.o util/malloc.o util/paths.o \
-                                   util/elf_target.o util/hex.o \
+                                   util/elf_target.o util/hex.o util/keys.o \
                                    util/crypto_openssl.o util/tls_openssl.o \
                                    util/bpm_oci.o util/bpm_package.o \
                                    util/bpm_tree.o $(VERSION_OBJ) \

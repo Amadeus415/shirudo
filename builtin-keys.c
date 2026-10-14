@@ -25,6 +25,7 @@
 #include <openssl/x509.h>
 
 #include "builtin.h"
+#include "util/crypto.h"
 #include "util/help.h"
 #include "util/hex.h"
 #include "util/identity.h"
@@ -387,21 +388,29 @@ static void keyring_absent(key_serial_t rc)
 		       strerror(-rc));
 }
 
+static const struct shirudo_help_item keys_subcmds[] = {
+	{ "add", "trust a certificate an enrolled key vouched for (target)" },
+	{ "vouch", "sign a vouch for a certificate (operator)" },
+};
+
 static const struct shirudo_help_item keys_options[] = {
 	{ "--keys-dir <dir>", "read signing_key.pem + cert.der from <dir>" },
 };
 
 static const struct shirudo_help_section keys_help_sections[] = {
+	{ "subcommands:", keys_subcmds, ARRAY_SIZE(keys_subcmds) },
 	{ "options:", keys_options,
 	  ARRAY_SIZE(keys_options) },
 };
 
 static const struct shirudo_help keys_help = {
-	.usage   = "shirudo keys [--keys-dir <dir>]",
+	.usage   = "shirudo keys [--keys-dir <dir>]\n"
+		   "       shirudo keys add <cert.der> --vouch <file>\n"
+		   "       shirudo keys vouch <cert.der> [-o <file>]",
 	.summary = "Inspect the shirudo key material this host holds: the "
-		   "on-disk cert and\nsigning key (if present) and the "
-		   "\"" SHIRUDO_KEYRING_NAME "\" named kernel keyring (if "
-		   "init'd).\nLocal-only on either side.",
+		   "on-disk cert and\nsigning key (if present), the trusted "
+		   "set a target enrols, and the kernel\nkeyring holding it "
+		   "(if init'd). Local-only on either side.",
 	.sections   = keys_help_sections,
 	.n_sections = ARRAY_SIZE(keys_help_sections),
 	.footer  = "Default paths:\n"
@@ -416,7 +425,269 @@ static void usage(void)
 	fprintf(stderr, "usage: %s\n", keys_help.usage);
 }
 
+static const struct shirudo_help_item keys_add_options[] = {
+	{ "--vouch <file>", "the vouch an enrolled key signed for the certificate" },
+	{ "--keys-dir <dir>", "the keys directory (default " SHIRUDO_KEYS_DIR ")" },
+};
+
+static const struct shirudo_help_section keys_add_sections[] = {
+	{ "options:", keys_add_options, ARRAY_SIZE(keys_add_options) },
+};
+
+static const struct shirudo_help keys_add_help = {
+	.usage   = "shirudo keys add <cert.der> --vouch <file> [--keys-dir <dir>]",
+	.summary = "Add a certificate to the trusted set this target enrols at "
+		   "its next boot.\nThe vouch must verify under a certificate "
+		   "already in the set; regenerate\nthe initrd afterwards "
+		   "(shirudo-gen-initrd). Prints the fingerprint.",
+	.sections   = keys_add_sections,
+	.n_sections = ARRAY_SIZE(keys_add_sections),
+};
+
+static const struct shirudo_help_item keys_vouch_options[] = {
+	{ "-o <file>", "where to write the vouch (default <cert.der>.vouch)" },
+	{ "--keys-dir <dir>", "read signing_key.pem + cert.der from <dir>" },
+	{ "--key <pem>", "the signing key (overrides --keys-dir)" },
+	{ "--cert <der>", "the signing certificate (overrides --keys-dir)" },
+};
+
+static const struct shirudo_help_section keys_vouch_sections[] = {
+	{ "options:", keys_vouch_options, ARRAY_SIZE(keys_vouch_options) },
+};
+
+static const struct shirudo_help keys_vouch_help = {
+	.usage   = "shirudo keys vouch <cert.der> [-o <file>] [--keys-dir <dir>]",
+	.summary = "Sign a vouch for another operator's certificate with this "
+		   "operator's key,\nfor `shirudo keys add --vouch` on the "
+		   "targets that enrol this key.\nPrints the vouched "
+		   "certificate's fingerprint.",
+	.sections   = keys_vouch_sections,
+	.n_sections = ARRAY_SIZE(keys_vouch_sections),
+};
+
+/* The public key must be one the kernel verifies loaders with. */
+static int check_cert_algorithm(const unsigned char *der, size_t der_sz,
+				const char *what)
+{
+	struct shirudo_cert cert = {};
+	char name[64] = {};
+	int rc;
+
+	rc = shirudo_cert_read_der(der, der_sz, &cert);
+	if (rc) {
+		pr_err("keys add: %s is not a certificate", what);
+		return rc;
+	}
+	rc = shirudo_cert_key_algorithm(&cert, name, sizeof(name));
+	shirudo_cert_free(&cert);
+	if (rc || strcmp(name, "ML-DSA-87")) {
+		pr_err("keys add: %s is %s; shirudo accepts only ML-DSA-87",
+		       what, rc ? "of an unknown algorithm" : name);
+		return -EKEYREJECTED;
+	}
+	return 0;
+}
+
+/*
+ * The vouching certificate must be one the kernel verifies against
+ * right now, not only one on disk, when the live target's set is the
+ * one being extended.
+ */
+static int check_voucher_live(const struct shirudo_trusted_set *set,
+			      const uint8_t voucher[32])
+{
+	struct shirudo_identity id;
+	unsigned char *der = NULL;
+	key_serial_t ring;
+	size_t der_sz = 0;
+	int rc = 0;
+	size_t i;
+
+	if (shirudo_identity_read(&id) ||
+	    id.keyring_type != SHIRUDO_SIG_KEYRING_BPF)
+		return 0;
+	ring = shirudo_keyring_bpf_serial();
+	if (ring <= 0)
+		return 0;
+	for (i = 0; i < set->n; i++)
+		if (memcmp(set->certs[i].fingerprint, voucher, 32) == 0)
+			break;
+	if (i == set->n)
+		return -ENOKEY;
+	rc = shirudo_keys_read_der(set->certs[i].path, &der, &der_sz);
+	if (rc)
+		return rc;
+	rc = shirudo_keyring_holds_cert(ring, der, der_sz);
+	xfree(der, der_sz);
+	if (rc < 0)
+		return rc;
+	return rc ? 0 : -ENOKEY;
+}
+
+static int keys_add(int argc, const char **argv)
+{
+	const char *keys_dir_arg = NULL, *vouch_path = NULL, *cert = NULL;
+	unsigned char *der = NULL, *sig = NULL;
+	uint8_t sha256[32], fp[32], by[32];
+	struct shirudo_trusted_set set;
+	char fp_hex[65], by_hex[65];
+	size_t der_sz = 0, sig_sz = 0;
+	char revoked[PATH_MAX];
+	const char *keys_dir;
+	char out[PATH_MAX];
+	int rc = 1;
+	size_t i;
+
+	for (int a = 1; a < argc; a++) {
+		if (!strcmp(argv[a], "--vouch") && a + 1 < argc) {
+			vouch_path = argv[++a];
+		} else if (!strncmp(argv[a], "--vouch=", 8)) {
+			vouch_path = argv[a] + 8;
+		} else if (!strcmp(argv[a], "--keys-dir") && a + 1 < argc) {
+			keys_dir_arg = argv[++a];
+		} else if (!strncmp(argv[a], "--keys-dir=", 11)) {
+			keys_dir_arg = argv[a] + 11;
+		} else if (shirudo_is_help(argv[a])) {
+			shirudo_print_help(&keys_add_help);
+			return 0;
+		} else if (argv[a][0] == '-') {
+			pr_err("keys add: unknown option '%s'", argv[a]);
+			return 2;
+		} else if (!cert) {
+			cert = argv[a];
+		} else {
+			pr_err("keys add: unexpected argument '%s'", argv[a]);
+			return 2;
+		}
+	}
+	if (!cert || !vouch_path) {
+		shirudo_print_help(&keys_add_help);
+		return 2;
+	}
+	keys_dir = shirudo_keys_dir_resolve(keys_dir_arg);
+	if (snprintf(revoked, sizeof(revoked), "%s/revoked", keys_dir) >=
+	    (int)sizeof(revoked)) {
+		pr_err("keys add: keys directory path too long");
+		return 2;
+	}
+
+	rc = shirudo_keys_read_der(cert, &der, &der_sz);
+	if (rc) {
+		pr_err("keys add: read %s: %s", cert, strerror(-rc));
+		return 1;
+	}
+	rc = shirudo_keys_digest_der(der, der_sz, sha256, fp);
+	if (rc) {
+		pr_err("keys add: %s is not a certificate", cert);
+		goto out;
+	}
+	if (check_cert_algorithm(der, der_sz, cert))
+		goto out;
+	shirudo_hex_encode(fp, 32, fp_hex);
+
+	rc = shirudo_keys_load(keys_dir, NULL, true, &set);
+	if (rc) {
+		pr_err("keys add: no trusted set under %s: %s (install the "
+		       "primary certificate first)", keys_dir, strerror(-rc));
+		goto out;
+	}
+	if (shirudo_keys_is_revoked(revoked, fp)) {
+		pr_err("keys add: %s was revoked on this target", fp_hex);
+		rc = -EKEYREVOKED;
+		goto out;
+	}
+	rc = shirudo_keys_read_der(vouch_path, &sig, &sig_sz);
+	if (rc) {
+		pr_err("keys add: read %s: %s", vouch_path, strerror(-rc));
+		goto out;
+	}
+	rc = shirudo_keys_verify_vouch(&set, der, der_sz, sig, sig_sz, by);
+	if (rc) {
+		pr_err("keys add: %s does not vouch for %s under any of the "
+		       "%zu trusted certificate%s", vouch_path, fp_hex, set.n,
+		       set.n == 1 ? "" : "s");
+		goto out;
+	}
+	shirudo_hex_encode(by, 32, by_hex);
+	if (!strcmp(keys_dir, SHIRUDO_KEYS_DIR)) {
+		rc = check_voucher_live(&set, by);
+		if (rc) {
+			pr_err("keys add: the vouching certificate %s is not "
+			       "in the bpf keyring this boot%s%s", by_hex,
+			       rc == -ENOKEY ? "" : ": ",
+			       rc == -ENOKEY ? "" : strerror(-rc));
+			goto out;
+		}
+	}
+	for (i = 0; i < set.n; i++) {
+		if (memcmp(set.certs[i].fingerprint, fp, 32))
+			continue;
+		pr_info("keys add: %s is already trusted", fp_hex);
+		printf("%s\n", fp_hex);
+		rc = 0;
+		goto out;
+	}
+	rc = shirudo_keys_install(keys_dir, der, der_sz, sig, sig_sz, out,
+				  sizeof(out));
+	if (rc) {
+		pr_err("keys add: install under %s/trusted: %s", keys_dir,
+		       strerror(-rc));
+		goto out;
+	}
+	pr_audit("keys add: fingerprint=%s vouched_by=%s path=%s", fp_hex,
+		 by_hex, out);
+	pr_info("keys add: %s joins the set at the next boot; regenerate "
+		"the initrd (shirudo-gen-initrd)", fp_hex);
+	printf("%s\n", fp_hex);
+out:
+	if (sig)
+		xfree(sig, sig_sz);
+	xfree(der, der_sz);
+	return rc ? 1 : 0;
+}
+
+/* Signing needs the private key, so the operator helper does it. */
+static int keys_vouch(int argc, const char **argv)
+{
+	const char **helper_argv;
+	size_t sz;
+	int rc;
+
+	if (argc >= 2 && shirudo_is_help(argv[1])) {
+		shirudo_print_help(&keys_vouch_help);
+		return 0;
+	}
+	sz = ((size_t)argc + 3) * sizeof(*helper_argv);
+	helper_argv = xcalloc((size_t)argc + 3, sizeof(*helper_argv));
+	if (!helper_argv)
+		return 1;
+	helper_argv[1] = "keys";
+	helper_argv[2] = "vouch";
+	for (int i = 1; i < argc; i++)
+		helper_argv[i + 2] = argv[i];
+	rc = shirudo_build_exec("keys vouch", (char **)helper_argv);
+	xfree(helper_argv, sz);
+	return rc;
+}
+
+static int keys_show(int argc, const char **argv);
+
 int cmd_keys(int argc, const char **argv)
+{
+	const char *sub;
+
+	if (argc < 2 || argv[1][0] == '-' || shirudo_is_help(argv[1]))
+		return keys_show(argc, argv);
+	sub = shirudo_resolve_subcommand("shirudo keys", argv[1], keys_subcmds,
+					 ARRAY_SIZE(keys_subcmds));
+	if (!sub)
+		return 2;
+	if (!strcmp(sub, "add"))
+		return keys_add(argc - 1, argv + 1);
+	return keys_vouch(argc - 1, argv + 1);
+}
+
+static int keys_show(int argc, const char **argv)
 {
 	const char *keys_dir_arg = NULL;
 	struct shirudo_trusted_set set;
@@ -436,6 +707,10 @@ int cmd_keys(int argc, const char **argv)
 			keys_dir_arg = argv[i] + 11;
 		} else if (shirudo_is_help(argv[i])) {
 			shirudo_print_help(&keys_help);
+			return 0;
+		} else if (shirudo_is_list_cmds(argv[i])) {
+			shirudo_print_subcmd_list(keys_subcmds,
+						  ARRAY_SIZE(keys_subcmds));
 			return 0;
 		} else {
 			pr_err("keys: unknown option '%s'", argv[i]);
@@ -471,11 +746,12 @@ int cmd_keys(int argc, const char **argv)
 	 * trusted certificates beside it, less the revoked ones.
 	 */
 	if (shirudo_keys_load(keys_dir, NULL, true, &set) == 0 &&
-	    (set.n > 1 || set.n_revoked)) {
+	    (set.n > 1 || set.n_revoked || set.n_unvouched)) {
 		size_t i;
 
-		printf("%sTrusted set (%zu enrolled, %zu revoked):\n",
-		       shown ? "\n" : "", set.n, set.n_revoked);
+		printf("%sTrusted set (%zu member%s, %zu revoked, "
+		       "%zu unvouched):\n", shown ? "\n" : "", set.n,
+		       set.n == 1 ? "" : "s", set.n_revoked, set.n_unvouched);
 		for (i = 0; i < set.n; i++) {
 			char fp[65], sha[65];
 
@@ -483,6 +759,10 @@ int cmd_keys(int argc, const char **argv)
 			shirudo_hex_encode(set.certs[i].sha256, 32, sha);
 			printf("  %s%s\n    sha256 %s\n", fp,
 			       set.certs[i].primary ? "  (primary)" : "", sha);
+			if (set.certs[i].primary)
+				continue;
+			shirudo_hex_encode(set.certs[i].voucher, 32, fp);
+			printf("    vouched by %s\n", fp);
 		}
 		shown = true;
 	}

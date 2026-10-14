@@ -137,7 +137,24 @@ _shirudo()
 		fi
 		;;
 	keys)
-		COMPREPLY=( $(compgen -W "--keys-dir=" -- "$cur") )
+		if (( cword == 2 )); then
+			local subs
+			subs=$("$bin" keys --list-cmds 2>/dev/null)
+			COMPREPLY=( $(compgen -W "$subs --keys-dir=" -- "$cur") )
+		elif [[ $cur == -* ]]; then
+			case "$sub" in
+			add)
+				COMPREPLY=( $(compgen -W "--vouch= --keys-dir=" \
+					-- "$cur") )
+				;;
+			vouch)
+				COMPREPLY=( $(compgen -W "-o --keys-dir= --key \
+					--cert" -- "$cur") )
+				;;
+			esac
+		else
+			COMPREPLY=( $(compgen -f -- "$cur") )
+		fi
 		;;
 	genkey)
 		COMPREPLY=( $(compgen -W "--keys-dir= --force -f" -- "$cur") )

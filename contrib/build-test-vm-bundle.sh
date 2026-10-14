@@ -531,12 +531,13 @@ EOF
 
 log "building target-test fixtures on the operator host"
 mkdir -p "$TMP_DIR/fixtures/decoders" "$FIXTURE_WORK/trusted" \
-	"$FIXTURE_WORK/foreign" "$FIXTURE_WORK/own"
+	"$FIXTURE_WORK/foreign" "$FIXTURE_WORK/own" "$FIXTURE_WORK/third"
 # Fixture keys are ML-DSA-87 like every shirudo key; the host OpenSSL must
 # be 3.5 or newer, which the operator build already requires.
 "$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/trusted" >/dev/null
 "$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/foreign" >/dev/null
 "$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/own" >/dev/null
+"$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/third" >/dev/null
 
 "${CC:-cc}" -O0 -g -Wl,--build-id=sha1 \
 	-o /tmp/shirudo-test-uprobe-target \
@@ -650,6 +651,16 @@ mv /tmp/shirudo-test-uprobe-target \
 
 cp "$FIXTURE_WORK/trusted/cert.der" "$TMP_DIR/fixtures/cert.der"
 cp "$FIXTURE_WORK/own/cert.der" "$TMP_DIR/fixtures/own.der"
+# The own certificate joins the enrolled set vouched for by the trusted
+# key; the third one is for the tests of `keys add` at runtime.
+cp "$FIXTURE_WORK/third/cert.der" "$TMP_DIR/fixtures/third.der"
+for vouched in own third; do
+	"$REPO_ROOT/tools/shirudo-build/shirudo-build" keys vouch \
+		"$TMP_DIR/fixtures/$vouched.der" \
+		-o "$TMP_DIR/fixtures/$vouched.vouch" \
+		--key "$FIXTURE_WORK/trusted/signing_key.pem" \
+		--cert "$FIXTURE_WORK/trusted/cert.der" >/dev/null
+done
 if [[ -n "$PACKAGE_CERT" ]]; then
 	install -m 0644 "$PACKAGE_CERT" "$TMP_DIR/fixtures/package-cert.der"
 else
@@ -658,7 +669,8 @@ else
 fi
 (
 	cd "$TMP_DIR/fixtures"
-	sha256sum -- *.upatch cert.der own.der package-cert.der > manifest
+	sha256sum -- *.upatch cert.der own.der own.vouch third.der \
+		third.vouch package-cert.der > manifest
 )
 
 printf 'shirudo-test-vm-bundle-v1\n' >"$TMP_DIR/format"

@@ -41,7 +41,8 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	if (strcmp(argv[1], "load") == 0) {
-		printf("n=%zu revoked=%zu\n", set.n, set.n_revoked);
+		printf("n=%zu revoked=%zu unvouched=%zu\n", set.n,
+		       set.n_revoked, set.n_unvouched);
 		for (i = 0; i < set.n; i++) {
 			char sha[65], fp[65];
 

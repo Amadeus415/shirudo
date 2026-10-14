@@ -900,7 +900,7 @@ RequiresMountsFor=/sysroot
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'mkdir -p /sysroot/usr/local/bin /sysroot/var/lib/shirudo/keys/trusted && cp /usr/local/bin/shirudo /sysroot/usr/local/bin/shirudo && chmod 0755 /sysroot/usr/local/bin/shirudo && cp /etc/shirudo/keys/cert.der /sysroot/var/lib/shirudo/keys/cert.der && cp /etc/shirudo/keys/trusted/*.der /sysroot/var/lib/shirudo/keys/trusted/ && chmod 0700 /sysroot/var/lib/shirudo /sysroot/var/lib/shirudo/keys /sysroot/var/lib/shirudo/keys/trusted'
+ExecStart=/bin/sh -c 'mkdir -p /sysroot/usr/local/bin /sysroot/var/lib/shirudo/keys/trusted && cp /usr/local/bin/shirudo /sysroot/usr/local/bin/shirudo && chmod 0755 /sysroot/usr/local/bin/shirudo && cp /etc/shirudo/keys/cert.der /sysroot/var/lib/shirudo/keys/cert.der && cp /etc/shirudo/keys/trusted/* /sysroot/var/lib/shirudo/keys/trusted/ && chmod 0700 /sysroot/var/lib/shirudo /sysroot/var/lib/shirudo/keys /sysroot/var/lib/shirudo/keys/trusted'
 EOF
 	ln -sf ../shirudo-test-seed.service \
 		"$seed/usr/lib/systemd/system/initrd.target.wants/shirudo-test-seed.service"
@@ -912,6 +912,7 @@ EOF
 		"$TEST_VM_HOST_BUNDLE/fixtures/own.der" 2>/dev/null)" ||
 		die "cannot fingerprint the bundle's own certificate"
 	cp "$TEST_VM_HOST_BUNDLE/fixtures/own.der" "$trusted/$fp.der"
+	cp "$TEST_VM_HOST_BUNDLE/fixtures/own.vouch" "$trusted/$fp.vouch"
 	args=(--kver "$kver" --output "$RUN_DIR/initrd.img"
 	      --binary "$TEST_VM_HOST_BUNDLE/root/usr/local/bin/shirudo"
 	      --binary-path /usr/local/bin/shirudo

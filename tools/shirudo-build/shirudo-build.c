@@ -48,6 +48,7 @@ static void usage(FILE *fp)
 		"                [--key <signing_key.pem>] [--cert <cert.der>]\n"
 		"\n"
 		"  shirudo-build bpm <build|push|tree append> ...\n"
+		"  shirudo-build keys vouch <cert.der> [-o <file>] ...\n"
 		"\n"
 		"<input> is .bpf.c (compiled via clang) or .bpf.o.\n"
 		"-o defaults to <input> with a trailing .c/.o replaced by\n"
@@ -262,6 +263,9 @@ int main(int argc, char **argv)
 
 	if (argc >= 2 && strcmp(argv[1], "bpm") == 0)
 		return shirudo_build_bpm(argc - 1, argv + 1);
+	if (argc >= 3 && strcmp(argv[1], "keys") == 0 &&
+	    strcmp(argv[2], "vouch") == 0)
+		return shirudo_build_keys_vouch(argc - 2, argv + 2);
 
 	for (i = 1; i < argc; i++) {
 		const char *a = argv[i];
