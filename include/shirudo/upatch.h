@@ -14,8 +14,8 @@
 /*
  * The PKCS#7 signature covers insns || data (the gen_loader metadata
  * blob), verified by the kernel at load time; payload_sha256 is SHA-256
- * of that same concatenation. See Documentation/bpf/signing.rst and
- * PLAN.md "signed loader scheme".
+ * of that same concatenation. See the kernel's Documentation/bpf/signing.rst
+ * and Documentation/upatch-spec.rst in this tree.
  */
 #define SHIRUDO_UPATCH_VERSION		1u
 #define SHIRUDO_UPATCH_LEGACY_HEADER_SIZE	352u

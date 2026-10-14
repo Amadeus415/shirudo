@@ -439,6 +439,5 @@ Production and consumption
   reads the loaded program's line_info + BTF from the kernel (the
   authoritative view of what is loaded).
 
-See ``PLAN.md`` (subcommands, "``.upatch`` artifact format") and
-``Documentation/threat-model.rst`` for the surrounding design and the
-trust boundaries.
+See ``Documentation/architecture.rst`` for the surrounding design and
+``Documentation/threat-model.rst`` for the trust boundaries.

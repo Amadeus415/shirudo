@@ -870,8 +870,8 @@ static int append_init_event(const struct restore_entry *set, size_t n,
 /*
  * Extend the TPM2 NV measurement chain by one "init" event covering
  * the restored set, then append the matching eventlog entry. One
- * extension per boot regardless of upatch count (PLAN.md "Boot-restore
- * protocol"). The chain is mandatory: a TPM that cannot be opened or an
+ * extension per boot regardless of upatch count (architecture.rst,
+ * boot restore). The chain is mandatory: a TPM that cannot be opened or an
  * index that cannot be defined is a hard error (category tpm_error),
  * never an unmeasured init, because an unmeasured target is
  * indistinguishable from a tampered one to the operator.

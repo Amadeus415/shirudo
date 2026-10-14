@@ -101,7 +101,7 @@ static int cmd_help(int argc, const char **argv)
 		    "target commands (run on the target, fronted by sshd):");
 	print_group(GROUP_LOCAL, "local commands (operator or target):");
 	print_group(GROUP_GENERAL, "other:");
-	fprintf(stderr, "See PLAN.md and Documentation/ for the design.\n");
+	fprintf(stderr, "See Documentation/ for the design.\n");
 	return 0;
 }
 

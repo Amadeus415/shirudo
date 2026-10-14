@@ -31,16 +31,15 @@ the user the model requirement.** "Trying your best" with a less
 capable model is worse than waiting for a session on the right one.
 
 This gate applies to every operation: editing files, generating code,
-designing additions to `PLAN.md`, reviewing diffs, answering questions
-about the codebase. Lower-tier models may read, but may not write.
+designing additions, reviewing diffs, answering questions about the
+codebase. Lower-tier models may read, but may not write.
 
 ## Current state
 
 **The repo contains the implemented MVP.** Before changing security-
 critical code, read `Documentation/architecture.rst` and
-`Documentation/threat-model.rst`. `PLAN.md` retains the original design
-history; the architecture and code are authoritative for the current
-scope. The operator builds and signs artifacts, while existing scp/ssh
+`Documentation/threat-model.rst`; the architecture and code are
+authoritative for the current scope. The operator builds and signs artifacts, while existing scp/ssh
 invokes target-local commands. Do not reintroduce the removed fleet,
 remote-management, or SSH transport layers.
 
@@ -80,7 +79,8 @@ specs. Consult them whenever the answer matters:
 | Path | Purpose |
 |---|---|
 | `Documentation/threat-model.rst` | **Authoritative security design document.** Trust boundaries, addressed threats, residual risks, and deferred mitigations. **Consult before designing or implementing any security-relevant code path.** |
-| `PLAN.md` | Implementation plan: MVP scope, subcommands, `.upatch` format, build system, project layout. Source of truth for *what* and *how*, complementary to the *why* in `threat-model.rst`. |
+| `Documentation/upatch-spec.rst` | The `.upatch` container format and signing scheme. |
+| `Documentation/requirements.rst` | Kernel options, operator toolchain and target runtime requirements. |
 | `Documentation/architecture.rst` | Contributor-facing architecture and the current operator/target boundary. |
 | `Documentation/getting-started.rst` | Operator quickstart for build, transfer, load, status, and unload. |
 
@@ -92,7 +92,7 @@ load-bearing — consult them directly rather than reasoning from memory:
 
 | Path | Purpose |
 |---|---|
-| `/root/bpf-next/tools/bpf/bpftool/sign.c` | Reference CMS/PKCS#7 signer (~250 LOC, OpenSSL). Will be vendored as `util/sign.c` with attribution; **linked only into the operator-only `shirudo-build` binary**, not into the core `shirudo` binary (the core binary never signs — signing happens via `shirudo build` dispatch). |
+| `/root/bpf-next/tools/bpf/bpftool/sign.c` | Reference CMS/PKCS#7 signer (~250 LOC, OpenSSL), vendored as `util/sign.c` with attribution; **linked only into the operator-only `shirudo-build` binary**, not into the core `shirudo` binary (the core binary never signs — signing happens via the `shirudo-build` dispatch). |
 | `/root/bpf-next/tools/lib/bpf/skel_internal.h:390-410` | Exact `BPF_PROG_LOAD` attr layout for signed loader progs. |
 | `/root/bpf-next/tools/lib/bpf/libbpf.h` | `bpf_object__gen_loader()` / `gen_loader_opts` API. Call before `bpf_object__load()`; set `opts.gen_hash = true`. |
 | `/root/bpf-next/tools/bpf/bpftool/gen.c:687-707` | Reference for the gen_loader + load + sign sequence. |
@@ -101,7 +101,7 @@ load-bearing — consult them directly rather than reasoning from memory:
 | `/root/bpf-next/tools/testing/selftests/bpf/verify_sig_setup.sh` | OpenSSL recipe for `genkey`: `setup-mldsa` (ML-DSA-87, self-signed X.509). shirudo has no classical key type. |
 | `/root/bpf-next/Documentation/bpf/signing.rst` | Kernel BPF signing design, including the ML-DSA form (OpenSSL < 4.0 needs signedAttrs + SHA-512; `CONFIG_CRYPTO_MLDSA` + `CONFIG_CRYPTO_SHA512`). |
 | `/root/bpf-next/tools/perf/perf.c` | `cmd_struct[]` dispatch table **pattern** to model `shirudo.c` after. perf is GPL-2.0; **do not copy**, the pattern itself is uncopyrightable. |
-| `/root/bpf-next/tools/lib/subcmd/parse-options.{h,c}` | `OPT_*` / `parse_options()` **API model only**. libsubcmd is GPL-2.0; **do not link**, do not vendor. shirudo whiteroom-implements the subset it uses under `util/parse-options.{c,h}` (or wraps POSIX `getopt_long(3)`). See PLAN.md §"Vendoring and whiteroom reimplementation". |
+| `/root/bpf-next/tools/lib/subcmd/parse-options.{h,c}` | `OPT_*` / `parse_options()` **API model only**. libsubcmd is GPL-2.0; **do not link**, do not vendor. shirudo whiteroom-implements the subset it uses under `util/parse-options.{c,h}` (or wraps POSIX `getopt_long(3)`). |
 | `Documentation/coding-style.rst` (in-tree copy of the kernel's `Documentation/process/coding-style.rst`) | **Coding style for all C in this repo** (userspace and BPF). |
 | `/root/git/` | git's own source tree (GPL-2.0). Consult for *patterns* (porcelain/plumbing, `builtin/` dispatch, `wt-status` structured output). **Never copy code**; git's `run-command.c` subprocess model is explicitly **not** a model for shirudo (we have the no-subprocess invariant). |
 
@@ -156,7 +156,7 @@ load-bearing — consult them directly rather than reasoning from memory:
   No multi-paragraph docstrings. No "added for issue X" or "used by Y" — those
   go in commit messages.
 
-## Build approach (deferred — see PLAN.md "Build system")
+## Build approach
 
 - No submodule and no kernel tree at build time: libbpf, its BPF-side
   headers and the BPF UAPI headers live in `vendor/libbpf/` (copied
@@ -216,8 +216,7 @@ load-bearing — consult them directly rather than reasoning from memory:
   absolute on every target-side code path. If a future feature
   appears to require shelling out from anywhere other than the
   named build dispatch, that's a missing library binding, not a
-  license to call `system(3)`. See PLAN.md §"Goals & non-goals"
-  and §"Operator-only binaries and dual install targets".
+  license to call `system(3)`.
 - **Agentless on the target.** No long-lived shirudo process, no
   shirudo-owned listening socket. Every target-side operation is a
   one-shot CLI invocation under `sshd`. The reboot-persistence systemd
@@ -238,8 +237,7 @@ load-bearing — consult them directly rather than reasoning from memory:
   install), not the `shirudo` package (target install). When using
   a checkout, put the checkout root and helper directory first on
   `$PATH`; `SHIRUDO_BUILD` is available when an explicit helper path
-  is needed. See PLAN.md §"Operator-only binaries and dual install
-  targets".
+  is needed.
 - The `lsm/bpf` hook's `bool kernel` arg is the security-critical
   discriminator. `kernel == true` means the call came from inside a (signed,
   kernel-verified) loader — those calls are always allowed. `kernel == false`
@@ -292,8 +290,8 @@ load-bearing — consult them directly rather than reasoning from memory:
   replace / corruption** ops are denied (BPF_LINK_DETACH, BPF_LINK_UPDATE,
   BPF_PROG_ATTACH/DETACH, BPF_BTF_LOAD, BPF_MAP_DELETE_ELEM and the
   *_BATCH / LOOKUP_AND_DELETE variants). The signature-gated
-  BPF_PROG_LOAD is the trust boundary. See `PLAN.md` § "LSM enforcement
-  policy" for the exact switch and `Documentation/threat-model.rst` T1.
+  BPF_PROG_LOAD is the trust boundary. See `bpf/bpf2.c` for the exact
+  switch and `Documentation/threat-model.rst` T1.
 - `attr.keyring_id` is a **serial number** (s32), not a string. Get it from
   the return value of `add_key(2)`.
 - The LSM bootstrap is chicken-and-egg-safe because the LSM hook isn't
@@ -352,8 +350,7 @@ load-bearing — consult them directly rather than reasoning from memory:
   one). Reusable module
   `util/preflight.{c,h}` so `shirudo status` can use the same
   gate for dry-run readiness reports. Failure category is
-  `init_prereqs_missing`. See PLAN.md §"Pre-flight checks (run
-  by every `shirudo init`)".
+  `init_prereqs_missing`.
 - **Target hardening in two layers.** (1) `util/harden.c`
   clamps the shirudo process at startup
   (`PR_SET_DUMPABLE=0`/`NO_NEW_PRIVS`/`PTRACER`,
@@ -400,8 +397,7 @@ load-bearing — consult them directly rather than reasoning from memory:
   PCR. The systemd PCR registry has no free PCRs on a stock Linux +
   grub + IMA system; PCR 23 is application-resettable. shirudo defines
   an NV index (default `0x01818E00`, owner-defined range) with
-  `TPMA_NV_EXTEND` set, persistent across reboots. See PLAN.md
-  §"TPM measurement and remote attestation".
+  `TPMA_NV_EXTEND` set, persistent across reboots.
 - **Boot-restore is one chain event, not N.** When the target
   reboots, the systemd unit re-runs `shirudo init`, which
   re-applies the upatch set from `/var/lib/shirudo/upatches/` in
@@ -416,8 +412,7 @@ load-bearing — consult them directly rather than reasoning from memory:
   (one local SHA-256), and matches the semantic that reboot+re-apply
   restores state rather than adding new state. Boot-restore is
   **all-or-nothing**: if any re-apply fails, the chain is not
-  extended and status reports `init_complete: false`. See PLAN.md
-  §"Boot-restore protocol".
+  extended and status reports `init_complete: false`.
 - No kernel keyring persists across reboots; the cert lives on disk
   and gets re-installed on each `shirudo init`. **However**, the
   TPM NV chain *is* persistent — reboot does not lose shirudo's
@@ -458,8 +453,7 @@ load-bearing — consult them directly rather than reasoning from memory:
   installations on one host are not supported — operators wanting
   multiple independent policy authorities on one host are out of
   MVP scope. If a code path needs to coexist with a second
-  installation, that's a redesign signal, not a code change. See
-  PLAN.md §"Single shirudo instance per host".
+  installation, that's a redesign signal, not a code change.
 - **TPM 2.0 only.** TPM 1.2 lacks `TPMA_NV_EXTEND` and the SHA-256
   NV bank that shirudo's measurement chain requires; the
   pre-flight refuses TPM 1.2 even if `/dev/tpmrm0` is present.
@@ -473,7 +467,6 @@ load-bearing — consult them directly rather than reasoning from memory:
   On policy-strict hosts, the operator may need to add SELinux
   booleans / AppArmor profile entries for the shirudo binary;
   shirudo ships no per-distro LSM policy in MVP. See
-  PLAN.md §"Coexistence with stacked LSMs" and
   Documentation/threat-model.rst §"LSM coexistence".
 - **CO-RE for portable BPF.** Every BPF program shipped by shirudo
   (`bpf/bpf2.bpf.o`, `bpf/seal.bpf.o`) and every BPF program built
@@ -511,8 +504,7 @@ load-bearing — consult them directly rather than reasoning from memory:
   `TPM2_NV_Extend` with garbage. Not cryptographic — an attacker
   who can read `cert.der` defeats it — but raises the bar from
   "one syscall by any TPM-access process" to "filesystem read of
-  the sealed tree". See PLAN.md §"Why an NV-extend index, not a
-  PCR" and threat-model.rst residual #2 (chain DoS).
+  the sealed tree". See threat-model.rst residual #2 (chain DoS).
 - **Defining the NV index needs owner-hierarchy auth; that's
   separate from the index auth_value above.** The index is in the
   TCG owner range, so `Esys_NV_DefineSpace` is authorised by the
@@ -552,8 +544,7 @@ load-bearing — consult them directly rather than reasoning from memory:
   can't bind a shared pre-pinned map in its signable insns
   (TODO.kernel item 8). The xattr-on-pin is co-located with the
   object it describes and tamper-proofed by the same exe-identity
-  model shirudo already uses for `inode_unlink`. See PLAN.md
-  §"How payload_sha256 is verified at unload".
+  model shirudo already uses for `inode_unlink`.
 - **Shirudo infrastructure maps that it does create are
   `BPF_MAP_FREEZE`d at creation.** The sb-identity array bpf2 reads
   (and any future config/ringbuf maps) is frozen between
@@ -603,8 +594,7 @@ load-bearing — consult them directly rather than reasoning from memory:
   in `t/helper/test-json-parser.c` from the start. When adding
   a new `--report=` field or a new JSON document type, extend
   `util/json.h`'s schema definitions; do **not** open-code
-  JSON-byte handling anywhere else. See PLAN.md §"In-tree JSON
-  parser and emitter".
+  JSON-byte handling anywhere else.
 - **Eventlog full → refuse the operation.** When the on-disk
   eventlog would exceed `eventlog.max_bytes` from
   `/etc/shirudo/shirudo.conf`, the state-changing operation
@@ -634,8 +624,7 @@ Use `syslog(3)` via `openlog("shirudo", LOG_PID | LOG_NDELAY, LOG_AUTHPRIV)` —
 no `libsystemd` dependency. systemd-journald picks these up automatically;
 operators filter with `journalctl -t shirudo`. A `util/log.c` will wrap this
 in `pr_info()` / `pr_warn()` / `pr_err()` / `pr_audit()` macros following the
-perf/bpftool idiom. See `PLAN.md` § "Logging to the systemd journal" for the
-event table.
+perf/bpftool idiom.
 
 ## File paths shirudo owns at runtime
 
@@ -699,8 +688,7 @@ Operator machine:
   `libtss2-tcti-device`, `libbpf`, `libelf`, `zlib`. Nothing
   else — every additional library expands the supply-chain
   attack surface. When reviewing a change that adds a new
-  library, check it against the five criteria in PLAN.md
-  §"Minimal, vetted library dependencies": absolutely necessary,
+  library, check it against five criteria: absolutely necessary,
   universally available, actively maintained, BSD-2-Clause
   compatible, single load-bearing role. Default answer for
   "should we link library X to save Y lines of code": **no**.
@@ -719,8 +707,7 @@ Operator machine:
   clang/LLVM and the signing key. When reviewing a change,
   ask: "does this grow the TCB?" If yes, that's a red flag —
   prefer designs that keep the target TCB minimal. The
-  agentless-on-target invariant exists for this reason. See
-  PLAN.md §"Trusted compute base".
+  agentless-on-target invariant exists for this reason.
 - **Userspace never introduces unsigned code once the LSM is active.**
   The trust boundary is the signature-gated `BPF_PROG_LOAD`: no program
   enters the kernel from userspace without a valid signature. shirudo's
@@ -786,9 +773,9 @@ Operator machine:
 - **shirudo's project license is BSD-2-Clause** and every line of
   code in the binary must be either fresh BSD-2-Clause or vendored
   from a permissive OR-branch (libbpf, bpftool sign.c). **Never
-  copy or link GPL-2.0 code** from perf, libsubcmd, or git — apply
-  the clean-room procedure described in PLAN.md §"Vendoring and
-  whiteroom reimplementation".
+  copy or link GPL-2.0 code** from perf, libsubcmd, or git — study
+  the pattern, then write the implementation from scratch without
+  the GPL source open (clean-room).
 - **`SHIRUDO_VERSION_ID` is architecture-stripped.** It hashes
   source-tree + build-config inputs, not binary bytes; same
   source on x86_64 and arm64 produces the same identity. The
@@ -797,9 +784,8 @@ Operator machine:
   version-skew guard, not a tamper-detection mechanism**: a
   malicious shirudo binary can lie about its version-id. Binary
   integrity is the distribution layer's job (signed packages,
-  IMA, dm-verity, measured boot). See PLAN.md §"Build system —
-  Version identity" and Documentation/threat-model.rst §"Binary
-  integrity".
+  IMA, dm-verity, measured boot). See Documentation/threat-model.rst
+  §"Binary integrity".
 - **MVP supported architectures: x86_64 and arm64.** Both
   little-endian; on-disk `.upatch` format is little-endian-
   defined; wire formats over SSH are text JSON. Operator and
@@ -818,13 +804,12 @@ Operator machine:
   no reboot needed*, not *legacy kernel kept alive*. When
   writing code or reviewing a PR, don't add fallback branches
   for older kernels — the bar is "this works on current
-  upstream", full stop. See PLAN.md §"Bleeding-edge kernel and
-  toolchain assumed".
+  upstream", full stop.
 
-## Future work parked in PLAN.md
+## Future work
 
-Listed roughly in priority order; see `PLAN.md` §"Open questions /
-future work" for full descriptions.
+Listed roughly in priority order; the threat model's deferred
+mitigations carry the full descriptions.
 
 - **Initramfs-stage `shirudo init`** to close the remaining boot-time
   enforcement gap (threat T5). The `systemd/shirudo.service` unit

@@ -3,7 +3,7 @@
 #
 # Makefile.shirudo -- main build graph.
 #
-# Five strict build phases (see PLAN.md "Build phases"):
+# Five strict build phases:
 #   1. vendored libbpf (vendor/libbpf) and the vmlinux.h generator
 #   2. generated headers   (vendor/linux/vmlinux.h)
 #   3. compiled objects    (util/*.o, builtin-*.o, shirudo.o, bpf/*.bpf.o)

@@ -2277,7 +2277,7 @@ int shirudo_upatch_apply(const char *path)
 }
 
 /*
- * Operator-side pre-flight gate (PLAN.md "Pre-flight state check").
+ * Operator-side pre-flight gate (threat-model.rst, pre-flight checks).
  * Runs before any BPF_PROG_LOAD: the live kernel must expose the private
  * signed-loader ABI, the shirudo keyring must exist, the LSM link must still
  * be pinned (enforcing), and -- when the caller supplied --expect-chain --

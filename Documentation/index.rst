@@ -11,9 +11,9 @@ shirudo is a BPF LSM-based security platform that locks down the
 install BPF code. The userspace tool is agentless on the target side
 and is operated through SSH.
 
-This index points at the three main documents in the shirudo source
-tree. ``PLAN.md`` in the repository root is the implementation plan
-and source-of-truth design.
+This index points at the documents in the shirudo source tree. The
+architecture and threat model are the source of truth for the current
+design; the code is authoritative for behaviour.
 
 .. toctree::
    :maxdepth: 2
@@ -48,8 +48,6 @@ Quick orientation
 Companion files in the repository root
 ======================================
 
-- ``PLAN.md`` — implementation plan, source-of-truth design, MVP
-  scope, phase-by-phase build order, file format specs.
 - ``CLAUDE.md`` — guidance for AI-driven contribution to shirudo.
 - ``TODO.kernel`` — kernel/libbpf limitations shirudo's design bumps
   into, with the userspace workaround for each (the docs reference

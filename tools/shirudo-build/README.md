@@ -29,8 +29,8 @@ checkout's locally built binaries without installing them. `shirudo
 bpm build|push|tree append` hand their full argument vector to
 `shirudo-build bpm ...` the same way.
 
-See `PLAN.md` § "Operator-only binaries and dual install targets" for
-the full rationale.
+The rationale is in `Documentation/architecture.rst` (operator and
+target boundary) and `CLAUDE.md` (the no-subprocess invariant).
 
 ## Modes
 

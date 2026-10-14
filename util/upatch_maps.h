@@ -137,8 +137,8 @@ void shirudo_upatch_map_print_inline(const struct shirudo_map_summary *m);
  * already inside the object that should carry the map details; the
  * object helper is for callers wrapping map views in arrays.
  *
- * NULL `v` emits nothing. The shape matches the one documented in
- * PLAN.md so target-local status output remains stable.
+ * NULL `v` emits nothing. The shape is part of the status report format,
+ * so target-local status output remains stable.
  */
 void shirudo_upatch_maps_emit_json_fields(struct shirudo_json_emit *e,
 					  const struct shirudo_map_view *v);

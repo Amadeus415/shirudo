@@ -24,5 +24,4 @@ POSSIBILITY OF SUCH DAMAGE.
 
 The shirudo source tree vendors source files from third-party projects
 under different but compatible licenses. Those files retain their original
-SPDX-License-Identifier and copyright notices. See PLAN.md "Vendoring and
-whiteroom reimplementation" for the canonical inventory.
+SPDX-License-Identifier and copyright notices.

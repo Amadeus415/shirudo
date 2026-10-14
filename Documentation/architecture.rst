@@ -5,10 +5,9 @@
 shirudo architecture
 =====================
 
-This document describes the implemented architecture. ``PLAN.md``
-contains the historical implementation plan and deferred work; this
-document is the source of truth for the current command and package
-boundaries.
+This document describes the implemented architecture and is the source
+of truth for the current command and package boundaries; deferred work
+is listed at the end of :doc:`threat-model`.
 
 What shirudo is
 ===============
