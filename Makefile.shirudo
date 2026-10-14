@@ -451,10 +451,17 @@ install-operator: install shirudo-build $(VMLINUX_H) $(BPF_LIBBPF_HEADERS) $(BPF
 
 # ----- test -------------------------------------------------------
 
+# A libtpms-backed TPM for the host-side register tests; built only
+# where libtpms is installed, the tests skip without it.
+TPMSIM_CFLAGS := $(shell pkg-config --cflags libtpms 2>/dev/null)
+TPMSIM_LIBS := $(shell pkg-config --libs libtpms 2>/dev/null)
+TPMSIM_HELPER := $(if $(TPMSIM_LIBS),t/helper/tpmsim-cmd,)
+
 # Compiled test helpers (also usable as fuzz entry points).
 TEST_HELPERS := t/helper/test-json-parser \
                 t/helper/test-chain \
                 t/helper/test-tpm-wire \
+                $(TPMSIM_HELPER) \
 		t/helper/test-config \
 		t/helper/test-bpm-source \
 		t/helper/test-kernel-release \
@@ -487,6 +494,10 @@ t/helper/test-tpm-wire: t/helper/test-tpm-wire.c util/tpm_wire.o util/hex.o \
                         util/crypto_openssl.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl
+
+t/helper/tpmsim-cmd: t/helper/tpmsim-cmd.c
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS_BASE) $(TPMSIM_CFLAGS) -o $@ $< $(TPMSIM_LIBS) -lcrypto
 
 t/helper/test-config: t/helper/test-config.c util/config.o util/io.o util/log.o
 	@printf '  CC      $@\n'
