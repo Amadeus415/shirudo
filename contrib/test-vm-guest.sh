@@ -18,6 +18,7 @@ OVERLAY_WORK=/var/tmp/shirudo-overlay-work
 WORKSPACE=/workspace/shirudo
 VM_MODE="${VM_MODE:-test}"
 SKIP_SEAL="${TEST_VM_SKIP_SEAL:-0}"
+VM_INITRD="${TEST_VM_INITRD:-0}"
 
 log()
 {
@@ -286,7 +287,11 @@ install_kernel_config
 log "importing host-built Shirudo payload"
 log "host bundle dependency mode: $(<"$BUNDLE/dependency-mode")"
 install -d /usr/local/bin
-install -m 0755 "$BUNDLE/root/usr/local/bin/shirudo" /usr/local/bin/shirudo
+# Booted from the shirudo initrd the binary is already in place and its
+# inode is the identity init recorded; replacing it would lock the root
+# out of its own pins.
+cmp -s "$BUNDLE/root/usr/local/bin/shirudo" /usr/local/bin/shirudo ||
+	install -m 0755 "$BUNDLE/root/usr/local/bin/shirudo" /usr/local/bin/shirudo
 TARGET_UNITS=(
 	shirudo.service
 	shirudo-map-export.service
@@ -326,8 +331,9 @@ if [[ -n "${TEST_VM_PACKAGE_CERT:-}" ]]; then
 		exit 1
 	}
 fi
-install -m 0644 "$package_cert" \
-	/var/lib/shirudo/keys/cert.der
+cmp -s "$package_cert" /var/lib/shirudo/keys/cert.der ||
+	install -m 0644 "$package_cert" \
+		/var/lib/shirudo/keys/cert.der
 rm -f /var/lib/shirudo/keys/signing_key.pem
 init_args=()
 if [[ "$SKIP_SEAL" == 1 ]]; then
@@ -337,6 +343,17 @@ fi
 configure_bpm_tree
 /usr/local/bin/shirudo init "${init_args[@]}"
 test -e /run/shirudo/bpffs/lsm_link
+if [[ "$VM_INITRD" == 1 ]]; then
+	log "checking that the initrd brought enforcement up"
+	journalctl -b -u shirudo-initrd.service --no-pager | tail -20 || true
+	/usr/local/bin/shirudo status --json | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+assert d["mode"] == "production", d["mode"]
+assert d["tpm"]["bound_in"] == "initrd", d["tpm"]
+'
+	test ! -e /run/shirudo/eventlog.pending
+fi
 /usr/local/bin/shirudo status --json >/tmp/shirudo-status.json
 python3 - /tmp/shirudo-status.json <<'PY'
 import json

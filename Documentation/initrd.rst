@@ -203,3 +203,9 @@ initrd by ``systemd-measure`` or ``systemd-pcrlock``.  No pending
 record remains under ``/run/shirudo`` once the root's run has adopted
 it; a target where it lingers is one whose ``shirudo.service`` has not
 run.
+
+The test VM exercises the whole path: ``make test-tgt TEST_VM_INITRD=1``
+builds an initrd from the bundle with the generator, boots the guest
+from it and runs the target suite, where ``t1122`` checks the
+configuration above and the rest of the suite runs against enforcement
+the initrd brought up.  It needs dracut and root on the host.

@@ -61,6 +61,9 @@ VM_MODE="${VM_MODE:-test}"
 KERNEL_PROFILE="${TEST_VM_KERNEL_PROFILE:-full}"
 VM_SUITE="${TEST_VM_SUITE:-all}"
 SKIP_SEAL="${TEST_VM_SKIP_SEAL:-0}"
+VM_INITRD="${TEST_VM_INITRD:-0}"
+VM_INITRD_MODULES="${TEST_VM_INITRD_MODULES:-base systemd systemd-initrd dracut-systemd rootfs-block fs-lib udev-rules terminfo shirudo}"
+INITRD=""
 VM_VERBOSE="${VM_VERBOSE:-0}"
 DNS_FUZZ="${TEST_VM_DNS_FUZZ:-0}"
 DNS_FUZZ_SEED="${TEST_VM_DNS_FUZZ_SEED:-0x53484952}"
@@ -168,6 +171,10 @@ validate_mode()
 	case "$SKIP_SEAL" in
 	0|1) ;;
 	*) die "TEST_VM_SKIP_SEAL must be '0' or '1'" ;;
+	esac
+	case "$VM_INITRD" in
+	0|1) ;;
+	*) die "TEST_VM_INITRD must be '0' or '1'" ;;
 	esac
 	case "$KERNEL_PROFILE" in
 	full|small) ;;
@@ -855,6 +862,69 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# The release string the kernel image carries in its setup header.
+kernel_release_of()
+{
+	local v
+
+	v="$(file -b "$1" 2>/dev/null | sed -n 's/.*version \([^ ]*\).*/\1/p')"
+	[[ -n "$v" ]] || return 1
+	printf '%s\n' "$v"
+}
+
+# An initrd that runs shirudo-initrd.service, built by the generator
+# from the bundle's binary and certificate. The guest's root file system
+# is a stock cloud image, so a seed unit in the initrd copies both onto
+# it before shirudo runs: init records the root's binary as the lasting
+# identity and the cloud-init stage later finds the files in place.
+build_initrd()
+{
+	local kver gen unit seed
+	local -a args
+
+	kver="$(kernel_release_of "$KERNEL")" ||
+		die "cannot read the kernel release from $KERNEL"
+	gen="$REPO_ROOT/tools/gen-initrd/shirudo-gen-initrd"
+	unit="$RUN_DIR/shirudo-initrd.service"
+	sed 's|@bindir@|/usr/local/bin|g' \
+		"$REPO_ROOT/systemd/shirudo-initrd.service.in" >"$unit"
+	seed="$RUN_DIR/initrd-seed"
+	mkdir -p "$seed/usr/lib/systemd/system/initrd.target.wants"
+	cat >"$seed/usr/lib/systemd/system/shirudo-test-seed.service" <<'EOF'
+[Unit]
+Description=shirudo test VM: seed the root file system with the bundle
+DefaultDependencies=no
+After=initrd-root-fs.target
+Before=shirudo-initrd.service
+RequiresMountsFor=/sysroot
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'mkdir -p /sysroot/usr/local/bin /sysroot/var/lib/shirudo/keys && cp /usr/local/bin/shirudo /sysroot/usr/local/bin/shirudo && chmod 0755 /sysroot/usr/local/bin/shirudo && cp /etc/shirudo/cert.der /sysroot/var/lib/shirudo/keys/cert.der && chmod 0700 /sysroot/var/lib/shirudo /sysroot/var/lib/shirudo/keys'
+EOF
+	ln -sf ../shirudo-test-seed.service \
+		"$seed/usr/lib/systemd/system/initrd.target.wants/shirudo-test-seed.service"
+	args=(--kver "$kver" --output "$RUN_DIR/initrd.img"
+	      --binary "$TEST_VM_HOST_BUNDLE/root/usr/local/bin/shirudo"
+	      --binary-path /usr/local/bin/shirudo
+	      --cert "$TEST_VM_HOST_BUNDLE/fixtures/cert.der"
+	      --unit "$unit" --module-dir "$REPO_ROOT/tools/gen-initrd")
+	if [[ -n "$KERNEL_ARTIFACT_DIR" ]]; then
+		args+=(--kmoddir "$KERNEL_ARTIFACT_DIR/lib/modules")
+	else
+		args+=(--no-kernel)
+	fi
+	log "building an initrd with shirudo for $kver"
+	# shellcheck disable=SC2086
+	if ! "$gen" "${args[@]}" -- --no-hostonly --no-hostonly-cmdline \
+	     --modules "$VM_INITRD_MODULES" --include "$seed" / \
+	     >"$RUN_DIR/initrd-build.log" 2>&1; then
+		tail -40 "$RUN_DIR/initrd-build.log" >&2
+		die "initrd build failed; see $RUN_DIR/initrd-build.log"
+	fi
+	INITRD="$RUN_DIR/initrd.img"
+}
+
 resolve_kernel()
 {
 	local cache_kernel expected actual tmp
@@ -1063,6 +1133,10 @@ validate_oci_ca
 validate_package_cert
 validate_bpm_tree_config
 validate_bpm_oci
+if [[ "$VM_INITRD" == 1 ]]; then
+	HOST_DEPENDENCIES+=("dracut:dracut-core" "lsinitrd:dracut-core" "file:file")
+	[[ "$EUID" == 0 ]] || die "TEST_VM_INITRD=1 builds the initrd with dracut, which needs root"
+fi
 check_host_dependencies
 validate_host_bundle
 [[ "$CPUS" =~ ^[1-9][0-9]*$ ]] || die "TEST_VM_CPUS must be a positive integer"
@@ -1072,6 +1146,7 @@ mkdir -p "$CACHE_DIR"
 allocate_run_dir
 allocate_ssh_access
 KERNEL="$(resolve_kernel)"
+[[ "$VM_INITRD" == 0 ]] || build_initrd
 
 [[ "$(uname -m)" == "x86_64" ]] || die "test-vm currently supports x86_64 hosts only"
 [[ -r /dev/kvm && -w /dev/kvm ]] || die "/dev/kvm is required and must be accessible"
@@ -1200,6 +1275,7 @@ fi
 printf '      export VM_MODE=%q\n' "$VM_MODE" >>"$USER_DATA"
 printf '      export TEST_VM_SUITE=%q\n' "$VM_SUITE" >>"$USER_DATA"
 printf '      export TEST_VM_SKIP_SEAL=%q\n' "$SKIP_SEAL" >>"$USER_DATA"
+printf '      export TEST_VM_INITRD=%q\n' "$VM_INITRD" >>"$USER_DATA"
 printf '      export TEST_VM_DNS_FUZZ=%q\n' "$DNS_FUZZ" >>"$USER_DATA"
 printf '      export TEST_VM_DNS_FUZZ_SEED=%q\n' "$DNS_FUZZ_SEED" >>"$USER_DATA"
 printf '      export TEST_VM_DNS_FUZZ_CASES=%q\n' "$DNS_FUZZ_CASES" >>"$USER_DATA"
@@ -1334,6 +1410,10 @@ if [[ -n "$KERNEL_ARTIFACT_DIR" ]]; then
 	QEMU_ARGS+=(
 		-virtfs "local,id=shirudo-kernel,path=${KERNEL_ARTIFACT_DIR},mount_tag=shirudo-kernel,security_model=none,readonly=on"
 	)
+fi
+
+if [[ -n "$INITRD" ]]; then
+	QEMU_ARGS+=(-initrd "$INITRD")
 fi
 
 if [[ -n "$OTEL_CA_DIR" ]]; then
