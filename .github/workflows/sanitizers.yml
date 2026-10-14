@@ -1,0 +1,88 @@
+name: Sanitizers
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-op:
+    name: ASan+UBSan (${{ matrix.compiler }})
+    runs-on: ubuntu-latest-4cores-16gb
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler:
+          - gcc
+          - clang
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # The BPF objects embedded in the binary need the BTF of a signed-BPF
+      # capable bpf-next kernel, so the build runs in the same LVH VM as the
+      # package build. The host-side suite itself needs no root, LSM or TPM.
+      - name: Build with sanitizers and run the host-side suite in LVH VM
+        uses: cilium/little-vm-helper@v0.0.30
+        with:
+          test-name: shirudo-sanitizers-${{ matrix.compiler }}
+          image: kind
+          image-version: bpf-next-20260603.072225
+          kernel-version: bpf-next-main
+          host-mount: ${{ github.workspace }}
+          images-folder-parent: ${{ github.workspace }}/../lvh
+          install-dependencies: true
+          cpu: 4
+          mem: 8G
+          cmd: |
+            grep -aq 'signature_size' /sys/kernel/btf/vmlinux || {
+              echo 'kernel BTF lacks bpf_attr.signature_size; needs a signed-BPF capable bpf-next kernel' >&2
+              exit 1
+            }
+            cd /host
+
+            apt-get update
+            apt-get install -y --no-install-recommends \
+              build-essential \
+              ca-certificates \
+              clang \
+              llvm \
+              curl \
+              git \
+              pkg-config \
+              python3 \
+              libcurl4-openssl-dev \
+              libelf-dev \
+              libluajit-5.1-dev \
+              libtss2-dev \
+              zlib1g-dev
+
+            git config --global --add safe.directory /host
+
+            # OpenSSL 3.5+: the distribution's build predates ML-DSA, and
+            # the suite generates its test keys with the openssl binary.
+            curl -fsSL https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz \
+              -o /tmp/openssl-3.5.9.tar.gz
+            tar -C /tmp -xf /tmp/openssl-3.5.9.tar.gz
+            cd /tmp/openssl-3.5.9
+            ./Configure --prefix=/tmp/shirudo-openssl --openssldir=/etc/ssl \
+              --libdir=lib no-docs no-tests
+            make -j4
+            make install_sw
+            cd /host
+
+            export PATH=/tmp/shirudo-openssl/bin:\$PATH
+            export PKG_CONFIG_PATH=/tmp/shirudo-openssl/lib/pkgconfig
+            export LD_LIBRARY_PATH=/tmp/shirudo-openssl/lib
+            export CC=${{ matrix.compiler }}
+
+            make -j4 SANITIZE=address,undefined
+            make SANITIZE=address,undefined shirudo-build test-helpers
+            make SANITIZE=address,undefined test-op
