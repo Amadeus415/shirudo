@@ -74,10 +74,10 @@ static int make_decoder(bool metric, bool counter, bool snapshot,
 	size_t sig_off = loader_off + sizeof(struct bpf_insn);
 	size_t data_off = sig_off + 1;
 	size_t file_len = data_off + data_len;
+	struct shirudo_upatch_decoder_trailer trailer = {};
+	struct shirudo_upatch_decoder_entry entry = {};
+	struct shirudo_upatch_decoder_blob blob = {};
 	struct shirudo_upatch_header header = {};
-	struct shirudo_upatch_decoder_blob *blob;
-	struct shirudo_upatch_decoder_entry *entry;
-	struct shirudo_upatch_decoder_trailer *trailer;
 	unsigned char *file;
 	char template[] = "/tmp/test-otel-map-decoder-XXXXXX";
 	int fd, rc;
@@ -109,29 +109,30 @@ static int make_decoder(bool metric, bool counter, bool snapshot,
 	memcpy(file, &header, sizeof(header));
 	file[data_off - 1] = 0;
 
-	blob = (void *)(file + data_off);
-	blob->magic = htole32(SHIRUDO_UPATCH_DECODER_MAGIC);
-	blob->version = htole32(SHIRUDO_UPATCH_DECODER_VERSION);
-	blob->nr_decoders = htole32(1);
-	entry = &blob->decoders[0];
-	entry->language = htole32(SHIRUDO_UPATCH_DECODER_LANG_LUA);
-	entry->api_version = htole32(1);
-	entry->input_format = htole32(SHIRUDO_UPATCH_DECODER_INPUT_MAP_V1);
-	entry->export_signal = htole32(metric ?
+	/* The sections start at odd offsets: build them aligned, then copy. */
+	blob.magic = htole32(SHIRUDO_UPATCH_DECODER_MAGIC);
+	blob.version = htole32(SHIRUDO_UPATCH_DECODER_VERSION);
+	blob.nr_decoders = htole32(1);
+	memcpy(file + data_off, &blob, sizeof(blob));
+	entry.language = htole32(SHIRUDO_UPATCH_DECODER_LANG_LUA);
+	entry.api_version = htole32(1);
+	entry.input_format = htole32(SHIRUDO_UPATCH_DECODER_INPUT_MAP_V1);
+	entry.export_signal = htole32(metric ?
 		SHIRUDO_UPATCH_DECODER_EXPORT_METRIC :
 		SHIRUDO_UPATCH_DECODER_EXPORT_LOG);
-	strncpy(entry->upatch, "test-upatch", sizeof(entry->upatch) - 1);
-	strncpy(entry->map, "hits_total", sizeof(entry->map) - 1);
-	strncpy(entry->source, "test.lua", sizeof(entry->source) - 1);
-	strncpy(entry->entrypoint, "decode", sizeof(entry->entrypoint) - 1);
-	entry->source_off = htole32(entries_end);
-	entry->source_len = htole32(source_len);
+	strncpy(entry.upatch, "test-upatch", sizeof(entry.upatch) - 1);
+	strncpy(entry.map, "hits_total", sizeof(entry.map) - 1);
+	strncpy(entry.source, "test.lua", sizeof(entry.source) - 1);
+	strncpy(entry.entrypoint, "decode", sizeof(entry.entrypoint) - 1);
+	entry.source_off = htole32(entries_end);
+	entry.source_len = htole32(source_len);
+	memcpy(file + data_off + sizeof(blob), &entry, sizeof(entry));
 	memcpy(file + data_off + entries_end, source, source_len);
-	trailer = (void *)(file + data_off + decoder_len);
-	trailer->magic = htole32(SHIRUDO_UPATCH_DECODER_TRAILER_MAGIC);
-	trailer->version = htole32(SHIRUDO_UPATCH_DECODER_VERSION);
-	trailer->decoder_off = htole32(0);
-	trailer->decoder_len = htole32(decoder_len);
+	trailer.magic = htole32(SHIRUDO_UPATCH_DECODER_TRAILER_MAGIC);
+	trailer.version = htole32(SHIRUDO_UPATCH_DECODER_VERSION);
+	trailer.decoder_off = htole32(0);
+	trailer.decoder_len = htole32(decoder_len);
+	memcpy(file + data_off + decoder_len, &trailer, sizeof(trailer));
 
 	rc = shirudo_write_all(fd, file, file_len);
 	if (close(fd) != 0 && rc == 0)
