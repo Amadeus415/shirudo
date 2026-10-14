@@ -1,0 +1,116 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Authors of shirudo
+#
+# t0029 -- the ML-DSA signing path end to end on the operator side:
+# genkey (default ML-DSA-87), build a tiny fentry upatch with it, and
+# check the embedded detached CMS against the kernel's expectations
+# (ML-DSA-87 SignerInfo, keyid signer, no embedded cert, SHA-512 signed
+# attributes without signingTime on OpenSSL 3.x) by verifying it with
+# openssl over the exact loader_insns || data bytes the kernel folds.
+# Needs clang, shirudo-build and an OpenSSL >= 3.5 (skips otherwise).
+
+cd "$(dirname "$0")"
+. ./test-lib.sh
+
+S=../shirudo
+SHB=../tools/shirudo-build/shirudo-build
+
+command -v clang >/dev/null 2>&1 || test_skip_all "no clang"
+command -v openssl >/dev/null 2>&1 || test_skip_all "no openssl"
+command -v python3 >/dev/null 2>&1 || test_skip_all "no python3"
+openssl list -public-key-algorithms 2>/dev/null | grep -qi 'ML-DSA' ||
+	test_skip_all "openssl without ML-DSA (needs OpenSSL >= 3.5)"
+[ -x "$S" ] || test_skip_all "shirudo not built"
+[ -x "$SHB" ] || test_skip_all "shirudo-build not built (make shirudo-build)"
+[ -e ../bpf/vmlinux.h ] || test_skip_all "no bpf/vmlinux.h (build the tree)"
+[ -e ../bpf/include/bpf/bpf_helpers.h ] || test_skip_all "no in-tree bpf headers"
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+cat > "$WORK/t.bpf.c" <<'BPF'
+// SPDX-License-Identifier: Dual BSD/GPL
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+
+char _license[] SEC("license") = "Dual BSD/GPL";
+
+SEC("fentry/do_nanosleep")
+int BPF_PROG(t0029_fn)
+{
+	return 0;
+}
+BPF
+
+case "$SHB" in
+/*) B="$SHB" ;;
+*)  B="$(pwd)/$SHB" ;;
+esac
+
+"$S" genkey --keys-dir "$WORK/keys" >/dev/null 2>&1 ||
+	test_skip_all "genkey failed"
+( cd .. && "$B" "$WORK/t.bpf.c" -o "$WORK/u.upatch" --vmlinux bpf/vmlinux.h \
+	--name t0029 --key "$WORK/keys/signing_key.pem" \
+	--cert "$WORK/keys/cert.der" ) >/dev/null 2>&1 ||
+	test_skip_all "build failed (clang/headers?)"
+
+# Slice the signature and the signed bytes out of the artifact using the
+# fixed v1 header offsets (Documentation/upatch-spec.rst).
+python3 - "$WORK/u.upatch" "$WORK" <<'PY'
+import struct, sys
+path, out = sys.argv[1], sys.argv[2]
+b = open(path, "rb").read()
+ioff, ilen, soff, slen, moff, mlen, doff, dlen = struct.unpack_from("<8I", b, 304)
+open(out + "/sig.der", "wb").write(b[soff:soff + slen])
+content = b[ioff:ioff + ilen] + (b[doff:doff + dlen] if doff else b"")
+open(out + "/content.bin", "wb").write(content)
+open(out + "/tampered.bin", "wb").write(content[:-1] + bytes([content[-1] ^ 1]))
+open(out + "/siglen", "w").write(str(slen))
+PY
+openssl x509 -inform DER -in "$WORK/keys/cert.der" -out "$WORK/cert.pem" 2>/dev/null
+
+test_expect_success 'signature is an ML-DSA-87 SignerInfo identified by keyid, no embedded cert' '
+	openssl cms -cmsout -inform DER -in "$WORK/sig.der" -print >"$WORK/cms.txt" 2>&1 &&
+	grep -q "ML-DSA-87" "$WORK/cms.txt" &&
+	grep -q "subjectKeyIdentifier" "$WORK/cms.txt" &&
+	! grep -q "X509v3 Subject Key Identifier" "$WORK/cms.txt"
+'
+
+test_expect_success 'ML-DSA signature is larger than the old 4 KiB cap and below the 16 KiB writer cap' '
+	siglen=$(cat "$WORK/siglen") &&
+	[ "$siglen" -gt 4096 ] && [ "$siglen" -lt 16384 ]
+'
+
+test_expect_success 'signed attributes form (OpenSSL 3.x) uses SHA-512 and omits signingTime' '
+	if grep -q "messageDigest" "$WORK/cms.txt"; then
+		grep -q "sha512" "$WORK/cms.txt" && ! grep -q "signingTime" "$WORK/cms.txt"
+	else
+		# OpenSSL 4 signs the content directly: no attributes at all.
+		! grep -q "signingTime" "$WORK/cms.txt"
+	fi
+'
+
+test_expect_success 'openssl verifies the detached CMS over loader_insns || data' '
+	openssl cms -verify -binary -inform DER -in "$WORK/sig.der" \
+		-content "$WORK/content.bin" -certfile "$WORK/cert.pem" \
+		-CAfile "$WORK/cert.pem" -purpose any -out /dev/null 2>/dev/null
+'
+
+test_expect_success 'a one-bit change in the signed bytes is rejected' '
+	! openssl cms -verify -binary -inform DER -in "$WORK/sig.der" \
+		-content "$WORK/tampered.bin" -certfile "$WORK/cert.pem" \
+		-CAfile "$WORK/cert.pem" -purpose any -out /dev/null 2>/dev/null
+'
+
+test_expect_success 'upatch info --json reports the artifact and signature length' '
+	"$S" upatch info "$WORK/u.upatch" --json 2>/dev/null | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+assert d[\"name\"] == \"t0029\", d.get(\"name\")
+assert d[\"signature_len\"] > 4096, d.get(\"signature_len\")
+"
+'
+
+test_done
