@@ -137,10 +137,12 @@ Build and sign tooling:
   ML-DSA; the build probe refuses older versions.
 * ``libelf``, ``zlib``, ``libcurl`` (>= 7.75), ``libluajit-5.1`` and
   TPM2-TSS (``tss2-esys`` >= 4.0, ``tss2-tctildr``) development
-  files. ``libbpf`` and ``bpftool`` build from the
-  ``third_party/bpf-next`` submodule.
-* Kernel UAPI headers new enough to carry
-  ``union bpf_attr.keyring_id`` (the submodule provides them).
+  files.
+* A bpf-next kernel checkout, passed once as
+  ``make BPF_NEXT_SRC=/path/to/bpf-next`` and cached in ``config.mk``:
+  ``libbpf``, ``bpftool`` and the UAPI headers (which must carry
+  ``union bpf_attr.keyring_id``) build from it. ``USE_BPF_NEXT_DEPS=1``
+  uses the prebuilt bundle from ``make bpf-next`` instead.
 * Go 1.25 or newer for the BPM publisher under ``bpm/``, which calls
   the ``openssl`` command for CMS signing and therefore shares the
   OpenSSL 3.5 requirement.

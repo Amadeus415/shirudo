@@ -14,8 +14,6 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          submodules: true
 
       - name: Free disk space
         run: |
@@ -64,8 +62,6 @@ jobs:
 
       - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          submodules: true
 
       - name: Build Amazon Linux kernel RPM artifacts
         run: make bpf-next PACKAGE_FORMAT=rpm

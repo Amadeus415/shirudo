@@ -78,7 +78,9 @@ SOURCE_DIR="${WORK_DIR}/linux"
 if [[ -n "$KERNEL_SOURCE_DIR_INPUT" ]]; then
   KERNEL_SOURCE_DIR="$KERNEL_SOURCE_DIR_INPUT"
 elif [[ "$KERNEL_TAG" == "bpf-next" ]]; then
-  KERNEL_SOURCE_DIR="${REPO_ROOT}/third_party/bpf-next"
+  # A local bpf-next checkout (the same BPF_NEXT_SRC the build uses) or a
+  # fresh shallow clone; there is no submodule.
+  KERNEL_SOURCE_DIR="${BPF_NEXT_SRC:-$SOURCE_DIR}"
 else
   KERNEL_SOURCE_DIR="$SOURCE_DIR"
 fi
@@ -206,7 +208,12 @@ install_build_dependencies
 rm -rf "$WORK_DIR" "$OUTPUT_DIR" "$BUNDLE_PATH" "${BUNDLE_PATH}.sha256sum"
 mkdir -p "$WORK_DIR" "$OUTPUT_DIR"
 
-if [[ "$KERNEL_TAG" != "bpf-next" && -z "$KERNEL_SOURCE_DIR_INPUT" ]]; then
+if [[ "$KERNEL_TAG" == "bpf-next" && "$KERNEL_SOURCE_DIR" == "$SOURCE_DIR" ]]; then
+  echo "Fetching bpf-next"
+  git clone --depth 1 --single-branch \
+    "${BPF_NEXT_REPOSITORY:-https://git.kernel.org/pub/scm/linux/kernel/git/bpf/bpf-next.git}" \
+    "$KERNEL_SOURCE_DIR"
+elif [[ "$KERNEL_TAG" != "bpf-next" && -z "$KERNEL_SOURCE_DIR_INPUT" ]]; then
   echo "Fetching third-party Linux kernel ${KERNEL_TAG}"
   if [[ -n "$KERNEL_COMMIT" ]]; then
     git clone --filter=blob:none --no-checkout \
@@ -856,6 +863,10 @@ mkdir -p "$BPF_DEPS_LIBBPF_DIR"
 cp "$SOURCE_DIR/tools/lib/bpf/libbpf.a" "$BPF_DEPS_LIBBPF_DIR/"
 cp "$SOURCE_DIR/tools/lib/bpf"/*.h "$BPF_DEPS_LIBBPF_DIR/"
 cp "$SOURCE_DIR/tools/bpf/bpftool/bpftool" "$BPF_DEPS_DIR/"
+# The UAPI headers travel with the bundle so USE_BPF_NEXT_DEPS=1 builds
+# need no source tree at all.
+mkdir -p "$BPF_DEPS_DIR/include"
+cp -a "$SOURCE_DIR/tools/include/uapi" "$BPF_DEPS_DIR/include/"
 "$BPF_DEPS_DIR/bpftool" btf dump file "$VMLINUX_BTF_PATH" format c \
   >"$BPF_DEPS_DIR/vmlinux.h"
 cat >"$BPF_DEPS_DIR/build" <<EOF

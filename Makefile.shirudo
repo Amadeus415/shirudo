@@ -4,7 +4,7 @@
 # Makefile.shirudo -- main build graph.
 #
 # Five strict build phases (see PLAN.md "Build phases"):
-#   1. submodule libraries (libbpf.a, libelf.a, bpftool)
+#   1. bpf-next libraries (libbpf.a, bpftool) from BPF_NEXT_SRC
 #   2. generated headers   (bpf/vmlinux.h)
 #   3. compiled objects    (util/*.o, builtin-*.o, shirudo.o, bpf/*.bpf.o)
 #   4. embedded BPF        (util/loader.o, .incbin of bpf/*.bpf.o)
@@ -41,8 +41,11 @@ SHIRUDO_BUNDLE_RPATH ?= 0
 CLANG   ?= clang
 BPF_NEXT_DEPS_DIR ?= artifacts/bpf-next-kernel-debs/shirudo-bpf-deps
 USE_BPF_NEXT_DEPS ?= 0
-BPFTOOL_SOURCE_DIR := third_party/bpf-next/tools/bpf/bpftool
-LIBBPF_SOURCE_DIR  := third_party/bpf-next/tools/lib/bpf
+# The bpf-next checkout recorded in config.mk by Makefile.config.
+BPF_NEXT_SRC ?=
+BPF_NEXT_UAPI ?= $(BPF_NEXT_SRC)/tools/include/uapi
+BPFTOOL_SOURCE_DIR := $(BPF_NEXT_SRC)/tools/bpf/bpftool
+LIBBPF_SOURCE_DIR  := $(BPF_NEXT_SRC)/tools/lib/bpf
 BPF_VMLINUX_H ?=
 # Prefer the BTF emitted by `make bpf-next`; otherwise use the running host.
 # A caller can still override this explicitly for another target kernel.
@@ -64,8 +67,11 @@ ifeq ($(USE_BPF_NEXT_DEPS),1)
     BPF_VMLINUX_H := $(BPF_NEXT_DEPS_DIR)/vmlinux.h
   endif
 else
+  ifeq ($(strip $(BPF_NEXT_SRC)),)
+    $(error BPF_NEXT_SRC is not set; run make BPF_NEXT_SRC=/path/to/bpf-next (cached in config.mk) or USE_BPF_NEXT_DEPS=1)
+  endif
   BPFTOOL ?= $(BPFTOOL_SOURCE_DIR)/bpftool
-  BPF_TOOLS_LIB_ROOT ?= third_party/bpf-next/tools/lib
+  BPF_TOOLS_LIB_ROOT ?= $(BPF_NEXT_SRC)/tools/lib
 endif
 
 SHIRUDO_LIBEXEC_DIR ?= $(libexecdir)/shirudo
@@ -93,7 +99,7 @@ INCLUDES := \
     -Iinclude \
     -Iutil \
     -I$(BPF_TOOLS_LIB_ROOT) \
-    -Ithird_party/bpf-next/tools/include/uapi
+    -I$(BPF_NEXT_UAPI)
 
 CFLAGS := $(CFLAGS_BASE) $(INCLUDES) \
           $(LIBCRYPTO_CFLAGS) $(TSS2_CFLAGS) \
@@ -240,7 +246,7 @@ all: shirudo
 # operator install target.
 shirudo-build: tools/shirudo-build/shirudo-build
 
-# ----- phase 1: submodule libraries -------------------------------
+# ----- phase 1: bpf-next libraries --------------------------------
 
 LIBBPF_DIR ?= $(BPF_TOOLS_LIB_ROOT)/bpf
 LIBBPF_A   ?= $(LIBBPF_DIR)/libbpf.a
@@ -296,11 +302,11 @@ $(BPF_HEADERS_OUT): bpf/include/bpf/%.h: $(LIBBPF_A)
 	$(Q)cp $(LIBBPF_DIR)/$*.h $@
 
 # BPF objects pull <bpf/...> headers from the in-tree vendor dir,
-# vmlinux.h from bpf/, and UAPI kernel headers from the submodule.
+# vmlinux.h from bpf/, and UAPI kernel headers from the bpf-next tree.
 bpf/%.bpf.o: bpf/%.c bpf/vmlinux.h $(BPF_HEADERS_OUT)
 	@printf '  CLANG   $@\n'
 	$(Q)$(CLANG_BPF) -Ibpf -Ibpf/lib -Ibpf/include \
-	    -Ithird_party/bpf-next/tools/include/uapi \
+	    -I$(BPF_NEXT_UAPI) \
 	    -c $< -o $@
 
 # ----- version_id ------------------------------------------------
@@ -507,11 +513,11 @@ t/helper/test-dns-prog-run: t/helper/test-dns-prog-run.c
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-# Needs the vendored uapi bpf.h (excl_prog_hash / fd_array_cnt / keyring_id
+# Needs the bpf-next uapi bpf.h (excl_prog_hash / fd_array_cnt / keyring_id
 # are newer than a stock system header) and libcrypto for SHA-256.
 t/helper/test-signed-load: t/helper/test-signed-load.c
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -Ithird_party/bpf-next/tools/include/uapi \
+	$(Q)$(CC) $(CFLAGS) -I$(BPF_NEXT_UAPI) \
 	    -o $@ $^ -lcrypto
 
 t/helper/test-kernel-abi: t/helper/test-kernel-abi.c util/kernel_abi.o \

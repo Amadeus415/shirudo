@@ -102,7 +102,7 @@ load-bearing — consult them directly rather than reasoning from memory:
 | `/root/bpf-next/Documentation/bpf/signing.rst` | Kernel BPF signing design, including the ML-DSA form (OpenSSL < 4.0 needs signedAttrs + SHA-512; `CONFIG_CRYPTO_MLDSA` + `CONFIG_CRYPTO_SHA512`). |
 | `/root/bpf-next/tools/perf/perf.c` | `cmd_struct[]` dispatch table **pattern** to model `shirudo.c` after. perf is GPL-2.0; **do not copy**, the pattern itself is uncopyrightable. |
 | `/root/bpf-next/tools/lib/subcmd/parse-options.{h,c}` | `OPT_*` / `parse_options()` **API model only**. libsubcmd is GPL-2.0; **do not link**, do not vendor. shirudo whiteroom-implements the subset it uses under `util/parse-options.{c,h}` (or wraps POSIX `getopt_long(3)`). See PLAN.md §"Vendoring and whiteroom reimplementation". |
-| `Documentation/coding-style.rst` (in-tree copy of `third_party/bpf-next/Documentation/process/coding-style.rst`) | **Coding style for all C in this repo** (userspace and BPF). |
+| `Documentation/coding-style.rst` (in-tree copy of the kernel's `Documentation/process/coding-style.rst`) | **Coding style for all C in this repo** (userspace and BPF). |
 | `/root/git/` | git's own source tree (GPL-2.0). Consult for *patterns* (porcelain/plumbing, `builtin/` dispatch, `wt-status` structured output). **Never copy code**; git's `run-command.c` subprocess model is explicitly **not** a model for shirudo (we have the no-subprocess invariant). |
 
 ## Coding conventions
@@ -158,13 +158,16 @@ load-bearing — consult them directly rather than reasoning from memory:
 
 ## Build approach (deferred — see PLAN.md "Build system")
 
-- `/root/bpf-next` will become `third_party/bpf-next/` (git submodule).
-- `libbpf` built **static** from the submodule under its
+- There is no submodule: `make BPF_NEXT_SRC=/path/to/bpf-next` names the
+  bpf-next checkout that libbpf, bpftool and the UAPI headers build from
+  (cached in `config.mk`); `USE_BPF_NEXT_DEPS=1` uses the prebuilt bundle
+  from `make bpf-next`.
+- `libbpf` built **static** from the bpf-next tree at `BPF_NEXT_SRC` under its
   `(LGPL-2.1 OR BSD-2-Clause)` BSD-branch.
   **`libsubcmd` is NOT linked** — it is GPL-2.0; shirudo whiteroom-
   reimplements only the CLI-parsing subset it needs as
   `util/parse-options.{c,h}` under BSD-2-Clause.
-- `bpftool` built from the submodule **as a build-time tool only** (needed for
+- `bpftool` built from the bpf-next tree **as a build-time tool only** (needed for
   `vmlinux.h` generation from `/sys/kernel/btf/vmlinux`). Not a runtime dep.
 - BPF compiled with `clang -target bpf -O2 -g`, embedded into the userspace
   binary via `.incbin` inline asm. No generated skeleton headers.

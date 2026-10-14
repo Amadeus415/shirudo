@@ -111,15 +111,13 @@ Build from BPF source:
 
 ::
 
-    shirudo build examples/cve-2026-31431.bpf.c \
-        -o cve-2026-31431.upatch
+    shirudo build my-fix.bpf.c -o my-fix.upatch
 
 Or build from an already compiled BPF object:
 
 ::
 
-    shirudo build examples/cve-2026-31431.bpf.o \
-        -o cve-2026-31431.upatch
+    shirudo build my-fix.bpf.o -o my-fix.upatch
 
 The build command compiles source when necessary, generates the signed
 loader, and writes the artifact. Review it before transfer:

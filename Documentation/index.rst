@@ -41,9 +41,9 @@ Quick orientation
   Read :doc:`threat-model`, which enumerates the adversary classes,
   target- and operator-node threats, and residual risks.
 - **Contributing C or BPF code?** :doc:`coding-style` is the kernel
-  coding-style document, copied verbatim from
-  ``third_party/bpf-next/Documentation/process/coding-style.rst``;
-  shirudo applies it to userspace too.
+  coding-style document, copied verbatim from the Linux kernel's
+  ``Documentation/process/coding-style.rst``; shirudo applies it to
+  userspace too.
 
 Companion files in the repository root
 ======================================
@@ -58,4 +58,5 @@ Companion files in the repository root
 - ``LICENSE`` — BSD-2-Clause (userspace). BPF programs declare
   ``Dual BSD/GPL`` (kernel LSM-hook framework requirement). Vendored
   files retain their upstream SPDX identifiers.
-- ``examples/`` — worked ``.upatch`` examples (CVE mitigations).
+- ``upatches/`` — the BPF upatch packages shirudo ships (Linux
+  observability, kernel CVE mitigations), each with its ``Beefile``.

@@ -31,16 +31,10 @@
 /systemd/shirudo-keepalive.service
 /systemd/shirudo-bpm-tree-sync.service
 
-# BPF-side headers copied from third_party/bpf-next at build time
+# BPF-side headers copied from the bpf-next tree at build time
 /bpf/include/
 
 # Vendored bpf-next build state (do not commit)
-/third_party/bpf-next/tools/lib/bpf/*.o
-/third_party/bpf-next/tools/lib/bpf/*.a
-/third_party/bpf-next/tools/lib/subcmd/*.o
-/third_party/bpf-next/tools/lib/subcmd/*.a
-/third_party/bpf-next/tools/bpf/bpftool/bpftool
-/third_party/bpf-next/tools/bpf/bpftool/*.o
 
 # Test results
 /t/test-results/

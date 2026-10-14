@@ -643,9 +643,9 @@ build_obs_fixture()
 		linux-observability.bpf.c exec_uid_arena.bpf.c exec_uid_common.h \
 		tcp_connect_arena.bpf.c udp_arena.bpf.c dns_arena.bpf.c \
 		ipv4_shields_arena.bpf.c gen_ipv4_shields.py; do
-		cp "$REPO_ROOT/shields/linux_obs/$source" "$source_dir/$source"
+		cp "$REPO_ROOT/upatches/linux_obs/$source" "$source_dir/$source"
 	done
-	cp "$REPO_ROOT/shields/linux_obs/decoders/"*.lua "$source_dir/decoders/"
+	cp "$REPO_ROOT/upatches/linux_obs/decoders/"*.lua "$source_dir/decoders/"
 	cat >"$source_dir/ipv4.list" <<'EOF'
 127.0.0.2/32
 203.0.113.10/32

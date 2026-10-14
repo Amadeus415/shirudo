@@ -316,7 +316,8 @@ offset      size  field                  meaning
 
 Neither string is NUL-terminated on disk; both are length-prefixed. The
 path is the operator-side input path passed to ``shirudo build`` (e.g.
-``examples/cve-2026-31431.bpf.c``); it is informational only.
+``upatches/linux_obs/linux-observability.bpf.c``); it is informational
+only.
 
 Embedding the source (rather than BTF + ``line_info``) lets ``shirudo
 upatch info`` show the **complete** program -- comments, blank lines,
