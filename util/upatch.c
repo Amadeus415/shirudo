@@ -147,12 +147,6 @@ static bool has_nul(const char *s, size_t n)
 	return memchr(s, '\0', n) != NULL;
 }
 
-static uint32_t decoder_entry_u32(const struct shirudo_upatch_decoder_entry *d,
-				  size_t off)
-{
-	return rd_le32((const unsigned char *)d + off);
-}
-
 /*
  * Parse the optional signed decoder blob. Advisory for now: malformed
  * decoder metadata is treated as absent so old upatches and ordinary
@@ -201,28 +195,26 @@ static void parse_decoders(struct shirudo_upatch *u)
 	if (entries_end > decoder_len)
 		return;
 
+	/* The blob sits behind the signature, so entries are unaligned. */
 	for (i = 0; i < nr_decoders; i++) {
-		const struct shirudo_upatch_decoder_entry *d;
+		struct shirudo_upatch_decoder_entry d;
 		uint32_t source_off, source_len;
 
-		d = (const void *)(bp +
-				   sizeof(struct shirudo_upatch_decoder_blob) +
-				   i * sizeof(*d));
-		if (!has_nul(d->upatch, sizeof(d->upatch)) ||
-		    !has_nul(d->map, sizeof(d->map)) ||
-		    !has_nul(d->source, sizeof(d->source)) ||
-		    !has_nul(d->entrypoint, sizeof(d->entrypoint)))
+		memcpy(&d, bp + sizeof(struct shirudo_upatch_decoder_blob) +
+		       i * sizeof(d), sizeof(d));
+		if (!has_nul(d.upatch, sizeof(d.upatch)) ||
+		    !has_nul(d.map, sizeof(d.map)) ||
+		    !has_nul(d.source, sizeof(d.source)) ||
+		    !has_nul(d.entrypoint, sizeof(d.entrypoint)))
 			return;
-		if (rd_le32(&d->language) == 0 ||
-		    rd_le32(&d->api_version) == 0 ||
-		    rd_le32(&d->input_format) == 0 ||
-		    rd_le32(&d->export_signal) == 0)
+		if (le32toh(d.language) == 0 ||
+		    le32toh(d.api_version) == 0 ||
+		    le32toh(d.input_format) == 0 ||
+		    le32toh(d.export_signal) == 0)
 			return;
 
-		source_off = decoder_entry_u32(d, offsetof(
-			struct shirudo_upatch_decoder_entry, source_off));
-		source_len = decoder_entry_u32(d, offsetof(
-			struct shirudo_upatch_decoder_entry, source_len));
+		source_off = le32toh(d.source_off);
+		source_len = le32toh(d.source_len);
 		if (source_len == 0 || source_off < entries_end ||
 		    source_off > decoder_len ||
 		    source_len > decoder_len - source_off)
@@ -343,9 +335,8 @@ bool shirudo_upatch_has_decoders(const struct shirudo_upatch *u)
 int shirudo_upatch_decoder_view(const struct shirudo_upatch *u, uint32_t idx,
 				struct shirudo_upatch_decoder_view *out)
 {
-	const unsigned char *bp, *src_base;
-	const struct shirudo_upatch_decoder_entry *d;
-	uint32_t source_off, source_len;
+	struct shirudo_upatch_decoder_entry d;
+	const unsigned char *bp;
 
 	if (!out)
 		return -EINVAL;
@@ -354,24 +345,18 @@ int shirudo_upatch_decoder_view(const struct shirudo_upatch *u, uint32_t idx,
 		return -ENOENT;
 
 	bp = (const unsigned char *)u->decoder_blob;
-	d = (const void *)(bp + sizeof(struct shirudo_upatch_decoder_blob) +
-			   (size_t)idx * sizeof(*d));
-	out->language = rd_le32(&d->language);
-	out->api_version = rd_le32(&d->api_version);
-	out->input_format = rd_le32(&d->input_format);
-	out->export_signal = rd_le32(&d->export_signal);
-	memcpy(out->upatch, d->upatch, sizeof(out->upatch));
-	memcpy(out->map, d->map, sizeof(out->map));
-	memcpy(out->source_name, d->source, sizeof(out->source_name));
-	memcpy(out->entrypoint, d->entrypoint, sizeof(out->entrypoint));
-
-	source_off = decoder_entry_u32(d, offsetof(
-		struct shirudo_upatch_decoder_entry, source_off));
-	source_len = decoder_entry_u32(d, offsetof(
-		struct shirudo_upatch_decoder_entry, source_len));
-	src_base = (const unsigned char *)u->decoder_blob;
-	out->source = (const char *)(src_base + source_off);
-	out->source_len = source_len;
+	memcpy(&d, bp + sizeof(struct shirudo_upatch_decoder_blob) +
+	       (size_t)idx * sizeof(d), sizeof(d));
+	out->language = le32toh(d.language);
+	out->api_version = le32toh(d.api_version);
+	out->input_format = le32toh(d.input_format);
+	out->export_signal = le32toh(d.export_signal);
+	memcpy(out->upatch, d.upatch, sizeof(out->upatch));
+	memcpy(out->map, d.map, sizeof(out->map));
+	memcpy(out->source_name, d.source, sizeof(out->source_name));
+	memcpy(out->entrypoint, d.entrypoint, sizeof(out->entrypoint));
+	out->source = (const char *)(bp + le32toh(d.source_off));
+	out->source_len = le32toh(d.source_len);
 	return 0;
 }
 
