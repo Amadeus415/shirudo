@@ -66,15 +66,6 @@ development both roles can live on the same node.
 
 ## Getting Started
 
-```sh
-make && make shirudo-build              # operator binary and build helper
-sudo shirudo genkey                     # ML-DSA-87 key and certificate
-shirudo build fix.bpf.c                 # compile, generate the loader, sign
-sudo shirudo init                       # target: pre-flight, keyring, LSM, TPM
-sudo shirudo upatch load fix.bpf.upatch
-sudo shirudo status --include-tpm
-```
-
 * [Getting started](Documentation/getting-started.rst): build, sign,
   initialise a target, load and unload, publish and install packages.
 * [Requirements](Documentation/requirements.rst): kernel options,
@@ -94,7 +85,6 @@ The full index is in [Documentation/index.rst](Documentation/index.rst).
 
 ## License
 
-shirudo is licensed under the [BSD-2-Clause License](LICENSE). The BPF
-programs are dual-licensed `Dual BSD/GPL` because the kernel's LSM hook
-framework requires a GPL-compatible licence, and vendored files keep
-their upstream SPDX identifiers.
+shirudo is licensed under the [BSD-2-Clause License](LICENSE). BPF
+programs are dual-licensed `Dual BSD/GPL`. Each source file holds a
+SPDX license identifier.
