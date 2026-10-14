@@ -106,7 +106,7 @@ $(OPENSSL_STAMP):
 			--libdir=lib \
 			no-shared no-module no-docs no-tests no-apps
 	@$(MAKE) -C "$(OPENSSL_SOURCE)" -j$$(nproc)
-	@$(MAKE) -C "$(OPENSSL_SOURCE)" install_sw
+	@$(MAKE) -C "$(OPENSSL_SOURCE)" DESTDIR= install_sw
 	@touch "$@"
 
 $(CURL_STAMP): $(OPENSSL_STAMP)
