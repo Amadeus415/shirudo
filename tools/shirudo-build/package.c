@@ -80,8 +80,7 @@ static void pack_header(struct shirudo_upatch_header *h,
 			uint32_t meta_off, uint32_t meta_len,
 			uint32_t data_off, uint32_t data_len,
 			uint32_t log_buf_sz,
-			uint32_t nr_maps, uint32_t nr_progs,
-			uint32_t extra_off)
+			uint32_t nr_maps, uint32_t nr_progs)
 {
 	memset(h, 0, sizeof(*h));
 	h->magic   = htole64(SHIRUDO_UPATCH_MAGIC);
@@ -101,9 +100,9 @@ static void pack_header(struct shirudo_upatch_header *h,
 	h->log_buf_sz       = htole32(log_buf_sz);
 	h->nr_maps          = htole32(nr_maps);
 	h->nr_progs         = htole32(nr_progs);
-	h->extra_off        = htole32(extra_off);
+	h->reserved0        = 0;
 	h->type             = htole32(type);
-	h->reserved         = 0;
+	h->reserved1        = 0;
 }
 
 static uint16_t rd_le16(const void *p)
@@ -1085,8 +1084,8 @@ static void unregister_target_attach_types(int handler_ids[2])
  * Run gen_loader on an already-opened object, CMS-sign the produced
  * loader bytes, and write the .upatch container. Takes ownership of
  * obj (closes it on every exit path). src_path, if non-NULL, is the C
- * source file embedded for `shirudo upatch info` (NULL for a .bpf.o
- * input or an unload directive).
+ * source whose directory anchors relative decoder paths (NULL for a
+ * .bpf.o input or an unload directive).
  */
 static int finalize_object(struct bpf_object *obj, const char *out_path,
 			   const char *upatch_name, uint32_t flags,
@@ -1108,13 +1107,11 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 	const void *write_meta = meta;
 	uint32_t write_meta_len = meta_len, attach_meta_len = 0;
 	uint32_t decoder_blob_len = 0, signed_data_len = 0;
-	char *src_buf = NULL;
 	int fd = -1;
 	int err = 0;
 	uint32_t loader_off, sig_off;
 	uint32_t nr_maps = 0, nr_progs = 0;
 	uint32_t nr_decoders = 0;
-	uint32_t src_len = 0, name_len = 0;
 
 	/*
 	 * The loader writes map_fd/prog_fd back into descriptor arrays
@@ -1194,35 +1191,11 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 		goto out;
 	}
 
-	/*
-	 * Informational extras: the BPF program's C source, so `shirudo
-	 * upatch info` can print the full source without loading. Only the
-	 * top-level source passed to `shirudo build` (a .bpf.c). Best-effort
-	 * and not signature-covered; a NULL src_path (a .bpf.o input or an
-	 * unload directive) or an unreadable file means no source extras.
-	 */
-	if (src_path) {
-		int srerr = read_small_file(src_path, &src_buf, &src_len);
-
-		if (srerr)
-			pr_warn("source %s unreadable: %s (no source embedded)",
-				src_path, strerror(-srerr));
-		else
-			name_len = (uint32_t)strlen(src_path);
-	}
-
 	loader_off = (uint32_t)sizeof(hdr);
 	sig_off    = loader_off + opts.insns_sz;
 	uint32_t data_off = sig_off + (uint32_t)sio.signature_sz;
 	uint32_t data_len = signed_data_len;
 	uint32_t meta_off = data_off + data_len;
-	uint32_t extra_off = src_buf ? meta_off + write_meta_len : 0;
-	struct shirudo_upatch_extras ex = {};
-
-	ex.magic      = htole32(SHIRUDO_UPATCH_EXTRAS_MAGIC);
-	ex.format     = htole32(SHIRUDO_UPATCH_EXTRAS_SOURCE);
-	ex.name_len   = htole32(name_len);
-	ex.source_len = htole32(src_len);
 
 	pack_header(&hdr, upatch_name, SHIRUDO_UPATCH_TYPE_BPF, flags,
 		    sio.payload_sha256,
@@ -1231,7 +1204,7 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 		    write_meta_len ? meta_off : 0, write_meta_len,
 		    data_len ? data_off : 0, data_len,
 		    1u * 1024u * 1024u,
-		    nr_maps, nr_progs, extra_off);
+		    nr_maps, nr_progs);
 
 	fd = open(out_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 	if (fd < 0) {
@@ -1248,28 +1221,19 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 		err = shirudo_write_all(fd, signed_data, data_len);
 	if (!err && write_meta_len)
 		err = shirudo_write_all(fd, write_meta, write_meta_len);
-	if (!err && extra_off) {
-		err = shirudo_write_all(fd, &ex, sizeof(ex));
-		if (!err && name_len)
-			err = shirudo_write_all(fd, src_path, name_len);
-		if (!err && src_len)
-			err = shirudo_write_all(fd, src_buf, src_len);
-	}
 	if (!err && fsync(fd) != 0)
 		err = -errno;
 	close(fd);
 	fd = -1;
-	xfree(src_buf, src_len);
-	src_buf = NULL;
 	if (err) {
 		unlink(out_path);
 		goto out;
 	}
 
 	pr_info("wrote %s (insns=%u sig=%zu data=%u meta=%u maps=%u "
-		"progs=%u decoders=%u source=%u name=%s%s)",
+		"progs=%u decoders=%u name=%s%s)",
 		out_path, opts.insns_sz, sio.signature_sz, data_len,
-		write_meta_len, nr_maps, nr_progs, nr_decoders, src_len,
+		write_meta_len, nr_maps, nr_progs, nr_decoders,
 		upatch_name,
 		(flags & SHIRUDO_DIRECTIVE_UNLOAD) ? " UNLOAD" : "");
 out:
@@ -1278,7 +1242,6 @@ out:
 	free_decoder_set(&decoders);
 	xfree(signed_data_buf, signed_data_len);
 	xfree(decoder_blob, decoder_blob_len);
-	xfree(src_buf, src_len);
 	xfree(sig_buf, SHIRUDO_MAX_SIG_SIZE);
 	bpf_object__close(obj);
 	xfree(attach_meta, attach_meta_len);

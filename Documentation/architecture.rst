@@ -146,9 +146,8 @@ with ``clang -target bpf -O2 -g``, opens the object with libbpf, calls
 ``bpf_object__gen_loader()`` with ``gen_hash`` set and
 ``bpf_object__load()`` to produce the loader instructions and data,
 CMS-signs ``loader_insns || data``, and writes the ``.upatch``
-container with the name, the payload SHA-256, the attach metadata and
-the verbatim source for offline inspection.  A pre-compiled ``.bpf.o``
-is accepted; it has no source to embed.  ``shirudo build --unload
+container with the name, the payload SHA-256 and the attach metadata.
+A pre-compiled ``.bpf.o`` is accepted as input too.  ``shirudo build --unload
 <name>`` emits an unload directive instead: the same container with
 flag bit 0 set, carrying the compiled ``bpf/unload.c`` template
 parameterised with the target name and the expected payload digest.
@@ -431,8 +430,8 @@ and ``--include-modules`` the corresponding detail.  The overall
 pushes it as a keepalive log record.
 
 ``shirudo upatch list``, ``info``, ``get`` and ``map`` inspect
-artifacts and loaded state.  ``info`` prints the container and its
-embedded source offline and is advisory; ``get`` reads the loaded
+artifacts and loaded state.  ``info`` describes the container offline,
+signed decoders included, and is advisory; ``get`` reads the loaded
 program's ``line_info`` and BTF from the kernel and is authoritative.
 ``upatch map`` reads pinned maps, runs the upatch's signed Lua decoder,
 and prints, appends NDJSON, or exports over OTLP.  The export path, its

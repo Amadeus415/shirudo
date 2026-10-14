@@ -103,8 +103,9 @@ Review before shipping::
     shirudo upatch info --json fix.upatch
 
 ``info`` prints the header, the sections, the attach metadata and the
-embedded source.  It is an offline view of the file; what the kernel
-actually loaded is shown by ``upatch get`` after the load.
+signed decoders.  It is an offline view of the file; the program as
+the kernel actually loaded it is shown by ``upatch get`` after the
+load.
 
 
 4) Initialise a target

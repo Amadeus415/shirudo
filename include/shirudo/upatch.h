@@ -55,43 +55,13 @@ struct shirudo_upatch_header {
 	uint32_t	log_buf_sz;		/* verifier-log buf size */
 	uint32_t	nr_maps;		/* loader ctx bpf_map_desc count */
 	uint32_t	nr_progs;		/* loader ctx bpf_prog_desc count */
-	uint32_t	extra_off;		/* offset of the extras blob, 0 = none */
+	uint32_t	reserved0;		/* zero */
 	uint32_t	type;			/* enum shirudo_upatch_type */
-	uint32_t	reserved;		/* zero; keeps the v1 header 8-byte aligned */
+	uint32_t	reserved1;		/* zero; keeps the v1 header 8-byte aligned */
 };
 
 _Static_assert(sizeof(struct shirudo_upatch_header) ==
 		SHIRUDO_UPATCH_HEADER_SIZE, "unexpected upatch header padding");
-
-/*
- * Optional trailing "extras" blob at header.extra_off (0 = absent).
- * Carries the BPF program's **C source** so `shirudo upatch info` can
- * print the full source without loading. (The kernel never receives the
- * source, so the on-target `shirudo upatch get` instead resolves the
- * loaded program's line_info against the kernel BTF.) Additive and
- * backward-compatible: this offset was the old `reserved` field (0 in
- * older files), and the blob trails every signature-covered section, so
- * a reader that predates it ignores both. It is NOT signature-covered --
- * informational only; tampering mis-renders a pre-load source dump but
- * cannot affect the loaded, hash-verified program.
- *
- * Only the top-level source file passed to `shirudo build` is embedded
- * (a `.bpf.c`); included headers (vmlinux.h, etc.) are not, and a
- * pre-compiled `.bpf.o` input has no source to embed (extras absent).
- */
-#define SHIRUDO_UPATCH_EXTRAS_MAGIC	0x52545853u	/* "SXTR" le */
-#define SHIRUDO_UPATCH_EXTRAS_SOURCE	1u		/* format: embedded source */
-
-struct shirudo_upatch_extras {
-	uint32_t	magic;		/* SHIRUDO_UPATCH_EXTRAS_MAGIC */
-	uint32_t	format;		/* SHIRUDO_UPATCH_EXTRAS_SOURCE */
-	uint32_t	name_len;	/* source path length (bytes, no NUL) */
-	uint32_t	source_len;	/* source text length (bytes, no NUL) */
-	/*
-	 * Then: name_len bytes of source path, then source_len bytes of
-	 * source text (neither NUL-terminated on disk).
-	 */
-};
 
 /*
  * Optional decoder metadata embedded inside the signature-covered data

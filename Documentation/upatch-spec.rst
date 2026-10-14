@@ -54,14 +54,12 @@ Artifacts are small in practice.
                 +-------------------------------------------+
                 | metadata                                  |  optional
                 +-------------------------------------------+
-                | extras         (embedded C source)        |  optional
-                +-------------------------------------------+
 
 The writer emits the sections in this order, but a reader must rely
 only on the header offsets, never on adjacency.  ``loader_insns``
 begins at offset 360, immediately after the header; legacy artifacts
-begin at 352.  ``data``, ``metadata`` and ``extras`` are optional; an
-absent section has its ``*_off`` (for extras, ``extra_off``) set to 0.
+begin at 352.  ``data`` and ``metadata`` are optional; an absent section
+has its ``*_off`` set to 0.
 
 
 3) Header
@@ -89,12 +87,12 @@ offset      size  type    field                  meaning
 336         4     u32     log_buf_sz             verifier-log buffer size to allocate at load
 340         4     u32     nr_maps                gen_loader bpf_map_desc count
 344         4     u32     nr_progs               gen_loader bpf_prog_desc count
-348         4     u32     extra_off              file offset of the extras blob, or 0
+348         4     u32     reserved0              zero
 352         4     u32     type                   ``1`` = BPF
-356         4     u32     reserved               zero
+356         4     u32     reserved1              zero
 ==========  ====  ======  =====================  ===========================================
 
-The legacy 352-byte header ended at ``extra_off`` and implied a BPF
+The legacy 352-byte header ended at ``reserved0`` and implied a BPF
 payload.  It remains readable for existing artifacts.
 
 magic
@@ -291,43 +289,6 @@ link creation.  It creates a system-wide ``BPF_TRACE_UPROBE_MULTI``
 entry link with ``BPF_F_UPROBE_MULTI_PATH_FD``.  ``shirudo status``
 renders such a link as ``uprobe.multi/<path> (<count> funcs)``.
 
-extras
-~~~~~~
-
-Optional, additive, not signature-covered.  Present (``extra_off != 0``)
-when ``shirudo build`` was given a ``.bpf.c`` input: the top-level
-source file is embedded verbatim so ``shirudo upatch info`` can print
-the full source offline.  A pre-compiled ``.bpf.o`` input has no source
-to embed and produces no extras.
-
-The blob begins with ``struct shirudo_upatch_extras`` (16 bytes,
-little-endian), then the source path, then the source bytes:
-
-==========  ====  =====================  ====================================
-offset      size  field                  meaning
-==========  ====  =====================  ====================================
-+0          4     magic                  ``0x52545853`` (``"SXTR"`` LE)
-+4          4     format                 ``1`` (``SHIRUDO_UPATCH_EXTRAS_SOURCE``)
-+8          4     name_len               source path length in bytes (no NUL)
-+12         4     source_len             source text length in bytes (no NUL)
-+16         var   <source path>          ``name_len`` bytes, the input file path
-var         var   <source text>          ``source_len`` bytes, the verbatim ``.c``
-==========  ====  =====================  ====================================
-
-Neither string is NUL-terminated on disk; both are length-prefixed.
-The path is the operator-side input path passed to ``shirudo build``
-and is informational only.
-
-Embedding the source, rather than relying on BTF and ``line_info``,
-lets ``shirudo upatch info`` show the complete program: comments, blank
-lines, every statement, not just the sparse instruction-tagged lines
-``clang -O2`` records.  Because it is unsigned, this view is advisory.
-The authoritative view of what is loaded is the kernel's, through
-``shirudo upatch get``, which reads the loaded program's ``line_info``
-and BTF (the BTF the signed loader installed beside the hash-verified
-program) and therefore renders instruction-tagged lines, not the
-embedded ``.c``.
-
 
 5) flags
 --------
@@ -358,8 +319,8 @@ without parsing the instruction stream.
 7) What is signed
 -----------------
 
-The CMS signature covers ``loader_insns || data``.  ``metadata`` and
-``extras`` are not signed.  The integrity model is therefore:
+The CMS signature covers ``loader_insns || data``.  ``metadata`` is not
+signed.  The integrity model is therefore:
 
 - the loader instructions and loader data are signature-verified by
   the kernel before anything runs;
@@ -367,10 +328,10 @@ The CMS signature covers ``loader_insns || data``.  ``metadata`` and
   ``excl_prog_hash`` and checked by the kernel at ``BPF_PROG_LOAD``;
 - decoder sources are signature-covered because they are appended
   inside ``data`` before signing;
-- ``metadata`` and ``extras`` are advisory.  Tampering with extras only
-  mis-renders the offline ``upatch info`` dump; the loaded program and
-  the kernel-resident ``line_info`` that ``upatch get`` reads are
-  unaffected.  Tampering with an UNLOAD directive's metadata can only
+- ``metadata`` is advisory.  Tampering with a LOAD artifact's attach
+  metadata changes where the hash-verified program is attached, not
+  what it contains, and the target validates the blob before creating
+  links.  Tampering with an UNLOAD directive's metadata can only
   produce a chain value the operator's expectation rejects, or a
   ``payload_mismatch``; the residual that remains is risk 1 in
   `threat-model <threat-model.rst>`__.
@@ -385,16 +346,12 @@ bump:
 - a signed decoder blob may be appended inside ``data`` and located by
   the trailer at its end.  Older loaders ignore the additional bytes;
   older readers treat them as opaque loader data;
-- ``extra_off`` reuses the slot that was a ``reserved`` u32 in the
-  original layout.  A reader that predates the extras blob sees
-  ``extra_off == 0`` (older writers zeroed ``reserved``) and ignores
-  the trailing bytes; a current reader parses the extras only when
-  ``extra_off != 0``.  The extras follow every signature-covered
-  section, so adding them changes neither the signed bytes nor the
-  layout a prior reader depends on;
-- the 360-byte header appended ``type`` and ``reserved`` after
-  ``extra_off``; the 352-byte form is still read and means
-  ``type = bpf``.
+- the 360-byte header appended ``type`` and ``reserved1`` after
+  ``reserved0``; the 352-byte form is still read and means
+  ``type = bpf``;
+- ``reserved0`` and ``reserved1`` are zero in every file a writer
+  emits; a reader rejects a file in which ``reserved0`` is not, so the
+  slot can be given a meaning later without a flag day.
 
 A reader must reject a file whose ``magic`` or ``version`` does not
 match, before trusting any offset.
@@ -410,13 +367,9 @@ match, before trusting any offset.
 3. each section ``(off, len)`` lies within the file, and any non-empty
    section starts at or after the active header (360 bytes, or 352 for
    the legacy form);
-4. ``loader_insns_len`` and ``signature_len`` are non-zero;
-5. extras are parsed only if ``extra_off != 0``, the extras header
-   fits, its ``magic`` and ``format`` match, and ``name_len`` plus
-   ``source_len`` stay within the file.  Extras are advisory: a
-   malformed blob is treated as "no source", never as a hard failure;
-   the signed sections are validated independently;
-6. decoders are parsed only if ``data`` ends with a matching trailer,
+4. ``loader_insns_len`` and ``signature_len`` are non-zero, and
+   ``reserved0`` is zero;
+5. decoders are parsed only if ``data`` ends with a matching trailer,
    all blob and entry bounds fit, fixed strings are NUL-terminated, and
    every source range stays inside the blob.  Malformed decoder
    metadata is treated as absent by offline inspection.
@@ -429,12 +382,11 @@ Produced by ``shirudo build``, which dispatches to the operator-only
 ``shirudo-build``: compile ``.bpf.c`` with ``clang -target bpf -O2 -g``
 (or accept a ``.bpf.o``), run ``bpf_object__gen_loader()`` and
 ``bpf_object__load()``, CMS-sign the loader and data bytes, embed the
-signed decoder sources and the advisory ``.bpf.c`` extras, and
-serialise the container.  ``--unload <name>`` emits an UNLOAD directive
-instead.
+signed decoder sources, and serialise the container.  ``--unload
+<name>`` emits an UNLOAD directive instead.
 
 Inspected by ``shirudo upatch info <file>`` (offline: header, sections,
-the advisory embedded source) and listed by ``shirudo upatch list``.
+attach metadata, signed decoders) and listed by ``shirudo upatch list``.
 
 Consumed by ``shirudo upatch load`` and ``unload`` on the target through
 the signature-gated ``BPF_PROG_LOAD`` with the sealed keyring serial.

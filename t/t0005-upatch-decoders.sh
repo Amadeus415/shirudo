@@ -2,12 +2,11 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Authors of shirudo
 #
-# t0005 -- `shirudo upatch info` reads and dumps the embedded C source
-# from the .upatch FILE, offline (no kernel, no root). Builds a tiny -g
-# fentry program from a .bpf.c, signs it with a throwaway key, and checks
-# both the human and --json output carry the *full* source -- including a
-# pure-comment marker line that BTF line_info could never carry, proving
-# the dump is the embedded source, not instruction-tagged line_info.
+# t0005 -- signed Lua decoders: `shirudo upatch info` reports the decoder
+# metadata embedded in a .upatch, offline (no kernel, no root), and the
+# decoder runs under the sandbox limits. Builds a tiny fentry program
+# from a .bpf.c that declares a decoder manifest, signs it with a
+# throwaway key, and exercises the decoder through the test helper.
 # Needs clang + shirudo-build (skips otherwise).
 
 cd "$(dirname "$0")"
@@ -80,7 +79,6 @@ const struct shirudo_decoder_manifest t0005_decoder SEC(".rodata") = {
 	.entrypoint = "decode",
 };
 
-/* T0005-COMMENT-ONLY-MARKER: never appears in BTF line_info */
 SEC("fentry/do_nanosleep")
 int BPF_PROG(t0005_marker_fn)
 {
@@ -95,25 +93,6 @@ esac
 ( cd .. && "$B" "$WORK/t.bpf.c" -o "$WORK/u.upatch" --vmlinux vendor/linux/vmlinux.h \
 	--name t0005 --key "$WORK/k.pem" --cert "$WORK/c.der" ) >/dev/null 2>&1 ||
 	test_skip_all "build failed (clang/headers?)"
-
-test_expect_success 'upatch info dumps the function from the embedded source (human)' '
-	"$S" upatch info "$WORK/u.upatch" 2>/dev/null | grep -q "t0005_marker_fn"
-'
-
-test_expect_success 'upatch info dumps the comment-only marker (full source, human)' '
-	"$S" upatch info "$WORK/u.upatch" 2>/dev/null | grep -q "T0005-COMMENT-ONLY-MARKER"
-'
-
-test_expect_success 'upatch info --json carries has_source + the full source' '
-	"$S" upatch info "$WORK/u.upatch" --json 2>/dev/null | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-assert d[\"has_source\"] is True, d.get(\"has_source\")
-assert \"t0005_marker_fn\" in d[\"source\"], \"missing function in source\"
-assert \"T0005-COMMENT-ONLY-MARKER\" in d[\"source\"], \"missing comment marker\"
-assert d[\"source_file\"].endswith(\"t.bpf.c\"), d.get(\"source_file\")
-"
-'
 
 test_expect_success 'upatch info --json reports signed decoder metadata' '
 	"$S" upatch info "$WORK/u.upatch" --json 2>/dev/null | python3 -c "

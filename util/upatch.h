@@ -17,11 +17,6 @@ struct shirudo_upatch {
 	const unsigned char		*map;
 	size_t				map_size;
 	size_t				header_size;
-	/* Parsed extras: embedded C source (all zero when absent). */
-	const char			*source;
-	uint32_t			source_len;
-	const char			*source_name;
-	uint32_t			source_name_len;
 	/* Parsed signed decoder blob (all zero when absent). */
 	const struct shirudo_upatch_decoder_blob *decoder_blob;
 	uint32_t			decoder_blob_len;
@@ -59,9 +54,6 @@ const void *shirudo_upatch_data(const struct shirudo_upatch *u);
 
 bool shirudo_upatch_is_unload(const struct shirudo_upatch *u);
 const char *shirudo_upatch_type_str(const struct shirudo_upatch *u);
-
-/* True if a parsed extras blob (embedded C source) is present. */
-bool shirudo_upatch_has_source(const struct shirudo_upatch *u);
 
 bool shirudo_upatch_has_decoders(const struct shirudo_upatch *u);
 int shirudo_upatch_decoder_view(const struct shirudo_upatch *u, uint32_t idx,

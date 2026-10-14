@@ -454,9 +454,9 @@ int main(int argc, char **argv)
 			}
 			bpf_o = temp_bpf_o;
 		}
-		src_path = input;	/* embed the .bpf.c source for `info` */
+		src_path = input;	/* anchors relative decoder paths */
 	} else if (ends_with(input, ".bpf.o") || ends_with(input, ".o")) {
-		bpf_o = input;		/* no source available -> no extras */
+		bpf_o = input;		/* decoder paths resolve from the cwd */
 	} else {
 		pr_err("input must be .bpf.c or .bpf.o");
 		return 2;

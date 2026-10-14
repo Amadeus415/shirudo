@@ -69,24 +69,6 @@ static bool safe_upatch_name(const char *name);
 #define NF_IP6_PRI_RAW_BEFORE_DEFRAG	(-450)
 #endif
 
-/* Print embedded C source with line numbers (slices, not NUL-terminated). */
-static void dump_source(const char *name, uint32_t name_len,
-			const char *src, uint32_t src_len)
-{
-	uint32_t i = 0, ln = 1, start;
-
-	printf("Source (%.*s):\n", (int)name_len, name);
-	while (i < src_len) {
-		start = i;
-		while (i < src_len && src[i] != '\n')
-			i++;
-		printf("  %4u  %.*s\n", ln, (int)(i - start), src + start);
-		if (i < src_len)
-			i++;		/* consume the newline */
-		ln++;
-	}
-}
-
 /* Fill one failure into a report (NULL report = no-op). */
 static void rep_fail(struct shirudo_op_report *rep, const char *phase,
 		     const char *cat, int err, const char *msg)
@@ -152,10 +134,10 @@ static int print_sha256_hex(const unsigned char hash[32])
 static const struct shirudo_help upatch_info_help = {
 	.usage   = "shirudo upatch info [--json] <file.upatch>",
 	.summary = "Describe a .upatch file: header, signature, payload "
-		   "digest,\nand (if the build embedded it) the full C "
-		   "source. Offline -- no\nkernel state read, runs on any "
-		   "host. For source as actually loaded\n(authoritative, "
-		   "via kernel BTF line_info) use `shirudo upatch get`.",
+		   "digest,\nattach metadata and signed decoders. Offline -- "
+		   "no kernel state\nread, runs on any host. For the program as "
+		   "actually loaded\n(authoritative, via kernel BTF line_info) "
+		   "use `shirudo upatch get`.",
 	.footer  =
 "Examples:\n"
 "  shirudo upatch info cve-2026-31431.upatch\n"
@@ -273,9 +255,7 @@ static const struct shirudo_help upatch_get_help = {
 		   "    signed loader (authoritative, but sparse),\n"
 		   "  - every pinned map: BTF key/value type definitions plus\n"
 		   "    the live key/value contents.\n"
-		   "Read-only; uses only LSM-allowed bpf() ops + xattr / stat.\n"
-		   "For the build-time-embedded full source see\n"
-		   "`shirudo upatch info`.",
+		   "Read-only; uses only LSM-allowed bpf() ops + xattr / stat.",
 	.sections   = upatch_get_sections,
 	.n_sections = ARRAY_SIZE(upatch_get_sections),
 	.footer  =
@@ -325,19 +305,13 @@ static int cmd_upatch_info(int argc, const char **argv)
 	name[SHIRUDO_UPATCH_NAME_MAX] = '\0';
 
 	if (json) {
-		size_t cap = 8192 + (size_t)u.source_len * 6 +
-			u.source_name_len + (size_t)u.nr_decoders * 768;
+		size_t cap = 8192 + (size_t)u.nr_decoders * 768;
 		struct shirudo_json_emit e = {};
 		char payload_hex[2 * 32 + 1];
-		char *sname = NULL, *stext = NULL;
 		char *buf = xmalloc(cap);
 
 		if (!buf)
 			goto out;
-		if (shirudo_upatch_has_source(&u)) {
-			sname = xstrndup(u.source_name, u.source_name_len);
-			stext = xstrndup(u.source, u.source_len);
-		}
 		e.buf = buf;
 		e.cap = cap;
 		shirudo_hex_encode(u.hdr.payload_sha256, 32, payload_hex);
@@ -359,10 +333,6 @@ static int cmd_upatch_info(int argc, const char **argv)
 		shirudo_json_kv_int(&e, "data_len", u.hdr.data_len);
 		shirudo_json_kv_int(&e, "log_buf_sz", u.hdr.log_buf_sz);
 		shirudo_json_kv_int(&e, "file_size", (int64_t)u.map_size);
-		shirudo_json_kv_bool(&e, "has_source",
-				     shirudo_upatch_has_source(&u));
-		shirudo_json_kv_string(&e, "source_file", sname ? sname : "");
-		shirudo_json_kv_string(&e, "source", stext ? stext : "");
 		shirudo_json_arr_open(&e, "decoders");
 		for (uint32_t j = 0; j < u.nr_decoders; j++) {
 			struct shirudo_upatch_decoder_view d;
@@ -391,8 +361,6 @@ static int cmd_upatch_info(int argc, const char **argv)
 				strerror(-e.err));
 		else
 			printf("%s\n", buf);
-		xstrfree(sname);
-		xstrfree(stext);
 		xfree(buf, cap);
 		ret = e.err ? 1 : 0;
 		goto out;
@@ -447,13 +415,6 @@ static int cmd_upatch_info(int argc, const char **argv)
 			       d.source_name, d.entrypoint, d.source_len);
 		}
 	}
-
-	printf("\n");
-	if (shirudo_upatch_has_source(&u))
-		dump_source(u.source_name, u.source_name_len,
-			    u.source, u.source_len);
-	else
-		printf("Source:                (none -- binary input)\n");
 	ret = 0;
 out:
 	shirudo_upatch_close(&u);

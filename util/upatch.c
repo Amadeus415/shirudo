@@ -76,7 +76,9 @@ static int parse_header(const unsigned char *m, size_t n,
 	out->log_buf_sz		= rd_le32(p); p += 4;
 	out->nr_maps		= rd_le32(p); p += 4;
 	out->nr_progs		= rd_le32(p); p += 4;
-	out->extra_off		= rd_le32(p); p += 4;
+	out->reserved0		= rd_le32(p); p += 4;
+	if (out->reserved0 != 0)
+		return -EINVAL;
 
 	/*
 	 * New v1 files append type + an explicit alignment word. A legacy
@@ -99,7 +101,7 @@ static int parse_header(const unsigned char *m, size_t n,
 	if (new_header && type != SHIRUDO_UPATCH_TYPE_BPF)
 		return -EINVAL;
 	out->type = type;
-	out->reserved = reserved;
+	out->reserved1 = reserved;
 	*header_size = new_header ? SHIRUDO_UPATCH_HEADER_SIZE :
 		SHIRUDO_UPATCH_LEGACY_HEADER_SIZE;
 
@@ -138,47 +140,6 @@ static int validate_bounds(const struct shirudo_upatch_header *h, size_t n,
 	if (h->loader_insns_len == 0 || h->signature_len == 0)
 		return -EINVAL;
 	return 0;
-}
-
-/*
- * Parse the optional extras blob (embedded C source). Advisory only:
- * any malformation leaves the fields zero (treated as "no source"); it
- * never fails the open, since the signed sections are validated
- * separately and the extras are not signature-covered.
- */
-static void parse_extras(struct shirudo_upatch *u)
-{
-	const unsigned char *m = u->map;
-	uint32_t off = u->hdr.extra_off;
-	uint32_t name_len, source_len;
-	uint64_t need;
-
-	if (off == 0)
-		return;
-	if (off < u->header_size ||
-	    (uint64_t)off + sizeof(struct shirudo_upatch_extras) >
-	    (uint64_t)u->map_size)
-		return;
-	if (rd_le32(m + off) != SHIRUDO_UPATCH_EXTRAS_MAGIC ||
-	    rd_le32(m + off + 4) != SHIRUDO_UPATCH_EXTRAS_SOURCE)
-		return;
-	name_len   = rd_le32(m + off + 8);
-	source_len = rd_le32(m + off + 12);
-
-	need = (uint64_t)off + sizeof(struct shirudo_upatch_extras) +
-	       (uint64_t)name_len + (uint64_t)source_len;
-	if (need > (uint64_t)u->map_size)
-		return;
-
-	off += sizeof(struct shirudo_upatch_extras);
-	if (name_len) {
-		u->source_name = (const char *)(m + off);
-		u->source_name_len = name_len;
-	}
-	if (source_len) {
-		u->source = (const char *)(m + off + name_len);
-		u->source_len = source_len;
-	}
 }
 
 static bool has_nul(const char *s, size_t n)
@@ -319,7 +280,6 @@ int shirudo_upatch_open(const char *path, struct shirudo_upatch *out)
 		shirudo_upatch_close(out);
 		return rc;
 	}
-	parse_extras(out);
 	parse_decoders(out);
 	return 0;
 }
@@ -331,10 +291,6 @@ void shirudo_upatch_close(struct shirudo_upatch *u)
 		u->map = NULL;
 		u->map_size = 0;
 		u->header_size = 0;
-		u->source = NULL;
-		u->source_len = 0;
-		u->source_name = NULL;
-		u->source_name_len = 0;
 		u->decoder_blob = NULL;
 		u->decoder_blob_len = 0;
 		u->nr_decoders = 0;
@@ -377,11 +333,6 @@ bool shirudo_upatch_is_unload(const struct shirudo_upatch *u)
 const char *shirudo_upatch_type_str(const struct shirudo_upatch *u)
 {
 	return "bpf";
-}
-
-bool shirudo_upatch_has_source(const struct shirudo_upatch *u)
-{
-	return u->map && u->source && u->source_len > 0;
 }
 
 bool shirudo_upatch_has_decoders(const struct shirudo_upatch *u)
