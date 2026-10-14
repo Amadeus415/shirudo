@@ -203,7 +203,7 @@ one usually still compiles and passes tests.
   then write it from scratch without the GPL source open.
 - No kernel tree or submodule is needed to build: libbpf and the BPF
   UAPI headers live in `vendor/libbpf/` and `vmlinux.h` is generated
-  into `vendor/linux/` from BTF. `make update-bpf-deps` refreshes the
+  into `vendor/linux/` from BTF. `make bpf-deps` refreshes the
   vendored copy and is run only when asked.
 
 ## Building, testing, packaging

@@ -3,7 +3,7 @@
 #
 # Build the vendored libbpf as a static archive. The sources under bpf/
 # and include/uapi/ are copied verbatim from a kernel tree by
-# contrib/update-bpf-deps.sh; include/linux and include/asm are small
+# contrib/bpf-deps.sh; include/linux and include/asm are small
 # shirudo-owned shims standing in for the kernel's tools/include.
 
 CC ?= cc

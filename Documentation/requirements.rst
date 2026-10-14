@@ -145,7 +145,7 @@ accepts the signed-attributes form.
   are vendored under ``vendor/libbpf``, and ``vmlinux.h`` is generated
   by the in-tree ``tools/gen-vmlinux-h`` into ``vendor/linux/`` (never
   committed), so neither a submodule nor bpftool is needed.  ``make
-  update-bpf-deps`` refreshes the vendored copy from a kernel tree on
+  bpf-deps`` refreshes the vendored copy from a kernel tree on
   demand.
 * Nothing else: packages, indexes and trees are built and published
   through the same ``shirudo-build`` helper.

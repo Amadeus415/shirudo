@@ -91,7 +91,7 @@ Contributing
 ``vendor/libbpf/``
     Vendored libbpf and BPF UAPI headers with shirudo's BSD shims for
     the kernel's ``tools/include`` internals; refreshed by ``make
-    update-bpf-deps``, see its ``README.md``.
+    bpf-deps``, see its ``README.md``.
 
 ``contrib/``
     ``swtpm.sh`` for a software TPM, the test VM scripts, and the

@@ -40,7 +40,7 @@ LDFLAGS ?=
 SHIRUDO_BUNDLE_RPATH ?= 0
 CLANG   ?= clang
 # libbpf, its BPF-side headers and the BPF UAPI headers are vendored under
-# vendor/libbpf (refreshed on demand with make update-bpf-deps); nothing in
+# vendor/libbpf (refreshed on demand with make bpf-deps); nothing in
 # a normal build reaches outside the repository for them. vmlinux.h is
 # dumped from BTF by the in-tree generator, so bpftool is not needed.
 LIBBPF_VENDOR    := vendor/libbpf

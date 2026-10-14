@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Authors of shirudo
 #
-# contrib/update-bpf-deps.sh [KERNEL_SRC] -- refresh vendor/libbpf from a
+# contrib/bpf-deps.sh [KERNEL_SRC] -- refresh vendor/libbpf from a
 # kernel tree. Without an argument (or KERNEL_SRC in the environment) a
 # shallow clone of bpf-next is used. Overwrites the copied sources and UAPI
 # headers, regenerates bpf_helper_defs.h, records the commit in COMMIT and
@@ -25,7 +25,7 @@ UAPI_HEADERS="bpf.h bpf_common.h btf.h bpf_perf_event.h perf_event.h
 
 die()
 {
-	printf 'update-bpf-deps: %s\n' "$*" >&2
+	printf 'bpf-deps: %s\n' "$*" >&2
 	exit 1
 }
 
@@ -37,7 +37,7 @@ trap cleanup EXIT HUP INT TERM
 
 if [ -z "$KERNEL_SRC" ]; then
 	tmp=$(mktemp -d)
-	printf 'update-bpf-deps: cloning %s\n' "$REPOSITORY"
+	printf 'bpf-deps: cloning %s\n' "$REPOSITORY"
 	git clone --depth 1 --single-branch "$REPOSITORY" "$tmp/bpf-next"
 	KERNEL_SRC="$tmp/bpf-next"
 	source_desc="$REPOSITORY"
@@ -72,13 +72,13 @@ python3 "$KERNEL_SRC/scripts/bpf_doc.py" --header \
 commit=$(git -C "$KERNEL_SRC" rev-parse HEAD 2>/dev/null || echo unknown)
 describe=$(git -C "$KERNEL_SRC" describe --always --tags 2>/dev/null || echo unknown)
 {
-	printf '# Written by contrib/update-bpf-deps.sh; do not edit.\n'
+	printf '# Written by contrib/bpf-deps.sh; do not edit.\n'
 	printf 'source=%s\n' "$source_desc"
 	printf 'commit=%s\n' "$commit"
 	printf 'describe=%s\n' "$describe"
 	printf 'updated=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > "$VENDOR/COMMIT"
 
-printf 'update-bpf-deps: rebuilding vendor/libbpf/libbpf.a as a check\n'
+printf 'bpf-deps: rebuilding vendor/libbpf/libbpf.a as a check\n'
 make -C "$VENDOR" clean all
-printf 'update-bpf-deps: vendor/libbpf now at %s (%s)\n' "$describe" "$commit"
+printf 'bpf-deps: vendor/libbpf now at %s (%s)\n' "$describe" "$commit"
