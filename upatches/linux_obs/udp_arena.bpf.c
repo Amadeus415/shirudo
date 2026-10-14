@@ -403,7 +403,7 @@ static __always_inline bool udp_ip_from_sockaddr(struct sockaddr *addr,
 						 __u16 *port)
 {
 	struct sockaddr_in sin = {};
-	struct sockaddr_in6 sin6 = {};
+	struct linux_obs_sockaddr_in6 sin6 = {};
 	__u16 family = 0;
 
 	if (!addr || addrlen < (int)sizeof(struct sockaddr))
@@ -424,7 +424,7 @@ static __always_inline bool udp_ip_from_sockaddr(struct sockaddr *addr,
 		return true;
 	}
 
-	if (family == AF_INET6) {
+	if (family == AF_INET6 && obs_ipv6_enabled()) {
 		if (addrlen < (int)sizeof(sin6))
 			return false;
 		if (bpf_probe_read_kernel(&sin6, sizeof(sin6), addr))
@@ -432,10 +432,10 @@ static __always_inline bool udp_ip_from_sockaddr(struct sockaddr *addr,
 
 		__builtin_memset(ip, 0, sizeof(*ip));
 		ip->family = AF_INET6;
-		ip->addr6[0] = sin6.sin6_addr.in6_u.u6_addr32[0];
-		ip->addr6[1] = sin6.sin6_addr.in6_u.u6_addr32[1];
-		ip->addr6[2] = sin6.sin6_addr.in6_u.u6_addr32[2];
-		ip->addr6[3] = sin6.sin6_addr.in6_u.u6_addr32[3];
+		ip->addr6[0] = sin6.sin6_addr[0];
+		ip->addr6[1] = sin6.sin6_addr[1];
+		ip->addr6[2] = sin6.sin6_addr[2];
+		ip->addr6[3] = sin6.sin6_addr[3];
 		*port = bpf_ntohs(sin6.sin6_port);
 		return true;
 	}
@@ -447,8 +447,9 @@ static __always_inline bool udp_ip_from_connected_sock(struct sock *sk,
 						       struct udp_ip_key *ip,
 						       __u16 *port)
 {
-	__u16 family;
+	struct sock_common___ipv6 *common;
 	__be16 dport;
+	__u16 family;
 
 	if (!sk)
 		return false;
@@ -466,13 +467,14 @@ static __always_inline bool udp_ip_from_connected_sock(struct sock *sk,
 		return ip->addr4 != 0;
 	}
 
-	if (family == AF_INET6) {
+	if (family == AF_INET6 && obs_ipv6_enabled()) {
 		__builtin_memset(ip, 0, sizeof(*ip));
 		ip->family = AF_INET6;
-		ip->addr6[0] = sk->__sk_common.skc_v6_daddr.in6_u.u6_addr32[0];
-		ip->addr6[1] = sk->__sk_common.skc_v6_daddr.in6_u.u6_addr32[1];
-		ip->addr6[2] = sk->__sk_common.skc_v6_daddr.in6_u.u6_addr32[2];
-		ip->addr6[3] = sk->__sk_common.skc_v6_daddr.in6_u.u6_addr32[3];
+		common = (void *)&sk->__sk_common;
+
+		if (bpf_core_read(ip->addr6, sizeof(ip->addr6),
+				  &common->skc_v6_daddr))
+			return false;
 		*port = bpf_ntohs(dport);
 		return ip->addr6[0] || ip->addr6[1] ||
 		       ip->addr6[2] || ip->addr6[3];

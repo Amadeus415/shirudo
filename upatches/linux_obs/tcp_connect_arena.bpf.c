@@ -407,7 +407,7 @@ static __always_inline bool tcp_endpoint_from_sockaddr(struct sockaddr *addr,
 						       struct tcp_endpoint *ep)
 {
 	struct sockaddr_in sin = {};
-	struct sockaddr_in6 sin6 = {};
+	struct linux_obs_sockaddr_in6 sin6 = {};
 	__u16 family;
 
 	if (!addr || addrlen < (int)sizeof(struct sockaddr))
@@ -427,7 +427,7 @@ static __always_inline bool tcp_endpoint_from_sockaddr(struct sockaddr *addr,
 		return true;
 	}
 
-	if (family == AF_INET6) {
+	if (family == AF_INET6 && obs_ipv6_enabled()) {
 		if (addrlen < (int)sizeof(sin6))
 			return false;
 		if (bpf_probe_read_kernel(&sin6, sizeof(sin6), addr))
@@ -436,10 +436,10 @@ static __always_inline bool tcp_endpoint_from_sockaddr(struct sockaddr *addr,
 		__builtin_memset(ep, 0, sizeof(*ep));
 		ep->family = AF_INET6;
 		ep->port = bpf_ntohs(sin6.sin6_port);
-		ep->addr6[0] = sin6.sin6_addr.in6_u.u6_addr32[0];
-		ep->addr6[1] = sin6.sin6_addr.in6_u.u6_addr32[1];
-		ep->addr6[2] = sin6.sin6_addr.in6_u.u6_addr32[2];
-		ep->addr6[3] = sin6.sin6_addr.in6_u.u6_addr32[3];
+		ep->addr6[0] = sin6.sin6_addr[0];
+		ep->addr6[1] = sin6.sin6_addr[1];
+		ep->addr6[2] = sin6.sin6_addr[2];
+		ep->addr6[3] = sin6.sin6_addr[3];
 		return true;
 	}
 
@@ -748,6 +748,8 @@ int BPF_PROG(track_socket_exec_uid, struct socket *sock, int family, int type,
 	if (kern)
 		return 0;
 	if (family != AF_INET && family != AF_INET6)
+		return 0;
+	if (family == AF_INET6 && !obs_ipv6_enabled())
 		return 0;
 	if ((type & SOCK_TYPE_MASK) != SOCK_STREAM)
 		return 0;

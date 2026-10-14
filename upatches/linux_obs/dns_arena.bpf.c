@@ -1465,7 +1465,7 @@ static __always_inline void dns_parse_packet(struct __sk_buff *skb, bool send)
 	void *data_end = (void *)(long)skb->data_end;
 	struct dns_request_key req_key = {};
 	struct iphdr *ip4;
-	struct ipv6hdr *ip6;
+	struct linux_obs_ipv6hdr *ip6;
 	struct udphdr *udp;
 	__u32 ip_hlen, dns_off;
 
@@ -1495,6 +1495,8 @@ static __always_inline void dns_parse_packet(struct __sk_buff *skb, bool send)
 		}
 		break;
 	case ETH_P_IPV6:
+		if (!obs_ipv6_enabled())
+			return;
 		dns_debug_inc(DNS_DBG_PACKET_IPV6);
 		ip6 = data;
 		if ((void *)(ip6 + 1) > data_end)
@@ -1503,28 +1505,28 @@ static __always_inline void dns_parse_packet(struct __sk_buff *skb, bool send)
 			dns_debug_inc(DNS_DBG_PACKET_NOT_UDP);
 			return;
 		}
-		udp = data + sizeof(struct ipv6hdr);
+		udp = data + sizeof(*ip6);
 		if ((void *)(udp + 1) > data_end)
 			return;
 		req_key.family = AF_INET6;
 		if (send) {
-			req_key.client_addr[0] = ip6->saddr.in6_u.u6_addr32[0];
-			req_key.client_addr[1] = ip6->saddr.in6_u.u6_addr32[1];
-			req_key.client_addr[2] = ip6->saddr.in6_u.u6_addr32[2];
-			req_key.client_addr[3] = ip6->saddr.in6_u.u6_addr32[3];
-			req_key.resolver_addr[0] = ip6->daddr.in6_u.u6_addr32[0];
-			req_key.resolver_addr[1] = ip6->daddr.in6_u.u6_addr32[1];
-			req_key.resolver_addr[2] = ip6->daddr.in6_u.u6_addr32[2];
-			req_key.resolver_addr[3] = ip6->daddr.in6_u.u6_addr32[3];
+			req_key.client_addr[0] = ip6->saddr[0];
+			req_key.client_addr[1] = ip6->saddr[1];
+			req_key.client_addr[2] = ip6->saddr[2];
+			req_key.client_addr[3] = ip6->saddr[3];
+			req_key.resolver_addr[0] = ip6->daddr[0];
+			req_key.resolver_addr[1] = ip6->daddr[1];
+			req_key.resolver_addr[2] = ip6->daddr[2];
+			req_key.resolver_addr[3] = ip6->daddr[3];
 		} else {
-			req_key.client_addr[0] = ip6->daddr.in6_u.u6_addr32[0];
-			req_key.client_addr[1] = ip6->daddr.in6_u.u6_addr32[1];
-			req_key.client_addr[2] = ip6->daddr.in6_u.u6_addr32[2];
-			req_key.client_addr[3] = ip6->daddr.in6_u.u6_addr32[3];
-			req_key.resolver_addr[0] = ip6->saddr.in6_u.u6_addr32[0];
-			req_key.resolver_addr[1] = ip6->saddr.in6_u.u6_addr32[1];
-			req_key.resolver_addr[2] = ip6->saddr.in6_u.u6_addr32[2];
-			req_key.resolver_addr[3] = ip6->saddr.in6_u.u6_addr32[3];
+			req_key.client_addr[0] = ip6->daddr[0];
+			req_key.client_addr[1] = ip6->daddr[1];
+			req_key.client_addr[2] = ip6->daddr[2];
+			req_key.client_addr[3] = ip6->daddr[3];
+			req_key.resolver_addr[0] = ip6->saddr[0];
+			req_key.resolver_addr[1] = ip6->saddr[1];
+			req_key.resolver_addr[2] = ip6->saddr[2];
+			req_key.resolver_addr[3] = ip6->saddr[3];
 		}
 		break;
 	default:

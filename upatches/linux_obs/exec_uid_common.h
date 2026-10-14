@@ -4,6 +4,33 @@
 
 #include <bpf/bpf_core_read.h>
 
+struct sock_common___ipv6 {
+	__u32 skc_v6_daddr[4];
+} __attribute__((preserve_access_index));
+
+struct linux_obs_sockaddr_in6 {
+	__u16 sin6_family;
+	__be16 sin6_port;
+	__be32 sin6_flowinfo;
+	__u32 sin6_addr[4];
+	__u32 sin6_scope_id;
+};
+
+struct linux_obs_ipv6hdr {
+	__be32 version_flow;
+	__be16 payload_len;
+	__u8 nexthdr;
+	__u8 hop_limit;
+	__u32 saddr[4];
+	__u32 daddr[4];
+};
+
+static __always_inline bool obs_ipv6_enabled(void)
+{
+	return bpf_core_field_exists(struct sock_common___ipv6,
+				     skc_v6_daddr);
+}
+
 struct exec_uid {
 	__u64 ino;
 	__u32 dev;
