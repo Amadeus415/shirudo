@@ -487,8 +487,8 @@ hashes the source tree and build configuration, not binary bytes, so
 the same source yields the same identity on x86_64 and arm64; the
 pre-flight refuses a ``version_mismatch``.
 
-shirudo assumes the current upstream kernel and the current upstream
-clang.  There are no fallbacks for older kernels: a missing feature
+shirudo requires Linux v7.4 or newer and the current upstream clang.
+There are no fallbacks for older kernels: a missing feature
 fails the build or the pre-flight with a message, never a degraded
 mode.
 

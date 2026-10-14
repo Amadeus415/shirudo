@@ -10,9 +10,9 @@ checkout to a loaded, measured upatch, and then to packages pulled from
 a registry.  Commands shown with ``sudo`` run on the target as root;
 the others run on the operator as the user who owns the signing key.
 `requirements <requirements.rst>`__ lists what each host needs; read it
-first if the target kernel is not a current upstream build with the
-BPF LSM, BTF and ML-DSA enabled.  For local development one host can
-play both roles.
+first if the target kernel is older than Linux v7.4 or not built with
+the BPF LSM, BTF and ML-DSA enabled.  For local development one host
+can play both roles.
 
 
 1) Build

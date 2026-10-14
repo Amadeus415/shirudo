@@ -8,21 +8,21 @@ System requirements
 This is the single list of what a host needs before shirudo is built,
 installed or initialised on it.  The operator and target roles have
 different needs; a development host that plays both needs the union.
-shirudo assumes the current upstream kernel and toolchain and has no
-fallback paths for older ones, so a missing item here fails loudly at
+shirudo requires Linux v7.4 or newer and a current toolchain and has
+no fallback paths for older ones, so a missing item here fails loudly at
 build or pre-flight time rather than degrading silently.
 
 
 1) Target kernel
 ----------------
 
-The target runs a current upstream Linux kernel with the signed-loader
-ABI: ``struct bpf_map`` carries ``sha`` and ``excl_prog_sha``, ``struct
-bpf_prog_aux`` carries ``sig``, and ``union bpf_attr`` carries
-``signature_size``.  The ``shirudo init`` pre-flight checks the
-kernel's BTF for these (``signed_loader_kernel_abi``) and refuses
-without them; a load on such a kernel reports
-``kernel_abi_unsupported``.  The following options must be enabled.
+The target runs Linux v7.4 or newer.  That release is the base
+minimum: it carries the signed BPF loader support shirudo builds on,
+and shirudo tracks current upstream from there.  The ``shirudo init``
+pre-flight checks that the running kernel has that support
+(``signed_loader_kernel_abi``) and refuses otherwise; a load on an
+older kernel reports ``kernel_abi_unsupported``.  The following
+options must be enabled.
 ``contrib/kernel-small.config`` carries the same list for the test VM
 kernel.
 

@@ -165,8 +165,8 @@ one usually still compiles and passes tests.
   the NV index are single-tenant by design.
 - **Kernel + shirudo is the target TCB.** Ask of every change whether it
   grows the TCB; the agentless design exists to keep it minimal.
-- **Bleeding-edge kernel and toolchain only.** Current upstream kernel
-  and clang/LLVM are hard prerequisites. No legacy-kernel detection, no
+- **Bleeding-edge kernel and toolchain only.** Linux v7.4 or newer
+  and current clang/LLVM are hard prerequisites. No legacy-kernel detection, no
   runtime feature-probe fallbacks; a missing kernel feature fails the
   build or the load. x86_64 and arm64 are the supported architectures.
 - **BPF is CO-RE.** Hard-coded struct offsets sign fine and fail on the
