@@ -138,6 +138,7 @@ UTIL_SRCS := \
     util/log.c \
     util/io.c \
     util/tpm.c \
+    util/tpm_wire.c \
     util/chain.c \
     util/hex.c \
     util/bpm_tree.c \
@@ -453,6 +454,7 @@ install-operator: install shirudo-build $(VMLINUX_H) $(BPF_LIBBPF_HEADERS) $(BPF
 # Compiled test helpers (also usable as fuzz entry points).
 TEST_HELPERS := t/helper/test-json-parser \
                 t/helper/test-chain \
+                t/helper/test-tpm-wire \
 		t/helper/test-config \
 		t/helper/test-bpm-source \
 		t/helper/test-kernel-release \
@@ -480,6 +482,11 @@ t/helper/test-chain: t/helper/test-chain.c util/chain.o util/hex.o util/crypto_o
                      util/config.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl -ltss2-esys -ltss2-tctildr
+
+t/helper/test-tpm-wire: t/helper/test-tpm-wire.c util/tpm_wire.o util/hex.o \
+                        util/crypto_openssl.o util/malloc.o
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl
 
 t/helper/test-config: t/helper/test-config.c util/config.o util/io.o util/log.o
 	@printf '  CC      $@\n'

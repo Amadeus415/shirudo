@@ -1,0 +1,104 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Authors of shirudo
+#
+# t0033 -- util/tpm_wire: the policy digests the register is defined
+# under, NV and object names, and the attestation structures the
+# verifier parses, each against values computed independently here.
+
+cd "$(dirname "$0")"
+. ./test-lib.sh
+
+H=helper/test-tpm-wire
+Z=0000000000000000000000000000000000000000000000000000000000000000
+
+py() { python3 -c "$1"; }
+
+test_expect_success 'PolicyNvWritten(YES) = H(prev || CC || 01)' '
+	want=$(py "import hashlib; print(hashlib.sha256(bytes(32) + bytes.fromhex(\"0000018f01\")).hexdigest())") &&
+	[ "$(./$H nv-written $Z 1)" = "$want" ]
+'
+
+test_expect_success 'PolicyPCR folds the SHA-256 selection of PCR 15 and the digest' '
+	d=$(py "print(\"ab\"*32)") &&
+	want=$(py "import hashlib; print(hashlib.sha256(bytes(32) + bytes.fromhex(\"0000017f\") + bytes.fromhex(\"00000001000b03008000\") + bytes.fromhex(\"ab\"*32)).hexdigest())") &&
+	[ "$(./$H pcr $Z 0x8000 $d)" = "$want" ]
+'
+
+test_expect_success 'PolicyOR starts from zero and folds both branches' '
+	a=$(py "print(\"11\"*32)") && b=$(py "print(\"22\"*32)") &&
+	want=$(py "import hashlib; print(hashlib.sha256(bytes(32) + bytes.fromhex(\"00000171\") + bytes.fromhex(\"11\"*32) + bytes.fromhex(\"22\"*32)).hexdigest())") &&
+	[ "$(./$H or $a $b)" = "$want" ]
+'
+
+test_expect_success 'register policy = OR(written, unwritten+PCR(H(value)))' '
+	v=$(py "print(\"cd\"*32)") &&
+	out=$(./$H register-policy 0x8000 $v) &&
+	w=$(echo "$out" | sed -n 1p) && i=$(echo "$out" | sed -n 2p) &&
+	p=$(echo "$out" | sed -n 3p) &&
+	[ "$w" = "$(./$H nv-written $Z 1)" ] &&
+	unwritten=$(./$H nv-written $Z 0) &&
+	vd=$(py "import hashlib; print(hashlib.sha256(bytes.fromhex(\"cd\"*32)).hexdigest())") &&
+	[ "$i" = "$(./$H pcr $unwritten 0x8000 $vd)" ] &&
+	[ "$p" = "$(./$H or $w $i)" ]
+'
+
+test_expect_success 'NV name = 000b || H(TPMS_NV_PUBLIC)' '
+	p=$(py "print(\"ef\"*32)") &&
+	want=$(py "import hashlib; print(\"000b\" + hashlib.sha256(bytes.fromhex(\"01818e00\") + bytes.fromhex(\"000b\") + bytes.fromhex(\"0e060048\") + bytes.fromhex(\"0020\") + bytes.fromhex(\"ef\"*32) + bytes.fromhex(\"0020\")).hexdigest())") &&
+	[ "$(./$H nv-name 0x01818e00 0x0e060048 $p)" = "$want" ]
+'
+
+test_expect_success 'a P-256 ECDSA public area parses and names itself' '
+	x=$(py "print(\"33\"*32)") && y=$(py "print(\"44\"*32)") &&
+	pub="0023000b000500320000001000180003000b0010" &&
+	pub="0023000b00050032000000100018000b00030010""0020$x""0020$y" &&
+	out=$(./$H ecc-public $pub) &&
+	echo "$out" | grep -qx "rc=0" &&
+	echo "$out" | grep -qx "attrs=0x00050032 scheme=0x0018 hash=0x000b curve=0x0003" &&
+	want=$(py "import hashlib; print(\"000b\" + hashlib.sha256(bytes.fromhex(\"$pub\")).hexdigest())") &&
+	[ "$(./$H object-name $pub)" = "$want" ]
+'
+
+test_expect_success 'a public area with another curve or scheme is refused' '
+	x=$(py "print(\"33\"*32)") && y=$(py "print(\"44\"*32)") &&
+	./$H ecc-public "0023000b00050032000000100018000b00040010""0020$x""0020$y" | grep -qx "rc=-93"
+'
+
+test_expect_success 'an ECDSA signature yields r and s' '
+	r=$(py "print(\"55\"*32)") && s=$(py "print(\"66\"*32)") &&
+	out=$(./$H signature "0018000b0020$r""0020$s") &&
+	echo "$out" | grep -qx "rc=0" &&
+	[ "$(echo "$out" | sed -n 2p)" = "$r" ] &&
+	[ "$(echo "$out" | sed -n 3p)" = "$s" ]
+'
+
+test_expect_success 'a quote attestation parses: signer, nonce, selection, digest' '
+	name=$(py "print(\"000b\" + \"77\"*32)") && dg=$(py "print(\"88\"*32)") &&
+	blob="ff544347""8018""0022$name""00046e6f6e63""0000000000000100""00000002""00000003""01""0000000000000004""00000001000b03fffa00""0020$dg" &&
+	out=$(./$H attest $blob) &&
+	echo "$out" | grep -qx "rc=0" &&
+	echo "$out" | grep -qx "type=0x8018 reset=2 restart=3 safe=1" &&
+	echo "$out" | grep -qx "signer=$name" &&
+	echo "$out" | grep -qx "extra=6e6f6e63" &&
+	echo "$out" | grep -qx "mask=0x00faff" &&
+	echo "$out" | grep -qx "pcr_digest=$dg"
+'
+
+test_expect_success 'an NV certification parses: index name, offset, contents' '
+	name=$(py "print(\"000b\" + \"77\"*32)") && iname=$(py "print(\"000b\" + \"99\"*32)") &&
+	val=$(py "print(\"aa\"*32)") &&
+	blob="ff544347""8014""0022$name""0000""0000000000000100""00000002""00000003""00""0000000000000004""0022$iname""0000""0020$val" &&
+	out=$(./$H attest $blob) &&
+	echo "$out" | grep -qx "rc=0" &&
+	echo "$out" | grep -qx "index_name=$iname" &&
+	echo "$out" | grep -qx "offset=0" &&
+	echo "$out" | grep -qx "nv=$val"
+'
+
+test_expect_success 'a truncated or mis-tagged attestation is rejected' '
+	./$H attest "ff54434780180022" | grep -qx "rc=-22" &&
+	./$H attest "ff544348801800020000" | grep -qx "rc=-22"
+'
+
+test_done
