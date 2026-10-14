@@ -37,8 +37,10 @@ From the repository root:
 
 The normal build produces the operator binary and target binary. Use
 the repository's packaging targets when producing installable
-packages. The operator-only ``shirudo-build`` helper and clang
-are not needed on a target.
+packages: ``make bindeb-pkg`` writes a ``shirudo-target`` and a
+``shirudo-operator`` .deb, ``make binrpm-pkg`` the same two packages as
+RPMs. The operator-only ``shirudo-build`` helper and clang are not
+needed on a target.
 
 Inspect a BPM package
 =====================

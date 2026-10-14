@@ -51,7 +51,7 @@ export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdi
 export VM_SSH_COMMAND
 
 .PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build update-bpf-deps test-helpers linux-obs-ipv4-shields bundle test-vm-bundle kernel bpf-next kernel-small vm vm-small test-vm-small-bundle vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
-        install-target install-operator bindeb-pkg bintar-pkg clean \
+        install-target install-operator bindeb-pkg binrpm-pkg bintar-pkg clean \
         distclean test config
 
 KERNEL_PATCHES ?= $(if $(wildcard kernel/*.patch),kernel/,)
@@ -66,27 +66,49 @@ STATIC_IMAGE_TARBALL ?= shirudo-static.tar.gz
 STATIC_IMAGE_STAGE   ?= build/shirudo-static-image
 STATIC_IMAGE_ROOT    := $(STATIC_IMAGE_STAGE)/root
 
-# Debian packaging (make bindeb-pkg). Distro packages live under /usr,
-# not /usr/local, and that prefix is baked into the binary (it is how the
-# core `shirudo` finds shirudo-build), so bindeb-pkg rebuilds with this.
-DEB_PREFIX     ?= /usr
+# Distribution packaging (make bindeb-pkg, make binrpm-pkg). Distro
+# packages live under /usr, not /usr/local, and that prefix is baked into
+# the binary (it is how the core `shirudo` finds shirudo-build), so both
+# rebuild with this prefix.
+PKG_PREFIX      ?= /usr
+PKG_RAW_VERSION ?= $(shell $(SHIRUDO_GIT_DESCRIBE) 2>/dev/null || cat VERSION)
+# Which roles to package. The target package is static apart from glibc
+# and portable across distributions; the operator package links the
+# build host's shared libraries and belongs on the distribution it is
+# built on, so PKG_ROLES=operator builds just that one there.
+PKG_ROLES       ?= target operator
+PKG_MAINTAINER  ?= $(shell git config user.name 2>/dev/null || echo shirudo) <$(shell git config user.email 2>/dev/null || echo shirudo@localhost)>
+
 DEB_STAGE      ?= build/deb
-DEB_RAW_VERSION ?= $(shell $(SHIRUDO_GIT_DESCRIBE) 2>/dev/null || cat VERSION)
+DEB_RAW_VERSION ?= $(PKG_RAW_VERSION)
 DEB_VERSION    ?= $(shell printf '%s' "$(DEB_RAW_VERSION)" | sed 's/^v//; s/[^A-Za-z0-9.+:~-]/./g; /^[0-9]/!s/^/0~/')
 DEB_ARCH       ?= $(shell dpkg --print-architecture 2>/dev/null || echo amd64)
-DEB_MAINTAINER ?= $(shell git config user.name 2>/dev/null || echo shirudo) <$(shell git config user.email 2>/dev/null || echo shirudo@localhost)>
 DEB_TARGET_PKG   ?= shirudo-target_$(DEB_VERSION)_$(DEB_ARCH).deb
 DEB_OPERATOR_PKG ?= shirudo-operator_$(DEB_VERSION)_$(DEB_ARCH).deb
+
+# An RPM Version may not contain '-', so the describe output is split at
+# the first dash: a plain tag is Release 1; commits past the tag
+# ("-<n>-g<hash>", "-dirty") become Release 1.<n>.g<hash>, sorting after
+# the tag; a pre-release tag suffix ("-rc1") becomes Release 0.rc1,
+# sorting before the final 1. A describe without any tag is version
+# 0.<hash>.
+RPM_STAGE       ?= build/rpm
+RPM_RAW_VERSION ?= $(PKG_RAW_VERSION)
+RPM_VERSION     ?= $(shell printf '%s\n' "$(RPM_RAW_VERSION)" | sed 's/^v//; s/-.*//; s/[^A-Za-z0-9.+~^]/./g; /^[0-9]/!s/^/0./')
+RPM_RELEASE     ?= $(shell printf '%s\n' "$(RPM_RAW_VERSION)" | sed 's/^v//; s/^[^-]*//; s/^-//; s/[^A-Za-z0-9.+~^]/./g' | sed -e 's/^$$/1/;t' -e 's/^[0-9]/1.&/;t' -e 's/^dirty/1.&/;t' -e 's/^/0./')
+RPM_ARCH        ?= $(shell rpm --eval '%{_arch}' 2>/dev/null || uname -m)
+RPM_TARGET_PKG   ?= shirudo-target-$(RPM_VERSION)-$(RPM_RELEASE).$(RPM_ARCH).rpm
+RPM_OPERATOR_PKG ?= shirudo-operator-$(RPM_VERSION)-$(RPM_RELEASE).$(RPM_ARCH).rpm
 
 # The outer make exports bindir/libexecdir/... derived from the default
 # prefix, and a sub-make's `?=` will not recompute an already-set (env)
 # value -- so we must hand the whole path set to the packaging sub-makes
 # as command-line overrides (which beat the environment and propagate).
-DEB_PATHS := prefix=$(DEB_PREFIX) exec_prefix=$(DEB_PREFIX) \
-             bindir=$(DEB_PREFIX)/bin libexecdir=$(DEB_PREFIX)/libexec \
-             sharedir=$(DEB_PREFIX)/share libdir=$(DEB_PREFIX)/lib \
-             mandir=$(DEB_PREFIX)/share/man \
-             completionsdir=$(DEB_PREFIX)/share/bash-completion/completions \
+PKG_PATHS := prefix=$(PKG_PREFIX) exec_prefix=$(PKG_PREFIX) \
+             bindir=$(PKG_PREFIX)/bin libexecdir=$(PKG_PREFIX)/libexec \
+             sharedir=$(PKG_PREFIX)/share libdir=$(PKG_PREFIX)/lib \
+             mandir=$(PKG_PREFIX)/share/man \
+             completionsdir=$(PKG_PREFIX)/share/bash-completion/completions \
              systemdunitdir=/usr/lib/systemd/system
 
 all: config
@@ -205,6 +227,17 @@ shirudo make targets (run from the repo root):
                            shirudo-operator_<version>_<arch>.deb (binary +
                            shirudo-build).
                            Rebuilds from clean with prefix=/usr.
+    make binrpm-pkg        The same two packages as binary .rpm's for
+                           Fedora, RHEL and SUSE targets:
+                           shirudo-target-<version>-<release>.<arch>.rpm and
+                           shirudo-operator-<version>-<release>.<arch>.rpm.
+                           Needs rpmbuild (rpm on Debian/Ubuntu, rpm-build
+                           on Fedora). Rebuilds from clean with prefix=/usr.
+                           PKG_ROLES=target or =operator builds one of the
+                           two (both package targets): the target package is
+                           static and portable, the operator package links
+                           the host's shared libraries and is built on the
+                           distribution it is for.
     make bintar-pkg        Two distro-agnostic target-installer tarballs:
                            both use the target binary with static OpenSSL and
                            OpenSSL-backed libcurl; shirudo-static.tar.gz also
@@ -610,29 +643,48 @@ bintar-pkg: config packaging/tar/install.sh packaging/tar/bundle-libs.sh
 #       (target node)
 #   shirudo-operator_<version>_<arch>.deb
 #       shirudo + shirudo-build + BPF headers, no unit
-# Rebuilds from clean with prefix=$(DEB_PREFIX) because the libexec path is
+# Rebuilds from clean with prefix=$(PKG_PREFIX) because the libexec path is
 # compiled into the binary and make cannot see the changed -D otherwise.
 bindeb-pkg:
 	$(Q)command -v dpkg-deb >/dev/null 2>&1 || { \
 	    printf 'shirudo: dpkg-deb not found; install the dpkg-dev package\n' >&2; \
 	    exit 1; }
-	@printf '  CLEAN   (rebuild with prefix=$(DEB_PREFIX) for packaging)\n'
+	@printf '  CLEAN   (rebuild with prefix=$(PKG_PREFIX) for packaging)\n'
 	+$(Q)$(MAKE) clean
-	+$(Q)$(MAKE) $(DEB_PATHS) all shirudo-build
+	+$(Q)$(MAKE) $(PKG_PATHS) all $(if $(filter operator,$(PKG_ROLES)),shirudo-build)
 	$(Q)rm -rf $(DEB_STAGE) $(DEB_TARGET_PKG) $(DEB_OPERATOR_PKG)
-	@printf '  STAGE   $(DEB_STAGE)/target\n'
-	+$(Q)$(MAKE) $(DEB_PATHS) DESTDIR=$(abspath $(DEB_STAGE)/target) \
-	    install-target
-	@printf '  STAGE   $(DEB_STAGE)/operator\n'
-	+$(Q)$(MAKE) $(DEB_PATHS) DESTDIR=$(abspath $(DEB_STAGE)/operator) \
-	    install-operator
-	$(Q)packaging/deb/builddeb.sh target $(abspath $(DEB_STAGE)/target) \
-	    '$(DEB_VERSION)' '$(DEB_ARCH)' '$(DEB_MAINTAINER)' \
-	    $(abspath $(DEB_TARGET_PKG))
-	$(Q)packaging/deb/builddeb.sh operator $(abspath $(DEB_STAGE)/operator) \
-	    '$(DEB_VERSION)' '$(DEB_ARCH)' '$(DEB_MAINTAINER)' \
-	    $(abspath $(DEB_OPERATOR_PKG))
-	@printf 'shirudo: wrote $(DEB_TARGET_PKG) and $(DEB_OPERATOR_PKG)\n'
+	$(if $(filter target,$(PKG_ROLES)),@printf '  STAGE   $(DEB_STAGE)/target\n')
+	$(if $(filter target,$(PKG_ROLES)),+$(Q)$(MAKE) $(PKG_PATHS) DESTDIR=$(abspath $(DEB_STAGE)/target) install-target)
+	$(if $(filter operator,$(PKG_ROLES)),@printf '  STAGE   $(DEB_STAGE)/operator\n')
+	$(if $(filter operator,$(PKG_ROLES)),+$(Q)$(MAKE) $(PKG_PATHS) DESTDIR=$(abspath $(DEB_STAGE)/operator) install-operator)
+	$(if $(filter target,$(PKG_ROLES)),$(Q)packaging/deb/builddeb.sh target $(abspath $(DEB_STAGE)/target) \
+	    '$(DEB_VERSION)' '$(DEB_ARCH)' '$(PKG_MAINTAINER)' $(abspath $(DEB_TARGET_PKG)))
+	$(if $(filter operator,$(PKG_ROLES)),$(Q)packaging/deb/builddeb.sh operator $(abspath $(DEB_STAGE)/operator) \
+	    '$(DEB_VERSION)' '$(DEB_ARCH)' '$(PKG_MAINTAINER)' $(abspath $(DEB_OPERATOR_PKG)))
+	@printf 'shirudo: wrote %s\n' "$(strip $(if $(filter target,$(PKG_ROLES)),$(DEB_TARGET_PKG)) $(if $(filter operator,$(PKG_ROLES)),$(DEB_OPERATOR_PKG)))"
+
+# Build the same two packages as binary RPMs (kernel-style `make
+# binrpm-pkg`). The staged trees are identical to the deb ones; only the
+# metadata and scriptlets differ. Library dependencies are rpm's
+# automatic soname requires, so the output installs on any RPM
+# distribution shipping those libraries.
+binrpm-pkg:
+	$(Q)command -v rpmbuild >/dev/null 2>&1 || { \
+	    printf 'shirudo: rpmbuild not found; install rpm (Debian/Ubuntu) or rpm-build (Fedora)\n' >&2; \
+	    exit 1; }
+	@printf '  CLEAN   (rebuild with prefix=$(PKG_PREFIX) for packaging)\n'
+	+$(Q)$(MAKE) clean
+	+$(Q)$(MAKE) $(PKG_PATHS) all $(if $(filter operator,$(PKG_ROLES)),shirudo-build)
+	$(Q)rm -rf $(RPM_STAGE) $(RPM_TARGET_PKG) $(RPM_OPERATOR_PKG)
+	$(if $(filter target,$(PKG_ROLES)),@printf '  STAGE   $(RPM_STAGE)/target\n')
+	$(if $(filter target,$(PKG_ROLES)),+$(Q)$(MAKE) $(PKG_PATHS) DESTDIR=$(abspath $(RPM_STAGE)/target) install-target)
+	$(if $(filter operator,$(PKG_ROLES)),@printf '  STAGE   $(RPM_STAGE)/operator\n')
+	$(if $(filter operator,$(PKG_ROLES)),+$(Q)$(MAKE) $(PKG_PATHS) DESTDIR=$(abspath $(RPM_STAGE)/operator) install-operator)
+	$(if $(filter target,$(PKG_ROLES)),$(Q)packaging/rpm/buildrpm.sh target $(abspath $(RPM_STAGE)/target) \
+	    '$(RPM_VERSION)' '$(RPM_RELEASE)' '$(RPM_ARCH)' '$(PKG_MAINTAINER)' $(abspath $(RPM_TARGET_PKG)))
+	$(if $(filter operator,$(PKG_ROLES)),$(Q)packaging/rpm/buildrpm.sh operator $(abspath $(RPM_STAGE)/operator) \
+	    '$(RPM_VERSION)' '$(RPM_RELEASE)' '$(RPM_ARCH)' '$(PKG_MAINTAINER)' $(abspath $(RPM_OPERATOR_PKG)))
+	@printf 'shirudo: wrote %s\n' "$(strip $(if $(filter target,$(PKG_ROLES)),$(RPM_TARGET_PKG)) $(if $(filter operator,$(PKG_ROLES)),$(RPM_OPERATOR_PKG)))"
 
 # config.mk is regenerated by Makefile.config from the host's pkg-config
 # state. Caches results until `make distclean`.
@@ -676,7 +728,8 @@ clean:
 		$(MAKE) -f Makefile.shirudo clean; \
 		rm -rf "$$bundle_dir" $(INSTALLER_STAGE) $(STATIC_IMAGE_STAGE) \
 		          $(INSTALLER_TARBALL) $(STATIC_IMAGE_TARBALL) \
-		          $(DEB_STAGE) $(DEB_TARGET_PKG) $(DEB_OPERATOR_PKG)
+		          $(DEB_STAGE) $(DEB_TARGET_PKG) $(DEB_OPERATOR_PKG) \
+		          $(RPM_STAGE) $(RPM_TARGET_PKG) $(RPM_OPERATOR_PKG)
 
 distclean: clean
 	$(Q)rm -f config.mk

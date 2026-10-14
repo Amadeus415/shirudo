@@ -138,4 +138,16 @@ test_expect_success 'target package enables and removes the timer safely' '
 		../packaging/deb/builddeb.sh
 '
 
+test_expect_success 'the rpm target package carries the same timer scriptlets' '
+	for unit in shirudo-map-export shirudo-keepalive shirudo-bpm-repo-update \
+		shirudo-bpm-tree-sync
+	do
+		grep -q "systemctl enable $unit.timer" ../packaging/rpm/buildrpm.sh &&
+		grep -q "systemctl --no-reload disable --now $unit.timer" \
+			../packaging/rpm/buildrpm.sh || return 1
+	done &&
+	grep -q "systemctl enable shirudo.service" ../packaging/rpm/buildrpm.sh &&
+	grep -q "systemctl --no-reload disable shirudo.service" ../packaging/rpm/buildrpm.sh
+'
+
 test_done

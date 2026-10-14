@@ -28,6 +28,7 @@
 /systemd/shirudo.service
 /systemd/shirudo-map-export.service
 /systemd/shirudo-keepalive.service
+/systemd/shirudo-bpm-repo-update.service
 /systemd/shirudo-bpm-tree-sync.service
 
 # Vendored bpf-next build state (do not commit)
