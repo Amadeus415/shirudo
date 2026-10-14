@@ -117,6 +117,21 @@ _shirudo()
 			--include-kernellog --include-modules \
 			--include-maps --show-full" -- "$cur") )
 		;;
+	attest)
+		if [[ $cword -eq 2 && $cur != -* ]]; then
+			COMPREPLY=( $(compgen -W "verify predict" -- "$cur") )
+		elif [[ $sub == verify ]]; then
+			COMPREPLY=( $(compgen -W "--evidence= --nonce= --ak-name= \
+				--cert= --upatch= --expect= --tree-root= \
+				--expect-chain= --expect-pcr= \
+				--allow-runtime-events --strict-anchor" -- "$cur") )
+		elif [[ $sub == predict ]]; then
+			COMPREPLY=( $(compgen -W "--cert= --upatch= --expect= \
+				--tree-root= --event=" -- "$cur") )
+		else
+			COMPREPLY=( $(compgen -W "--nonce= --pcrs= --out=" -- "$cur") )
+		fi
+		;;
 	keys)
 		COMPREPLY=( $(compgen -W "--keys-dir=" -- "$cur") )
 		;;

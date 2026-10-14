@@ -42,6 +42,7 @@ int shirudo_upatch_remove(const char *path);
 
 /* Either-side. */
 int cmd_status(int argc, const char **argv);
+int cmd_attest(int argc, const char **argv);
 int cmd_version(int argc, const char **argv);
 int cmd_keys(int argc, const char **argv);
 int cmd_config(int argc, const char **argv);

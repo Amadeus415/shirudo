@@ -33,7 +33,7 @@ Z=0000000000000000000000000000000000000000000000000000000000000000
 PAYLOAD=$(py "print(\"ab\"*32)")
 
 test_expect_success 'init binds the register to PCR 15 and anchors its name' '
-	init=$(py "import hashlib; c = hashlib.sha256(open(\"$WORK/keys/cert.der\", \"rb\").read()).digest(); print(hashlib.sha256(b\"shirudo-init\\0\" + c + hashlib.sha256(b\"\").digest() + bytes(32)).hexdigest())") &&
+	init=$($S attest predict --cert="$WORK/keys/cert.der" | sed -n "s/^init_event: //p") &&
 	out=$(./$R init "$init") &&
 	echo "$out" | grep -qx "rc=0" &&
 	echo "$out" | grep -qx "reused=0" &&
@@ -77,6 +77,52 @@ test_expect_success 'the init branch cannot be satisfied after the anchor' '
 	./$R first-write "$PAYLOAD" | grep -qx "rc=-13"
 '
 
+test_expect_success 'evidence verifies against the pinned key and predicted state' '
+	nonce=0102030405060708090a0b0c0d0e0f10 &&
+	./$R evidence $nonce >"$WORK/evidence.json" &&
+	ak=$(py "import json; print(json.load(open(\"$WORK/evidence.json\"))[\"ak\"][\"name\"])") &&
+	echo "$ak" >"$WORK/ak" &&
+	value=$(./$R read | field value) &&
+	$S attest verify --evidence="$WORK/evidence.json" --nonce=$nonce \
+		--ak-name="$ak" --expect-chain="$value" --strict-anchor \
+		>"$WORK/report" &&
+	grep -qx "verdict: ok" "$WORK/report" &&
+	! grep -q "^FAIL" "$WORK/report"
+'
+
+test_expect_success 'verify computes the state from cert and set, flags runtime events' '
+	nonce=0102030405060708090a0b0c0d0e0f10 &&
+	$S attest verify --evidence="$WORK/evidence.json" --nonce=$nonce \
+		--ak-name="$(cat "$WORK/ak")" --cert="$WORK/keys/cert.der" \
+		>"$WORK/report3"; rc=$? &&
+	[ "$rc" = 1 ] &&
+	grep -q "^ok:   state: init event covers" "$WORK/report3" &&
+	grep -q "^FAIL: state: 1 event after boot" "$WORK/report3" &&
+	$S attest verify --evidence="$WORK/evidence.json" --nonce=$nonce \
+		--ak-name="$(cat "$WORK/ak")" --cert="$WORK/keys/cert.der" \
+		--allow-runtime-events | grep -qx "verdict: ok"
+'
+
+test_expect_success 'predict reproduces the register after the load' '
+	value=$(./$R read | field value) &&
+	$S attest predict --cert="$WORK/keys/cert.der" --event="load:foo=$PAYLOAD" |
+		grep -qx "register_after_events: $value"
+'
+
+test_expect_success 'a wrong nonce, a wrong key name or a tampered value fails' '
+	nonce=0102030405060708090a0b0c0d0e0f10 &&
+	value=$(./$R read | field value) &&
+	ak=$(cat "$WORK/ak") &&
+	! $S attest verify --evidence="$WORK/evidence.json" --nonce=ffff \
+		--ak-name="$ak" --expect-chain="$value" >/dev/null &&
+	! $S attest verify --evidence="$WORK/evidence.json" --nonce=$nonce \
+		--ak-name="000b$(py "print(\"00\"*32)")" --expect-chain="$value" >/dev/null &&
+	sed "s/\"value\":\"$value\"/\"value\":\"$Z\"/" "$WORK/evidence.json" >"$WORK/tampered.json" &&
+	! $S attest verify --evidence="$WORK/tampered.json" --nonce=$nonce \
+		--ak-name="$ak" --expect-chain="$value" >"$WORK/report4" &&
+	grep -q "^FAIL: register: certified contents" "$WORK/report4"
+'
+
 test_expect_success 'a recreated index is unwritable and no longer anchored' '
 	out=$(./$R recreate) &&
 	echo "$out" | grep -qx "rc=0" &&
@@ -96,6 +142,14 @@ test_expect_success 'a TPM reset clears the register; init binds it again' '
 	[ "$(echo "$out" | field name)" = "$(cat "$WORK/name")" ] &&
 	[ "$(echo "$out" | field value)" = "$(sha "$Z$(cat "$WORK/init")")" ] &&
 	./$R status | grep -qx "tpm=1 defined=1 written=1 logged=1 anchored=1"
+'
+
+test_expect_success 'after the reset the evidence matches the set at boot' '
+	nonce=cafe &&
+	./$R evidence $nonce >"$WORK/evidence2.json" &&
+	$S attest verify --evidence="$WORK/evidence2.json" --nonce=$nonce \
+		--ak-name="$(cat "$WORK/ak")" --cert="$WORK/keys/cert.der" \
+		--strict-anchor | grep -qx "verdict: ok"
 '
 
 test_done

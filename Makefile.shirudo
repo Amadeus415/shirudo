@@ -139,6 +139,7 @@ UTIL_SRCS := \
     util/io.c \
     util/tpm.c \
     util/tpm_wire.c \
+    util/attest.c \
     util/chain.c \
     util/hex.c \
     util/bpm_tree.c \
@@ -180,6 +181,7 @@ BUILTIN_SRCS := \
     builtin-config.c \
     builtin-upatch.c \
     builtin-bpm.c \
+    builtin-attest.c \
     builtin-build.c \
     builtin-version.c
 
@@ -503,7 +505,8 @@ t/helper/test-tpm-wire: t/helper/test-tpm-wire.c util/tpm_wire.o util/hex.o \
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl
 
-t/helper/test-register: t/helper/test-register.c $(REGISTER_OBJS)
+t/helper/test-register: t/helper/test-register.c util/attest.o \
+                        $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 

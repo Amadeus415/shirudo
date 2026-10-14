@@ -54,6 +54,7 @@ static const struct cmd commands[] = {
 	{ "bpm",	cmd_bpm,	GROUP_TARGET,	"manage signed OCI packages on this target" },
 
 	{ "status",	cmd_status,	GROUP_LOCAL,	"local readiness + state report" },
+	{ "attest",	cmd_attest,	GROUP_LOCAL,	"TPM-signed evidence (target); verify / predict (operator)" },
 	{ "keys",	cmd_keys,	GROUP_LOCAL,	"inspect cert / keyring contents" },
 	{ "version",	cmd_version,	GROUP_LOCAL,	"print version and SHIRUDO_VERSION_ID" },
 

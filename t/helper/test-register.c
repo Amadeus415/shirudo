@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "attest.h"
 #include "chain.h"
 #include "config.h"
 #include "eventlog.h"
@@ -231,6 +232,26 @@ int main(int argc, char **argv)
 		shirudo_tpm_close(tpm);
 		printf("rc=%d\n", rc);
 		return rc ? 1 : 0;
+	}
+	if (strcmp(argv[1], "evidence") == 0 && argc == 3) {
+		uint8_t nonce[64];
+		size_t nonce_len = strlen(argv[2]) / 2, len, cap;
+		char *doc;
+
+		if (nonce_len > sizeof(nonce) ||
+		    shirudo_hex_decode(argv[2], nonce, nonce_len))
+			return 2;
+		rc = shirudo_attest_evidence(nonce, nonce_len,
+					     SHIRUDO_ATTEST_PCR_DEFAULT, &doc,
+					     &len, &cap);
+		if (rc) {
+			fprintf(stderr, "evidence: %s\n", strerror(-rc));
+			return 1;
+		}
+		fwrite(doc, 1, len, stdout);
+		fputc('\n', stdout);
+		xfree(doc, cap);
+		return 0;
 	}
 	return 2;
 }
