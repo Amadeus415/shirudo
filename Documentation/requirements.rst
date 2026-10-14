@@ -21,10 +21,11 @@ minimum: it carries the signed BPF loader support shirudo builds on,
 and shirudo tracks current upstream from there.  The ``shirudo init``
 pre-flight checks that the running kernel has that support
 (``signed_loader_kernel_abi``) and refuses otherwise; a load on an
-older kernel reports ``kernel_abi_unsupported``.  The following
-options must be enabled.
-``contrib/kernel-small.config`` carries the same list for the test VM
-kernel.
+older kernel reports ``kernel_abi_unsupported``.
+
+The table below is what shirudo itself needs; without any of it,
+``shirudo init`` does not complete.  ``contrib/kernel-small.config``
+carries the same list for the test VM kernel.
 
 .. list-table::
    :header-rows: 1
@@ -35,10 +36,16 @@ kernel.
    * - ``CONFIG_BPF``, ``CONFIG_BPF_SYSCALL``, ``CONFIG_BPF_JIT``
      - The ``bpf()`` syscall, the JIT and bpffs, for the loaders, the
        enforcement programs and the private pin mount.
-   * - ``CONFIG_BPF_LSM``, ``CONFIG_SECURITY``, ``bpf`` in
-       ``CONFIG_LSM`` (or ``lsm=`` on the kernel command line)
+   * - ``CONFIG_BPF_LSM``, ``CONFIG_BPF_EVENTS``, ``CONFIG_SECURITY``,
+       ``bpf`` in ``CONFIG_LSM`` (or ``lsm=`` on the kernel command line)
      - The ``lsm/bpf`` and ``lsm/bpf_prog_load`` gates, the bpffs and
-       mount guards, and the filesystem seal.
+       mount guards, and the filesystem seal.  ``CONFIG_BPF_LSM``
+       depends on ``CONFIG_BPF_EVENTS``.
+   * - ``CONFIG_FUNCTION_TRACER``,
+       ``CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS``
+     - The BPF trampolines through which shirudo's own LSM programs
+       attach.  With function tracing but no direct-call support the
+       kernel refuses every trampoline attach with ``ENOTSUPP``.
    * - ``CONFIG_SECURITYFS``
      - ``/sys/kernel/security/lsm``, which the pre-flight reads to
        confirm the BPF LSM is active (``bpf_lsm_active``).
@@ -73,20 +80,44 @@ kernel.
      - The NV-extend measurement chain.  A TPM 2.0 is mandatory; there
        is no unmeasured mode.  ``contrib/swtpm.sh`` provides a software
        TPM for machines without one.
-   * - ``CONFIG_BPF_EVENTS``, ``CONFIG_FUNCTION_TRACER``,
-       ``CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS``
-     - ``fentry``, ``fexit``, ``fmod_ret`` and kprobe attach points for
-       upatches.
-   * - ``CONFIG_UPROBES``, ``CONFIG_UPROBE_EVENTS``
-     - ``uprobe.multi`` upatches against userspace binaries.
-   * - ``CONFIG_CGROUP_BPF``
-     - ``cgroup_skb`` upatches on the cgroup v2 root.
-   * - ``CONFIG_NETFILTER_BPF_LINK``
-     - ``netfilter`` upatches at IPv6 pre-routing.
 
 ``CONFIG_PKCS7_WAIVE_AUTHATTRS_REJECTION_FOR_MLDSA`` is not required: it
 only relaxes module-signature checks, and BPF signature verification
 accepts the signed-attributes form.
+
+Attach points for upatches
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Everything from here on is optional.  shirudo itself runs without any
+of it; these options only decide where the upatches an operator ships
+can attach.  ``fentry``, ``fexit``, ``lsm`` and ``tp_btf`` upatches
+attach through the trampolines and BTF the base already requires, and
+``fmod_ret`` works on the ``security_*`` hooks without anything more.
+Enable the rest for the kinds of upatch a fleet will run.  An upatch
+that needs a missing one fails at load with the kernel's error in the
+report; it never attaches somewhere else.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Option
+     - What it enables
+   * - ``CONFIG_KPROBES``, ``CONFIG_KPROBE_EVENTS``
+     - ``kprobe`` and ``kretprobe`` upatches on arbitrary kernel
+       functions.
+   * - ``CONFIG_FUNCTION_ERROR_INJECTION``,
+       ``CONFIG_BPF_KPROBE_OVERRIDE``
+     - ``fmod_ret`` on functions outside the ``security_*`` hooks
+       (those marked ``ALLOW_ERROR_INJECTION``) and
+       ``bpf_override_return()`` from a kprobe: the two ways a shield
+       rejects a call before the function body runs.
+   * - ``CONFIG_UPROBE_EVENTS`` (selects ``CONFIG_UPROBES``)
+     - ``uprobe.multi`` upatches against userspace binaries.
+   * - ``CONFIG_CGROUP_BPF``
+     - ``cgroup_skb`` upatches on the cgroup v2 root.
+   * - ``CONFIG_NETFILTER``, ``CONFIG_NETFILTER_BPF_LINK``
+     - ``netfilter`` upatches at IPv6 pre-routing.
 
 
 2) Cryptography
@@ -168,7 +199,7 @@ the private key under ``/var/lib/shirudo/keys/``.
   vTPM), or a software TPM reachable through ``tpm.tcti``.  TPM 1.2 is
   refused; there is no opt-out.
 * ``systemd`` for the boot unit and the timers.
-* x86_64 or arm64.
+* x86-64, arm64 or riscv64.
 
 Operator and target may be on different architectures; the artifact
 format is little-endian and the signature is architecture-neutral.
