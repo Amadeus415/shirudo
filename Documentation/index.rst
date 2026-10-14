@@ -48,6 +48,11 @@ Writing and shipping upatches
     the Beefile and ``bpm build``, publishing to a registry and to the
     signed upatch tree, and what a target does with both.
 
+Keys
+    `key-lifecycle <key-lifecycle.rst>`__ covers the signing key and
+    its certificate from creation to retirement: where the certificate
+    goes, how targets trust it, rotation, revocation and custody.
+
 Understanding what shirudo does
     `architecture <architecture.rst>`__ describes why shirudo exists,
     its design properties, the signed-loader path, the kernel

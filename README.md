@@ -71,6 +71,8 @@ development both roles can live on the same node.
   initialise a target, load and unload, publish and install packages.
 * [Upatches](Documentation/upatch.rst): writing the BPF side, building
   and signing, packaging, publishing to a registry and the signed tree.
+* [Key lifecycle](Documentation/key-lifecycle.rst): the signing key and
+  certificate, distribution, rotation, revocation and custody.
 * [Requirements](Documentation/requirements.rst): kernel options,
   operator toolchain, target runtime.
 * [Architecture](Documentation/architecture.rst): why shirudo exists,
