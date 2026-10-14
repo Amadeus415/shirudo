@@ -60,7 +60,7 @@ SOURCE_DIR="${WORK_DIR}/linux"
 if [[ -n "$KERNEL_SOURCE_DIR_INPUT" ]]; then
   KERNEL_SOURCE_DIR="$KERNEL_SOURCE_DIR_INPUT"
 elif [[ "$KERNEL_TAG" == "bpf-next" ]]; then
-  # Fresh shallow clone unless KERNEL_SOURCE_DIR names a checkout.
+  # Reuse the managed shallow clone unless KERNEL_SOURCE_DIR names a checkout.
   KERNEL_SOURCE_DIR="$SOURCE_DIR"
 else
   KERNEL_SOURCE_DIR="$SOURCE_DIR"
@@ -182,14 +182,29 @@ install_build_dependencies() {
 
 install_build_dependencies
 
-rm -rf "$WORK_DIR" "$OUTPUT_DIR" "$BUNDLE_PATH" "${BUNDLE_PATH}.sha256sum"
+if [[ "$KERNEL_TAG" == "bpf-next" && "$KERNEL_SOURCE_DIR" == "$SOURCE_DIR" ]]; then
+  mkdir -p "$WORK_DIR"
+else
+  rm -rf "$WORK_DIR"
+  mkdir -p "$WORK_DIR"
+fi
+rm -rf "$OUTPUT_DIR" "$BUNDLE_PATH" "${BUNDLE_PATH}.sha256sum"
 mkdir -p "$WORK_DIR" "$OUTPUT_DIR"
 
 if [[ "$KERNEL_TAG" == "bpf-next" && "$KERNEL_SOURCE_DIR" == "$SOURCE_DIR" ]]; then
-  echo "Fetching bpf-next"
-  git clone --depth 1 --single-branch \
-    "${BPF_NEXT_REPOSITORY:-https://git.kernel.org/pub/scm/linux/kernel/git/bpf/bpf-next.git}" \
-    "$KERNEL_SOURCE_DIR"
+  repository="${BPF_NEXT_REPOSITORY:-https://git.kernel.org/pub/scm/linux/kernel/git/bpf/bpf-next.git}"
+  if git -C "$KERNEL_SOURCE_DIR" rev-parse --is-inside-work-tree \
+      >/dev/null 2>&1; then
+    echo "Updating bpf-next"
+    git -C "$KERNEL_SOURCE_DIR" remote set-url origin "$repository"
+    git -C "$KERNEL_SOURCE_DIR" fetch --depth 1 origin HEAD
+    git -C "$KERNEL_SOURCE_DIR" reset --hard FETCH_HEAD
+    git -C "$KERNEL_SOURCE_DIR" clean -fdx
+  else
+    echo "Fetching bpf-next"
+    rm -rf "$KERNEL_SOURCE_DIR"
+    git clone --depth 1 --single-branch "$repository" "$KERNEL_SOURCE_DIR"
+  fi
 elif [[ "$KERNEL_TAG" != "bpf-next" && -z "$KERNEL_SOURCE_DIR_INPUT" ]]; then
   echo "Fetching third-party Linux kernel ${KERNEL_TAG}"
   if [[ -n "$KERNEL_COMMIT" ]]; then
