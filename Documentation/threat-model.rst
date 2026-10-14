@@ -88,78 +88,82 @@ D.  An adversary holding the operator's signing key.  Out of scope:
 4) Threats addressed
 --------------------
 
-T1  Loading unsigned BPF.  ``lsm/bpf`` admits a userspace
-    ``BPF_PROG_LOAD`` only for a ``BPF_PROG_TYPE_SYSCALL`` program that
-    carries a signature.  The kernel verifies that signature against
-    the sealed ``shirudo`` keyring, whose serial is passed as
-    ``attr.keyring_id``, before the verifier runs, and
-    ``lsm/bpf_prog_load`` then requires the verdict ``BPF_SIG_VERIFIED``
-    from exactly that keyring serial.  The payload is hash-locked to the
-    loader by ``excl_prog_hash``.  Root without the key gets
-    ``-EACCES`` or ``-ENOKEY``; a certificate planted in any other
-    keyring is ignored, and a foreign-signed artifact fails with
-    ``ENOKEY``.
+T1  Loading unsigned BPF
+    ``lsm/bpf`` admits a userspace ``BPF_PROG_LOAD`` only for a
+    ``BPF_PROG_TYPE_SYSCALL`` program that carries a signature.  The
+    kernel verifies that signature against the sealed ``shirudo``
+    keyring, whose serial is passed as ``attr.keyring_id``, before the
+    verifier runs, and ``lsm/bpf_prog_load`` then requires the verdict
+    ``BPF_SIG_VERIFIED`` from exactly that keyring serial.  The payload
+    is hash-locked to the loader by ``excl_prog_hash``.  Root without
+    the key gets ``-EACCES`` or ``-ENOKEY``; a certificate planted in
+    any other keyring is ignored, and a foreign-signed artifact fails
+    with ``ENOKEY``.
 
-T2  Detaching or replacing enforcement.  ``lsm/bpf`` denies
-    ``LINK_DETACH``, ``LINK_UPDATE``, ``PROG_ATTACH``, ``PROG_DETACH``
-    and ``BTF_LOAD`` from userspace.  The links are kept alive by pins
-    in a private bpffs; ``inode_unlink`` on that filesystem allows only
-    shirudo's own executable, and ``sb_umount``, ``move_mount``,
-    ``sb_mount`` and ``sb_remount`` deny everyone, so neither ``rm`` nor
-    ``umount`` nor mounting over the directory removes a pin.
-    Infrastructure maps are frozen at creation, so even with the LSM
-    gone userspace could not rewrite the identity map.
+T2  Detaching or replacing enforcement
+    ``lsm/bpf`` denies ``LINK_DETACH``, ``LINK_UPDATE``,
+    ``PROG_ATTACH``, ``PROG_DETACH`` and ``BTF_LOAD`` from userspace.
+    The links are kept alive by pins in a private bpffs;
+    ``inode_unlink`` on that filesystem allows only shirudo's own
+    executable, and ``sb_umount``, ``move_mount``, ``sb_mount`` and
+    ``sb_remount`` deny everyone, so neither ``rm`` nor ``umount`` nor
+    mounting over the directory removes a pin. Infrastructure maps are
+    frozen at creation, so even with the LSM gone userspace could not
+    rewrite the identity map.
 
-T3  Tampering with shirudo's files and process.  Every inode under
-    ``/var/lib/shirudo`` carries the ``security.bpf.shirudo`` label;
-    the seal program allows write open, unlink, rename and xattr
-    changes only to a process whose executable carries the same label,
-    compared by xattr value and never by path.  Marked shirudo tasks
-    cannot be ptraced or perf-sampled, and the process drops
-    dumpability, forbids new privileges and locks sensitive buffers.
-    The keyring is sealed with ``KEYCTL_SETPERM`` so no key can be
-    added or removed for the rest of the boot, and its serial is pinned
-    on disk; a swapped same-name keyring makes every load refuse
-    ``tampered``.
+T3  Tampering with shirudo's files and process
+    Every inode under ``/var/lib/shirudo`` carries the
+    ``security.bpf.shirudo`` label; the seal program allows write open,
+    unlink, rename and xattr changes only to a process whose executable
+    carries the same label, compared by xattr value and never by path.
+    Marked shirudo tasks cannot be ptraced or perf-sampled, and the
+    process drops dumpability, forbids new privileges and locks
+    sensitive buffers. The keyring is sealed with ``KEYCTL_SETPERM`` so
+    no key can be added or removed for the rest of the boot, and its
+    serial is pinned on disk; a swapped same-name keyring makes every
+    load refuse ``tampered``.
 
-T4  Substituting artifacts.  The signature covers the loader
-    instructions and data, so the kernel refuses a modified loader.  An
-    unload directive is itself a signed loader and goes through the same
-    ``BPF_PROG_LOAD``.  Before detaching, shirudo compares the live
-    pin's payload xattr, which only shirudo can write, against the
-    directive's expected payload, and refuses ``payload_mismatch`` on
-    disagreement or when the xattr is unreadable.
+T4  Substituting artifacts
+    The signature covers the loader instructions and data, so the kernel
+    refuses a modified loader.  An unload directive is itself a signed
+    loader and goes through the same ``BPF_PROG_LOAD``.  Before
+    detaching, shirudo compares the live pin's payload xattr, which only
+    shirudo can write, against the directive's expected payload, and
+    refuses ``payload_mismatch`` on disagreement or when the xattr is
+    unreadable.
 
-T5  Silent state change.  Every init, load and unload extends the
-    non-resettable NV index with a domain-separated digest and appends
-    the event to the eventlog.  A load whose extension fails reports
-    ``tpm_error`` rather than succeeding unmeasured; an eventlog that
-    would overflow refuses ``eventlog_full`` before anything happens.
-    Every state-changing command compares the chain to
-    ``--expect-chain`` first and refuses ``tampered`` on drift, which
-    also serialises concurrent operators.  ``shirudo status`` replays
-    the eventlog and flags a chain it cannot explain.  There is no
-    unmeasured mode: a target without a TPM 2.0 does not initialise.
+T5  Silent state change
+    Every init, load and unload extends the non-resettable NV index with
+    a domain-separated digest and appends the event to the eventlog.  A
+    load whose extension fails reports ``tpm_error`` rather than
+    succeeding unmeasured; an eventlog that would overflow refuses
+    ``eventlog_full`` before anything happens. Every state-changing
+    command compares the chain to ``--expect-chain`` first and refuses
+    ``tampered`` on drift, which also serialises concurrent operators.
+    ``shirudo status`` replays the eventlog and flags a chain it cannot
+    explain.  There is no unmeasured mode: a target without a TPM 2.0
+    does not initialise.
 
-T6  The boot window.  Enforcement is BPF and does not survive a reboot
-    by itself.  ``shirudo.service`` runs ``init`` before
-    ``sysinit.target``, re-applies the installed set all or nothing, and
-    extends the chain by exactly one predictable event.  Until it has
-    run the target is unprotected; see residual risk 7.
+T6  The boot window
+    Enforcement is BPF and does not survive a reboot by itself.
+    ``shirudo.service`` runs ``init`` before ``sysinit.target``,
+    re-applies the installed set all or nothing, and extends the chain
+    by exactly one predictable event.  Until it has run the target is
+    unprotected; see residual risk 7.
 
-T7  The delivery path.  The registry index is a detached CMS signature
-    by the operator's key, checked against the certificate registered
-    with the repository; a package installed from a repository is
-    checked against the digests in that signed index; a tree
-    publication is signed, carries per-operation digests and sequence
-    continuity, and a ``delete`` is accepted only for an id loaded from
-    the same tree.  TLS is 1.3 with hybrid ML-KEM only, so the
-    transport is not the weak link even though it is not the trust
-    anchor.
+T7  The delivery path
+    The registry index is a detached CMS signature by the operator's
+    key, checked against the certificate registered with the repository;
+    a package installed from a repository is checked against the digests
+    in that signed index; a tree publication is signed, carries
+    per-operation digests and sequence continuity, and a ``delete`` is
+    accepted only for an id loaded from the same tree.  TLS is 1.3 with
+    hybrid ML-KEM only, so the transport is not the weak link even
+    though it is not the trust anchor.
 
-T8  Quantum-capable adversaries against the trust anchor.  Signing is
-    ML-DSA-87 (FIPS 204) only: ``genkey`` makes nothing else, the
-    builder refuses a classical key, and the pre-flight refuses a
+T8  Quantum-capable adversaries against the trust anchor
+    Signing is ML-DSA-87 (FIPS 204) only: ``genkey`` makes nothing else,
+    the builder refuses a classical key, and the pre-flight refuses a
     classical certificate, so a fleet cannot drift back by
     misconfiguration.  Digests are SHA-256 and SHA-512, which stay well
     above a 128-bit margin against Grover-style search.  Long-lived

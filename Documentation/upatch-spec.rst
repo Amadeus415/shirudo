@@ -76,7 +76,7 @@ offset      size  type    field                  meaning
 8           4     u32     version                ``1``
 12          4     u32     flags                  bit 0 = ``DIRECTIVE_UNLOAD``; bits 1-31 zero
 16          256   char[]  name                   upatch name; NUL-padded, not guaranteed
-                                                  NUL-terminated on disk
+                                                 NUL-terminated on disk
 272         32    u8[]    payload_sha256         SHA-256 of ``loader_insns || data``
 304         4     u32     loader_insns_off       file offset of the loader instructions
 308         4     u32     loader_insns_len       length in bytes (multiple of 8)
