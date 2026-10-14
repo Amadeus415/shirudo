@@ -367,7 +367,7 @@ to a different one while a key is active.  The ``repo update`` and
 ``tree sync`` timers (60 s) and the map-export and keepalive timers
 (5 s) are the only always-on infrastructure.
 
-Upatch trees.  A tree is an append-only, globally ordered sequence of
+upatch trees.  A tree is an append-only, globally ordered sequence of
 ``add`` and ``delete`` operations published as a CMS-signed JSON
 document (``application/vnd.shirudo.upatch.tree.v2+json``), each
 ``.upatch`` pushed as an immutable OCI manifest.  Every operation
