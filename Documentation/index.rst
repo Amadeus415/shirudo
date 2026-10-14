@@ -2,63 +2,97 @@
    SPDX-License-Identifier: BSD-2-Clause
    Copyright (c) 2026 Authors of shirudo
 
-================
 shirudo manual
-================
+==============
 
-shirudo is a BPF LSM-based security platform that locks down the
-``bpf()`` syscall so only signed in-kernel BPF loader programs can
-install BPF code. The userspace tool is agentless on the target side;
-targets pull signed packages from OCI registries and export status over
-OTLP.
+shirudo ("shields", Japanese) is a BPF security platform.  It ships
+BPF live patches, called upatches, to Linux targets without a reboot,
+and it makes sure a target runs only the BPF its operator signed.  Once
+``shirudo init`` has run, the kernel accepts BPF from userspace only
+inside a signed loader program whose signature verifies against the
+certificate in a sealed kernel keyring; root without the signing key
+cannot load, replace or detach BPF, and every state change is measured
+into a TPM NV-extend chain.  The userspace side is one agentless
+``shirudo`` binary: no daemon, no listening socket, one-shot commands
+driven by systemd timers that pull signed packages from OCI registries
+and push state to an OTLP collector.
 
-This index points at the documents in the shirudo source tree. The
-architecture and threat model are the source of truth for the current
-design; the code is authoritative for behaviour.
+The kernel's CVE stream runs at dozens of fixes a day and exploitation
+now regularly precedes the patch, while a fleet reboot cycle takes
+weeks.  shirudo exists for the window in between: an agent or an
+engineer derives a BPF shield from the fix, the operator signs it, and
+the fleet pulls it within the hour, measured and revocable.
 
-.. toctree::
-   :maxdepth: 2
-   :caption: Contents
+This index points at the documents in the tree.  The code is
+authoritative for behaviour; the documents describe it and say why it
+is the way it is.
 
-   requirements
-   architecture
-   threat-model
-   getting-started
-   upatch-spec
-   contributing
-   coding-style
 
-Quick orientation
-=================
+1) Which document
+-----------------
 
-- **Checking whether a host can run shirudo?**
-  :doc:`requirements` lists the kernel options (including
-  ``CONFIG_CRYPTO_MLDSA`` for the default ML-DSA signatures), the
-  operator toolchain and the target runtime.
-- **Just want to deploy shirudo on a target?** Start with
-  :doc:`getting-started`.
-- **Want to understand what shirudo does and how?** Read
-  :doc:`architecture`.
-- **Reviewing the design or considering shirudo for your fleet?**
-  Read :doc:`threat-model`, which enumerates the adversary classes,
-  target- and operator-node threats, and residual risks.
-- **Contributing C or BPF code?** :doc:`contributing` covers the
-  sign-off requirement and commit tags; :doc:`coding-style` is the
-  kernel coding-style document, copied verbatim from the Linux kernel's
-  ``Documentation/process/coding-style.rst``; shirudo applies it to
-  userspace too.
+Checking whether a host can run shirudo
+    `requirements <requirements.rst>`__ lists the kernel options, the
+    operator toolchain and the target runtime, with the reason for
+    each.
 
-Companion files in the repository root
-======================================
+Deploying shirudo
+    `getting-started <getting-started.rst>`__ walks through building,
+    creating a signing key, initialising a target, loading an upatch
+    and publishing packages to a registry.
 
-- ``AGENTS.md`` — guidance for coding agents contributing to shirudo
-  (``CLAUDE.md`` imports it for Claude Code).
-- ``README.md`` — short overview of what shirudo is and where to look.
-- ``LICENSE`` — BSD-2-Clause (userspace). BPF programs declare
-  ``Dual BSD/GPL`` (kernel LSM-hook framework requirement). Vendored
-  files retain their upstream SPDX identifiers.
-- ``upatches/`` — the BPF upatch packages shirudo ships (Linux
-  observability, kernel CVE mitigations), each with its ``Beefile``.
-- ``vendor/libbpf/`` — vendored libbpf and BPF UAPI headers with
-  shirudo's BSD shims for the kernel's ``tools/include`` internals;
-  refreshed by ``make update-bpf-deps``, see its ``README.md``.
+Understanding what shirudo does
+    `architecture <architecture.rst>`__ describes why shirudo exists,
+    its design properties, the signed-loader path, the kernel
+    enforcement programs, the target state, and the delivery and
+    observability paths.
+
+Reviewing the security design
+    `threat-model <threat-model.rst>`__ states the trust boundaries,
+    the adversaries, the threats shirudo addresses with the mechanism
+    behind each, and the residual risks.
+
+Shipping state to a collector
+    `telemetry <telemetry.rst>`__ explains the OTLP export of map
+    snapshots and status keepalives and how to feed them into the
+    OpenTelemetry Collector, ClickHouse, Splunk or a collector of your
+    own.
+
+Reading or writing a ``.upatch``
+    `upatch-spec <upatch-spec.rst>`__ is the byte-level reference for
+    the signed artifact.
+
+Contributing
+    `contributing <contributing.rst>`__ covers commit messages, the
+    mandatory ``Signed-off-by:`` and the kernel's tags.
+    `coding-style <coding-style.rst>`__ is the kernel's coding style,
+    copied verbatim from ``Documentation/process/coding-style.rst``
+    and applied to userspace C and BPF alike.
+
+
+2) Companion files in the repository root
+-----------------------------------------
+
+``AGENTS.md``
+    Guidance for coding agents contributing to shirudo; ``CLAUDE.md``
+    imports it for Claude Code.
+
+``README.md``
+    A short overview of what shirudo is and where to look.
+
+``LICENSE``
+    BSD-2-Clause for userspace.  BPF programs declare ``Dual BSD/GPL``
+    because the kernel's LSM hook framework requires a GPL-compatible
+    licence.  Vendored files keep their upstream SPDX identifiers.
+
+``upatches/``
+    The packages shirudo ships, each with its ``Beefile``.
+
+``vendor/libbpf/``
+    Vendored libbpf and BPF UAPI headers with shirudo's BSD shims for
+    the kernel's ``tools/include`` internals; refreshed by ``make
+    update-bpf-deps``, see its ``README.md``.
+
+``contrib/``
+    ``swtpm.sh`` for a software TPM, the test VM scripts, and the
+    kernel configurations they use.

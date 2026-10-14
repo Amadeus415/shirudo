@@ -7,7 +7,7 @@ not visible from the code.
 
 ## Capability requirement
 
-shirudo is a security-critical BPF LSM platform. A subtle error in
+shirudo is a security-critical BPF security platform. A subtle error in
 signature verification, LSM hook policy, TPM measurement, the pre-flight
 tamper check or the signed-loader artifact format silently invalidates
 the trust model while the code still looks correct, and it ships to
@@ -21,7 +21,7 @@ and `Documentation/threat-model.rst`.
 
 ## What shirudo is
 
-A BPF LSM that locks down the `bpf()` syscall so only signed in-kernel
+A BPF security platform that locks down the `bpf()` syscall so only signed in-kernel
 BPF loader programs can install BPF code, create maps or attach links,
 even for `CAP_SYS_ADMIN`. One plain-C binary serves two roles, chosen by
 what is present on the machine, never by separate builds:
@@ -49,7 +49,8 @@ remote-management or transport layers.
 | `Documentation/architecture.rst` | Implemented architecture, operator/target boundary, BPM package and upatch tree formats. |
 | `Documentation/upatch-spec.rst` | The `.upatch` container and signing scheme. |
 | `Documentation/requirements.rst` | Kernel options, operator toolchain, target runtime. |
-| `Documentation/getting-started.rst` | Operator quickstart: build, package, transfer, load, status, unload. |
+| `Documentation/getting-started.rst` | Quickstart: build, sign, initialise a target, load and unload, publish and install packages. |
+| `Documentation/telemetry.rst` | OTLP export of map snapshots and status keepalives, the signed Lua decoders, and collector integration (OpenTelemetry Collector, ClickHouse, Splunk, custom). |
 | `Documentation/coding-style.rst` | The kernel's coding style, applied to all C here. |
 | `Documentation/contributing.rst` | Commit message form, the mandatory `Signed-off-by:` and the kernel's attribution tags. Read it before crafting a commit. |
 

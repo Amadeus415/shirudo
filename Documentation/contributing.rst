@@ -6,7 +6,7 @@ Contributing
 ==============
 
 shirudo follows the Linux kernel's development conventions for commits:
-the coding style in :doc:`coding-style`, a kernel-style commit message,
+the coding style in `coding-style <coding-style.rst>`__, a kernel-style commit message,
 a mandatory ``Signed-off-by:`` line, and the same set of attribution
 tags. This page states the parts of that process that apply here; the
 kernel's ``Documentation/process/submitting-patches.rst`` is the
@@ -193,6 +193,6 @@ Before sending
   touches target-side behaviour.
 * Keep each commit to one logical change that builds and passes on its
   own, so the history bisects.
-* Read :doc:`threat-model` before changing anything on a
+* Read `threat-model <threat-model.rst>`__ before changing anything on a
   security-relevant path, and say in the commit message which invariant
   the change preserves or extends.
