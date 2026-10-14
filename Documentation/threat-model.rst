@@ -137,11 +137,13 @@ T5  Silent state change
     measurement register with a domain-separated digest and appends
     the event to the eventlog.  The register is an NV extend index
     that clears at TPM reset and is written only under its policy: the
-    first write of a boot needs PCR 15 to hold the value the policy was
-    computed from, and ``init`` extends PCR 15 with the index name right
-    after that write, so an index undefined and recreated at runtime
-    cannot be written again, and one recreated under another policy has
-    a name the eventlog does not know.  A load whose extension fails
+    first write of a boot needs PCRs 9 and 11 to hold the values the
+    policy was computed from, which ``init`` performs from the initrd
+    before ``leave-initrd`` moves PCR 11, and ``init`` extends PCR 9
+    with the index name right after that write, so nothing that runs
+    later can bind, an index undefined and recreated at runtime cannot
+    be written again, and one recreated under another policy has a name
+    the eventlog does not know.  A load whose extension fails
     reports ``tpm_error`` rather than succeeding unmeasured; an eventlog
     that would overflow refuses ``eventlog_full`` before anything
     happens.  Every state-changing command reads the register first and
@@ -158,11 +160,12 @@ T5  Silent state change
 
 T6  The boot window
     Enforcement is BPF and does not survive a reboot by itself.
-    ``shirudo.service`` runs ``init`` before ``sysinit.target``,
-    re-applies the installed set all or nothing, binds the register and
-    extends it by exactly one event an operator predicts from the
-    certificate and the set.  Until it has run the target is
-    unprotected; see residual risk 7.
+    ``shirudo.service`` runs ``init`` from the initrd, after the
+    ``enter-initrd`` phase is measured and before the switch to the
+    root file system, re-applies the installed set all or nothing,
+    binds the register and extends it by exactly one event an
+    operator predicts from the certificate and the set.  Until it has
+    run the target is unprotected; see residual risk 7.
 
 T7  The delivery path
     The registry index is a detached CMS signature by the operator's
@@ -232,7 +235,7 @@ Each of these is known, documented and bounded; none is silent.
     guards close.
 
 4.  Register denial of service.  A process that can open
-    ``/dev/tpmrm0`` can extend PCR 15 or the written register with
+    ``/dev/tpmrm0`` can extend PCR 9 or the written register with
     garbage, and with the owner auth (empty on most TPMs) undefine the
     index.  None of it is hidden: a garbage event fails the replay, a
     recreated index cannot be written and fails the name check, and
@@ -253,9 +256,12 @@ Each of these is known, documented and bounded; none is silent.
     complete fix needs a kernel kfunc that lets ``lsm/key_permission``
     identify the keyring.
 
-7.  The boot window before ``shirudo.service`` has run.  An initramfs
-    stage would close it; the unit runs as early as a root-filesystem
-    service can.
+7.  The boot window before ``init`` has run.  Run from the initrd it
+    is the initrd itself, which the measured boot records in PCRs 9 and
+    11 and the verifier pins.  Started from the root file system
+    instead, every process that runs before it is unconstrained and
+    the binding carries the post-``leave-initrd`` PCR 11 value, which
+    ``--expect-bind-pcr=11`` and ``--require-initrd`` reject.
 
 8.  Registry withholding and replay.  A hostile registry can serve an
     old signed index, or none; it cannot serve a forged one.  Operators
@@ -277,27 +283,32 @@ Each of these is known, documented and bounded; none is silent.
     virtual TPMs usually are, leaves the endorsement key pinned by its
     name as presented at enrolment.
 
-11. The anchor shares PCR 15 with systemd's own system-identity
-    measurements, so ``attest verify`` proves the anchor exactly only
-    when PCR 15 holds nothing else; otherwise it says so and leaves the
+11. The anchor shares PCR 9 with the initrd measurements and with
+    systemd's ``nvpcr-init`` events and their separator, so ``attest
+    verify`` proves the anchor exactly only when nothing is measured
+    into PCR 9 after ``init``, which holds when it runs after
+    ``systemd-pcrnvdone.service``; otherwise it says so and leaves the
     replay of the systemd measurement log, which the evidence carries,
     to the verifier's tooling.  ``--strict-anchor`` turns the note into
-    a failure for systems where PCR 15 is known to hold nothing else.
+    a failure.
 
-12. A root attacker who runs before ``shirudo.service`` can bind and
-    write the register first.  ``init`` then rebinds it under the
-    current PCR 15 value and anchors again, and the evidence shows two
-    anchors and a register the eventlog does not explain; the window is
-    the same one residual risk 7 describes.
+12. A root process that runs before ``init`` in the same boot phase
+    can bind and write the register first, and a record it forges
+    before the eventlog is sealed is indistinguishable from ``init``'s.
+    From the initrd that phase is the initrd itself, measured and
+    pinned; from the root file system it is the window of residual risk
+    7, and the binding then carries a PCR 11 value the verifier can
+    reject.
 
 Deferred mitigations
 ~~~~~~~~~~~~~~~~~~~~
 
-In scope and not yet built: registering the register as a
-systemd NvPCR so that the initrd initialises it under the signed PCR 11
-policy and anchors it in PCR 9, and measuring through
-``systemd-pcrextend`` so systemd's measurement log explains the anchor
-(residual risks 11 and 12); signed PCR policies for the kernel and
+In scope and not yet built: registering the register as a systemd
+NvPCR, so that its name follows the UKI signing key instead of the PCR
+values of each boot and systemd-aware verifiers find it in PCR 9 before
+the separator, and measuring the anchor through ``systemd-pcrextend`` so
+systemd's measurement log explains it (residual risk 11); signed PCR
+policies for the kernel and
 initrd PCRs so a verifier needs no golden values; an in-kernel detach
 so the unload compare runs against signed ``.rodata`` (residual risk
 1); and the keyring kfunc of residual risk 6.

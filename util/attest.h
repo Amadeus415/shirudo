@@ -83,6 +83,9 @@ struct shirudo_attest_expect {
 	uint8_t		pcrs[24][32];
 	bool		have_credential;
 	uint8_t		credential[SHIRUDO_TPM_CREDENTIAL_LEN];
+	bool		require_initrd;	/* the binding must be the initrd's */
+	uint32_t	bind_expect_mask; /* PCR values at binding time */
+	uint8_t		bind_values[24][32];
 };
 
 /*

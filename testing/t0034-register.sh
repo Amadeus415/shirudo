@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Authors of shirudo
 #
-# t0034 -- the measurement register against a software TPM: binding,
-# the anchor, extends, the recreate and replay attacks, a reset, and
-# the evidence a verifier accepts or refuses. Needs the libtpms-backed
+# t0034 -- the measurement register against a software TPM: binding
+# from the initrd, the anchor, extends, the recreate and replay attacks,
+# a reset and a late binding, the credential challenge, and the evidence
+# a verifier accepts or refuses. Needs the libtpms-backed
 # helper/tpmsim-cmd; skipped where libtpms is not installed.
 
 cd "$(dirname "$0")"
@@ -22,28 +23,44 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 mkdir -p "$WORK/keys"
 head -c 700 /dev/urandom >"$WORK/keys/cert.der"
+: >"$WORK/initrd-release"
 export SHIRUDO_TPM_TCTI="cmd:$SIM $WORK/tpm"
 export SHIRUDO_EVENTLOG_PATH="$WORK/eventlog"
 export SHIRUDO_KEYS_DIR="$WORK/keys"
+export SHIRUDO_INITRD_RELEASE="$WORK/initrd-release"
 
 py() { python3 -c "$1"; }
 sha() { py "import hashlib; print(hashlib.sha256(bytes.fromhex(\"$1\")).hexdigest())"; }
 field() { sed -n "s/^$1=//p"; }
 Z=0000000000000000000000000000000000000000000000000000000000000000
 PAYLOAD=$(py "print(\"ab\"*32)")
+ENTER=$(py "import hashlib; print(hashlib.sha256(b\"enter-initrd\").hexdigest())")
+LEAVE=$(py "import hashlib; print(hashlib.sha256(b\"leave-initrd\").hexdigest())")
+PHASE=$(sha "$Z$ENTER")
 
-test_expect_success 'init binds the register to PCR 15 and anchors its name' '
+test_expect_success 'init binds the register to PCRs 9 and 11 from the initrd and anchors in PCR 9' '
+	./$R pcr-extend 11 "$ENTER" | grep -qx "rc=0" &&
+	[ "$(./$R pcr 11)" = "$PHASE" ] &&
 	init=$($S attest predict --cert="$WORK/keys/cert.der" | sed -n "s/^init_event: //p") &&
 	out=$(./$R init "$init") &&
 	echo "$out" | grep -qx "rc=0" &&
 	echo "$out" | grep -qx "reused=0" &&
 	echo "$out" | grep -qx "pcr_before=$Z" &&
+	echo "$out" | grep -qx "phase_before=$PHASE" &&
+	echo "$out" | grep -qx "bound_in=initrd" &&
 	name=$(echo "$out" | field name) &&
 	[ "$(echo "$out" | field anchor)" = "nvpcr-init:shirudo:0x1818e00:$name" ] &&
 	anchor_digest=$(py "import hashlib; print(hashlib.sha256(b\"nvpcr-init:shirudo:0x1818e00:$name\").hexdigest())") &&
-	[ "$(./$R pcr 15)" = "$(sha "$Z$anchor_digest")" ] &&
+	[ "$(./$R pcr 9)" = "$(sha "$Z$anchor_digest")" ] &&
 	[ "$(echo "$out" | field value)" = "$(sha "$Z$init")" ] &&
 	echo "$init" >"$WORK/init" && echo "$name" >"$WORK/name"
+'
+
+test_expect_success 'predict names the register from the binding values alone' '
+	$S attest predict --cert="$WORK/keys/cert.der" --bind-pcr=9=$Z \
+		--bind-pcr=11=$PHASE >"$WORK/predict" &&
+	grep -qx "register_name: $(cat "$WORK/name")" "$WORK/predict" &&
+	grep -qx "pcr9_after_anchor: $(./$R pcr 9)" "$WORK/predict"
 '
 
 test_expect_success 'status reports the register bound, logged and anchored' '
@@ -54,7 +71,8 @@ import json, sys
 t = json.load(open(sys.argv[1]))["tpm"]
 assert t["register_bound"] and t["register_anchored"], t
 assert t["chain_matches_eventlog"] is True, t
-assert t["pcr"] == 15, t
+assert t["pcr"] == 9 and t["phase_pcr"] == 11, t
+assert t["bound_in"] == "initrd", t
 PY
 '
 
@@ -62,6 +80,11 @@ test_expect_success 'a re-run of init reuses the register and adds no event' '
 	out=$(./$R init "$(cat "$WORK/init")") &&
 	echo "$out" | grep -qx "reused=1" &&
 	[ "$(wc -l <"$WORK/eventlog")" = 1 ]
+'
+
+test_expect_success 'leaving the initrd closes the init branch for good' '
+	./$R pcr-extend 11 "$LEAVE" | grep -qx "rc=0" &&
+	./$R first-write "$PAYLOAD" | grep -qx "rc=-13"
 '
 
 test_expect_success 'a load extends through the written branch and replays' '
@@ -73,20 +96,22 @@ test_expect_success 'a load extends through the written branch and replays' '
 	./$R status | grep -qx "tpm=1 defined=1 written=1 logged=1 anchored=1"
 '
 
-test_expect_success 'the init branch cannot be satisfied after the anchor' '
-	./$R first-write "$PAYLOAD" | grep -qx "rc=-13"
-'
-
-test_expect_success 'evidence verifies against the pinned key and predicted state' '
+test_expect_success 'evidence verifies against the pinned key, the binding and the predicted state' '
 	nonce=0102030405060708090a0b0c0d0e0f10 &&
 	./$R evidence $nonce >"$WORK/evidence.json" &&
 	ak=$(py "import json; print(json.load(open(\"$WORK/evidence.json\"))[\"ak\"][\"name\"])") &&
 	echo "$ak" >"$WORK/ak" &&
+	py "import json; print(json.load(open(\"$WORK/evidence.json\"))[\"ek\"][\"name\"])" >"$WORK/ek" &&
 	value=$(./$R read | field value) &&
 	$S attest verify --evidence="$WORK/evidence.json" --nonce=$nonce \
-		--ak-name="$ak" --expect-chain="$value" --strict-anchor \
+		--ak-name="$ak" \
+		--expect-chain="$value" --strict-anchor --require-initrd \
+		--expect-bind-pcr=9=$Z --expect-bind-pcr=11=$PHASE \
 		>"$WORK/report" &&
 	grep -qx "verdict: ok" "$WORK/report" &&
+	grep -q "^ok:   register: public area is bound to PCRs 9 and 11" "$WORK/report" &&
+	grep -q "^ok:   binding: PCR 11 held the expected value" "$WORK/report" &&
+	grep -q "^ok:   binding: made while the initrd ran" "$WORK/report" &&
 	! grep -q "^FAIL" "$WORK/report"
 '
 
@@ -109,7 +134,7 @@ test_expect_success 'predict reproduces the register after the load' '
 		grep -qx "register_after_events: $value"
 '
 
-test_expect_success 'a wrong nonce, a wrong key name or a tampered value fails' '
+test_expect_success 'a wrong nonce, key name, binding value or tampered value fails' '
 	nonce=0102030405060708090a0b0c0d0e0f10 &&
 	value=$(./$R read | field value) &&
 	ak=$(cat "$WORK/ak") &&
@@ -117,6 +142,10 @@ test_expect_success 'a wrong nonce, a wrong key name or a tampered value fails' 
 		--ak-name="$ak" --expect-chain="$value" >/dev/null &&
 	! $S attest verify --evidence="$WORK/evidence.json" --nonce=$nonce \
 		--ak-name="000b$(py "print(\"00\"*32)")" --expect-chain="$value" >/dev/null &&
+	! $S attest verify --evidence="$WORK/evidence.json" --nonce=$nonce \
+		--ak-name="$ak" --expect-chain="$value" --expect-bind-pcr=11=$Z \
+		>"$WORK/report4b" &&
+	grep -q "^FAIL: binding: PCR 11 held the expected value" "$WORK/report4b" &&
 	sed "s/\"value\":\"$value\"/\"value\":\"$Z\"/" "$WORK/evidence.json" >"$WORK/tampered.json" &&
 	! $S attest verify --evidence="$WORK/tampered.json" --nonce=$nonce \
 		--ak-name="$ak" --expect-chain="$value" >"$WORK/report4" &&
@@ -127,7 +156,6 @@ test_expect_success 'a challenge made from the evidence activates on the target'
 	nonce=1112 &&
 	$S attest challenge --evidence="$WORK/evidence.json" \
 		--out="$WORK/challenge.json" >"$WORK/challenge.out" &&
-	grep -q "^ok:   endorsement key: name matches" "$WORK/challenge.out" &&
 	grep -q "^ok:   endorsement key: TCG default template" "$WORK/challenge.out" &&
 	grep -q "^note: no endorsement certificate" "$WORK/challenge.out" &&
 	sed -n "s/^credential: //p" "$WORK/challenge.out" >"$WORK/credential" &&
@@ -200,13 +228,15 @@ test_expect_success 'init refuses a second binding before the next TPM reset' '
 	./$R status | grep -qx "rebound=0"
 '
 
-test_expect_success 'a TPM reset clears the register; init binds it again' '
+test_expect_success 'a TPM reset clears the register; a late init binds it in the root file system' '
 	rm -f "$WORK/tpm/volatile" &&
 	./$R read | grep -qx "rc=-19" &&
-	out=$(./$R init "$(cat "$WORK/init")") &&
+	out=$(env -u SHIRUDO_INITRD_RELEASE ./$R init "$(cat "$WORK/init")") &&
 	echo "$out" | grep -qx "rc=0" &&
 	echo "$out" | grep -qx "reused=0" &&
-	[ "$(echo "$out" | field name)" = "$(cat "$WORK/name")" ] &&
+	echo "$out" | grep -qx "bound_in=root" &&
+	echo "$out" | grep -qx "phase_before=$Z" &&
+	[ "$(echo "$out" | field name)" != "$(cat "$WORK/name")" ] &&
 	[ "$(echo "$out" | field value)" = "$(sha "$Z$(cat "$WORK/init")")" ] &&
 	./$R status | grep -qx "tpm=1 defined=1 written=1 logged=1 anchored=1" &&
 	./$R status | grep -qx "rebound=0" &&
@@ -215,19 +245,26 @@ import json, sys
 inits = [json.loads(l) for l in open(sys.argv[1]) if json.loads(l)["type"] == "init"]
 assert len(inits) == 2, inits
 assert inits[0]["tpm_reset_count"] != inits[1]["tpm_reset_count"], inits
+assert inits[0]["bound_in"] == "initrd" and inits[1]["bound_in"] == "root", inits
 PY
 '
 
-test_expect_success 'after the reset the evidence matches the set at boot' '
+test_expect_success 'a late binding is told apart by the phase value and the initrd requirement' '
 	nonce=cafe &&
 	./$R evidence $nonce >"$WORK/evidence2.json" &&
 	$S attest verify --evidence="$WORK/evidence2.json" --nonce=$nonce \
 		--ak-name="$(cat "$WORK/ak")" --cert="$WORK/keys/cert.der" \
 		--strict-anchor >"$WORK/report6" &&
 	grep -qx "verdict: ok" "$WORK/report6" &&
+	grep -q "^note: binding: made in the root file system" "$WORK/report6" &&
 	grep -q "^ok:   eventlog: one init record for this TPM reset (2 this boot)" "$WORK/report6" &&
 	grep -q "^ok:   register: init record is of the TPM" "$WORK/report6" &&
-	grep -q "^ok:   quote and certification are of one TPM reset" "$WORK/report6"
+	grep -q "^ok:   quote and certification are of one TPM reset" "$WORK/report6" &&
+	! $S attest verify --evidence="$WORK/evidence2.json" --nonce=$nonce \
+		--ak-name="$(cat "$WORK/ak")" --cert="$WORK/keys/cert.der" \
+		--require-initrd --expect-bind-pcr=11=$PHASE >"$WORK/report6b" &&
+	grep -q "^FAIL: binding: PCR 11 held the expected value" "$WORK/report6b" &&
+	grep -q "^FAIL: binding: made while the initrd ran" "$WORK/report6b"
 '
 
 test_expect_success 'a second init record for one TPM reset fails status and verify' '

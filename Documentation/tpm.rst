@@ -65,9 +65,12 @@ The write policy is ``PolicyOR(written, init)`` with two branches:
   threat; rewriting it is.
 
 * ``init`` is ``PolicyNvWritten(NO)`` followed by ``PolicyPCR`` over
-  PCR 15 at the value it holds when ``init`` binds the register.  It
-  admits the first write of a boot, and only while PCR 15 still holds
-  that value.
+  PCRs 9 and 11 at the values they hold when ``init`` binds the
+  register.  It admits the first write of a boot, and only while both
+  still hold those values.  PCR 9 carries the initrd measurements and
+  takes the anchor; PCR 11 carries systemd's boot phase and moves at
+  ``leave-initrd``, so a register bound from the initrd can be bound by
+  nothing that runs after it.
 
 The index's TPM name is the SHA-256 of its public area (handle, name
 algorithm, attributes, policy digest, size), prefixed with the
@@ -79,11 +82,15 @@ anchor carries and every later comparison uses.
 Binding at boot
 ~~~~~~~~~~~~~~~
 
-``shirudo init`` binds the register after it has re-applied the
-installed set, in this order:
+``shirudo init`` is meant to run from the initrd, after
+``systemd-pcrphase-initrd.service`` has measured ``enter-initrd`` into
+PCR 11 and before the switch to the root file system, which is how the
+shipped unit orders itself; it binds the register after it has
+re-applied the installed set, in this order:
 
-1. Read PCR 15; that value is ``pcr_before``.  Compute both policy
-   branches, the policy digest and the two names from it.
+1. Read PCRs 9 and 11; the values are ``pcr_before`` and
+   ``phase_before``.  Compute both policy branches, the policy digest
+   and the two names from them.
 
 2. If the index exists from an earlier boot, is unwritten and carries
    the expected unwritten name, keep it.  Otherwise define it under
@@ -99,15 +106,24 @@ installed set, in this order:
    a drift between ``util/tpm_wire.c`` and the TPM fails with a clear
    message instead of ``TPM2_RC_POLICY_FAIL``.
 
-4. Anchor: extend PCR 15 with ``SHA256(anchor)`` where the anchor is
+4. Anchor: extend PCR 9 with ``SHA256(anchor)`` where the anchor is
    the string ``nvpcr-init:shirudo:0x1818e00:<written name hex>``,
    systemd's ``nvpcr-init`` event format.  From this moment the
    ``init`` branch cannot be satisfied again until the next TPM
-   reset, because PCR 15 no longer holds ``pcr_before``.
+   reset, because PCR 9 no longer holds ``pcr_before``; once systemd
+   measures ``leave-initrd``, PCR 11 does not hold ``phase_before``
+   either.
 
-5. Append the ``init`` record to the eventlog (section 3) with
-   ``pcr_before``, the written name, the anchor and its digest, the
-   register value and the TPM's reset count.
+5. Append the ``init`` record to the eventlog (section 3) with both
+   PCR values, whether the initrd was running, the written name, the
+   anchor and its digest, the register value and the TPM's reset
+   count.
+
+Run from the root file system instead, ``init`` binds all the same,
+with the post-initrd PCR 11 value and ``bound_in: root`` on the
+record, and warns; a verifier that pins the ``enter-initrd`` value or
+requires the initrd binding rejects such evidence, which is what tells
+a late binding, by ``init`` or by anyone else, from the real one.
 
 The reset count, read with ``TPM2_ReadClock``, changes at every TPM
 reset and nowhere else, so a record of this boot for the current count
@@ -119,7 +135,7 @@ a second binding would restart the history the record vouches for.
 Without a record for the current count, whether the boot is new or
 the TPM was reset without a reboot, the index is bound; one found
 written by someone else first is undefined and bound again, with a
-warning, and PCR 15 then carries both anchors.
+warning, and PCR 9 then carries both anchors.
 
 Extending later
 ~~~~~~~~~~~~~~~
@@ -134,7 +150,8 @@ first and refuses ``tampered`` when ``--expect-chain`` disagrees, which
 serialises concurrent operators.
 
 Consequences: an index undefined and recreated at runtime under the
-same policy cannot be written, because PCR 15 has moved; one recreated
+same policy cannot be written, because PCRs 9 and 11 have moved; one
+recreated
 under another policy has a name the record does not know; and the
 register value at any time is a pure function of the certificate, the
 installed set, the tree root and the events since boot, so the
@@ -197,9 +214,10 @@ extension, written with ``fsync`` and sealed like everything under
 ``init``
     ``tpm_reset_count``, ``cert_sha256``, ``set_digest``,
     ``tree_root``, ``set`` (the listing as ``name`` and
-    ``payload_sha256`` pairs), ``pcr`` (15), ``pcr_before``,
-    ``nv_name`` (the written name), ``anchor``, ``anchor_digest`` and
-    ``chain`` (the register after the event).
+    ``payload_sha256`` pairs), ``pcr`` (9), ``pcr_before``,
+    ``phase_pcr`` (11), ``phase_before``, ``bound_in`` (``initrd`` or
+    ``root``), ``nv_name`` (the written name), ``anchor``,
+    ``anchor_digest`` and ``chain`` (the register after the event).
 
 ``upatch_load`` and ``upatch_unload``
     ``upatch`` with ``name`` and ``payload_sha256``.
@@ -214,8 +232,8 @@ the live register; ``shirudo status`` does that replay, checks that
 the live index carries the recorded name and that the record is of
 the TPM's current reset count, and reports ``register_bound``,
 ``register_anchored``, ``init_records``, ``register_rebound``,
-``nv_name``, ``pcr``, ``pcr_before``, ``chain`` and
-``chain_matches_eventlog``.  A register that exists without a record
+``nv_name``, ``pcr``, ``pcr_before``, ``phase_pcr``, ``phase_before``,
+``bound_in``, ``chain`` and ``chain_matches_eventlog``.  A register that exists without a record
 of this boot, that the records do not explain, or that a second init
 record for one reset count shows was bound again, is reported as a
 mismatch.  An operation that would push the eventlog past
@@ -273,7 +291,7 @@ one JSON document, ``kind`` ``shirudo-attestation``, ``schema`` 1:
     those values; otherwise both are taken again, up to three times.
 
 ``register``
-    ``nv_index``, ``pcr`` (15), ``name`` (the live index name),
+    ``nv_index``, ``pcr`` (9), ``name`` (the live index name),
     ``value``, and ``attest`` and ``signature`` from
     ``TPM2_NV_Certify`` of the index's 32 bytes at offset 0 with the
     same nonce.  The certification names the index, so it binds the
@@ -362,9 +380,11 @@ Both run on the operator and touch no TPM.
 
 ``shirudo attest verify --evidence=<path> --nonce=<hex> --ak-name=<hex>
 [--cert=<cert.der> --upatch=<file>... --expect=<name>=<hex>...
---tree-root=<hex>] [--expect-chain=<hex>] [--expect-pcr=<n>=<hex>...]
-[--expect-credential=<hex>] [--allow-runtime-events] [--strict-anchor]``
-prints one line per check and a verdict.  The checks, in order:
+--tree-root=<hex>] [--expect-chain=<hex>]
+[--expect-pcr=<n>=<hex>...] [--expect-bind-pcr=<n>=<hex>...]
+[--require-initrd] [--expect-credential=<hex>] [--allow-runtime-events]
+[--strict-anchor]`` prints one line per check and a verdict.  The
+checks, in order:
 
 1. The nonce in the document is the one given.
 2. The attestation key's public area is a P-256 ECDSA key with
@@ -384,10 +404,14 @@ prints one line per check and a verdict.  The checks, in order:
    checks, the certified index name equal to the listed name, and the
    certified 32 bytes at offset 0 equal to the listed value.
 5. The binding: this boot has an ``init`` record; the name a register
-   bound to that record's ``pcr_before`` must have, computed in
-   software from the handle, the attributes with ``TPMA_NV_WRITTEN``,
-   the policy and the size, equals both the certified name and the
-   recorded one.
+   bound to that record's ``pcr_before`` and ``phase_before`` must
+   have, computed in software from the handle, the attributes with
+   ``TPMA_NV_WRITTEN``, the policy and the size, equals both the
+   certified name and the recorded one.  Every ``--expect-bind-pcr``
+   value equals the recorded one for that PCR, so the operator pins
+   the ``enter-initrd`` phase value from the UKI, and
+   ``--require-initrd`` fails unless the record says the binding was
+   made while the initrd ran.
 6. The reset: the boot holds one init record for the reset count the
    last one names, that count is the one the certification carries,
    and the quote and the certification carry the same reset count and
@@ -396,8 +420,8 @@ prints one line per check and a verdict.  The checks, in order:
 7. The replay: this boot's records fold from zeros to the certified
    value.
 8. The anchor: the record's anchor digest is the digest of the anchor
-   string for the recorded name, and the quoted PCR 15 equals
-   ``pcr_before`` extended by it.  When PCR 15 holds further
+   string for the recorded name, and the quoted PCR 9 equals
+   ``pcr_before`` extended by it.  When PCR 9 holds further
    measurements the check is a note unless ``--strict-anchor`` makes
    it a failure.
 9. The expected state: with ``--cert`` the init event equals the one
@@ -417,6 +441,9 @@ not shirudo evidence exits 2.
 --event=tree:<seq>=<operation_digest>...]`` prints ``set_digest``,
 ``init_event``, ``register_at_boot`` and, with events,
 ``register_after_events``, from the same functions the target uses.
+With ``--bind-pcr=9=<hex> --bind-pcr=11=<hex>`` it also prints
+``register_name``, the anchor string and ``pcr9_after_anchor``, so the
+name and PCR 9 can be pinned from values the operator knows.
 
 ``shirudo attest challenge --evidence=<path> --out=<path>
 [--ek-ca=<bundle>]`` is described in section 4; it prints its checks,
@@ -449,30 +476,30 @@ Different from it, and why it matters:
   branch closes when ``leave-initrd`` is measured.  The name is then
   stable across kernel updates, and it is unsatisfiable at runtime
   whatever an attacker does.  v263 adds a plain ``PolicyPCR`` fallback
-  where no signed policy exists.  shirudo binds to PCR 15 at the time
-  ``shirudo.service`` runs, in the root file system, and closes the
-  branch by extending PCR 15 itself.  The name therefore depends on
-  ``pcr_before`` and the record has to carry it; the verifier recomputes
-  the name from that recorded value rather than from a constant it
-  knows independently.
+  where no signed policy exists, and that is shirudo's construction:
+  a plain ``PolicyPCR`` over PCRs 9 and 11, bound from the initrd at
+  ``enter-initrd`` and closed by ``leave-initrd`` and by the anchor.
+  The name therefore changes with the initrd and the phase value, so
+  the record carries both and the operator pins them from the UKI with
+  ``--expect-bind-pcr``.
 
-* **The anchor's PCR.**  systemd measures the ``nvpcr-init`` event into
-  PCR 9, then ``nvpcr-separator`` once the initrd has initialised every
-  NvPCR, and a verifier trusts a certified name only if it appears in
-  the PCR 9 log before the separator.  shirudo extends PCR 15 and keeps
-  the anchor in its own eventlog; the extension does not appear in
-  systemd's measurement log, so tooling that replays PCR 15 from that
-  log alone cannot explain it, and the exact anchor check holds only
-  while nothing extends PCR 15 after ``init``.
+* **The anchor's PCR.**  Both measure the ``nvpcr-init`` event into PCR
+  9.  systemd does so through ``systemd-pcrextend`` before
+  ``nvpcr-separator``, and its verifiers trust a certified name only if
+  it appears in the PCR 9 log before the separator; shirudo extends PCR
+  9 itself, after the separator when ordered after
+  ``systemd-pcrnvdone.service``, and keeps the anchor in its own
+  eventlog, so the extension does not appear in systemd's measurement
+  log and systemd-aware tooling has to take it from the evidence.
 
 * **Registration.**  The register is not a ``*.nvpcr`` definition and
   has a handle of its own, so systemd neither initialises nor extends
   it, and systemd-aware verifiers do not know it.
 
-Registering the register as a systemd NvPCR, so that the initrd
-initialises it under the signed policy and anchors it in PCR 9 and
-shirudo only extends it, is the deferred step that would remove all
-three differences; until then the two coexist without interfering.
+Registering the register as a systemd NvPCR, so that its name follows
+the UKI signing key and systemd anchors it before the separator while
+shirudo only extends it, is the deferred step that would remove the
+remaining differences; until then the two coexist without interfering.
 
 
 7) Limits
@@ -482,14 +509,15 @@ These are the known limits of the design as implemented; the
 `threat-model <threat-model.rst>`__ residual risks give the full
 context and the deferred mitigations the plan.
 
-* **The binding is read from the target.**  ``verify`` recomputes the
-  index name from the ``pcr_before`` the init record claims rather
-  than from a value it knows independently, which is why one init
-  record per TPM reset and the reset count in the certification are
-  checked.  Root with the owner authorisation (empty on most TPMs) can
-  still undefine the written index at runtime; from then on every
-  extension and ``init`` itself refuse ``tampered`` until the next TPM
-  reset, a denial of service and not an erasure.
+* **The binding values come from the record unless pinned.**
+  ``verify`` recomputes the index name from the ``pcr_before`` and
+  ``phase_before`` the init record claims; ``--expect-bind-pcr`` makes
+  them values the operator knows, and ``predict --bind-pcr`` turns
+  those into the expected name and PCR 9.  Root with the owner
+  authorisation (empty on most TPMs) can still undefine the written
+  index at runtime; from then on every extension and ``init`` itself
+  refuse ``tampered`` until the next TPM reset, a denial of service and
+  not an erasure.
 
 * **The endorsement key's trust is the certificate's.**  Credential
   activation proves the attestation key sits beside the endorsement
@@ -499,13 +527,15 @@ context and the deferred mitigations the plan.
   without a certificate, as virtual TPMs usually are, leaves the
   endorsement key pinned by its name as presented at enrolment.
 
-* **PCR 15 is shared.**  systemd measures the machine ID and file
-  system identities into PCR 15, before and possibly after ``init``;
-  an unlock policy bound to PCR 15 has to account for the anchor.
+* **PCR 9 after the anchor.**  The exact anchor check holds while
+  nothing is measured into PCR 9 after ``init``; systemd's
+  ``nvpcr-separator`` lands there, so ``init`` orders after
+  ``systemd-pcrnvdone.service``.
 
-* **The boot window.**  Until ``shirudo.service`` has run, anyone can
-  bind the register first; ``init`` then rebinds it and PCR 15 shows
-  two anchors.  An initrd stage would close this.
+* **The boot window.**  Run from the initrd, ``init`` can be preceded
+  only by what the initrd runs before it, which the measured boot
+  records; a binding made from the root file system is one the
+  verifier can reject, not one it can prevent.
 
 * **A TPM reset without a reboot.**  Resuming from hibernation resets
   the TPM but keeps the kernel's boot ID, so the register is gone while
@@ -524,8 +554,9 @@ context and the deferred mitigations the plan.
 parsers, the key derivations, the endorsement policy and the
 credential blob against known vectors and an independent
 implementation, without a TPM.  ``testing/t0034-register.sh`` drives the
-whole register and attestation path, the credential challenge with an
-ECC and an RSA endorsement key included, against libtpms:
+whole register and attestation path, the initrd phases simulated as
+PCR 11 extensions, the credential challenge with an ECC and an RSA
+endorsement key included, against libtpms:
 ``testing/helper/tpmsim-cmd`` is a ``cmd:`` TCTI driver around the simulator,
 built when ``pkg-config libtpms`` succeeds, and ``testing/helper/test-register``
 exercises binding, extending, replay, recreation, a TPM reset and

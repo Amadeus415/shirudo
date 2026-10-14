@@ -318,16 +318,21 @@ Measurement register.  The measurement lives in a TPM 2.0 NV index
 (default ``0x01818E00``) built the way systemd builds its NvPCRs: an
 extend-only index (``TPM2_NT_EXTEND``) whose contents clear at every
 TPM reset (``TPMA_NV_CLEAR_STCLEAR``) and whose write policy is
-``PolicyOR(PolicyNvWritten(YES), PolicyNvWritten(NO) || PolicyPCR(PCR
-15))``, computed from the value PCR 15 holds when ``init`` binds the
-register.  ``init`` performs the first write through the PCR branch
-and then extends PCR 15 with the record
-``nvpcr-init:shirudo:0x1818e00:<name>`` (systemd's ``nvpcr-init``
-format, ``<name>`` being the index's TPM name), so that branch can
-never be satisfied again until the next reset; every later extend
-presents the written branch.  An index undefined and recreated at
-runtime therefore stays unwritable, and one recreated under a weaker
-policy has a name other than the one ``init`` recorded and anchored.
+``PolicyOR(PolicyNvWritten(YES), PolicyNvWritten(NO) || PolicyPCR(PCRs
+9, 11))``, computed from the values PCRs 9 and 11 hold when ``init``
+binds the register.  ``init`` runs from the initrd, after systemd has
+measured ``enter-initrd`` into PCR 11 and before ``leave-initrd``
+moves it, performs the first write through the PCR branch and then
+extends PCR 9 with the record ``nvpcr-init:shirudo:0x1818e00:<name>``
+(systemd's ``nvpcr-init`` format, ``<name>`` being the index's TPM
+name), so that branch can never be satisfied again until the next
+reset and nothing that runs after the initrd can bind at all; every
+later extend presents the written branch.  An index undefined and
+recreated at runtime therefore stays unwritable, and one recreated
+under a weaker policy has a name other than the one ``init`` recorded
+and anchored.  The record carries both PCR values and whether the
+initrd was running, so a verifier pins the ``enter-initrd`` value and
+refuses a binding made from the root file system.
 Reads need no authorisation; defining and undefining the index needs
 the owner hierarchy, whose password, when set, comes from
 ``tpm.owner_auth`` in ``/etc/shirudo/shirudo.conf``.  Every

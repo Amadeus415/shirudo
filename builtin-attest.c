@@ -26,6 +26,7 @@
 #include "util/log.h"
 #include "util/macros.h"
 #include "util/malloc.h"
+#include "util/paths.h"
 #include "util/upatch.h"
 
 #define EVIDENCE_MAX		SHIRUDO_JSON_MAX_BYTES
@@ -57,6 +58,8 @@ static const struct shirudo_help_item verify_options[] = {
 	{ "--allow-runtime-events", "accept loads and unloads after boot" },
 	{ "--strict-anchor",       "require the anchoring PCR to hold only the anchor" },
 	{ "--expect-credential=<hex>", "the credential the challenge given to the target carried" },
+	{ "--expect-bind-pcr=<n>=<hex>", "a PCR value the register was bound under (repeatable)" },
+	{ "--require-initrd",      "fail unless init bound the register from the initrd" },
 };
 
 static const struct shirudo_help_item challenge_options[] = {
@@ -71,6 +74,7 @@ static const struct shirudo_help_item predict_options[] = {
 	{ "--expect=<name>=<hex>", "an installed upatch by name and payload digest" },
 	{ "--tree-root=<hex>",     "the upatch tree projection root at boot" },
 	{ "--event=<kind>:<name>=<hex>", "a load, unload or tree:<seq> event after boot" },
+	{ "--bind-pcr=<n>=<hex>",  "PCR 9 and 11 values at binding, for the register name" },
 };
 
 static const struct shirudo_help_section attest_help_sections[] = {
@@ -261,11 +265,11 @@ static int apply_event(const char *spec, uint8_t chain[32])
 static int cmd_attest_predict(int argc, const char **argv)
 {
 	uint8_t cert_sha[32], tree_root[32] = {}, set_digest[32], init[32];
-	uint8_t chain[32] = {};
+	uint8_t bind[2][32], chain[32] = {};
 	const char *events[EVENTS_MAX];
 	struct members m = {};
-	char hex[65];
-	bool have_cert = false;
+	char hex[2 * SHIRUDO_TPM_NAME_LEN + 1];
+	bool have_cert = false, have_bind[2] = {};
 	size_t n_events = 0, i;
 	int ret = 2;
 
@@ -294,6 +298,21 @@ static int cmd_attest_predict(int argc, const char **argv)
 			if (n_events >= EVENTS_MAX)
 				goto out;
 			events[n_events++] = a + 8;
+		} else if (!strncmp(a, "--bind-pcr=", 11)) {
+			char *end;
+			unsigned long n = strtoul(a + 11, &end, 10);
+			int slot = n == SHIRUDO_CHAIN_PCR ? 0 :
+				   n == SHIRUDO_CHAIN_PHASE_PCR ? 1 : -1;
+
+			if (end == a + 11 || *end != '=' || slot < 0 ||
+			    parse_hex32("--bind-pcr value", end + 1,
+					bind[slot])) {
+				pr_err("attest predict: --bind-pcr takes "
+				       "%u=<hex> or %u=<hex>", SHIRUDO_CHAIN_PCR,
+				       SHIRUDO_CHAIN_PHASE_PCR);
+				goto out;
+			}
+			have_bind[slot] = true;
 		} else if (shirudo_is_help(a)) {
 			shirudo_print_help(&attest_help);
 			ret = 0;
@@ -325,6 +344,30 @@ static int cmd_attest_predict(int argc, const char **argv)
 	if (n_events) {
 		shirudo_hex_encode(chain, 32, hex);
 		printf("register_after_events: %s\n", hex);
+	}
+	if (have_bind[0] && have_bind[1]) {
+		uint8_t branch_written[32], branch_init[32], policy[32];
+		uint8_t name[SHIRUDO_TPM_NAME_LEN], anchor_digest[32];
+		char anchor[SHIRUDO_CHAIN_ANCHOR_MAX];
+
+		shirudo_tpm_register_policy(SHIRUDO_CHAIN_PCR_MASK, bind[0], 2,
+					    branch_written, branch_init,
+					    policy);
+		shirudo_tpm_nv_name(SHIRUDO_NV_INDEX,
+				    SHIRUDO_TPM_REGISTER_ATTRS |
+				    SHIRUDO_TPM_NV_WRITTEN, policy, 32, name);
+		shirudo_hex_encode(name, sizeof(name), hex);
+		printf("register_name: %s\n", hex);
+		shirudo_chain_anchor(name, anchor, sizeof(anchor));
+		printf("anchor: %s\n", anchor);
+		shirudo_sha256(anchor, strlen(anchor), anchor_digest);
+		shirudo_chain_fold(bind[0], anchor_digest);
+		shirudo_hex_encode(bind[0], 32, hex);
+		printf("pcr%u_after_anchor: %s\n", SHIRUDO_CHAIN_PCR, hex);
+	} else if (have_bind[0] || have_bind[1]) {
+		pr_err("attest predict: --bind-pcr needs both %u and %u",
+		       SHIRUDO_CHAIN_PCR, SHIRUDO_CHAIN_PHASE_PCR);
+		goto out;
 	}
 	ret = 0;
 out:
@@ -446,6 +489,17 @@ static int cmd_attest_verify(int argc, const char **argv)
 					x.credential))
 				goto out;
 			x.have_credential = true;
+		} else if (!strncmp(a, "--expect-bind-pcr=", 18)) {
+			char *end;
+			unsigned long n = strtoul(a + 18, &end, 10);
+
+			if (end == a + 18 || *end != '=' || n >= 24 ||
+			    parse_hex32("--expect-bind-pcr value", end + 1,
+					x.bind_values[n]))
+				goto out;
+			x.bind_expect_mask |= 1u << n;
+		} else if (!strcmp(a, "--require-initrd")) {
+			x.require_initrd = true;
 		} else if (shirudo_is_help(a)) {
 			shirudo_print_help(&attest_help);
 			ret = 0;

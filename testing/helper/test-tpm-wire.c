@@ -65,13 +65,14 @@ int main(int argc, char **argv)
 		puthex(out, 32);
 		return 0;
 	}
-	if (strcmp(argv[1], "register-policy") == 0 && argc == 4) {
-		uint8_t w[32], i[32], p[32];
+	if (strcmp(argv[1], "register-policy") == 0 && argc == 5) {
+		uint8_t w[32], i[32], p[32], values[64];
 
-		if (shirudo_hex_decode(argv[3], a, 32))
+		if (shirudo_hex_decode(argv[3], values, 32) ||
+		    shirudo_hex_decode(argv[4], values + 32, 32))
 			return 2;
 		shirudo_tpm_register_policy((uint32_t)strtoul(argv[2], NULL, 0),
-					    a, w, i, p);
+					    values, 2, w, i, p);
 		puthex(w, 32);
 		puthex(i, 32);
 		puthex(p, 32);

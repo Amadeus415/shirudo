@@ -7,13 +7,13 @@
 # persisted upatches, binds this boot's measurement register and
 # extends it by one event.
 #
-# It runs as EARLY as a filesystem-dependent service can: right after
-# local filesystems are up (so /var/lib/shirudo is readable) and inside
-# the sysinit phase, ahead of networking, container runtimes, and every
-# other potential BPF loader. The point is to have the bpf() lockdown
-# and the filesystem seal enforcing before anything unsigned can load
-# BPF or touch shirudo's state. DefaultDependencies=no drops the
-# implicit ordering-after-basic.target that would otherwise hold it back.
+# It is meant to run from the initrd, with /var/lib/shirudo and
+# /etc/shirudo reachable at their usual paths: the register binds while
+# PCR 11 still holds the enter-initrd phase, which no later process can
+# bring back. Included in an initrd it therefore orders after the phase
+# measurement and the TPM setup and before the switch to the root file
+# system; installed in the root file system instead it runs as early as
+# a filesystem-dependent service can, inside the sysinit phase.
 #
 # Install: `make install` drops this file; enable with
 #   systemctl enable shirudo.service
@@ -23,8 +23,9 @@
 [Unit]
 Description=shirudo: bring up the BPF LSM and re-apply signed upatches
 DefaultDependencies=no
-After=local-fs.target
-Before=sysinit.target shutdown.target
+After=local-fs.target systemd-pcrphase-initrd.service
+After=systemd-tpm2-setup-early.service systemd-pcrnvdone.service
+Before=sysinit.target shutdown.target initrd-switch-root.target
 Conflicts=shutdown.target
 RequiresMountsFor=/var/lib/shirudo
 

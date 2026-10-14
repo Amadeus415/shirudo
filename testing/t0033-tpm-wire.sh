@@ -31,15 +31,15 @@ test_expect_success 'PolicyOR starts from zero and folds both branches' '
 	[ "$(./$H or $a $b)" = "$want" ]
 '
 
-test_expect_success 'register policy = OR(written, unwritten+PCR(H(value)))' '
-	v=$(py "print(\"cd\"*32)") &&
-	out=$(./$H register-policy 0x8000 $v) &&
+test_expect_success 'register policy = OR(written, unwritten+PCR(H(values)))' '
+	v9=$(py "print(\"cd\"*32)") && v11=$(py "print(\"ef\"*32)") &&
+	out=$(./$H register-policy 0xa00 $v9 $v11) &&
 	w=$(echo "$out" | sed -n 1p) && i=$(echo "$out" | sed -n 2p) &&
 	p=$(echo "$out" | sed -n 3p) &&
 	[ "$w" = "$(./$H nv-written $Z 1)" ] &&
 	unwritten=$(./$H nv-written $Z 0) &&
-	vd=$(py "import hashlib; print(hashlib.sha256(bytes.fromhex(\"cd\"*32)).hexdigest())") &&
-	[ "$i" = "$(./$H pcr $unwritten 0x8000 $vd)" ] &&
+	vd=$(py "import hashlib; print(hashlib.sha256(bytes.fromhex(\"cd\"*32 + \"ef\"*32)).hexdigest())") &&
+	[ "$i" = "$(./$H pcr $unwritten 0xa00 $vd)" ] &&
 	[ "$p" = "$(./$H or $w $i)" ]
 '
 

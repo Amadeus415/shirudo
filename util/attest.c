@@ -381,10 +381,13 @@ struct record {
 struct init_record {
 	bool		present;
 	bool		have_reset_count;
+	bool		initrd;
 	uint32_t	reset_count;
 	unsigned int	pcr;
+	unsigned int	phase_pcr;
 	uint8_t		digest[32];
 	uint8_t		pcr_before[32];
+	uint8_t		phase_before[32];
 	uint8_t		name[SHIRUDO_TPM_NAME_LEN];
 	uint8_t		anchor_digest[32];
 	uint8_t		chain[32];
@@ -418,11 +421,14 @@ struct parse {
 	char		type[16];
 	char		digest_hex[65];
 	char		pcr_before_hex[65];
+	char		phase_before_hex[65];
+	char		bound_in[8];
 	char		nv_name_hex[2 * SHIRUDO_TPM_NAME_LEN + 1];
 	char		anchor[SHIRUDO_CHAIN_ANCHOR_MAX];
 	char		anchor_digest_hex[65];
 	char		chain_hex[65];
 	int64_t		rec_pcr;
+	int64_t		rec_phase_pcr;
 	int64_t		rec_reset;
 	char		upatch_name[SHIRUDO_UPATCH_NAME_MAX + 1];
 	char		tree_id[SHIRUDO_UPATCH_NAME_MAX + 1];
@@ -467,9 +473,12 @@ static int on_record(void *ctx)
 
 		memset(in, 0, sizeof(*in));
 		if (p->rec_pcr < 0 || p->rec_pcr >= 24 ||
+		    p->rec_phase_pcr <= p->rec_pcr || p->rec_phase_pcr >= 24 ||
 		    p->rec_reset > UINT32_MAX ||
 		    strlen(p->nv_name_hex) != 2 * SHIRUDO_TPM_NAME_LEN ||
 		    shirudo_hex_decode(p->pcr_before_hex, in->pcr_before, 32) ||
+		    shirudo_hex_decode(p->phase_before_hex, in->phase_before,
+				       32) ||
 		    shirudo_hex_decode(p->nv_name_hex, in->name,
 				       SHIRUDO_TPM_NAME_LEN) ||
 		    shirudo_hex_decode(p->anchor_digest_hex, in->anchor_digest,
@@ -478,6 +487,8 @@ static int on_record(void *ctx)
 			return -EINVAL;
 		memcpy(in->digest, r->digest, 32);
 		in->pcr = (unsigned int)p->rec_pcr;
+		in->phase_pcr = (unsigned int)p->rec_phase_pcr;
+		in->initrd = !strcmp(p->bound_in, "initrd");
 		in->have_reset_count = p->rec_reset >= 0;
 		in->reset_count = (uint32_t)p->rec_reset;
 		snprintf(in->anchor, sizeof(in->anchor), "%s", p->anchor);
@@ -511,8 +522,10 @@ static int on_record(void *ctx)
 	p->tree_id[0] = '\0';
 	p->tree_op[0] = '\0';
 	p->anchor[0] = '\0';
+	p->bound_in[0] = '\0';
 	p->tree_seq = 0;
 	p->rec_pcr = -1;
+	p->rec_phase_pcr = -1;
 	p->rec_reset = -1;
 	return 0;
 }
@@ -637,7 +650,7 @@ int shirudo_attest_verify(const char *evidence, size_t len,
 	uint8_t reg_name[SHIRUDO_TPM_NAME_LEN], reg_value[32];
 	uint8_t attest[SHIRUDO_TPM_ATTEST_MAX];
 	uint8_t nonce[SHIRUDO_ATTEST_NONCE_MAX], chain[32] = {};
-	uint8_t branch_written[32], branch_init[32], policy[32];
+	uint8_t branch_written[32], branch_init[32], policy[32], bind[64];
 	uint8_t expected_name[SHIRUDO_TPM_NAME_LEN], pcr_expected[32];
 	uint8_t anchor_digest[32], cred[SHIRUDO_TPM_CREDENTIAL_LEN];
 	struct parse *p;
@@ -659,6 +672,7 @@ int shirudo_attest_verify(const char *evidence, size_t len,
 		return -ENOMEM;
 	}
 	p->rec_pcr = -1;
+	p->rec_phase_pcr = -1;
 	p->rec_reset = -1;
 
 	{
@@ -732,6 +746,13 @@ int shirudo_attest_verify(const char *evidence, size_t len,
 			{ "pcr_before", SHIRUDO_JSON_T_STRING,
 			  p->pcr_before_hex, sizeof(p->pcr_before_hex), 0,
 			  NULL, 0 },
+			{ "phase_pcr", SHIRUDO_JSON_T_INT, &p->rec_phase_pcr, 0,
+			  0, NULL, 0 },
+			{ "phase_before", SHIRUDO_JSON_T_STRING,
+			  p->phase_before_hex, sizeof(p->phase_before_hex), 0,
+			  NULL, 0 },
+			{ "bound_in", SHIRUDO_JSON_T_STRING, p->bound_in,
+			  sizeof(p->bound_in), 0, NULL, 0 },
 			{ "nv_name", SHIRUDO_JSON_T_STRING, p->nv_name_hex,
 			  sizeof(p->nv_name_hex), 0, NULL, 0 },
 			{ "anchor", SHIRUDO_JSON_T_STRING, p->anchor,
@@ -926,15 +947,19 @@ int shirudo_attest_verify(const char *evidence, size_t len,
 
 	/*
 	 * The binding: the certified index must have the public area a
-	 * register bound to the recorded PCR value has, which is what
-	 * makes a runtime recreation impossible to pass off.
+	 * register bound to the recorded PCR values has, which is what
+	 * makes a recreation impossible to pass off, and those values are
+	 * what the operator pins to tell an initrd binding from a later one.
 	 */
 	say(&rep, p->init.present, "eventlog: this boot has an init record");
 	if (!p->init.present) {
 		rc = -EKEYREJECTED;
 		goto out;
 	}
-	shirudo_tpm_register_policy(1u << p->init.pcr, p->init.pcr_before,
+	memcpy(bind, p->init.pcr_before, 32);
+	memcpy(bind + 32, p->init.phase_before, 32);
+	shirudo_tpm_register_policy((1u << p->init.pcr) |
+				    (1u << p->init.phase_pcr), bind, 2,
 				    branch_written, branch_init, policy);
 	shirudo_tpm_nv_name(reg_index,
 			    SHIRUDO_TPM_REGISTER_ATTRS | SHIRUDO_TPM_NV_WRITTEN,
@@ -942,8 +967,24 @@ int shirudo_attest_verify(const char *evidence, size_t len,
 	say(&rep, (unsigned int)p->reg_pcr == p->init.pcr &&
 	    shirudo_ct_eq(expected_name, reg_name, SHIRUDO_TPM_NAME_LEN) &&
 	    shirudo_ct_eq(expected_name, p->init.name, SHIRUDO_TPM_NAME_LEN),
-	    "register: public area is bound to PCR %u as recorded",
-	    p->init.pcr);
+	    "register: public area is bound to PCRs %u and %u as recorded",
+	    p->init.pcr, p->init.phase_pcr);
+	for (bit = 0; bit < 24; bit++) {
+		const uint8_t *held;
+
+		if (!(expect->bind_expect_mask & (1u << bit)))
+			continue;
+		held = bit == p->init.pcr ? p->init.pcr_before :
+		       bit == p->init.phase_pcr ? p->init.phase_before : NULL;
+		say(&rep, held && shirudo_ct_eq(held, expect->bind_values[bit],
+						32),
+		    "binding: PCR %u held the expected value", bit);
+	}
+	if (expect->require_initrd)
+		say(&rep, p->init.initrd, "binding: made while the initrd ran");
+	else
+		note(&rep, "binding: made in the %s",
+		     p->init.initrd ? "initrd" : "root file system");
 
 	/*
 	 * The epoch: one binding per TPM reset, and the one on record is

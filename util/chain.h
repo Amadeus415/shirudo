@@ -20,8 +20,17 @@
 
 #define SHIRUDO_CHAIN_DIGEST_LEN	32
 #define SHIRUDO_CHAIN_NAME		"shirudo"
-#define SHIRUDO_CHAIN_PCR		15u
-#define SHIRUDO_CHAIN_PCR_MASK		(1u << SHIRUDO_CHAIN_PCR)
+/*
+ * The register binds to PCR 9, which holds the initrd and nothing
+ * measured after it, and to PCR 11, which systemd extends with the
+ * boot phase: bound while the initrd runs, the init branch closes at
+ * "leave-initrd" and no later process can bind. PCR 9 also takes the
+ * anchor, so it stays exact afterwards.
+ */
+#define SHIRUDO_CHAIN_PCR		9u
+#define SHIRUDO_CHAIN_PHASE_PCR		11u
+#define SHIRUDO_CHAIN_PCR_MASK		((1u << SHIRUDO_CHAIN_PCR) | \
+					 (1u << SHIRUDO_CHAIN_PHASE_PCR))
 #define SHIRUDO_CHAIN_ANCHOR_MAX	128
 
 void shirudo_sha256(const void *data, size_t len,
@@ -64,9 +73,11 @@ void shirudo_chain_anchor(const uint8_t name[SHIRUDO_TPM_NAME_LEN],
 
 struct shirudo_chain_init_info {
 	bool		reused;		/* written and on record */
+	bool		initrd;		/* bound while the initrd ran */
 	uint32_t	reset_count;	/* the TPM's, for the record */
 	uint8_t		value[SHIRUDO_CHAIN_DIGEST_LEN];
 	uint8_t		pcr_before[SHIRUDO_CHAIN_DIGEST_LEN];
+	uint8_t		phase_before[SHIRUDO_CHAIN_DIGEST_LEN];
 	uint8_t		name[SHIRUDO_TPM_NAME_LEN];
 	size_t		name_len;
 	char		anchor[SHIRUDO_CHAIN_ANCHOR_MAX];

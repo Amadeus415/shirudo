@@ -55,6 +55,10 @@ static int append_init(const uint8_t event[32],
 	shirudo_json_kv_int(&e, "pcr", SHIRUDO_CHAIN_PCR);
 	shirudo_hex_encode(info->pcr_before, 32, hex);
 	shirudo_json_kv_string(&e, "pcr_before", hex);
+	shirudo_json_kv_int(&e, "phase_pcr", SHIRUDO_CHAIN_PHASE_PCR);
+	shirudo_hex_encode(info->phase_before, 32, hex);
+	shirudo_json_kv_string(&e, "phase_before", hex);
+	shirudo_json_kv_string(&e, "bound_in", info->initrd ? "initrd" : "root");
 	shirudo_hex_encode(info->name, info->name_len, hex);
 	shirudo_json_kv_string(&e, "nv_name", hex);
 	shirudo_json_kv_string(&e, "anchor", info->anchor);
@@ -122,6 +126,9 @@ int main(int argc, char **argv)
 		puthex(info.name, info.name_len);
 		printf("pcr_before=");
 		puthex(info.pcr_before, 32);
+		printf("phase_before=");
+		puthex(info.phase_before, 32);
+		printf("bound_in=%s\n", info.initrd ? "initrd" : "root");
 		printf("anchor=%s\n", info.anchor);
 		if (!info.reused && append_init(event, &info))
 			return 1;
@@ -175,6 +182,18 @@ int main(int argc, char **argv)
 			printf("value=");
 			puthex(st.value, 32);
 		}
+		return rc ? 1 : 0;
+	}
+	/* A measurement into a PCR, as systemd's boot phases make them. */
+	if (strcmp(argv[1], "pcr-extend") == 0 && argc == 4) {
+		struct shirudo_tpm *tpm = NULL;
+		uint8_t d[32];
+
+		if (shirudo_hex_decode(argv[3], d, 32) || shirudo_tpm_open(&tpm))
+			return 2;
+		rc = shirudo_tpm_pcr_extend(tpm, (unsigned int)atoi(argv[2]), d);
+		shirudo_tpm_close(tpm);
+		printf("rc=%d\n", rc);
 		return rc ? 1 : 0;
 	}
 	if (strcmp(argv[1], "pcr") == 0 && argc == 3) {
@@ -242,13 +261,16 @@ int main(int argc, char **argv)
 		uint8_t branch_written[32], branch_init[32], policy[32];
 		struct shirudo_eventlog_init rec;
 		struct shirudo_tpm *tpm = NULL;
+		uint8_t values[64];
 
 		if (shirudo_hex_decode(argv[2], event, 32) ||
 		    shirudo_eventlog_boot_init(&rec))
 			return 2;
-		shirudo_tpm_register_policy(SHIRUDO_CHAIN_PCR_MASK,
-					    rec.pcr_before, branch_written,
-					    branch_init, policy);
+		memcpy(values, rec.pcr_before, 32);
+		memcpy(values + 32, rec.phase_before, 32);
+		shirudo_tpm_register_policy(SHIRUDO_CHAIN_PCR_MASK, values, 2,
+					    branch_written, branch_init,
+					    policy);
 		if (shirudo_tpm_open(&tpm))
 			return 1;
 		rc = shirudo_tpm_nv_extend_first(tpm, SHIRUDO_NV_INDEX,

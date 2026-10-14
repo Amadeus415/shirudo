@@ -177,21 +177,33 @@ void shirudo_chain_anchor(const uint8_t name[SHIRUDO_TPM_NAME_LEN],
 		 SHIRUDO_NV_INDEX, hex);
 }
 
+/* The binding PCR values in PCR order, as PolicyPCR hashes them. */
+static void bind_values(const uint8_t pcr_before[32],
+			const uint8_t phase_before[32], uint8_t out[64])
+{
+	memcpy(out, pcr_before, 32);
+	memcpy(out + 32, phase_before, 32);
+}
+
 /*
- * The write policy and the expected names for the PCR value the
+ * The write policy and the expected names for the PCR values the
  * register binds to. TPMA_NV_WRITTEN is part of the public area, so
  * the index is named differently before and after its first write;
  * the written name is the one the record, the anchor and every later
  * comparison use.
  */
-static void register_expectation(const uint8_t pcr_value[32],
+static void register_expectation(const uint8_t pcr_before[32],
+				 const uint8_t phase_before[32],
 				 uint8_t branch_written[32],
 				 uint8_t branch_init[32],
 				 uint8_t policy[32],
 				 uint8_t name_unwritten[SHIRUDO_TPM_NAME_LEN],
 				 uint8_t name_written[SHIRUDO_TPM_NAME_LEN])
 {
-	shirudo_tpm_register_policy(SHIRUDO_CHAIN_PCR_MASK, pcr_value,
+	uint8_t values[64];
+
+	bind_values(pcr_before, phase_before, values);
+	shirudo_tpm_register_policy(SHIRUDO_CHAIN_PCR_MASK, values, 2,
 				    branch_written, branch_init, policy);
 	shirudo_tpm_nv_name(SHIRUDO_NV_INDEX, SHIRUDO_TPM_REGISTER_ATTRS,
 			    policy, SHIRUDO_TPM_NV_DIGEST_LEN, name_unwritten);
@@ -227,6 +239,14 @@ static int register_define(struct shirudo_tpm *tpm, bool defined,
 out:
 	explicit_bzero(&cfg, sizeof(cfg));
 	return rc;
+}
+
+/* The initrd marks itself by this file; tests point elsewhere. */
+static bool in_initrd(void)
+{
+	const char *env = getenv("SHIRUDO_INITRD_RELEASE");
+
+	return access(env && *env ? env : "/etc/initrd-release", F_OK) == 0;
 }
 
 int shirudo_chain_init(const uint8_t event[32],
@@ -273,9 +293,11 @@ int shirudo_chain_init(const uint8_t event[32],
 			memcpy(info->name, nv.name, nv.name_len);
 			info->name_len = nv.name_len;
 			memcpy(info->pcr_before, rec.pcr_before, 32);
+			memcpy(info->phase_before, rec.phase_before, 32);
 			memcpy(info->anchor_digest, rec.anchor_digest, 32);
 			shirudo_chain_anchor(info->name, info->anchor,
 					     sizeof(info->anchor));
+			info->initrd = rec.initrd;
 			info->reused = true;
 			goto out;
 		}
@@ -291,10 +313,15 @@ int shirudo_chain_init(const uint8_t event[32],
 			"record; rebinding it", SHIRUDO_NV_INDEX);
 
 	rc = shirudo_tpm_pcr_read(tpm, SHIRUDO_CHAIN_PCR, info->pcr_before);
+	if (!rc)
+		rc = shirudo_tpm_pcr_read(tpm, SHIRUDO_CHAIN_PHASE_PCR,
+					  info->phase_before);
 	if (rc)
 		goto out;
-	register_expectation(info->pcr_before, branch_written, branch_init,
-			     policy, unwritten, written);
+	info->initrd = in_initrd();
+	register_expectation(info->pcr_before, info->phase_before,
+			     branch_written, branch_init, policy, unwritten,
+			     written);
 
 	if (!nv.defined || nv.written || !name_equals(&nv, unwritten)) {
 		rc = register_define(tpm, nv.defined, policy);
@@ -336,7 +363,7 @@ out:
 
 int shirudo_chain_extend(const uint8_t event[32], uint8_t out_chain[32])
 {
-	uint8_t branch_written[32], branch_init[32], policy[32];
+	uint8_t branch_written[32], branch_init[32], policy[32], values[64];
 	struct shirudo_eventlog_init rec;
 	struct shirudo_tpm_nv_info nv;
 	struct shirudo_tpm *tpm = NULL;
@@ -345,7 +372,8 @@ int shirudo_chain_extend(const uint8_t event[32], uint8_t out_chain[32])
 	rc = shirudo_eventlog_boot_init(&rec);
 	if (rc)
 		return -ENODEV;		/* no register this boot */
-	shirudo_tpm_register_policy(SHIRUDO_CHAIN_PCR_MASK, rec.pcr_before,
+	bind_values(rec.pcr_before, rec.phase_before, values);
+	shirudo_tpm_register_policy(SHIRUDO_CHAIN_PCR_MASK, values, 2,
 				    branch_written, branch_init, policy);
 
 	rc = shirudo_tpm_open(&tpm);

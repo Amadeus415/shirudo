@@ -52,13 +52,13 @@ void shirudo_tpm_policy_or(const uint8_t a[SHIRUDO_TPM_DIGEST_LEN],
 			   uint8_t out[SHIRUDO_TPM_DIGEST_LEN]);
 
 /*
- * The register's write policy from the value of the anchoring PCR at
- * binding time: PolicyOR(PolicyNvWritten(YES),
- * PolicyNvWritten(NO) + PolicyPCR(mask, SHA-256(pcr_value))). The two
+ * The register's write policy from the values the binding PCRs held
+ * at binding time, given in PCR order: PolicyOR(PolicyNvWritten(YES),
+ * PolicyNvWritten(NO) + PolicyPCR(mask, SHA-256(values))). The two
  * branch digests are what a session has to present to PolicyOR.
  */
 void shirudo_tpm_register_policy(uint32_t pcr_mask,
-				 const uint8_t pcr_value[32],
+				 const uint8_t *pcr_values, size_t n_values,
 				 uint8_t branch_written[32],
 				 uint8_t branch_init[32],
 				 uint8_t policy[32]);

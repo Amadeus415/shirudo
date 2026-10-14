@@ -133,17 +133,26 @@ can use a software one for development::
 Either export that variable or set ``tpm.tcti`` in
 ``/etc/shirudo/shirudo.conf``.  A TPM whose owner hierarchy has a
 password needs ``tpm.owner_auth`` (or ``SHIRUDO_TPM_OWNER_AUTH``) to
-define the measurement register, once and again whenever the PCR 15
-value at boot changes.
+define the measurement register, once and again whenever the PCR 9 or
+PCR 11 value at binding changes.
 
 ``init`` mounts the private bpffs, installs the certificate into the
 ``shirudo`` keyring and seals it, labels ``/var/lib/shirudo`` with the
 sealing xattr, attaches the enforcement programs, re-applies any
 installed upatches, binds this boot's measurement register and extends
-it once.  It is idempotent and safe to re-run.  ``shirudo.service``
-runs it on every boot before
-``sysinit.target``; extra arguments go in ``/etc/shirudo/init.env`` as
-``SHIRUDO_INIT_ARGS``.  Enable the unit and the timers you want::
+it once.  It is idempotent and safe to re-run.
+
+The production configuration runs it from the initrd: give the initrd
+the target binary, ``shirudo.service``, ``/etc/shirudo`` and
+``/var/lib/shirudo`` at their usual paths, so that ``init`` runs after
+the ``enter-initrd`` phase is measured and before the switch to the
+root file system.  The register then binds while PCR 11 holds a value
+no later process can bring back.  Started from the root file system
+instead, ``init`` binds the register with the post-initrd PCR 11
+value; ``status`` reports ``bound_in``, and the verifier can refuse
+it.  Extra arguments go in
+``/etc/shirudo/init.env`` as ``SHIRUDO_INIT_ARGS``.  Enable the unit
+and the timers you want::
 
     sudo systemctl enable --now shirudo.service
     sudo systemctl enable --now shirudo-bpm-repo-update.timer
@@ -338,7 +347,7 @@ On the operator, with the artifacts the target was given::
 ``verify`` prints one line per check and a verdict: the signatures and
 the nonce, the endorsement key and the credential it opened, the
 quote against the listed PCRs, the certified index against the
-recorded binding, the eventlog replay, the anchor in PCR 15, and the
+recorded binding, the eventlog replay, the anchor in PCR 9, and the
 register against the value predicted for that set.  Loads
 and unloads after boot change the register; either pass
 ``--allow-runtime-events`` to see them listed, or compute the exact
@@ -346,8 +355,12 @@ value with ``shirudo attest predict --cert cert.der --upatch ...
 --event=load:<name>=<payload_sha256>`` and pass it as
 ``--expect-chain``.  ``--expect-pcr=11=<hex>`` pins a kernel or
 firmware PCR to a value you know (``systemd-measure calculate`` for a
-UKI's PCR 11); ``--strict-anchor`` fails instead of noting when PCR 15
-holds more than the anchor.  Neither command needs the other machine.
+UKI's PCR 11); ``--expect-bind-pcr=11=<hex>`` pins the PCR 11 value the
+register was bound under, the ``enter-initrd`` phase value the same
+tool computes, and ``--require-initrd`` refuses a binding made from the
+root file system; ``--strict-anchor`` fails instead of noting when PCR
+9 holds more than
+the initrd and the anchor.  Neither command needs the other machine.
 
 
 10) Troubleshooting

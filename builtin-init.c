@@ -822,6 +822,7 @@ static int append_init_event(const struct shirudo_measured_upatch *set,
 	struct shirudo_json_emit e = { .buf = buf, .cap = sizeof(buf) };
 	char cert_hex[HEXLEN(32)], set_hex[HEXLEN(32)], digest_hex[HEXLEN(32)];
 	char pcr_hex[HEXLEN(32)], anchor_hex[HEXLEN(32)], chain_hex[HEXLEN(32)];
+	char phase_hex[HEXLEN(32)];
 	char name_hex[HEXLEN(SHIRUDO_TPM_NAME_LEN)], tree_hex[HEXLEN(32)];
 	char ts[32], boot_id[64], nv_index[16];
 	size_t i;
@@ -834,6 +835,7 @@ static int append_init_event(const struct shirudo_measured_upatch *set,
 	shirudo_hex_encode(tree_root, 32, tree_hex);
 	shirudo_hex_encode(init_digest, 32, digest_hex);
 	shirudo_hex_encode(info->pcr_before, 32, pcr_hex);
+	shirudo_hex_encode(info->phase_before, 32, phase_hex);
 	shirudo_hex_encode(info->name, SHIRUDO_TPM_NAME_LEN, name_hex);
 	shirudo_hex_encode(info->anchor_digest, 32, anchor_hex);
 	shirudo_hex_encode(info->value, 32, chain_hex);
@@ -860,6 +862,9 @@ static int append_init_event(const struct shirudo_measured_upatch *set,
 	shirudo_json_arr_close(&e);
 	shirudo_json_kv_int(&e, "pcr", SHIRUDO_CHAIN_PCR);
 	shirudo_json_kv_string(&e, "pcr_before", pcr_hex);
+	shirudo_json_kv_int(&e, "phase_pcr", SHIRUDO_CHAIN_PHASE_PCR);
+	shirudo_json_kv_string(&e, "phase_before", phase_hex);
+	shirudo_json_kv_string(&e, "bound_in", info->initrd ? "initrd" : "root");
 	shirudo_json_kv_string(&e, "nv_name", name_hex);
 	shirudo_json_kv_string(&e, "anchor", info->anchor);
 	shirudo_json_kv_string(&e, "anchor_digest", anchor_hex);
@@ -972,9 +977,14 @@ static int chain_extend_init(struct shirudo_measured_upatch *set, size_t n)
 		return rc;
 	}
 
-	pr_info("tpm: register bound and extended (index 0x%08X, PCR %u "
-		"anchored, %zu upatch%s in set)", SHIRUDO_NV_INDEX,
+	pr_info("tpm: register bound in the %s and extended (index 0x%08X, "
+		"PCR %u anchored, %zu upatch%s in set)",
+		info.initrd ? "initrd" : "root file system", SHIRUDO_NV_INDEX,
 		SHIRUDO_CHAIN_PCR, n, n == 1 ? "" : "es");
+	if (!info.initrd)
+		pr_warn("tpm: init ran after the initrd; the register's binding "
+			"can be told from an initrd one by PCR %u",
+			SHIRUDO_CHAIN_PHASE_PCR);
 	return 0;
 }
 

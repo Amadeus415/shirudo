@@ -569,6 +569,7 @@ int cmd_status(int argc, const char **argv)
 	struct asset_view assets;
 	struct dirent **ups = NULL;
 	char pcr_before_hex[2 * SHIRUDO_CHAIN_DIGEST_LEN + 1] = "";
+	char phase_before_hex[2 * SHIRUDO_CHAIN_DIGEST_LEN + 1] = "";
 	char chain_hex[2 * SHIRUDO_CHAIN_DIGEST_LEN + 1] = "";
 	char name_hex[2 * SHIRUDO_TPM_NAME_LEN + 1] = "";
 	struct shirudo_chain_status cst = {};
@@ -685,10 +686,14 @@ int cmd_status(int argc, const char **argv)
 					   chain_hex);
 			shirudo_hex_encode(cst.name, cst.name_len, name_hex);
 		}
-		if (cst.logged)
+		if (cst.logged) {
 			shirudo_hex_encode(cst.init.pcr_before,
 					   sizeof(cst.init.pcr_before),
 					   pcr_before_hex);
+			shirudo_hex_encode(cst.init.phase_before,
+					   sizeof(cst.init.phase_before),
+					   phase_before_hex);
+		}
 		ev_rc = count_eventlog(&ev_entries, &ev_bytes);
 
 		/*
@@ -843,11 +848,21 @@ int cmd_status(int argc, const char **argv)
 			shirudo_json_kv_bool(&e, "register_rebound",
 					     cst.rebound);
 			shirudo_json_kv_int(&e, "pcr", SHIRUDO_CHAIN_PCR);
-			if (cst.logged)
+			shirudo_json_kv_int(&e, "phase_pcr",
+					    SHIRUDO_CHAIN_PHASE_PCR);
+			if (cst.logged) {
 				shirudo_json_kv_string(&e, "pcr_before",
 						       pcr_before_hex);
-			else
+				shirudo_json_kv_string(&e, "phase_before",
+						       phase_before_hex);
+				shirudo_json_kv_string(&e, "bound_in",
+						       cst.init.initrd ?
+						       "initrd" : "root");
+			} else {
 				shirudo_json_kv_null(&e, "pcr_before");
+				shirudo_json_kv_null(&e, "phase_before");
+				shirudo_json_kv_null(&e, "bound_in");
+			}
 			if (match < 0)
 				shirudo_json_kv_null(&e, "chain_matches_eventlog");
 			else
@@ -1065,9 +1080,15 @@ int cmd_status(int argc, const char **argv)
 				       "unavailable (no TPM / register not "
 				       "bound this boot)");
 			}
-			if (cst.logged)
+			if (cst.logged) {
 				printf("  %-18s %s\n", "PCR before init:",
 				       pcr_before_hex);
+				printf("  %-18s %s (PCR %u)\n", "Phase at init:",
+				       phase_before_hex, SHIRUDO_CHAIN_PHASE_PCR);
+				printf("  %-18s %s\n", "Bound in:",
+				       cst.init.initrd ? "initrd" :
+				       "root file system");
+			}
 			if (cst.rebound)
 				printf("  %-18s %u for this TPM reset "
 				       "(REBOUND after init; tamper?)\n",

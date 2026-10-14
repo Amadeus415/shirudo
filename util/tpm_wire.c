@@ -161,7 +161,7 @@ void shirudo_tpm_policy_or(const uint8_t a[32], const uint8_t b[32],
 }
 
 void shirudo_tpm_register_policy(uint32_t pcr_mask,
-				 const uint8_t pcr_value[32],
+				 const uint8_t *pcr_values, size_t n_values,
 				 uint8_t branch_written[32],
 				 uint8_t branch_init[32], uint8_t policy[32])
 {
@@ -170,7 +170,7 @@ void shirudo_tpm_register_policy(uint32_t pcr_mask,
 
 	shirudo_tpm_policy_nv_written(zero, true, branch_written);
 	shirudo_tpm_policy_nv_written(zero, false, unwritten);
-	shirudo_sha256_buffer(pcr_value, 32, pcr_digest);
+	shirudo_sha256_buffer(pcr_values, 32 * n_values, pcr_digest);
 	shirudo_tpm_policy_pcr(unwritten, pcr_mask, pcr_digest, branch_init);
 	shirudo_tpm_policy_or(branch_written, branch_init, policy);
 }

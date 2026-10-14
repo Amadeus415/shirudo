@@ -39,7 +39,9 @@ int shirudo_eventlog_replay(uint8_t out[SHIRUDO_TPM_DIGEST_LEN]);
  */
 struct shirudo_eventlog_init {
 	unsigned int	pcr;
+	bool		initrd;		/* bound while the initrd ran */
 	uint8_t		pcr_before[SHIRUDO_TPM_DIGEST_LEN];
+	uint8_t		phase_before[SHIRUDO_TPM_DIGEST_LEN];
 	uint8_t		name[SHIRUDO_TPM_NAME_LEN];
 	size_t		name_len;
 	uint8_t		anchor_digest[SHIRUDO_TPM_DIGEST_LEN];
