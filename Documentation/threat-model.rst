@@ -249,10 +249,10 @@ Each of these is known, documented and bounded; none is silent.
     bug to fix.
 
 3.  A lazy (``MNT_DETACH``) unmount of an ancestor of
-    ``/var/lib/shirudo/bpffs`` tears the subtree down without firing
-    ``sb_umount`` on the child.  The ancestor is normally the root or
-    ``/var`` filesystem, a far higher bar than the direct unmount the
-    guards close.
+    ``/run/shirudo/bpffs`` tears the subtree down without firing
+    ``sb_umount`` on the child.  The ancestor is ``/run`` or the root
+    filesystem, a far higher bar than the direct unmount the guards
+    close.
 
 4.  Register denial of service.  A process that can open
     ``/dev/tpmrm0`` can extend PCR 9 or the written register with

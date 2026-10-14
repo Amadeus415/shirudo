@@ -363,6 +363,11 @@ static int init_bpffs(void)
 		pr_err("mkdir %s: %s", SHIRUDO_VAR_LIB, strerror(-rc));
 		return rc;
 	}
+	rc = mkdir_p_mode(SHIRUDO_RUN_DIR, 0700);
+	if (rc) {
+		pr_err("mkdir %s: %s", SHIRUDO_RUN_DIR, strerror(-rc));
+		return rc;
+	}
 	rc = mkdir_p_mode(SHIRUDO_BPFFS_DIR, 0700);
 	if (rc) {
 		pr_err("mkdir %s: %s",
@@ -1183,7 +1188,7 @@ int cmd_init(int argc, const char **argv)
 		return 1;
 
 	/*
-	 * Label the binary + the /var/lib/shirudo tree (bpffs skipped)
+	 * Label the binary + the /var/lib/shirudo tree
 	 * BEFORE init_lsm attaches seal, so the bulk setxattr is not gated
 	 * by seal's own inode_setxattr hook.
 	 */

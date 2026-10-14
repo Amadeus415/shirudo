@@ -4,7 +4,7 @@
 [Unit]
 Description=shirudo: export loaded upatch maps
 After=shirudo.service
-ConditionPathExists=/var/lib/shirudo/bpffs/lsm_link
+ConditionPathExists=/run/shirudo/bpffs/lsm_link
 
 [Service]
 Type=oneshot

@@ -2,7 +2,7 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Pinned upatch maps reader. Walks /var/lib/shirudo/bpffs/upatches/
+ * Pinned upatch maps reader. Walks /run/shirudo/bpffs/upatches/
  * <name>/maps/<map>, opens each pin via BPF_OBJ_GET, dispatches to a
  * per-type reader for the entries. BTF type names come from
  * libbpf::btf__name_by_offset() when the map carries a btf_id.
@@ -1292,7 +1292,7 @@ static void summary_append(struct shirudo_map_summary **list, size_t *n,
 	(*list)[(*n)++] = *one;
 }
 
-/* Read /var/lib/shirudo/bpffs/upatches/<upatch>/maps/<entry> dir. */
+/* Read /run/shirudo/bpffs/upatches/<upatch>/maps/<entry> dir. */
 static void scan_upatch_maps(const char *upatch,
 			     struct shirudo_map_summary **list, size_t *n,
 			     size_t *cap)

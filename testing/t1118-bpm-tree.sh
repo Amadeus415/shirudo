@@ -12,7 +12,7 @@ target_guard
 
 FIXTURES=${SHIRUDO_TEST_FIXTURES_DIR:?target fixture directory is not set}
 REGISTRY="$FIXTURES/tree-oci"
-MATCH_PIN=/var/lib/shirudo/bpffs/upatches/shirudo-test-tree-match/link
+MATCH_PIN=/run/shirudo/bpffs/upatches/shirudo-test-tree-match/link
 MATCH_CACHE=/var/lib/shirudo/bpm/upatch-tree/artifacts
 WORK=$(mktemp -d)
 

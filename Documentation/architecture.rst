@@ -171,7 +171,7 @@ Load.  ``shirudo upatch load fix.upatch`` on the target:
    loader's ``excl_prog_hash``;
 5. attaches the payload (``BPF_LINK_CREATE`` or
    ``BPF_RAW_TRACEPOINT_OPEN``), pins the link at
-   ``/var/lib/shirudo/bpffs/upatches/<name>/link`` and every map under
+   ``/run/shirudo/bpffs/upatches/<name>/link`` and every map under
    ``maps/`` beside it, and records the payload digest as the
    ``security.bpf.shirudo.payload`` xattr on the pin directory;
 6. copies the artifact to ``/var/lib/shirudo/upatches/`` for
@@ -294,7 +294,7 @@ instead, and the target stays in staging.  It does, in order:
    check is hard; all failures are reported together as
    ``init_prereqs_missing`` and nothing is touched.  ``shirudo init
    --check-only`` stops here;
-2. mounts the private bpffs at ``/var/lib/shirudo/bpffs`` with
+2. mounts the private bpffs at ``/run/shirudo/bpffs`` with
    ``mode=0700,nosuid,nodev,noexec``;
 3. removes state left behind by features that no longer exist;
 4. enrols ``cert.der`` in the kernel's bpf keyring, seals it with
@@ -398,9 +398,12 @@ target's TPM; ``verify`` and ``predict`` touch no TPM at all.
 Files.  Under ``/var/lib/shirudo/``: ``keys/cert.der`` (and
 ``keys/signing_key.pem`` on an operator), ``keyring.serial``,
 ``eventlog``, ``upatches/`` (installed artifacts), ``incoming/``
-(staging), ``locks/``, ``bpm/`` (registry indexes, packages, tree
-state) and the ``bpffs/`` mount with ``lsm_link``, the ``bpf2_*_link``
-and ``seal_*_link`` pins and ``upatches/<name>/``.  Under
+(staging), ``locks/`` and ``bpm/`` (registry indexes, packages, tree
+state).  Under ``/run/shirudo/``, per boot: the ``bpffs/`` mount with
+``lsm_link``, the ``bpf2_*_link`` and ``seal_*_link`` pins and
+``upatches/<name>/``; it lives under ``/run`` because that is what
+systemd carries from the initrd into the root file system, so pins
+made before the switch keep their links.  Under
 ``/etc/shirudo/``: ``shirudo.conf``, ``init.env``, ``map-export.env``,
 ``node.labels`` and ``bpm/`` (``registries.d/``, ``keys/``,
 ``upatch-tree.conf``, ``environment``).  ``shirudo config`` prints the

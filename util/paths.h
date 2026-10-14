@@ -23,7 +23,14 @@
 #define SHIRUDO_LOCKS_DIR		SHIRUDO_VAR_LIB "/locks"
 #define SHIRUDO_EVENTLOG_PATH		SHIRUDO_VAR_LIB "/eventlog"
 #define SHIRUDO_KEYRING_SERIAL_PATH	SHIRUDO_VAR_LIB "/keyring.serial"
-#define SHIRUDO_BPFFS_DIR		SHIRUDO_VAR_LIB "/bpffs"
+/*
+ * Per-boot state: the private bpffs holds the pins that keep the LSM
+ * links alive. /run is what systemd carries from the initrd into the
+ * root file system; a mount anywhere else in the initrd is detached at
+ * switch-root and takes the links with it.
+ */
+#define SHIRUDO_RUN_DIR			"/run/shirudo"
+#define SHIRUDO_BPFFS_DIR		SHIRUDO_RUN_DIR "/bpffs"
 #define SHIRUDO_BPM_ETC_DIR		"/etc/shirudo/bpm"
 #define SHIRUDO_BPM_REGISTRIES_DIR	SHIRUDO_BPM_ETC_DIR "/registries.d"
 #define SHIRUDO_BPM_KEYS_DIR		SHIRUDO_BPM_ETC_DIR "/keys"

@@ -12,8 +12,8 @@ target_guard
 FIXTURES=${SHIRUDO_TEST_FIXTURES_DIR:?target fixture directory is not set}
 REGISTRY="$FIXTURES/tree-oci"
 TREE_REPO="$REGISTRY/shirudo/upatch-tree"
-MATCH_PIN=/var/lib/shirudo/bpffs/upatches/shirudo-test-tree-match/link
-SKIP_PIN=/var/lib/shirudo/bpffs/upatches/shirudo-test-tree-skip/link
+MATCH_PIN=/run/shirudo/bpffs/upatches/shirudo-test-tree-match/link
+SKIP_PIN=/run/shirudo/bpffs/upatches/shirudo-test-tree-skip/link
 CACHE=/var/lib/shirudo/bpm/upatch-tree/artifacts
 WORK=$(mktemp -d)
 

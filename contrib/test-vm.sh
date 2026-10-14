@@ -779,7 +779,7 @@ print_test_summary()
 	fi
 
 	if [[ -f "$console_log" ]]; then
-		if grep -Eq 'Failed unmounting .*var-lib-shirudo.*bpffs|Failed to unmount /oldroot/var/lib/shirudo/bpffs: Operation not permitted' "$console_log"; then
+		if grep -Eq 'Failed unmounting .*var-lib-shirudo.*bpffs|Failed to unmount /oldroot/run/shirudo/bpffs: Operation not permitted' "$console_log"; then
 			bpffs_warning=1
 		fi
 		if grep -Eq 'Failed unmounting .*mnt-shirudo.*out|Failed to unmount /oldroot: Device or resource busy' "$console_log"; then

@@ -2,7 +2,7 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Read pinned upatch maps under /var/lib/shirudo/bpffs/upatches/<name>/
+ * Read pinned upatch maps under /run/shirudo/bpffs/upatches/<name>/
  * maps/<map>. Shared by `shirudo upatch map` (CLI), `shirudo status
  * --include-maps` (target-local JSON/human), and direct target inspection
  * (operator pulls the same JSON over SSH).

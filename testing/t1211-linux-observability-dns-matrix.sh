@@ -11,13 +11,13 @@ FIXTURES=${SHIRUDO_TEST_FIXTURES_DIR:?target fixture directory is not set}
 NAME=linux-observability
 LOAD="$FIXTURES/$NAME.upatch"
 UNLOAD="$FIXTURES/$NAME.unload.upatch"
-PIN="/var/lib/shirudo/bpffs/upatches/$NAME/link_0"
+PIN="/run/shirudo/bpffs/upatches/$NAME/link_0"
 RUNNER=./helper/test-dns-prog-run
 WORK=$(mktemp -d)
 
 cleanup()
 {
-	if [ -e "$PIN" ] || [ -e "/var/lib/shirudo/bpffs/upatches/$NAME/link" ]; then
+	if [ -e "$PIN" ] || [ -e "/run/shirudo/bpffs/upatches/$NAME/link" ]; then
 		"$SHIRUDO_BIN" upatch unload "$UNLOAD" --no-precheck \
 			>/dev/null 2>&1 || true
 	fi
@@ -59,7 +59,7 @@ test_expect_success 'DNS matrix helper and generator are available' '
 
 test_expect_success 'Linux observability DNS programs load for packet tests' '
 	load_observability &&
-	[ -e "/var/lib/shirudo/bpffs/upatches/$NAME/serializers/dns_arena" ]
+	[ -e "/run/shirudo/bpffs/upatches/$NAME/serializers/dns_arena" ]
 '
 
 test_expect_success 'DNS UDP deterministic packet matrix passes' '

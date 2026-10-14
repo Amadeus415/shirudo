@@ -15,7 +15,7 @@ target_guard
 FIXTURES=${SHIRUDO_TEST_FIXTURES_DIR:?target fixture directory is not set}
 UP=shirudo-test-basic
 UNLOAD="$FIXTURES/shirudo-test-basic-mismatch.unload.upatch"
-PIN="/var/lib/shirudo/bpffs/upatches/$UP/link"
+PIN="/run/shirudo/bpffs/upatches/$UP/link"
 [ -e "$PIN" ] || test_skip_all "basic fixture is not loaded"
 [ -s "$UNLOAD" ] || test_skip_all "missing prebuilt mismatch unload fixture"
 

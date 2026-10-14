@@ -7,7 +7,7 @@
 # by the bpffs pins; tearing the superblock down detaches all
 # enforcement. bpf2's sb_umount/move_mount/sb_mount/sb_remount hooks deny
 # the whole mount lifecycle of that superblock, so a plain (or lazy)
-# `umount` of /var/lib/shirudo/bpffs -- which before these hooks silently
+# `umount` of /run/shirudo/bpffs -- which before these hooks silently
 # disabled every LSM program -- is refused, and enforcement survives.
 #
 # Non-destructive when the guards work (the operations are denied, so
@@ -21,7 +21,7 @@ target_guard
 
 H=helper/test-bpf-load
 [ -x "$H" ] || test_skip_all "test-bpf-load helper not built"
-B=/var/lib/shirudo/bpffs
+B=/run/shirudo/bpffs
 mountpoint -q "$B" 2>/dev/null || test_skip_all "bpffs not mounted at $B"
 
 restore() {

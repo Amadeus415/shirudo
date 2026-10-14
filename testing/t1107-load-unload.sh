@@ -12,8 +12,8 @@ FIXTURES=${SHIRUDO_TEST_FIXTURES_DIR:?target fixture directory is not set}
 NAME=shirudo-test-lifecycle
 LOAD="$FIXTURES/$NAME.upatch"
 UNLOAD="$FIXTURES/$NAME.unload.upatch"
-PIN="/var/lib/shirudo/bpffs/upatches/$NAME/link"
-PINDIR="/var/lib/shirudo/bpffs/upatches/$NAME"
+PIN="/run/shirudo/bpffs/upatches/$NAME/link"
+PINDIR="/run/shirudo/bpffs/upatches/$NAME"
 WORK=$(mktemp -d)
 
 restore() {

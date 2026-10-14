@@ -22,10 +22,10 @@ OWN="$FIXTURES/shirudo-test-own-keyring.upatch"
 OWN_CERT="$FIXTURES/own.der"
 MAP_EXPORT="$FIXTURES/shirudo-test-map-export.upatch"
 WORK=$(mktemp -d)
-BASIC_PIN=/var/lib/shirudo/bpffs/upatches/shirudo-test-basic/link
-LIFECYCLE_PIN=/var/lib/shirudo/bpffs/upatches/shirudo-test-lifecycle/link
-MARKER_PIN=/var/lib/shirudo/bpffs/upatches/shirudo-test-marker/link
-MAP_EXPORT_PIN=/var/lib/shirudo/bpffs/upatches/shirudo-test-map-export/link
+BASIC_PIN=/run/shirudo/bpffs/upatches/shirudo-test-basic/link
+LIFECYCLE_PIN=/run/shirudo/bpffs/upatches/shirudo-test-lifecycle/link
+MARKER_PIN=/run/shirudo/bpffs/upatches/shirudo-test-marker/link
+MAP_EXPORT_PIN=/run/shirudo/bpffs/upatches/shirudo-test-map-export/link
 
 for fixture in "$BASIC" "$BASIC_MISMATCH" \
 	"$LIFECYCLE" "$LIFECYCLE_UNLOAD" "$MARKER" "$MARKER_UNLOAD" \

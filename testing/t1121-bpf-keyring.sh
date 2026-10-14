@@ -17,7 +17,7 @@ FIXTURES=${SHIRUDO_TEST_FIXTURES_DIR:?target fixture directory is not set}
 OWN_CERT="$FIXTURES/own.der"
 LIFECYCLE="$FIXTURES/shirudo-test-lifecycle.upatch"
 LIFECYCLE_UNLOAD="$FIXTURES/shirudo-test-lifecycle.unload.upatch"
-LIFECYCLE_PIN=/var/lib/shirudo/bpffs/upatches/shirudo-test-lifecycle/link
+LIFECYCLE_PIN=/run/shirudo/bpffs/upatches/shirudo-test-lifecycle/link
 [ -s "$OWN_CERT" ] || test_skip_all "missing own-keyring certificate"
 [ -s "$LIFECYCLE" ] && [ -s "$LIFECYCLE_UNLOAD" ] ||
 	test_skip_all "missing lifecycle fixtures"

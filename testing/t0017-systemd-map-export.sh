@@ -14,7 +14,7 @@ trap 'rm -rf "$WORK"' EXIT
 test_expect_success 'map export service runs the configured batch exporter' '
 	grep -q "^After=shirudo.service$" \
 		../systemd/shirudo-map-export.service.in &&
-	grep -q "^ConditionPathExists=/var/lib/shirudo/bpffs/lsm_link$" \
+	grep -q "^ConditionPathExists=/run/shirudo/bpffs/lsm_link$" \
 		../systemd/shirudo-map-export.service.in &&
 	grep -q "^EnvironmentFile=-/etc/shirudo/map-export.env$" \
 		../systemd/shirudo-map-export.service.in &&

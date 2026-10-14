@@ -15,7 +15,7 @@ FIXTURES=${SHIRUDO_TEST_FIXTURES_DIR:?target fixture directory is not set}
 NAME=shirudo-test-marker
 LOAD="$FIXTURES/$NAME.upatch"
 UNLOAD="$FIXTURES/$NAME.unload.upatch"
-PIN="/var/lib/shirudo/bpffs/upatches/$NAME/link"
+PIN="/run/shirudo/bpffs/upatches/$NAME/link"
 WORK=$(mktemp -d)
 
 restore() {

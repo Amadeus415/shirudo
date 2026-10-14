@@ -15,7 +15,7 @@ LOAD="$FIXTURES/$NAME.upatch"
 UNLOAD="$FIXTURES/$NAME.unload.upatch"
 TARGET="$FIXTURES/shirudo-test-uprobe-target"
 RUNTIME=/tmp/shirudo-test-uprobe-target
-PIN="/var/lib/shirudo/bpffs/upatches/$NAME/link"
+PIN="/run/shirudo/bpffs/upatches/$NAME/link"
 WORK=$(mktemp -d)
 trap 'if [ -e "$PIN" ]; then "$SHIRUDO_BIN" upatch unload "$UNLOAD" --no-precheck >/dev/null 2>&1 || true; fi; rm -rf "$WORK"' EXIT
 

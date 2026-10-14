@@ -27,13 +27,13 @@ target_guard() {
 		test_skip_all "target tests must run as root"
 	[ -x "$SHIRUDO_BIN" ] ||
 		test_skip_all "shirudo binary not executable: $SHIRUDO_BIN"
-	[ -e /var/lib/shirudo/bpffs/lsm_link ] ||
+	[ -e /run/shirudo/bpffs/lsm_link ] ||
 		test_skip_all "LSM not attached; run \`shirudo init\` first"
 }
 
 # Echo the name of an arbitrary currently-loaded upatch, or "" if none.
 first_loaded_upatch() {
-	for d in /var/lib/shirudo/bpffs/upatches/*/; do
+	for d in /run/shirudo/bpffs/upatches/*/; do
 		[ -e "$d/link" ] || continue
 		basename "$d"
 		return 0

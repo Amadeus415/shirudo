@@ -40,7 +40,7 @@ Collector, ClickHouse, Splunk or a collector of your own.
     collector  -->  ClickHouse, Splunk, a database, a custom sink
 
 Every stage runs inside ``shirudo upatch map``.  The command reads the
-pins under ``/var/lib/shirudo/bpffs/upatches/<name>/maps/``, uses only
+pins under ``/run/shirudo/bpffs/upatches/<name>/maps/``, uses only
 the ``bpf()`` commands the LSM allows from userspace (``OBJ_GET``,
 ``OBJ_GET_INFO_BY_FD``, ``MAP_LOOKUP_ELEM``, ``MAP_GET_NEXT_KEY``,
 ``PROG_TEST_RUN``), decodes, and then prints, appends JSON lines to a

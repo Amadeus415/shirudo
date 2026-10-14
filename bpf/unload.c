@@ -39,7 +39,7 @@ SEC("syscall")
 int shirudo_unload(void *ctx)
 {
 	/*
-	 * TODO: look up /var/lib/shirudo/bpffs/upatches/<name>/link
+	 * TODO: look up /run/shirudo/bpffs/upatches/<name>/link
 	 * via bpf_sys_bpf(BPF_OBJ_GET), cross-check the loaded upatch's
 	 * payload_sha256 against the signature-covered
 	 * shirudo_unload_params.expected_sha256, then BPF_LINK_DETACH +

@@ -11,12 +11,12 @@ FIXTURES=${SHIRUDO_TEST_FIXTURES_DIR:?target fixture directory is not set}
 NAME=linux-observability
 LOAD="$FIXTURES/$NAME.upatch"
 UNLOAD="$FIXTURES/$NAME.unload.upatch"
-PIN="/var/lib/shirudo/bpffs/upatches/$NAME/link_0"
+PIN="/run/shirudo/bpffs/upatches/$NAME/link_0"
 WORK=$(mktemp -d)
 
 cleanup()
 {
-	if [ -e "$PIN" ] || [ -e "/var/lib/shirudo/bpffs/upatches/$NAME/link" ]; then
+	if [ -e "$PIN" ] || [ -e "/run/shirudo/bpffs/upatches/$NAME/link" ]; then
 		"$SHIRUDO_BIN" upatch unload "$UNLOAD" --no-precheck \
 			>/dev/null 2>&1 || true
 	fi
@@ -132,11 +132,11 @@ PY
 
 test_expect_success 'combined observability upatch loads with five serializers' '
 	load_observability &&
-	[ -e "/var/lib/shirudo/bpffs/upatches/$NAME/serializers/exec_arena" ] &&
-	[ -e "/var/lib/shirudo/bpffs/upatches/$NAME/serializers/tcp_arena" ] &&
-	[ -e "/var/lib/shirudo/bpffs/upatches/$NAME/serializers/udp_arena" ] &&
-	[ -e "/var/lib/shirudo/bpffs/upatches/$NAME/serializers/dns_arena" ] &&
-	[ -e "/var/lib/shirudo/bpffs/upatches/$NAME/serializers/ipv4_shields" ]
+	[ -e "/run/shirudo/bpffs/upatches/$NAME/serializers/exec_arena" ] &&
+	[ -e "/run/shirudo/bpffs/upatches/$NAME/serializers/tcp_arena" ] &&
+	[ -e "/run/shirudo/bpffs/upatches/$NAME/serializers/udp_arena" ] &&
+	[ -e "/run/shirudo/bpffs/upatches/$NAME/serializers/dns_arena" ] &&
+	[ -e "/run/shirudo/bpffs/upatches/$NAME/serializers/ipv4_shields" ]
 '
 
 test_expect_success 'IPv4 shields enforce TCP and UDP and export counters' '

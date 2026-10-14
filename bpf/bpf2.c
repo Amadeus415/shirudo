@@ -322,7 +322,7 @@ int BPF_PROG(shirudo_lsm_inode_removexattr, struct mnt_idmap *idmap,
  * The pinned LSM links live only in this bpffs, and shirudo is agentless
  * -- once `shirudo init` exits no process holds an fd to them, so the
  * pins are their only reference. Tearing the superblock down therefore
- * detaches every hook at once: a plain `umount /var/lib/shirudo/bpffs`
+ * detaches every hook at once: a plain `umount /run/shirudo/bpffs`
  * drops the pinned inodes, releases the links, and silently disables all
  * enforcement (no signature, keyring, or TPM involved). The inode guards
  * above stop `rm` of a pin but a mount is not an inode op, so it slips
