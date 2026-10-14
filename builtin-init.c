@@ -2,7 +2,7 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Bootstrap the BPF LSM on a target.
+ * Bootstrap shirudo enforcement on a target.
  */
 
 #include <dirent.h>
@@ -984,7 +984,7 @@ static const struct shirudo_help_section init_help_sections[] = {
 
 static const struct shirudo_help init_help = {
 	.usage      = "shirudo init [--check-only] [--no-seal]",
-	.summary    = "Bootstrap the BPF LSM on this target. Idempotent; safe "
+	.summary    = "Bootstrap enforcement on this target. Idempotent; safe "
 		      "to re-run.\nThe pinned link survives the process exit.",
 	.sections   = init_help_sections,
 	.n_sections = sizeof(init_help_sections) /

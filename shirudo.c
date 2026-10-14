@@ -20,7 +20,7 @@
 
 /*
  * Which side a command runs on. The operator holds the signing key; the
- * target runs one-shot under sshd; local commands work on either side.
+ * target commands run one-shot locally; local commands work on either side.
  */
 enum cmd_group {
 	GROUP_OPERATOR,
@@ -49,7 +49,7 @@ static const struct cmd commands[] = {
 	{ "genkey",	cmd_genkey,	GROUP_OPERATOR,	"generate the signing key + cert" },
 	{ "build",	cmd_build,	GROUP_OPERATOR,	"compile + sign a .upatch" },
 
-	{ "init",	cmd_init,	GROUP_TARGET,	"bootstrap the BPF LSM on this target" },
+	{ "init",	cmd_init,	GROUP_TARGET,	"bootstrap shirudo enforcement on this target" },
 	{ "upatch",	cmd_upatch,	GROUP_TARGET,	"load / unload (target); list / info (read-only, anywhere)" },
 	{ "bpm",	cmd_bpm,	GROUP_TARGET,	"manage signed OCI packages on this target" },
 
@@ -98,7 +98,7 @@ static int cmd_help(int argc, const char **argv)
 	print_group(GROUP_OPERATOR,
 		    "operator commands (hold the signing key; drive targets):");
 	print_group(GROUP_TARGET,
-		    "target commands (run on the target, fronted by sshd):");
+		    "target commands (run locally on the target):");
 	print_group(GROUP_LOCAL, "local commands (operator or target):");
 	print_group(GROUP_GENERAL, "other:");
 	fprintf(stderr, "See Documentation/ for the design.\n");
