@@ -61,6 +61,7 @@ jobs:
               libcurl4-openssl-dev \
               libelf-dev \
               libluajit-5.1-dev \
+              libtpms-dev \
               libtss2-dev \
               zlib1g-dev
 
