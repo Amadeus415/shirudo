@@ -1,7 +1,0 @@
-interface:
-  display_name: "Shirudo VM/Test Workflow"
-  short_description: "Build and operate Shirudo test VMs"
-  default_prompt: "Use $shirudo-vm-test-workflow to build, run, test, stop, or clean Shirudo VMs."
-
-policy:
-  allow_implicit_invocation: true
