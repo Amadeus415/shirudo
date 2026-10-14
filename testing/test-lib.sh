@@ -2,7 +2,7 @@
 # shellcheck shell=sh
 # Copyright (c) 2026 Authors of shirudo
 #
-# t/test-lib.sh -- minimal TAP-style test harness, whiteroom of the
+# testing/test-lib.sh -- minimal TAP-style test harness, whiteroom of the
 # subset shirudo uses. Sourced by each tNNNN-*.sh test.
 #
 # Public API (stable):

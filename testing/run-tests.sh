@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Authors of shirudo
 #
-# t/run-tests.sh -- discover and run every t0xxx operator test in this
+# testing/run-tests.sh -- discover and run every t0xxx operator test in this
 # directory, prap-style. Target tests are listed by run-target-tests.sh.
 # CI-friendly; sets non-zero exit if any test
 # fails.

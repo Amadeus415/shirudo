@@ -520,14 +520,14 @@ context and the deferred mitigations the plan.
 8) Testing
 ----------
 
-``t/t0033-tpm-wire.sh`` checks the policy digests, names, wire
+``testing/t0033-tpm-wire.sh`` checks the policy digests, names, wire
 parsers, the key derivations, the endorsement policy and the
 credential blob against known vectors and an independent
-implementation, without a TPM.  ``t/t0034-register.sh`` drives the
+implementation, without a TPM.  ``testing/t0034-register.sh`` drives the
 whole register and attestation path, the credential challenge with an
 ECC and an RSA endorsement key included, against libtpms:
-``t/helper/tpmsim-cmd`` is a ``cmd:`` TCTI driver around the simulator,
-built when ``pkg-config libtpms`` succeeds, and ``t/helper/test-register``
+``testing/helper/tpmsim-cmd`` is a ``cmd:`` TCTI driver around the simulator,
+built when ``pkg-config libtpms`` succeeds, and ``testing/helper/test-register``
 exercises binding, extending, replay, recreation, a TPM reset and
 ``attest`` evidence and verification through ``SHIRUDO_TPM_TCTI``,
 ``SHIRUDO_EVENTLOG_PATH`` and ``SHIRUDO_KEYS_DIR``.  Deleting the

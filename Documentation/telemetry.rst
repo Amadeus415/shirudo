@@ -398,7 +398,7 @@ The body is the OTLP ``ExportLogsServiceRequest`` or
 ``ExportMetricsServiceRequest`` in its JSON encoding:
 ``resourceLogs[].scopeLogs[].logRecords[]`` and
 ``resourceMetrics[].scopeMetrics[].metrics[]``.  A sink is a few dozen
-lines in any language; ``t/helper/otel-mock.py`` in the tree is one,
+lines in any language; ``testing/helper/otel-mock.py`` in the tree is one,
 used by the exporter tests, and shows the three response modes above.
 Point shirudo at it with ``--otel-endpoint`` and watch the documents
 arrive.

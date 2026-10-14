@@ -293,25 +293,25 @@ trap cleanup EXIT
 
 make -C "$REPO_ROOT" DESTDIR="$TMP_DIR/root" install-target
 
-install -d "$TMP_DIR/test-helpers/t/helper"
+install -d "$TMP_DIR/test-helpers/testing/helper"
 while IFS= read -r helper; do
 	install -m 0755 "$REPO_ROOT/$helper" "$TMP_DIR/test-helpers/$helper"
 done <<'EOF'
-t/helper/test-json-parser
-t/helper/test-chain
-t/helper/test-config
-t/helper/test-bpf-load
-t/helper/test-dns-prog-run
-t/helper/test-kernel-abi
-t/helper/test-otel-map
-t/helper/test-upatch-map-types
-t/helper/test-upatch-prog-metadata
-t/helper/test-upatch-decode
-t/helper/test-upatch-serializer-pages
-t/helper/test-signed-load
-t/helper/test-exec-churn
-t/helper/otel-mock.py
-t/helper/test-oci-registry.py
+testing/helper/test-json-parser
+testing/helper/test-chain
+testing/helper/test-config
+testing/helper/test-bpf-load
+testing/helper/test-dns-prog-run
+testing/helper/test-kernel-abi
+testing/helper/test-otel-map
+testing/helper/test-upatch-map-types
+testing/helper/test-upatch-prog-metadata
+testing/helper/test-upatch-decode
+testing/helper/test-upatch-serializer-pages
+testing/helper/test-signed-load
+testing/helper/test-exec-churn
+testing/helper/otel-mock.py
+testing/helper/test-oci-registry.py
 EOF
 
 build_fixture()
@@ -323,7 +323,7 @@ build_fixture()
 	(
 		cd "$REPO_ROOT"
 		"$REPO_ROOT/tools/shirudo-build/shirudo-build" \
-			"$REPO_ROOT/t/fixtures/$source" \
+			"$REPO_ROOT/testing/fixtures/$source" \
 			-o "$TMP_DIR/fixtures/$name.upatch" \
 			--name "$name" --vmlinux "$REPO_ROOT/vendor/linux/vmlinux.h" \
 			--key "$keys_dir/signing_key.pem" \
@@ -540,7 +540,7 @@ mkdir -p "$TMP_DIR/fixtures/decoders" "$FIXTURE_WORK/trusted" \
 
 "${CC:-cc}" -O0 -g -Wl,--build-id=sha1 \
 	-o /tmp/shirudo-test-uprobe-target \
-	"$REPO_ROOT/t/fixtures/uprobe-target.c"
+	"$REPO_ROOT/testing/fixtures/uprobe-target.c"
 
 build_fixture basic.bpf.c shirudo-test-basic "$FIXTURE_WORK/trusted"
 build_fixture basic.bpf.c shirudo-test-lifecycle "$FIXTURE_WORK/trusted"

@@ -2,7 +2,7 @@
 # shellcheck shell=sh
 # Copyright (c) 2026 Authors of shirudo
 #
-# t/integration-lib.sh -- shared setup for target-side tests.
+# testing/integration-lib.sh -- shared setup for target-side tests.
 #
 # These exercise the LIVE kernel (BPF LSM, kernel keyring, bpffs) and
 # the installed binary, so they run as root against a target where `shirudo

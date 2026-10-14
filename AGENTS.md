@@ -231,7 +231,7 @@ one usually still compiles and passes tests.
 - `make` builds the operator binary; `make shirudo-build` the helper;
   `make target` the static-OpenSSL target profile (`make target-deps`
   builds OpenSSL, libcurl and tpm2-tss from source first).
-- `make test-op` runs the host-side suite (`t/t0*`), no root needed;
+- `make test-op` runs the host-side suite (`testing/t0*`), no root needed;
   `make SANITIZE=address,undefined test-op` runs it under ASan and
   UBSan (CI does too); `make test-tgt` runs the target suite in the
   QEMU/swtpm VM (`make help` lists the VM targets and variables).

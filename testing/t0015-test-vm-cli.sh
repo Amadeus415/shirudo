@@ -112,8 +112,8 @@ test_expect_success 'test-vm imports the host-built payload' '
 	grep -q "qemu.log\\\" 2>&1 &" ../contrib/test-vm.sh &&
 	grep -q "SHIRUDO_TEST_FAILURES_FILE" ../contrib/test-vm-guest.sh &&
 	grep -q "SHIRUDO_TEST_SUITE_FAILURES_FILE" ../contrib/test-vm-guest.sh &&
-	grep -q "SHIRUDO_TEST_FAILURES_FILE" ../t/test-lib.sh &&
-	grep -q "SHIRUDO_TEST_SUITE_FAILURES_FILE" ../t/run-tests.sh
+	grep -q "SHIRUDO_TEST_FAILURES_FILE" ../testing/test-lib.sh &&
+	grep -q "SHIRUDO_TEST_SUITE_FAILURES_FILE" ../testing/run-tests.sh
 '
 
 test_expect_success 'test harness records a failed test title' '
@@ -564,8 +564,8 @@ test_expect_success 'make test runs the complete pipeline in order' '
 '
 
 test_expect_success 'operator and target runners have disjoint explicit scopes' '
-	grep -q "for t in t0\[0-9\]\[0-9\]\[0-9\]-\*.sh" ../t/run-tests.sh &&
-	! grep -q "t1101" ../t/run-tests.sh &&
+	grep -q "for t in t0\[0-9\]\[0-9\]\[0-9\]-\*.sh" ../testing/run-tests.sh &&
+	! grep -q "t1101" ../testing/run-tests.sh &&
 	for test_name in \
 		t1101-seal.sh t1102-eventlog-full.sh t1103-version-gate.sh \
 		t1104-payload-mismatch.sh t1105-siggate.sh t1106-keyring-swap.sh \
@@ -576,10 +576,10 @@ test_expect_success 'operator and target runners have disjoint explicit scopes' 
 		t1116-otel-backend.sh t1117-otel-serialized-metric.sh \
 		t1200-target-fixtures.sh
 	do
-		grep -q "$test_name" ../t/run-target-tests.sh || return 1
+		grep -q "$test_name" ../testing/run-target-tests.sh || return 1
 	done &&
 	forbidden=$(printf '%s%s' SHIRUDO_ INTEGRATION) &&
-	! grep -R -q "$forbidden" ../Makefile ../contrib ../t
+	! grep -R -q "$forbidden" ../Makefile ../contrib ../testing
 '
 
 test_done

@@ -567,7 +567,7 @@ mode.
         systemd/                target units and timers
         packaging/              tar, deb and rpm packaging
         contrib/                swtpm, test VM, kernel configs
-        t/                      TAP tests, host and target VM
+        testing/                TAP tests, host and target VM
         Documentation/          this tree
 
 ``shirudo help --list-cmds`` prints the supported command set.

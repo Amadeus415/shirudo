@@ -180,7 +180,7 @@ shirudo make targets (run from the repo root):
 
   Test
     make test-op           build the operator tools, then run only the
-                           host/operator-side TAP suite under t/; safe without
+                           host/operator-side TAP suite under testing/; safe without
                            root, LSM, or a target kernel
     make html-docs         render Documentation/*.rst with docutils in strict
                            mode into Documentation/output/ (needs rst2html
@@ -345,9 +345,9 @@ TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
 	bpf/*.c bpf/lib/*.h \
 	vendor/linux/vmlinux.h \
 	tools/shirudo-build/*.c tools/shirudo-build/*.h \
-	t/helper/*.c t/helper/*.py completion/* systemd/*.in systemd/*.timer \
-	t/fixtures/*.c t/fixtures/*.lua \
-	t/fixtures/decoders/* \
+	testing/helper/*.c testing/helper/*.py completion/* systemd/*.in \
+	systemd/*.timer testing/fixtures/*.c testing/fixtures/*.lua \
+	testing/fixtures/decoders/* \
 	upatches/linux_obs/*.c upatches/linux_obs/*.h upatches/linux_obs/*.list \
 		upatches/linux_obs/*.py upatches/linux_obs/Beefile \
 	upatches/linux_obs/decoders/*))

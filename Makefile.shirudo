@@ -457,30 +457,30 @@ install-operator: install shirudo-build $(VMLINUX_H) $(BPF_LIBBPF_HEADERS) $(BPF
 # where libtpms is installed, the tests skip without it.
 TPMSIM_CFLAGS := $(shell pkg-config --cflags libtpms 2>/dev/null)
 TPMSIM_LIBS := $(shell pkg-config --libs libtpms 2>/dev/null)
-TPMSIM_HELPER := $(if $(TPMSIM_LIBS),t/helper/tpmsim-cmd,)
+TPMSIM_HELPER := $(if $(TPMSIM_LIBS),testing/helper/tpmsim-cmd,)
 
 # Compiled test helpers (also usable as fuzz entry points).
-TEST_HELPERS := t/helper/test-json-parser \
-                t/helper/test-chain \
-                t/helper/test-tpm-wire \
-                t/helper/test-register \
+TEST_HELPERS := testing/helper/test-json-parser \
+                testing/helper/test-chain \
+                testing/helper/test-tpm-wire \
+                testing/helper/test-register \
                 $(TPMSIM_HELPER) \
-		t/helper/test-config \
-		t/helper/test-bpm-source \
-		t/helper/test-kernel-release \
-		t/helper/test-kernel-build-id \
-                t/helper/test-bpf-load \
-		t/helper/test-dns-prog-run \
-                t/helper/test-kernel-abi \
-                t/helper/test-otel-map \
-                t/helper/test-upatch-map-types \
-                t/helper/test-upatch-prog-metadata \
-                t/helper/test-upatch-decode \
-                t/helper/test-upatch-serializer-pages \
-                t/helper/test-signed-load \
-                t/helper/test-exec-churn
+		testing/helper/test-config \
+		testing/helper/test-bpm-source \
+		testing/helper/test-kernel-release \
+		testing/helper/test-kernel-build-id \
+                testing/helper/test-bpf-load \
+		testing/helper/test-dns-prog-run \
+                testing/helper/test-kernel-abi \
+                testing/helper/test-otel-map \
+                testing/helper/test-upatch-map-types \
+                testing/helper/test-upatch-prog-metadata \
+                testing/helper/test-upatch-decode \
+                testing/helper/test-upatch-serializer-pages \
+                testing/helper/test-signed-load \
+                testing/helper/test-exec-churn
 
-t/helper/test-json-parser: t/helper/test-json-parser.c util/json.o
+testing/helper/test-json-parser: testing/helper/test-json-parser.c util/json.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
@@ -496,61 +496,61 @@ REGISTER_OBJS := util/chain.o util/tpm.o util/tpm_wire.o util/eventlog.o \
                  $(VERSION_OBJ)
 REGISTER_LIBS := -lcrypto -lssl -ltss2-esys -ltss2-tctildr
 
-t/helper/test-chain: t/helper/test-chain.c $(REGISTER_OBJS)
+testing/helper/test-chain: testing/helper/test-chain.c $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
-t/helper/test-tpm-wire: t/helper/test-tpm-wire.c util/tpm_wire.o util/hex.o \
+testing/helper/test-tpm-wire: testing/helper/test-tpm-wire.c util/tpm_wire.o util/hex.o \
                         util/crypto_openssl.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl
 
-t/helper/test-register: t/helper/test-register.c util/attest.o \
+testing/helper/test-register: testing/helper/test-register.c util/attest.o \
                         $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
-t/helper/tpmsim-cmd: t/helper/tpmsim-cmd.c
+testing/helper/tpmsim-cmd: testing/helper/tpmsim-cmd.c
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS_BASE) $(TPMSIM_CFLAGS) -o $@ $< $(TPMSIM_LIBS) -lcrypto
 
-t/helper/test-config: t/helper/test-config.c util/config.o util/io.o util/log.o
+testing/helper/test-config: testing/helper/test-config.c util/config.o util/io.o util/log.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-t/helper/test-bpm-source: t/helper/test-bpm-source.c util/bpm_source_config.o
+testing/helper/test-bpm-source: testing/helper/test-bpm-source.c util/bpm_source_config.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-t/helper/test-kernel-release: t/helper/test-kernel-release.c util/kernel_release.o
+testing/helper/test-kernel-release: testing/helper/test-kernel-release.c util/kernel_release.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-t/helper/test-kernel-build-id: t/helper/test-kernel-build-id.c util/kernel_build_id.o
+testing/helper/test-kernel-build-id: testing/helper/test-kernel-build-id.c util/kernel_build_id.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-t/helper/test-bpf-load: t/helper/test-bpf-load.c
+testing/helper/test-bpf-load: testing/helper/test-bpf-load.c
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-t/helper/test-dns-prog-run: t/helper/test-dns-prog-run.c
+testing/helper/test-dns-prog-run: testing/helper/test-dns-prog-run.c
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 # Needs the vendored uapi bpf.h (excl_prog_hash / fd_array_cnt / keyring_id
 # are newer than a stock system header) and libcrypto for SHA-256.
-t/helper/test-signed-load: t/helper/test-signed-load.c
+testing/helper/test-signed-load: testing/helper/test-signed-load.c
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -I$(BPF_UAPI_INCLUDE) \
 	    -o $@ $^ -lcrypto
 
-t/helper/test-kernel-abi: t/helper/test-kernel-abi.c util/kernel_abi.o \
+testing/helper/test-kernel-abi: testing/helper/test-kernel-abi.c util/kernel_abi.o \
                           $(LIBBPF_A)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LIBELF_LIBS) $(ZLIB_LIBS)
 
-t/helper/test-otel-map: t/helper/test-otel-map.c util/upatch_maps.o \
+testing/helper/test-otel-map: testing/helper/test-otel-map.c util/upatch_maps.o \
                         util/upatch_maps_otel.o util/crypto_openssl.o \
                         util/tls_openssl.o util/serializer.o \
                         util/upatch_decode.o util/upatch_resolve.o \
@@ -559,28 +559,28 @@ t/helper/test-otel-map: t/helper/test-otel-map.c util/upatch_maps.o \
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS)
 
-t/helper/test-upatch-map-types: t/helper/test-upatch-map-types.c
+testing/helper/test-upatch-map-types: testing/helper/test-upatch-map-types.c
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-t/helper/test-upatch-prog-metadata: t/helper/test-upatch-prog-metadata.c \
+testing/helper/test-upatch-prog-metadata: testing/helper/test-upatch-prog-metadata.c \
                                     util/upatch.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-t/helper/test-upatch-serializer-pages: t/helper/test-upatch-serializer-pages.c \
+testing/helper/test-upatch-serializer-pages: testing/helper/test-upatch-serializer-pages.c \
                                        util/upatch_maps.o util/upatch_resolve.o \
                                        util/serializer.o \
                                        util/json.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS)
 
-t/helper/test-upatch-decode: t/helper/test-upatch-decode.c \
+testing/helper/test-upatch-decode: testing/helper/test-upatch-decode.c \
 			      util/upatch_decode.o util/upatch.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS)
 
-t/helper/test-exec-churn: t/helper/test-exec-churn.c util/io.o
+testing/helper/test-exec-churn: testing/helper/test-exec-churn.c util/io.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
@@ -588,7 +588,7 @@ test-helpers: $(TEST_HELPERS)
 
 check test: shirudo $(TEST_HELPERS)
 	@printf '  TEST\n'
-	$(Q)cd t && ./run-tests.sh
+	$(Q)cd testing && ./run-tests.sh
 
 # ----- clean ------------------------------------------------------
 
@@ -597,7 +597,7 @@ clean:
 	$(Q)rm -f $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) \
 	          $(BUILD_OBJS) $(VERSION_OBJ) util/version_id.c
 	$(Q)rm -rf build/target
-	$(Q)rm -f $(DEPS) t/helper/*.d
+	$(Q)rm -f $(DEPS) testing/helper/*.d
 	$(Q)rm -f $(BPF_OBJS) $(VMLINUX_H) systemd/shirudo.service \
 	          systemd/shirudo-map-export.service \
 	          systemd/shirudo-keepalive.service \

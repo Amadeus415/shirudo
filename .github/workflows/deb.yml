@@ -240,7 +240,7 @@ jobs:
 
             # Verify that shirudo build works without a local copy of vmlinux.h
             rm -rf /tmp/shirudo-smoke && mkdir -p /tmp/shirudo-smoke
-            cp t/fixtures/basic.bpf.c /tmp/shirudo-smoke/
+            cp testing/fixtures/basic.bpf.c /tmp/shirudo-smoke/
             pushd /tmp/shirudo-smoke
             # TODO: shirudo build should include multiarch include path.
             shirudo build basic.bpf.c --extra-cflags "-I/usr/include/\$(gcc -dumpmachine)"
@@ -346,7 +346,7 @@ jobs:
           rpm -qV shirudo-operator
           shirudo genkey
           rm -rf /tmp/shirudo-smoke && mkdir -p /tmp/shirudo-smoke
-          cp t/fixtures/basic.bpf.c /tmp/shirudo-smoke/
+          cp testing/fixtures/basic.bpf.c /tmp/shirudo-smoke/
           cd /tmp/shirudo-smoke
           shirudo build basic.bpf.c
           shirudo upatch info basic.bpf.upatch

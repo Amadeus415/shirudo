@@ -390,7 +390,7 @@ log "running target test suite: ${TEST_VM_SUITE:-all}"
 : >/mnt/shirudo-out/failed-tests
 : >/mnt/shirudo-out/failed-suites
 (
-	cd t
+	cd testing
 	if [[ "${TEST_VM_SUITE:-all}" == obs ]]; then
 			SHIRUDO_BIN=/usr/local/bin/shirudo \
 				SHIRUDO_TEST_FIXTURES_DIR="$BUNDLE/fixtures" \

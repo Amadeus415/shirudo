@@ -34,7 +34,7 @@ case "$SHB" in
 *)  B="$(pwd)/$SHB" ;;
 esac
 
-( cd .. && "$B" t/fixtures/arena-tree-serializer.bpf.c \
+( cd .. && "$B" testing/fixtures/arena-tree-serializer.bpf.c \
 	-o "$WORK/arena-tree-serializer.upatch" \
 	--vmlinux vendor/linux/vmlinux.h --name arena-tree-serializer \
 	--key "$WORK/k.pem" --cert "$WORK/c.der" ) >/dev/null 2>&1 ||
