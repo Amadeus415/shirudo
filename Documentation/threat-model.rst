@@ -133,22 +133,30 @@ T4  Substituting artifacts
     unreadable.
 
 T5  Silent state change
-    Every init, load and unload extends the non-resettable NV index with
-    a domain-separated digest and appends the event to the eventlog.  A
-    load whose extension fails reports ``tpm_error`` rather than
-    succeeding unmeasured; an eventlog that would overflow refuses
-    ``eventlog_full`` before anything happens. Every state-changing
-    command compares the chain to ``--expect-chain`` first and refuses
-    ``tampered`` on drift, which also serialises concurrent operators.
-    ``shirudo status`` replays the eventlog and flags a chain it cannot
-    explain.  There is no unmeasured mode: a target without a TPM 2.0
-    does not initialise.
+    Every init, load, unload and tree operation extends this boot's
+    measurement register with a domain-separated digest and appends
+    the event to the eventlog.  The register is an NV extend index
+    that clears at TPM reset and is written only under its policy: the
+    first write of a boot needs PCR 15 to hold the value the policy was
+    computed from, and ``init`` extends PCR 15 with the index name right
+    after that write, so an index undefined and recreated at runtime
+    cannot be written again, and one recreated under another policy has
+    a name the eventlog does not know.  A load whose extension fails
+    reports ``tpm_error`` rather than succeeding unmeasured; an eventlog
+    that would overflow refuses ``eventlog_full`` before anything
+    happens.  Every state-changing command reads the register first and
+    refuses ``tampered`` when ``--expect-chain`` disagrees or the index
+    is not the one ``init`` recorded, which also serialises concurrent
+    operators.  ``shirudo status`` replays this boot's records and flags
+    a register it cannot explain.  There is no unmeasured mode: a target
+    without a TPM 2.0 does not initialise.
 
 T6  The boot window
     Enforcement is BPF and does not survive a reboot by itself.
     ``shirudo.service`` runs ``init`` before ``sysinit.target``,
-    re-applies the installed set all or nothing, and extends the chain
-    by exactly one predictable event.  Until it has run the target is
+    re-applies the installed set all or nothing, binds the register and
+    extends it by exactly one event an operator predicts from the
+    certificate and the set.  Until it has run the target is
     unprotected; see residual risk 7.
 
 T7  The delivery path
@@ -170,6 +178,21 @@ T8  Quantum-capable adversaries against the trust anchor
     embedded fleets are the reason: a forgeable signature would let a
     future adversary install BPF on every device that still trusts the
     old certificate.
+
+T9  A target lying about its state
+    ``shirudo status`` is the target's own account and proves nothing
+    by itself.  ``shirudo attest`` makes the TPM speak: a quote over
+    the firmware, boot loader, kernel, initrd and systemd PCRs and a
+    certification of the register, both signed by an attestation key
+    the operator pinned by name and carrying the operator's nonce.
+    ``shirudo attest verify`` ties the certified index to the recorded
+    PCR binding, replays the eventlog to the certified value and
+    compares it with the value predicted from the certificate and the
+    installed artifacts, so a substituted binary, a recreated index or
+    an unexpected set is a failed check, not a healthy report.  Which
+    firmware, kernel and initrd values are acceptable is the platform
+    owner's policy; ``--expect-pcr`` pins them and the logs in the
+    evidence explain them.
 
 
 5) Residual risks
@@ -199,12 +222,14 @@ Each of these is known, documented and bounded; none is silent.
     ``/var`` filesystem, a far higher bar than the direct unmount the
     guards close.
 
-4.  Chain denial of service.  A process that can open ``/dev/tpmrm0``
-    and knows the NV auth value, which is derived from ``cert.der``,
-    can extend the index with garbage.  The result is detected
-    (``tampered`` on every operation, ``ChainIntact`` at ``ALERT``), not
-    hidden, and the attacker still cannot load BPF; it costs the
-    operator a re-provisioning.
+4.  Register denial of service.  A process that can open
+    ``/dev/tpmrm0`` can extend PCR 15 or the written register with
+    garbage, and with the owner auth (empty on most TPMs) undefine the
+    index.  None of it is hidden: a garbage event fails the replay, a
+    recreated index cannot be written and fails the name check, and
+    ``status``, every state-changing command and ``attest verify``
+    report ``tampered``; the attacker still cannot load BPF.  It costs
+    the operator a reboot and an investigation.
 
 5.  The binary on disk.  shirudo cannot defend its own executable
     against substitution or patching before it runs; that belongs to
@@ -225,13 +250,48 @@ Each of these is known, documented and bounded; none is silent.
 8.  Registry withholding and replay.  A hostile registry can serve an
     old signed index, or none; it cannot serve a forged one.  Operators
     who need freshness compare the versions ``shirudo bpm list``
-    reports and the chain ``status`` exports against what they
+    reports and the register ``attest`` certifies against what they
     published.
 
 9.  Classical pieces outside the boundary: WebPKI server certificates
     on registries and collectors (they authenticate the transport, not
-    the artifacts), and any future TPM attestation key, which TPM
-    vendors ship as RSA or ECC today.
+    the artifacts), and the attestation key, which is ECDSA P-256
+    because TPMs sign with nothing post-quantum today.  The evidence is
+    therefore classical even though the artifacts it describes are not.
+
+10. Attestation key trust.  The operator pins the key by its name when
+    enrolling a target, over whatever channel they trust at that
+    moment, and nothing in the evidence proves by itself that the key
+    lives in the TPM whose endorsement certificate it carries.  A
+    credential activation against that certificate is deferred (see
+    below); until then the pin is a first-use trust.
+
+11. The anchor shares PCR 15 with systemd's own system-identity
+    measurements, so ``attest verify`` proves the anchor exactly only
+    when PCR 15 holds nothing else; otherwise it says so and leaves the
+    replay of the systemd measurement log, which the evidence carries,
+    to the verifier's tooling.  ``--strict-anchor`` turns the note into
+    a failure for systems where PCR 15 is known to hold nothing else.
+
+12. A root attacker who runs before ``shirudo.service`` can bind and
+    write the register first.  ``init`` then rebinds it under the
+    current PCR 15 value and anchors again, and the evidence shows two
+    anchors and a register the eventlog does not explain; the window is
+    the same one residual risk 7 describes.
+
+Deferred mitigations
+~~~~~~~~~~~~~~~~~~~~
+
+In scope and not yet built: credential activation
+(``TPM2_MakeCredential`` on the operator, ``TPM2_ActivateCredential`` on
+the target) that proves the attestation key sits beside the endorsement
+key whose certificate the evidence carries; registering the register as
+a systemd NvPCR through ``io.systemd.PCRExtend`` once systemd-aware
+verifiers consume third-party NvPCRs, so that systemd anchors it from
+the initrd; signed PCR policies for the kernel and initrd PCRs so a
+verifier needs no golden values; an in-kernel detach so the unload
+compare runs against signed ``.rodata`` (residual risk 1); and the
+keyring kfunc of residual risk 6.
 
 
 6) Out of scope
@@ -255,8 +315,13 @@ Each of these is known, documented and bounded; none is silent.
 Keep the signing key on a host with the controls of a certificate
 authority and never on a target.  Treat ``tampered`` as an incident to
 understand, not a condition to retry.  Verify ``shirudo status`` after
-every boot and every load; a target whose chain the eventlog cannot
-explain is not healthy just because it is still running.  Build
+every boot and every load; a target whose register the eventlog cannot
+explain is not healthy just because it is still running.  Record the
+attestation key name when a target is enrolled (``shirudo attest``
+once, keep ``ak.name``), and let the fleet's health be ``shirudo attest
+verify`` against a fresh nonce and the values ``shirudo attest
+predict`` computes from what you installed, not a status the target
+wrote about itself.  Build
 upatches against the target kernel's BTF and read verifier logs from
 the structured report.  Restrict who can register repositories and who
 can run state-changing commands, and drop ``CAP_SYS_RESOURCE`` from

@@ -38,8 +38,9 @@ covers every instruction that ends up attached.
 
 Everything else follows from that.  The kernel-side enforcement is a
 set of BPF LSM programs that shirudo loads through the same signed
-path.  Every state change extends a TPM NV-extend chain, so an operator
-can tell from one 32-byte value whether a target is where it was left.
+path.  Every state change extends a per-boot TPM measurement register
+anchored in a PCR, so an operator predicts from the signed set what a
+target must report and has the TPM certify that it does.
 The userspace side is one binary with git-like subcommands; on the
 target there is no daemon and no socket, only one-shot invocations
 driven by systemd timers.
@@ -82,9 +83,9 @@ Agentless.  The BPF security layer is part of the TCB and always on,
 launched from early boot.  It is signed, verified against a sealed
 kernel keyring, and resilient to a malicious root user.  The BPF
 control plane lives in the kernel, so every operation on it is
-signature-verified, and a TPM chain keeps the history of every
-operation.  No daemon, no listening socket, no open port on the
-target.
+signature-verified, and a TPM register the TPM certifies on request
+keeps the record of every operation since boot.  No daemon, no
+listening socket, no open port on the target.
 
 Packaging.  The platform itself protects only its own assets; every
 piece of functionality, observability or a CVE shield, ships as a BPF
@@ -126,7 +127,7 @@ or the kernel keyring, and persists nothing but the keypair and the
 files the caller names.
 
 The target holds the certificate, the sealed keyring, the private bpffs
-mount, the installed upatches, the eventlog and the TPM chain.  It runs
+mount, the installed upatches, the eventlog and the TPM register.  It runs
 ``init``, ``upatch load``, ``upatch unload`` and the install side of
 ``bpm``.  The target never sees the private key and never signs.
 
@@ -158,7 +159,8 @@ Load.  ``shirudo upatch load fix.upatch`` on the target:
    ``shirudo`` keyring exists and its serial equals the pinned one, the
    enforcement link is pinned, the eventlog has room, the binary's
    version identity matches ``--expect-version-id`` when given, and
-   the TPM chain equals ``--expect-chain`` when given;
+   the register is the one ``init`` bound and equals ``--expect-chain``
+   when given;
 2. parses and bounds-checks the container;
 3. loads the signed loader with ``BPF_PROG_LOAD``, passing the keyring
    serial as ``attr.keyring_id``; the kernel verifies the CMS signature
@@ -173,7 +175,7 @@ Load.  ``shirudo upatch load fix.upatch`` on the target:
    ``security.bpf.shirudo.payload`` xattr on the pin directory;
 6. copies the artifact to ``/var/lib/shirudo/upatches/`` for
    boot-restore;
-7. extends the TPM chain with ``SHA256("shirudo-upatch\0" ||
+7. extends the register with ``SHA256("shirudo-upatch\0" ||
    payload_sha256 || name)`` and appends the event to the eventlog.
 
 Unload.  ``shirudo upatch unload fix.unload.upatch`` runs the same
@@ -184,7 +186,7 @@ it authorises a load.  The detach itself is userspace: shirudo reads the
 constant-time against the directive's expected payload, and refuses
 with ``payload_mismatch`` on disagreement or when the xattr cannot be
 read.  Otherwise it unlinks the map pins, the link pin and the pin
-directory, removes the persisted ``.upatch``, and extends the chain
+directory, removes the persisted ``.upatch``, and extends the register
 with ``SHA256("shirudo-unload\0" || payload_sha256 || name)``.  A
 missing pin is ``already_unloaded`` and extends nothing.  The kernel's
 ``bpf_sys_bpf()`` allowlist has no detach or unlink command, which is
@@ -297,35 +299,74 @@ It does, in order:
    doing anything else fallible;
 7. re-applies every ``.upatch`` under ``/var/lib/shirudo/upatches/`` in
    sorted name order, all or nothing;
-8. extends the TPM chain once with ``SHA256("shirudo-init\0" ||
-   cert_sha256 || set_digest)``, where ``set_digest`` is the SHA-256
-   of the sorted listing of the restored set, and appends the event.
+8. binds this boot's measurement register and extends it once with
+   ``SHA256("shirudo-init\0" || cert_sha256 || set_digest ||
+   tree_root)``, where ``set_digest`` is the SHA-256 of the sorted
+   listing of the restored set and ``tree_root`` the upatch tree's
+   projection root (zeros without a tree), and appends the event.
 
-Boot-restore extends the chain by exactly one event however many
-upatches it restores.  An operator who knows the previous chain value
-and the installed set predicts the post-reboot value with one local
-hash.  If any re-apply fails the chain is not extended and ``status``
-reports ``init-pending``.
+Boot-restore extends the register by exactly one event however many
+upatches it restores.  The register starts from zero at every boot, so
+an operator predicts its value from the certificate and the installed
+set alone (``shirudo attest predict``); no history is needed.  If any
+re-apply fails the register is not written and ``status`` reports
+``init-pending``.  A re-run of ``init`` finds the register bound and on
+record and leaves it alone.
 
-TPM chain.  The measurement lives in a TPM 2.0 NV index (default
-``0x01818E00``) defined with ``TPMA_NV_EXTEND``, so it can only be
-extended, never reset, and persists across reboots.  Its auth value is
-``SHA256("shirudo-nv-auth\0" || cert_sha256)``; defining it needs the
-owner hierarchy, whose password, when set, comes from ``tpm.owner_auth``
-in ``/etc/shirudo/shirudo.conf``.  The upatch tree uses a second index
-(``0x01818E01``).  Every state-changing command reads the chain first
-and refuses with ``tampered`` when ``--expect-chain`` disagrees.  There
-is no TPM opt-out; an unmeasured target is indistinguishable from a
-tampered one.
+Measurement register.  The measurement lives in a TPM 2.0 NV index
+(default ``0x01818E00``) built the way systemd builds its NvPCRs: an
+extend-only index (``TPM2_NT_EXTEND``) whose contents clear at every
+TPM reset (``TPMA_NV_CLEAR_STCLEAR``) and whose write policy is
+``PolicyOR(PolicyNvWritten(YES), PolicyNvWritten(NO) || PolicyPCR(PCR
+15))``, computed from the value PCR 15 holds when ``init`` binds the
+register.  ``init`` performs the first write through the PCR branch
+and then extends PCR 15 with the record
+``nvpcr-init:shirudo:0x1818e00:<name>`` (systemd's ``nvpcr-init``
+format, ``<name>`` being the index's TPM name), so that branch can
+never be satisfied again until the next reset; every later extend
+presents the written branch.  An index undefined and recreated at
+runtime therefore stays unwritable, and one recreated under a weaker
+policy has a name other than the one ``init`` recorded and anchored.
+Reads need no authorisation; defining and undefining the index needs
+the owner hierarchy, whose password, when set, comes from
+``tpm.owner_auth`` in ``/etc/shirudo/shirudo.conf``.  Every
+state-changing command reads the register first and refuses with
+``tampered`` when ``--expect-chain`` disagrees or the index is not the
+one ``init`` recorded.  There is no TPM opt-out; an unmeasured target
+is indistinguishable from a tampered one.
 
 Eventlog.  ``/var/lib/shirudo/eventlog`` (mode 0600) holds one JSON
-line per chain extension: timestamp, type (``init``, ``upatch_load``,
-``upatch_unload``), the digest extended, and the name and payload
-digest or the set digest.  Replaying it must reproduce the TPM value;
-``shirudo status`` does that replay and reports ``Chain vs eventlog``.
-When ``eventlog.max_bytes`` would be exceeded, the operation refuses
-with ``eventlog_full`` before any load or extend, so chain and log
-never diverge.
+line per register extension: timestamp, boot ID, type (``init``,
+``upatch_load``, ``upatch_unload``, ``tree_op``), the digest extended,
+and the name and payload digest, the set digest or the tree operation.
+The ``init`` record also carries the binding: the PCR value the policy
+was computed from, the index name, and the anchor record with its
+digest.  Replaying this boot's records from its ``init`` on must
+reproduce the live value; ``shirudo status`` does that replay, checks
+that the live index carries the recorded name, and reports ``Chain vs
+eventlog`` and ``Anchored``.  When ``eventlog.max_bytes`` would be
+exceeded, the operation refuses with ``eventlog_full`` before any load
+or extend, so register and log never diverge.
+
+Attestation.  ``shirudo attest --nonce=<hex>`` emits a JSON evidence
+document: a ``TPM2_Quote`` over the SHA-256 bank (PCRs 0-7, 9 and
+11-15 by default) and a ``TPM2_NV_Certify`` of the register, both
+signed by the attestation key and carrying the nonce, the key's public
+area and name, the PCR values, this boot's eventlog records, the
+endorsement key certificate when the TPM holds one, and the firmware
+and systemd measurement logs.  The attestation key is a restricted
+P-256 ECDSA primary under the endorsement hierarchy with a fixed
+template, so the same TPM always yields the same key; an operator
+records its name once when enrolling the target.  ``shirudo attest
+verify`` on the operator checks the signatures and the nonce, that the
+quote covers the listed PCRs, that the certified index has the public
+area a register bound to the recorded PCR value must have, that the
+records replay to the certified value, that the anchoring PCR carries
+the anchor, and that the register equals the value ``shirudo attest
+predict`` computes from the certificate, the installed artifacts and
+the tree root, or an ``--expect-chain`` the operator computed from
+those plus the events since boot.  ``attest`` touches only the
+target's TPM; ``verify`` and ``predict`` touch no TPM at all.
 
 Files.  Under ``/var/lib/shirudo/``: ``keys/cert.der`` (and
 ``keys/signing_key.pem`` on an operator), ``keyring.serial``,
@@ -374,8 +415,10 @@ carries a selector (architecture, kernel release prefix, kernel build
 ID, Kconfig values, node labels) that ``shirudo bpm tree sync``
 evaluates locally against ``uname``, ``/sys/kernel/notes``,
 ``/proc/config.gz`` and ``/etc/shirudo/node.labels``; matching
-operations apply in sequence order, and the node's projection is
-measured into the second NV index.  ``shirudo bpm tree append <pkg.bee>
+operations apply in sequence order, each applied one is measured into
+the register as a ``tree_op`` event (``SHA256("shirudo-tree\0" || seq
+|| operation_digest)``), and the node's projection root enters the next
+boot's ``init`` event.  ``shirudo bpm tree append <pkg.bee>
 oci://host/repo [--op add|delete]`` publishes from the operator.  The
 tree is enabled by ``/etc/shirudo/bpm/upatch-tree.conf`` and its timer;
 without that file nothing changes.  The publication format is in the
@@ -421,13 +464,15 @@ same tree.
 ``shirudo status`` reports the machine it runs on: roles, version ID,
 the conditions ``LsmAttached``, ``KeyringSealed``, ``ChainIntact`` and
 ``TpmMeasured`` with an ``OK``, ``WARN`` or ``ALERT`` verdict each, the
-keyring serial against its pin, the TPM chain against the eventlog
-replay, the on-disk assets, and with ``--include-tpm``,
+keyring serial against its pin, the register against this boot's
+eventlog replay and its anchor, the on-disk assets, and with ``--include-tpm``,
 ``--include-system``, ``--include-eventlog``, ``--include-kernellog``
 and ``--include-modules`` the corresponding detail.  The overall
 ``status`` is ``ok``, ``degraded``, ``init-pending``, ``lsm-off`` or
 ``tampered``.  ``--json`` emits the same as one document; ``--otel``
-pushes it as a keepalive log record.
+pushes it as a keepalive log record.  ``status`` is the target's own
+account of itself; ``shirudo attest`` (section 7) is the account the
+TPM signs.
 
 ``shirudo upatch list``, ``info``, ``get`` and ``map`` inspect
 artifacts and loaded state.  ``info`` describes the container offline,

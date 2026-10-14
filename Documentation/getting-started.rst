@@ -132,14 +132,16 @@ can use a software one for development::
 
 Either export that variable or set ``tpm.tcti`` in
 ``/etc/shirudo/shirudo.conf``.  A TPM whose owner hierarchy has a
-password needs ``tpm.owner_auth`` (or ``SHIRUDO_TPM_OWNER_AUTH``) for
-the one-time NV index definition.
+password needs ``tpm.owner_auth`` (or ``SHIRUDO_TPM_OWNER_AUTH``) to
+define the measurement register, once and again whenever the PCR 15
+value at boot changes.
 
 ``init`` mounts the private bpffs, installs the certificate into the
 ``shirudo`` keyring and seals it, labels ``/var/lib/shirudo`` with the
 sealing xattr, attaches the enforcement programs, re-applies any
-installed upatches and extends the TPM chain.  It is idempotent and
-safe to re-run.  ``shirudo.service`` runs it on every boot before
+installed upatches, binds this boot's measurement register and extends
+it once.  It is idempotent and safe to re-run.  ``shirudo.service``
+runs it on every boot before
 ``sysinit.target``; extra arguments go in ``/etc/shirudo/init.env`` as
 ``SHIRUDO_INIT_ARGS``.  Enable the unit and the timers you want::
 
@@ -148,8 +150,9 @@ safe to re-run.  ``shirudo.service`` runs it on every boot before
     sudo systemctl enable --now shirudo-keepalive.timer shirudo-map-export.timer
 
 ``status`` shows the roles, the four conditions, the keyring serial
-against its pin, the chain against the eventlog replay and the assets
-on disk; ``--json`` emits the same as a document.
+against its pin, the register against this boot's eventlog replay and
+its anchor, and the assets on disk; ``--json`` emits the same as a
+document.
 
 
 5) Load and unload a local artifact
@@ -167,9 +170,12 @@ A stricter load binds the operation to the state the caller expects::
     sudo shirudo upatch load --expect-chain=$chain \
         --report=/tmp/fix.json fix.upatch
 
-The load refuses with ``tampered`` if the chain moved since the status
-was taken, whether by an attacker or by another operator; take a fresh
-status and decide again rather than retrying.  ``--report`` writes a
+The value need not come from the target: ``shirudo attest predict
+--cert cert.der --upatch a.upatch --upatch b.upatch`` computes on the
+operator what a target booted with exactly those artifacts must hold.
+The load refuses with ``tampered`` if the register moved since the
+value was computed, whether by an attacker or by another operator;
+take a fresh status and decide again rather than retrying.  ``--report`` writes a
 JSON document with the phase reached, the failure category, the
 verifier log and the chain after the operation.
 
@@ -290,8 +296,44 @@ how to land them in ClickHouse, Splunk or a collector of your own.
 Every command logs to syslog under the ``shirudo`` tag.
 
 
-9) Troubleshooting
+9) Attest a target
 ------------------
+
+``status`` is what the target says about itself.  ``attest`` is what
+its TPM signs.  On the target, with a nonce the verifier chose::
+
+    nonce=$(openssl rand -hex 16)
+    sudo shirudo attest --nonce=$nonce --out=/tmp/evidence.json
+
+The document carries a quote over the firmware, boot loader, kernel,
+initrd and systemd PCRs, a certification of the measurement register,
+the attestation key, this boot's eventlog and the measurement logs.
+When a target is enrolled, run it once and record the attestation key
+name (``jq -r .ak.name evidence.json``); the same TPM always yields
+the same key.
+
+On the operator, with the artifacts the target was given::
+
+    shirudo attest verify --evidence=evidence.json --nonce=$nonce \
+        --ak-name=000b... --cert=cert.der \
+        --upatch=fix.upatch --upatch=shield.upatch
+
+``verify`` prints one line per check and a verdict: the signatures and
+the nonce, the quote against the listed PCRs, the certified index
+against the recorded binding, the eventlog replay, the anchor in PCR
+15, and the register against the value predicted for that set.  Loads
+and unloads after boot change the register; either pass
+``--allow-runtime-events`` to see them listed, or compute the exact
+value with ``shirudo attest predict --cert cert.der --upatch ...
+--event=load:<name>=<payload_sha256>`` and pass it as
+``--expect-chain``.  ``--expect-pcr=11=<hex>`` pins a kernel or
+firmware PCR to a value you know (``systemd-measure calculate`` for a
+UKI's PCR 11); ``--strict-anchor`` fails instead of noting when PCR 15
+holds more than the anchor.  Neither command needs the other machine.
+
+
+10) Troubleshooting
+-------------------
 
 ``init_prereqs_missing``
     One or more pre-flight checks failed; the message names each one.
@@ -314,7 +356,7 @@ Every command logs to syslog under the ``shirudo`` tag.
     all.  Compare ``shirudo keys`` on both sides.
 
 ``tpm2_reachable`` (pre-flight), ``tpm_error``
-    No TPM 2.0, or the NV index cannot be defined.  Check
+    No TPM 2.0, or the measurement register cannot be bound.  Check
     ``/dev/tpmrm0``, ``tpm.tcti`` for a software TPM, and
     ``tpm.owner_auth`` on a TPM with an owner password.
 
@@ -326,8 +368,9 @@ Every command logs to syslog under the ``shirudo`` tag.
     Regenerate ``vmlinux.h`` from the target kernel and rebuild.
 
 ``tampered``
-    The chain, the keyring serial or the pins are not what the
-    operation expected.  Inspect ``shirudo status`` and the eventlog;
+    The register, the keyring serial or the pins are not what the
+    operation expected, or the register is not the index ``init``
+    bound this boot.  Inspect ``shirudo status`` and the eventlog;
     retry only after the state is understood.
 
 ``eventlog_full``

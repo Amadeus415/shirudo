@@ -39,10 +39,11 @@ What it does:
   be unlinked, unmounted or mounted over.
 * **Sealed state:** Every file shirudo owns carries an xattr security
   label that only the shirudo binary itself can access and modify.
-* **Measured:** Every init, load and unload extends a non-resettable
-  TPM 2.0 NV index and appends to an eventlog; an operator checks a
-  target from one 32-byte value, and a chain that moved refuses every
-  further operation as `tampered`.
+* **Measured:** Every init, load and unload extends a per-boot TPM
+  measurement register built like a systemd NvPCR and anchored in PCR
+  15; `shirudo attest` has the TPM quote the boot PCRs and certify the
+  register, and the operator verifies that evidence offline against the
+  value predicted from the signed artifacts.
 * **Agentless:** shirudo is a plain-C binary, no daemon, no listening
   socket. Everything on the target is a one-shot command, run by hand
   or by systemd timers, which keeps it generally light enough to deploy

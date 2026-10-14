@@ -30,11 +30,13 @@ what is present on the machine, never by separate builds:
   signed `.upatch` artifacts (`shirudo build`, `shirudo bpm build`), and
   publishes packages (`shirudo bpm push`, `shirudo bpm tree append`);
 - the *target* holds only the public certificate in a sealed kernel
-  keyring plus a TPM2 NV-extend chain, verifies every load and is
-  agentless: no daemon, no listening socket, every operation is a
-  one-shot CLI invocation run locally or by the systemd timers that
-  pull packages (`bpm repo update`, `bpm upgrade`, `bpm tree sync`) and
-  export status (OTLP).
+  keyring plus a per-boot TPM2 measurement register anchored in PCR
+  15, verifies every load, emits TPM-signed evidence on request
+  (`shirudo attest`) and is agentless: no daemon, no listening socket,
+  every operation is a one-shot CLI invocation run locally or by the
+  systemd timers that pull packages (`bpm repo update`, `bpm upgrade`,
+  `bpm tree sync`) and export status (OTLP). The operator verifies that
+  evidence offline (`shirudo attest verify`, `shirudo attest predict`).
 
 Delivery is pull-based: the operator publishes to an OCI registry, the
 target fetches and verifies. shirudo has no push transport, no SSH
@@ -153,11 +155,24 @@ one usually still compiles and passes tests.
 - **The operator is stateless.** It writes only the keypair (`genkey`)
   and the artifacts or reports the caller names. No hidden caches,
   state files, logs or staging directories; `--expect-chain` comes
-  from the caller.
-- **Every target state change extends the TPM NV chain** with a
-  domain-separated tag, in deterministic order, and refuses on chain
+  from the caller or from `shirudo attest predict`.
+- **Every target state change extends the TPM measurement register**
+  with a domain-separated tag, in deterministic order, and refuses on
   drift (`tampered`) rather than retrying. Boot restore is exactly one
-  chain event. A TPM 2.0 is mandatory; there is no unmeasured mode.
+  register event and a re-run of `init` adds none. The register follows
+  systemd's NvPCR construction (`util/chain.c`): an NV extend index that
+  clears at TPM reset, a first write only possible while PCR 15 holds
+  the value the policy was computed from, and the index name extended
+  into PCR 15 right after it. Do not reintroduce a persistent index, an
+  auth value derived from the certificate, or a second index; the
+  upatch tree measures into the same register. A TPM 2.0 is mandatory;
+  there is no unmeasured mode.
+- **Evidence is signed by the TPM, verified by the operator.** The
+  attestation key is a fixed-template primary under the endorsement
+  hierarchy, pinned by name; `shirudo attest verify` recomputes the
+  register's public area from the recorded PCR binding and the expected
+  value from the certificate and the artifacts. A check that trusts a
+  value the target wrote about itself is not a check.
 - **Pin the bpf_link before anything else fallible** in `shirudo init`,
   or a crash leaves an attached, unowned link that the kernel detaches.
 - **Single shirudo instance per host.** Keyring name, private bpffs,
@@ -237,8 +252,8 @@ Do not propose features in these areas; the design delegates them:
   registries; there is no push channel, no SSH integration and no
   fleet orchestration. How an administrator reaches a target is not
   shirudo's concern.
-- Audit and log retention: journald's job. The TPM chain is append-only
-  and unbounded by design.
+- Audit and log retention: journald's job. The eventlog is append-only
+  and unbounded by design; the register itself is per boot.
 - Operator-host and on-disk binary integrity: signed packages, IMA,
   dm-verity, measured boot.
 - Kernel hardening and TPM hardware attacks: trusted components.
