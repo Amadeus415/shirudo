@@ -40,6 +40,7 @@
 #include "util/help.h"
 #include "util/json.h"
 #include "util/macros.h"
+#include "util/identity.h"
 #include "util/keyring.h"
 #include "util/log.h"
 #include "util/malloc.h"
@@ -95,7 +96,6 @@ struct asset_view {
 	int n_incoming;
 	bool cert;
 	bool signing_key;
-	bool keyring_serial;
 	bool eventlog;
 	bool bpffs_mounted;
 };
@@ -151,7 +151,6 @@ static void gather_assets(struct asset_view *a)
 	*a = (struct asset_view){};
 	a->cert = access(SHIRUDO_CERT_PATH, F_OK) == 0;
 	a->signing_key = access(SHIRUDO_SIGNING_KEY_PATH, F_OK) == 0;
-	a->keyring_serial = access(SHIRUDO_KEYRING_SERIAL_PATH, F_OK) == 0;
 	if (stat(shirudo_eventlog_path(), &st) == 0) {
 		a->eventlog = true;
 		a->eventlog_bytes = (long)st.st_size;
@@ -566,6 +565,7 @@ int cmd_status(int argc, const char **argv)
 	key_serial_t keyring_serial, keyring_pinned;
 	const char *keyring_mode, *mode;
 	struct shirudo_sysinfo sysi = {};
+	struct shirudo_identity ident;
 	struct shirudo_config otel_cfg = {};
 	struct shirudo_otel_opts otel_opts = {};
 	struct asset_view assets;
@@ -665,11 +665,22 @@ int cmd_status(int argc, const char **argv)
 	lsm_attached = fd >= 0;
 	if (fd >= 0)
 		close(fd);
-	keyring_pinned = shirudo_keyring_read_pinned_serial();
-	keyring_serial = shirudo_keyring_bpf_serial();
-	if (keyring_serial > 0 && keyring_pinned == keyring_serial) {
-		keyring_mode = "bpf";
+	/*
+	 * The anchor init froze is the kernel's record; the live keyring
+	 * of that kind is what a load would name, and the two must agree.
+	 */
+	if (shirudo_identity_read(&ident) == 0) {
+		keyring_pinned = ident.keyring_serial;
+		if (ident.keyring_type == SHIRUDO_SIG_KEYRING_BPF) {
+			keyring_serial = shirudo_keyring_bpf_serial();
+			keyring_mode = "bpf";
+		} else {
+			keyring_serial =
+				shirudo_keyring_find(SHIRUDO_KEYRING_NAME);
+			keyring_mode = "user";
+		}
 	} else {
+		keyring_pinned = -ENOENT;
 		keyring_serial = shirudo_keyring_find(SHIRUDO_KEYRING_NAME);
 		keyring_mode = keyring_serial >= 0 ? "user" : "none";
 	}
@@ -830,7 +841,6 @@ int cmd_status(int argc, const char **argv)
 		shirudo_json_kv_string(&e, "root", SHIRUDO_VAR_LIB);
 		shirudo_json_kv_bool(&e, "cert", assets.cert);
 		shirudo_json_kv_bool(&e, "signing_key", assets.signing_key);
-		shirudo_json_kv_bool(&e, "keyring_serial", assets.keyring_serial);
 		shirudo_json_kv_bool(&e, "eventlog", assets.eventlog);
 		shirudo_json_kv_int(&e, "eventlog_bytes", assets.eventlog_bytes);
 		if (assets.n_upatches >= 0)
@@ -1067,14 +1077,11 @@ int cmd_status(int argc, const char **argv)
 			printf("  %-22s %s\n", "Serial:",
 			       "absent  (operator host, or `shirudo init` "
 			       "not yet run)");
-		if (keyring_pinned == (key_serial_t)-ENOENT)
-			printf("  %-22s %s\n", "Pinned serial:",
-			       "(none recorded)");
-		else if (keyring_pinned < 0)
-			printf("  %-22s unreadable (%s)\n", "Pinned serial:",
-			       strerror(-keyring_pinned));
+		if (keyring_pinned < 0)
+			printf("  %-22s %s\n", "Frozen serial:",
+			       "(none this boot)");
 		else
-			printf("  %-22s %lld%s\n", "Pinned serial:",
+			printf("  %-22s %lld%s\n", "Frozen serial:",
 			       (long long)keyring_pinned, !keyring_present ? "" :
 			       keyring_serial == keyring_pinned ?
 				       "  (matches)" :
@@ -1138,8 +1145,6 @@ int cmd_status(int argc, const char **argv)
 		       assets.cert ? "present" : "absent");
 		printf("  %-22s %s\n", "keys/signing_key.pem",
 		       assets.signing_key ? "present" : "absent");
-		printf("  %-22s %s\n", "keyring.serial",
-		       assets.keyring_serial ? "present" : "absent");
 		if (assets.eventlog)
 			printf("  %-22s present (%ld bytes)\n", "eventlog",
 			       assets.eventlog_bytes);

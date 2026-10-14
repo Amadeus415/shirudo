@@ -22,7 +22,6 @@
 #define SHIRUDO_INCOMING_DIR		SHIRUDO_VAR_LIB "/incoming"
 #define SHIRUDO_LOCKS_DIR		SHIRUDO_VAR_LIB "/locks"
 #define SHIRUDO_EVENTLOG_PATH		SHIRUDO_VAR_LIB "/eventlog"
-#define SHIRUDO_KEYRING_SERIAL_PATH	SHIRUDO_VAR_LIB "/keyring.serial"
 /*
  * Per-boot state: the private bpffs holds the pins that keep the LSM
  * links alive. /run is what systemd carries from the initrd into the
@@ -65,6 +64,8 @@
 #define SHIRUDO_SEAL_SETXATTR_PIN	SHIRUDO_BPFFS_DIR "/seal_inode_setxattr_link"
 #define SHIRUDO_SEAL_RMXATTR_PIN	SHIRUDO_BPFFS_DIR "/seal_inode_removexattr_link"
 #define SHIRUDO_BPFFS_UPATCHES_DIR	SHIRUDO_BPFFS_DIR "/upatches"
+/* The frozen identity map: bpffs device, executable, trust anchor. */
+#define SHIRUDO_IDENTITY_PIN		SHIRUDO_BPFFS_DIR "/identity"
 
 /* Operator-side. */
 #define SHIRUDO_SIGNING_KEY_FILE	"signing_key.pem"

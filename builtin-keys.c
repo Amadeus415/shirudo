@@ -26,6 +26,7 @@
 
 #include "builtin.h"
 #include "util/help.h"
+#include "util/identity.h"
 #include "util/keyring.h"
 #include "util/log.h"
 #include "util/macros.h"
@@ -331,28 +332,25 @@ static void collect_key(key_serial_t serial, const char *type,
 
 static int keys_list_keyring(key_serial_t ring)
 {
+	struct shirudo_identity id;
 	struct list_ctx c = {};
-	key_serial_t pin;
 	int rc, i;
 
 	printf("Keyring (%s):\n", SHIRUDO_KEYRING_NAME);
 	printf("  %-22s %d\n", "Serial:", (int)ring);
 
-	pin = shirudo_keyring_read_pinned_serial();
-	if (pin >= 1) {
-		const char *match = pin == ring ? "matches" : "MISMATCH";
+	if (shirudo_identity_read(&id) == 0) {
+		const char *match = id.keyring_serial == ring ?
+				    "matches" : "MISMATCH";
 
-		printf("  %-22s %d  (%s)\n", "Pinned serial:",
-		       (int)pin, match);
-		if (pin != ring)
-			pr_warn("keyring serial pin %d != live serial %d "
-				"(swap?)", (int)pin, (int)ring);
-	} else if (pin == (key_serial_t)-ENOENT) {
-		printf("  %-22s %s\n", "Pinned serial:",
-		       "(none recorded)");
+		printf("  %-22s %d  (%s)\n", "Frozen serial:",
+		       (int)id.keyring_serial, match);
+		if (id.keyring_serial != ring)
+			pr_warn("keyring serial %d != frozen %d (swap?)",
+				(int)ring, (int)id.keyring_serial);
 	} else {
-		printf("  %-22s read error: %s\n", "Pinned serial:",
-		       strerror(-pin));
+		printf("  %-22s %s\n", "Frozen serial:",
+		       "(none this boot)");
 	}
 
 	rc = shirudo_keyring_list(ring, collect_key, &c);

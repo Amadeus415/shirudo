@@ -131,6 +131,7 @@ UTIL_SRCS := \
     util/loader.c \
     util/upatch.c \
     util/keyring.c \
+    util/identity.c \
     util/paths.c \
     util/harden.c \
     util/preflight.c \

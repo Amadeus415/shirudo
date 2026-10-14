@@ -158,10 +158,12 @@ one usually still compiles and passes tests.
   seals it, which needs the kernel booted with `bpf.keyring_unsealed=1`
   and `init` run from the initrd; a kernel that sealed it empty at boot
   makes `init` stage the certificate in a sealed `shirudo` user keyring
-  until the next reboot. A load names the keyring the pin records, and
-  `lsm/bpf_prog_load` admits only the keyring kind `init` froze into
-  the identity map, and for a staged user keyring only the frozen
-  serial (the kernel records none for its own bpf keyring).
+  until the next reboot. The kind and serial of the keyring `init`
+  sealed live in the identity map it freezes and pins in the bpffs; a
+  load names the keyring that record says, and `lsm/bpf_prog_load`
+  admits only that kind, and for a staged user keyring only that
+  serial (the kernel records none for its own bpf keyring). There is
+  no file pin to forge or lose.
 - **The operator is stateless.** It writes only the keypair (`genkey`)
   and the artifacts or reports the caller names. No hidden caches,
   state files, logs or staging directories; `--expect-chain` comes

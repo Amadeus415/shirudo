@@ -42,6 +42,7 @@
 #include "util/json.h"
 #include "util/kernel_abi.h"
 #include "util/macros.h"
+#include "util/identity.h"
 #include "util/keyring.h"
 #include "util/log.h"
 #include "util/malloc.h"
@@ -1776,52 +1777,61 @@ static int get_pin_payload(const char *name, uint8_t out[32])
 }
 
 /*
- * The keyring a signed loader is verified against: the trust anchor
- * init pinned. Enrolled in the kernel's bpf keyring, that is
- * KEY_SPEC_BPF_KEYRING, which the kernel sealed for the boot and names
- * as such in the verdict. Staged in the user keyring, it is the sealed
- * "shirudo" keyring's own serial rather than KEY_SPEC_USER_KEYRING (-4):
- * with -4 the kernel's keyring_search recurses through the whole user
- * keyring (_uid.0), so a root attacker who links their own cert
- * anywhere in _uid.0 could get BPF they signed accepted. The pinned
- * serial also catches a same-named "shirudo" keyring substituted for
- * the sealed one, which a root attacker can do by unlinking the real
- * one from _uid.0 and linking a fake; the bpf keyring cannot be
- * substituted. Returns 0 with *keyring set, or -1 with rep filled.
+ * The keyring a signed loader is verified against: the anchor init
+ * froze into the identity map, read back from its bpffs pin. Enrolled
+ * in the kernel's bpf keyring, that is KEY_SPEC_BPF_KEYRING, which the
+ * kernel sealed for the boot and names as such in the verdict. Staged
+ * in the user keyring, it is the sealed "shirudo" keyring's own serial
+ * rather than KEY_SPEC_USER_KEYRING (-4): with -4 the kernel's
+ * keyring_search recurses through the whole user keyring (_uid.0), so
+ * a root attacker who links their own cert anywhere in _uid.0 could
+ * get BPF they signed accepted. The frozen serial also catches a
+ * same-named "shirudo" keyring substituted for the sealed one, which a
+ * root attacker can do by unlinking the real one from _uid.0 and
+ * linking a fake; the bpf keyring cannot be substituted. Returns 0
+ * with *keyring set, or -1 with rep filled.
  */
 static int trust_anchor_keyring(key_serial_t *keyring,
 				struct shirudo_op_report *rep)
 {
-	key_serial_t pinned = shirudo_keyring_read_pinned_serial();
-	key_serial_t bpf_ring = shirudo_keyring_bpf_serial();
+	struct shirudo_identity id;
 	key_serial_t ring;
+	int rc;
 
-	if (bpf_ring > 0 && pinned == bpf_ring) {
+	rc = shirudo_identity_read(&id);
+	if (rc) {
+		pr_err("no trust anchor frozen this boot: %s (run `shirudo "
+		       "init`)", strerror(-rc));
+		rep_fail(rep, "pre_flight", "keyring_missing", -rc,
+			 "no trust anchor frozen this boot");
+		return -1;
+	}
+	if (id.keyring_type == SHIRUDO_SIG_KEYRING_BPF) {
+		ring = shirudo_keyring_bpf_serial();
+		if (ring != id.keyring_serial) {
+			pr_err("the kernel's bpf keyring (%d) is not the one "
+			       "init sealed (%d)", (int)ring,
+			       (int)id.keyring_serial);
+			rep_fail(rep, "pre_flight", "tampered", 0,
+				 "bpf keyring is not the frozen anchor");
+			return -1;
+		}
 		*keyring = KEY_SPEC_BPF_KEYRING;
 		return 0;
 	}
 	ring = shirudo_keyring_find(SHIRUDO_KEYRING_NAME);
 	if (ring < 0) {
-		pr_err("keyring \"%s\" not found: %s (run `shirudo init`)",
-		       SHIRUDO_KEYRING_NAME, strerror(-ring));
-		rep_fail(rep, "pre_flight", "keyring_missing", -ring,
-			 "shirudo keyring not found");
+		pr_err("keyring \"%s\" not found: %s; the anchor frozen this "
+		       "boot was serial %d", SHIRUDO_KEYRING_NAME,
+		       strerror(-ring), (int)id.keyring_serial);
+		rep_fail(rep, "pre_flight", "tampered", -ring,
+			 "the sealed keyring is gone");
 		return -1;
 	}
-	if (pinned == -ENOENT) {
-		pr_warn("keyring: no pinned serial at %s; swap detection "
-			"skipped (re-run `shirudo init`)",
-			SHIRUDO_KEYRING_SERIAL_PATH);
-	} else if (pinned < 0) {
-		pr_err("keyring: pinned serial unreadable: %s",
-		       strerror(-pinned));
-		rep_fail(rep, "pre_flight", "tampered", -pinned,
-			 "keyring serial pin unreadable");
-		return -1;
-	} else if (pinned != ring) {
-		pr_err("keyring \"%s\" serial %d != pinned %d -- a same-named "
+	if (ring != id.keyring_serial) {
+		pr_err("keyring \"%s\" serial %d != frozen %d -- a same-named "
 		       "keyring was substituted", SHIRUDO_KEYRING_NAME,
-		       (int)ring, (int)pinned);
+		       (int)ring, (int)id.keyring_serial);
 		rep_fail(rep, "pre_flight", "tampered", 0,
 			 "keyring serial mismatch (substituted keyring)");
 		return -1;

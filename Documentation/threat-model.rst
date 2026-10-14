@@ -139,8 +139,10 @@ T3  Tampering with shirudo's files and process
     ``KEYCTL_RESTRICT_KEYRING`` so no key can be linked into it for the
     rest of the boot, and the kernel then refuses every caller-supplied
     keyring for signature verification; a staged ``shirudo`` keyring is
-    sealed with ``KEYCTL_SETPERM`` and its serial pinned on disk, so a
-    swapped same-name keyring makes every load refuse ``tampered``.
+    sealed with ``KEYCTL_SETPERM``.  The kind and serial of the keyring
+    ``init`` sealed are frozen into the identity map, pinned in the
+    bpffs and read back by every later command, so a swapped same-name
+    keyring makes every load refuse ``tampered``.
 
 T4  Substituting artifacts
     The signature covers the loader instructions and data, so the kernel
@@ -273,7 +275,8 @@ Each of these is known, documented and bounded; none is silent.
 6.  While the certificate is staged in the user keyring, a keyring
     swap degrades to denial of service.  Root can unlink the sealed
     ``shirudo`` keyring and create a fake one with the same name; the
-    serial pin turns that into a fail-closed refusal instead of a
+    serial frozen in the identity map turns that into a fail-closed
+    refusal, for the rest of the boot, instead of a
     bypass.  The bpf keyring, the production anchor, can be neither
     unlinked nor substituted, and the kernel refuses every other
     keyring once it is sealed.

@@ -34,6 +34,7 @@
 #include "util/help.h"
 #include "util/json.h"
 #include "util/macros.h"
+#include "util/identity.h"
 #include "util/keyring.h"
 #include "util/loader.h"
 #include "util/log.h"
@@ -98,28 +99,6 @@ static int read_cert_der(unsigned char **out, size_t *out_sz)
 	return 0;
 }
 
-/*
- * Record the keyring serial under the sealed tree so a later upatch
- * load can detect a same-named "shirudo" keyring being swapped in
- * under it (the resolved serial would stop matching). Best-effort:
- * the keyring scoping at load already confines trust to this keyring;
- * the pin only adds swap-detection. Labelled now so seal protects it.
- */
-static void pin_keyring_serial(key_serial_t ring)
-{
-	int rc = shirudo_keyring_pin_serial(ring);
-
-	if (rc) {
-		pr_warn("keyring: could not pin serial to %s: %s",
-			SHIRUDO_KEYRING_SERIAL_PATH, strerror(-rc));
-		return;
-	}
-	rc = shirudo_seal_label(SHIRUDO_KEYRING_SERIAL_PATH);
-	if (rc)
-		pr_warn("keyring: could not seal-label %s: %s",
-			SHIRUDO_KEYRING_SERIAL_PATH, strerror(-rc));
-}
-
 static void keyring_note_asymmetric(key_serial_t serial, const char *type,
 				    const char *description, void *ud)
 {
@@ -141,14 +120,6 @@ static int keyring_has_cert(key_serial_t ring)
 	return found ? 1 : 0;
 }
 
-/*
- * The keyring the kernel verified a signed loader against, as the
- * kernel names it in the verdict (enum bpf_sig_keyring) and as the
- * identity map hands it to lsm/bpf_prog_load.
- */
-#define SHIRUDO_SIG_KEYRING_USER	4
-#define SHIRUDO_SIG_KEYRING_BPF		5
-
 /* Set once init_keyring has chosen the trust anchor for this boot. */
 static bool bpf_keyring_mode;
 
@@ -156,17 +127,16 @@ static bool bpf_keyring_mode;
  * The bpf keyring is the trust anchor a signed loader is verified
  * against once it is sealed. Booted with bpf.keyring_unsealed=1 it
  * takes keys until the first seal, which is init's job from the initrd:
- * enrol the certificate, seal, pin the serial. Found sealed, it either
- * holds the certificate init enrolled earlier this boot (-EEXIST: use
- * it) or was sealed empty by the kernel at boot (-ENOKEY: the user
- * keyring stages the certificate until the target reboots into the
- * production configuration); sealed around someone else's key, it is
- * refused.
+ * enrol the certificate and seal. Found sealed, it either holds this
+ * certificate (-EEXIST: use it) or was sealed empty by the kernel at
+ * boot (-ENOKEY: the user keyring stages the certificate until the
+ * target reboots into the production configuration); sealed around
+ * someone else's key, it is refused.
  */
 static int init_bpf_keyring(key_serial_t ring, const unsigned char *der,
 			    size_t der_sz)
 {
-	key_serial_t key, pinned;
+	key_serial_t key;
 	int rc;
 
 	key = shirudo_keyring_bpf_add_cert(der, der_sz);
@@ -180,7 +150,6 @@ static int init_bpf_keyring(key_serial_t ring, const unsigned char *der,
 		}
 		pr_info("bpf keyring serial=%d: certificate enrolled (key "
 			"serial=%d) and sealed", (int)ring, (int)key);
-		pin_keyring_serial(ring);
 		return 0;
 	}
 	if (key != -EPERM && key != -EACCES) {
@@ -192,6 +161,16 @@ static int init_bpf_keyring(key_serial_t ring, const unsigned char *der,
 			       "Documentation/requirements.rst)");
 		return key;
 	}
+	rc = shirudo_keyring_holds_cert(ring, der, der_sz);
+	if (rc < 0) {
+		pr_err("bpf keyring: compare: %s", strerror(-rc));
+		return rc;
+	}
+	if (rc) {
+		pr_info("bpf keyring serial=%d: already enrolled and sealed "
+			"this boot", (int)ring);
+		return -EEXIST;
+	}
 	rc = keyring_has_cert(ring);
 	if (rc < 0) {
 		pr_err("bpf keyring: list: %s", strerror(-rc));
@@ -199,40 +178,48 @@ static int init_bpf_keyring(key_serial_t ring, const unsigned char *der,
 	}
 	if (rc == 0)
 		return -ENOKEY;
-	pinned = shirudo_keyring_read_pinned_serial();
-	if (pinned == ring) {
-		pr_info("bpf keyring serial=%d: already enrolled and sealed "
-			"this boot", (int)ring);
-		return -EEXIST;
-	}
-	pr_err("bpf keyring serial=%d is sealed around a certificate shirudo "
-	       "did not enrol this boot (tampered)", (int)ring);
+	pr_err("bpf keyring serial=%d is sealed around a certificate that is "
+	       "not %s (tampered)", (int)ring, SHIRUDO_CERT_PATH);
 	return -EKEYREJECTED;
 }
 
 static int init_keyring(void)
 {
+	struct shirudo_identity id;
 	unsigned char *der = NULL;
 	key_serial_t ring, key;
 	size_t der_sz = 0;
+	bool frozen;
 	int rc;
+
+	rc = read_cert_der(&der, &der_sz);
+	if (rc) {
+		pr_err("read %s: %s", SHIRUDO_CERT_PATH, strerror(-rc));
+		return rc;
+	}
+	frozen = shirudo_identity_read(&id) == 0;
 
 	ring = shirudo_keyring_bpf_serial();
 	if (ring > 0) {
-		rc = read_cert_der(&der, &der_sz);
-		if (rc) {
-			pr_err("read %s: %s", SHIRUDO_CERT_PATH, strerror(-rc));
-			return rc;
-		}
 		rc = init_bpf_keyring(ring, der, der_sz);
-		xfree(der, der_sz);
-		der = NULL;
 		if (rc == 0 || rc == -EEXIST) {
+			xfree(der, der_sz);
+			if (frozen &&
+			    (id.keyring_type != SHIRUDO_SIG_KEYRING_BPF ||
+			     id.keyring_serial != ring)) {
+				pr_err("bpf keyring serial=%d holds the "
+				       "certificate, but the anchor frozen "
+				       "this boot is another keyring "
+				       "(tampered)", (int)ring);
+				return -EKEYREJECTED;
+			}
 			bpf_keyring_mode = true;
 			return 0;
 		}
-		if (rc != -ENOKEY)
+		if (rc != -ENOKEY) {
+			xfree(der, der_sz);
 			return rc;
+		}
 		pr_warn("bpf keyring serial=%d is sealed empty; staging the "
 			"certificate in the user keyring. Boot with "
 			"bpf.keyring_unsealed=1 and run init from the initrd "
@@ -243,42 +230,49 @@ static int init_keyring(void)
 	}
 
 	/*
-	 * Idempotent only when the existing keyring is readable and contains
-	 * an asymmetric cert. Older failed init attempts could leave an empty,
-	 * unreadable keyring behind; replace that rather than accepting it.
+	 * Staging. The keyring found by name must be the one whose serial
+	 * init froze this boot, if it froze one: a substitute or a missing
+	 * keyring cannot be repaired before the next boot, because the
+	 * frozen identity is what lsm/bpf_prog_load enforces.
 	 */
 	ring = shirudo_keyring_find(SHIRUDO_KEYRING_NAME);
+	if (frozen && id.keyring_type == SHIRUDO_SIG_KEYRING_USER &&
+	    ring != id.keyring_serial) {
+		pr_err("keyring \"%s\" is %s; the anchor frozen this boot is "
+		       "serial %d, which only a reboot can replace (tampered)",
+		       SHIRUDO_KEYRING_NAME, ring < 0 ? "gone" :
+		       "not the one init sealed", (int)id.keyring_serial);
+		xfree(der, der_sz);
+		return -EKEYREJECTED;
+	}
 	if (ring >= 0) {
-		rc = keyring_has_cert(ring);
+		rc = shirudo_keyring_holds_cert(ring, der, der_sz);
 		if (rc > 0) {
+			xfree(der, der_sz);
 			rc = shirudo_keyring_seal(ring);
 			if (rc && rc != -EACCES)
 				pr_warn("keyring \"%s\": could not seal (mutable): %s",
 					SHIRUDO_KEYRING_NAME, strerror(-rc));
 			pr_info("keyring \"%s\" already present (serial=%d), sealed",
 				SHIRUDO_KEYRING_NAME, (int)ring);
-			pin_keyring_serial(ring);
 			return 0;
 		}
-		pr_warn("keyring \"%s\" serial=%d is %s; recreating",
+		pr_warn("keyring \"%s\" serial=%d %s; recreating",
 			SHIRUDO_KEYRING_NAME, (int)ring,
-			rc == 0 ? "empty" : strerror(-rc));
+			rc == 0 ? "does not hold the certificate" :
+			strerror(-rc));
 		rc = shirudo_keyring_unlink_from_user(ring);
 		if (rc) {
 			pr_err("unlink stale keyring \"%s\": %s",
 			       SHIRUDO_KEYRING_NAME, strerror(-rc));
+			xfree(der, der_sz);
 			return rc;
 		}
 	} else if (ring != -ENOKEY) {
 		pr_err("lookup keyring \"%s\": %s",
 		       SHIRUDO_KEYRING_NAME, strerror(-ring));
+		xfree(der, der_sz);
 		return ring;
-	}
-
-	rc = read_cert_der(&der, &der_sz);
-	if (rc) {
-		pr_err("read %s: %s", SHIRUDO_CERT_PATH, strerror(-rc));
-		return rc;
 	}
 
 	ring = shirudo_keyring_open_or_create(SHIRUDO_KEYRING_NAME);
@@ -315,7 +309,6 @@ static int init_keyring(void)
 	pr_info("keyring \"%s\" serial=%d%s, cert key serial=%d",
 		SHIRUDO_KEYRING_NAME, (int)ring, rc ? "" : " sealed",
 		(int)key);
-	pin_keyring_serial(ring);
 	return 0;
 }
 
@@ -500,14 +493,7 @@ static int attach_seal(struct bpf_object **obj_out, struct bpf_link **links)
 
 static int init_lsm(bool attach_filesystem_seal)
 {
-	/* Must match struct shirudo_sb_id in bpf/bpf2.c byte-for-byte. */
-	struct shirudo_sb_id {
-		uint32_t	sb_dev;
-		uint32_t	exe_dev;
-		uint64_t	exe_ino;
-		int32_t		keyring_serial;
-		uint32_t	keyring_type;
-	} id = {};
+	struct shirudo_identity id = {};
 	/*
 	 * The four mount-lifecycle guards over shirudo's bpffs. Table-driven
 	 * so the attach loop stays short; each pin is destroyed in the out:
@@ -539,6 +525,12 @@ static int init_lsm(bool attach_filesystem_seal)
 		pr_info("bpf2 already attached (%s exists)",
 			SHIRUDO_LSM_LINK_PIN);
 		return 0;
+	}
+	/* A pin without the links behind it is what a failed attempt leaves. */
+	if (unlink(SHIRUDO_IDENTITY_PIN) != 0 && errno != ENOENT) {
+		pr_err("unlink stale %s: %s", SHIRUDO_IDENTITY_PIN,
+		       strerror(errno));
+		return -errno;
 	}
 
 	if (!blob || !blob->data || !blob->size) {
@@ -617,6 +609,17 @@ static int init_lsm(bool attach_filesystem_seal)
 	if (bpf_map_freeze(map_fd) != 0) {
 		err = -errno;
 		pr_err("freeze sb-identity map: %s", strerror(errno));
+		goto out;
+	}
+	/*
+	 * Pinned so that every later command reads the anchor init froze
+	 * from the kernel rather than from a file: the serial a load names
+	 * and status reports is the one lsm/bpf_prog_load enforces.
+	 */
+	if (bpf_obj_pin(map_fd, SHIRUDO_IDENTITY_PIN) != 0) {
+		err = -errno;
+		pr_err("pin identity map at %s: %s", SHIRUDO_IDENTITY_PIN,
+		       strerror(errno));
 		goto out;
 	}
 

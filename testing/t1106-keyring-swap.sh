@@ -33,8 +33,9 @@ ARCH=$(ls /var/lib/shirudo/upatches/*.upatch 2>/dev/null | head -1)
 keyctl search @u keyring shirudo >/dev/null 2>&1 || test_skip_all "no shirudo keyring"
 
 restore() {
-	# Drop whatever "shirudo" keyring is in @u now (fake or stale), then
-	# let init recreate a fresh sealed one with the cert and re-pin it.
+	# Drop whatever "shirudo" keyring is in @u now (fake or stale). The
+	# anchor init froze names the original serial, so the re-run can
+	# only report the swap; the test runs last for that reason.
 	k=$(keyctl search @u keyring shirudo 2>/dev/null) &&
 		keyctl unlink "$k" @u >/dev/null 2>&1
 	"$SHIRUDO_BIN" init >/dev/null 2>&1 || true

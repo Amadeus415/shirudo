@@ -297,16 +297,16 @@ instead, and the target stays in staging.  It does, in order:
 2. mounts the private bpffs at ``/run/shirudo/bpffs`` with
    ``mode=0700,nosuid,nodev,noexec``;
 3. removes state left behind by features that no longer exist;
-4. enrols ``cert.der`` in the kernel's bpf keyring, seals it with
+4. enrols ``cert.der`` in the kernel's bpf keyring and seals it with
    ``KEYCTL_RESTRICT_KEYRING`` so nothing can be linked into it for the
-   rest of the boot, and pins its serial in
-   ``/var/lib/shirudo/keyring.serial``; a keyring already sealed around
-   that pin is reused.  That needs the kernel booted with
-   ``bpf.keyring_unsealed=1`` and ``init`` run from the initrd.  A kernel
-   that sealed the bpf keyring empty at boot makes ``init`` stage the
-   certificate instead: a ``shirudo`` keyring in the user keyring, sealed
-   with ``KEYCTL_SETPERM`` to view, read and search only, its serial
-   pinned, until the next reboot;
+   rest of the boot; a keyring found sealed is reused when it holds
+   this certificate, which ``init`` tells by the description the kernel
+   gives the certificate, and refused when it holds another.  That
+   needs the kernel booted with ``bpf.keyring_unsealed=1`` and ``init``
+   run from the initrd.  A kernel that sealed the bpf keyring empty at
+   boot makes ``init`` stage the certificate instead: a ``shirudo``
+   keyring in the user keyring, sealed with ``KEYCTL_SETPERM`` to view,
+   read and search only, until the next reboot;
 5. labels ``/var/lib/shirudo/`` with ``security.bpf.shirudo``;
 6. loads bpf2 and, unless ``--no-seal``, seal through the signed path,
    freezes the identity map, creates the links and pins each one before
@@ -396,12 +396,13 @@ those plus the events since boot.  ``attest`` touches only the
 target's TPM; ``verify`` and ``predict`` touch no TPM at all.
 
 Files.  Under ``/var/lib/shirudo/``: ``keys/cert.der`` (and
-``keys/signing_key.pem`` on an operator), ``keyring.serial``,
+``keys/signing_key.pem`` on an operator),
 ``eventlog``, ``upatches/`` (installed artifacts), ``incoming/``
 (staging), ``locks/`` and ``bpm/`` (registry indexes, packages, tree
 state).  Under ``/run/shirudo/``, per boot: the ``bpffs/`` mount with
-``lsm_link``, the ``bpf2_*_link`` and ``seal_*_link`` pins and
-``upatches/<name>/``; it lives under ``/run`` because that is what
+``lsm_link``, the ``bpf2_*_link`` and ``seal_*_link`` pins, the frozen
+``identity`` map and ``upatches/<name>/``; it lives under ``/run``
+because that is what
 systemd carries from the initrd into the root file system, so pins
 made before the switch keep their links.  Under
 ``/etc/shirudo/``: ``shirudo.conf``, ``init.env``, ``map-export.env``,

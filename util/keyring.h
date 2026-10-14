@@ -50,18 +50,15 @@ key_serial_t shirudo_keyring_add_cert(key_serial_t keyring,
 int shirudo_keyring_seal(key_serial_t keyring);
 
 /*
- * Pin a keyring's serial to disk so a later load can detect a
- * same-named keyring being swapped under it (the resolved-by-name
- * serial would no longer match the pin). Per-boot; init rewrites it
- * each boot. The file lives under the sealed tree. Returns 0 / -errno.
+ * Whether <keyring> holds the certificate <der>: 1 when one of its
+ * keys is that certificate, 0 when none is, -errno otherwise. The
+ * kernel names an asymmetric key after the certificate it parsed, so
+ * the comparison is between the description a throwaway instance of
+ * the certificate gets on the thread keyring and those of the keys in
+ * <keyring>; no key material leaves the kernel.
  */
-int shirudo_keyring_pin_serial(key_serial_t serial);
-
-/*
- * Read the pinned serial back. Returns the serial (>= 1), -ENOENT if no
- * pin exists, or another -errno (including -EINVAL for a corrupt pin).
- */
-key_serial_t shirudo_keyring_read_pinned_serial(void);
+int shirudo_keyring_holds_cert(key_serial_t keyring,
+			       const unsigned char *der, size_t der_len);
 
 /*
  * Iterate every key linked into <keyring>. Returns 0 / -errno.

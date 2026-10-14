@@ -7,6 +7,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -139,50 +140,6 @@ int shirudo_keyring_seal(key_serial_t keyring)
 	return 0;
 }
 
-int shirudo_keyring_pin_serial(key_serial_t serial)
-{
-	char buf[16];
-	int fd, len, rc = 0;
-
-	len = snprintf(buf, sizeof(buf), "%d\n", (int)serial);
-	if (len < 0 || (size_t)len >= sizeof(buf))
-		return -EINVAL;
-
-	fd = open(SHIRUDO_KEYRING_SERIAL_PATH,
-		  O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-	if (fd < 0)
-		return -errno;
-	rc = shirudo_write_all(fd, buf, (size_t)len);
-	if (close(fd) < 0 && !rc)
-		rc = -errno;
-	return rc;
-}
-
-key_serial_t shirudo_keyring_read_pinned_serial(void)
-{
-	char buf[32], *end;
-	ssize_t n;
-	long val;
-	int fd;
-
-	fd = open(SHIRUDO_KEYRING_SERIAL_PATH, O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		return (key_serial_t)-errno;
-	n = read(fd, buf, sizeof(buf) - 1);
-	close(fd);
-	if (n < 0)
-		return (key_serial_t)-errno;
-
-	buf[n] = '\0';
-	errno = 0;
-	val = strtol(buf, &end, 10);
-	if (end == buf || (errno && val == 0))
-		return (key_serial_t)-EINVAL;
-	if (val < 1 || val > INT32_MAX)
-		return (key_serial_t)-EINVAL;
-	return (key_serial_t)val;
-}
-
 static int describe_key(key_serial_t serial,
 			char *out, size_t out_sz)
 {
@@ -270,6 +227,50 @@ int shirudo_keyring_list(key_serial_t keyring,
 	}
 	xfree(serials, cap);
 	return 0;
+}
+
+struct holds_cert_ctx {
+	char	want[512];
+	bool	found;
+};
+
+static void holds_cert_cb(key_serial_t serial, const char *type,
+			  const char *description, void *ud)
+{
+	struct holds_cert_ctx *ctx = ud;
+
+	(void)serial;
+	if (strcmp(type, "asymmetric") == 0 &&
+	    strcmp(description, ctx->want) == 0)
+		ctx->found = true;
+}
+
+int shirudo_keyring_holds_cert(key_serial_t keyring,
+			       const unsigned char *der, size_t der_len)
+{
+	struct holds_cert_ctx ctx = {};
+	const char *type, *description;
+	char desc[512];
+	long probe;
+	int rc;
+
+	probe = sys_add_key("asymmetric", NULL, der, der_len,
+			    KEY_SPEC_THREAD_KEYRING);
+	if (probe < 0)
+		return -errno;
+	rc = describe_key((key_serial_t)probe, desc, sizeof(desc));
+	sys_keyctl(KEYCTL_UNLINK, probe, KEY_SPEC_THREAD_KEYRING, 0, 0);
+	if (rc)
+		return rc;
+	split_describe(desc, &type, &description);
+	if (strlen(description) >= sizeof(ctx.want))
+		return -ERANGE;
+	memcpy(ctx.want, description, strlen(description) + 1);
+
+	rc = shirudo_keyring_list(keyring, holds_cert_cb, &ctx);
+	if (rc)
+		return rc;
+	return ctx.found ? 1 : 0;
 }
 
 key_serial_t shirudo_keyring_bpf_serial(void)
