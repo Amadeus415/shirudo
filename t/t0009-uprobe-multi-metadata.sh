@@ -16,8 +16,8 @@ command -v clang >/dev/null 2>&1 || test_skip_all "no clang"
 command -v openssl >/dev/null 2>&1 || test_skip_all "no openssl"
 [ -x "$SHB" ] || test_skip_all "shirudo-build not built (make shirudo-build)"
 [ -x "$CHECK" ] || test_skip_all "metadata helper not built"
-[ -e ../bpf/vmlinux.h ] || test_skip_all "no bpf/vmlinux.h (build the tree)"
-[ -e ../bpf/include/bpf/bpf_helpers.h ] || test_skip_all "no in-tree bpf headers"
+[ -e ../vendor/linux/vmlinux.h ] || test_skip_all "no vendor/linux/vmlinux.h (build the tree)"
+[ -e ../vendor/libbpf/bpf/bpf_helpers.h ] || test_skip_all "no vendored bpf headers"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -62,7 +62,7 @@ EOF
 test_expect_success 'one * glob assigns the program to fooFunc and barFunc' '
 	write_probe "*Func" &&
 	( cd .. && "$B" "$WORK/probe.bpf.c" \
-		-o "$WORK/uprobe.upatch" --vmlinux bpf/vmlinux.h \
+		-o "$WORK/uprobe.upatch" --vmlinux vendor/linux/vmlinux.h \
 		--name uprobe-multi-test --key "$WORK/k.pem" \
 		--cert "$WORK/c.der" ) >/dev/null 2>&1 &&
 	"$CHECK" "$WORK/uprobe.upatch" uprobe-multi \
@@ -72,7 +72,7 @@ test_expect_success 'one * glob assigns the program to fooFunc and barFunc' '
 test_expect_success 'a zero-match function glob is rejected at build time' '
 	write_probe "doesNotExist*" &&
 	! ( cd .. && "$B" "$WORK/probe.bpf.c" \
-		-o "$WORK/no-match.upatch" --vmlinux bpf/vmlinux.h \
+		-o "$WORK/no-match.upatch" --vmlinux vendor/linux/vmlinux.h \
 		--name uprobe-no-match --key "$WORK/k.pem" \
 		--cert "$WORK/c.der" ) >"$WORK/no-match.log" 2>&1 &&
 	grep -q "matched no functions" "$WORK/no-match.log"
@@ -81,7 +81,7 @@ test_expect_success 'a zero-match function glob is rejected at build time' '
 test_expect_success 'comma alternation is rejected with an actionable error' '
 	write_probe "fooFunc,barFunc" &&
 	! ( cd .. && "$B" "$WORK/probe.bpf.c" \
-		-o "$WORK/alternation.upatch" --vmlinux bpf/vmlinux.h \
+		-o "$WORK/alternation.upatch" --vmlinux vendor/linux/vmlinux.h \
 		--name uprobe-alternation --key "$WORK/k.pem" \
 		--cert "$WORK/c.der" ) >"$WORK/alternation.log" 2>&1 &&
 	grep -q "alternation are unsupported" "$WORK/alternation.log"

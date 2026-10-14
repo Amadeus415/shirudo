@@ -20,8 +20,8 @@ command -v clang >/dev/null 2>&1 || test_skip_all "no clang"
 command -v openssl >/dev/null 2>&1 || test_skip_all "no openssl"
 [ -x "$S" ] || test_skip_all "shirudo not built"
 [ -x "$SHB" ] || test_skip_all "shirudo-build not built (make shirudo-build)"
-[ -e ../bpf/vmlinux.h ] || test_skip_all "no bpf/vmlinux.h (build the tree)"
-[ -e ../bpf/include/bpf/bpf_helpers.h ] || test_skip_all "no in-tree bpf headers"
+[ -e ../vendor/linux/vmlinux.h ] || test_skip_all "no vendor/linux/vmlinux.h (build the tree)"
+[ -e ../vendor/libbpf/bpf/bpf_helpers.h ] || test_skip_all "no vendored bpf headers"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -92,7 +92,7 @@ case "$SHB" in
 /*) B="$SHB" ;;
 *)  B="$(pwd)/$SHB" ;;
 esac
-( cd .. && "$B" "$WORK/t.bpf.c" -o "$WORK/u.upatch" --vmlinux bpf/vmlinux.h \
+( cd .. && "$B" "$WORK/t.bpf.c" -o "$WORK/u.upatch" --vmlinux vendor/linux/vmlinux.h \
 	--name t0005 --key "$WORK/k.pem" --cert "$WORK/c.der" ) >/dev/null 2>&1 ||
 	test_skip_all "build failed (clang/headers?)"
 

@@ -13,8 +13,8 @@ SHB=../tools/shirudo-build/shirudo-build
 command -v clang >/dev/null 2>&1 || test_skip_all "no clang"
 command -v openssl >/dev/null 2>&1 || test_skip_all "no openssl"
 [ -x "$SHB" ] || test_skip_all "shirudo-build not built (make shirudo-build)"
-[ -e ../bpf/vmlinux.h ] || test_skip_all "no bpf/vmlinux.h (build the tree)"
-[ -e ../bpf/include/bpf/bpf_helpers.h ] || test_skip_all "no in-tree bpf headers"
+[ -e ../vendor/linux/vmlinux.h ] || test_skip_all "no vendor/linux/vmlinux.h (build the tree)"
+[ -e ../vendor/libbpf/bpf/bpf_helpers.h ] || test_skip_all "no vendored bpf headers"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -74,7 +74,7 @@ EOF
 test_expect_success 'sk_skb sections are rejected for now' '
 	! ( cd .. && "$B" "$WORK/sk-skb.bpf.c" \
 		-o "$WORK/sk-skb.upatch" \
-		--vmlinux bpf/vmlinux.h --name sk-skb \
+		--vmlinux vendor/linux/vmlinux.h --name sk-skb \
 		--key "$WORK/k.pem" --cert "$WORK/c.der" ) \
 		>"$WORK/sk-skb.out" 2>&1 &&
 	grep -q "unsupported sk_skb section" "$WORK/sk-skb.out"
@@ -83,7 +83,7 @@ test_expect_success 'sk_skb sections are rejected for now' '
 test_expect_success 'socket filter sections are rejected for lifecycle reasons' '
 	! ( cd .. && "$B" "$WORK/socket-filter.bpf.c" \
 		-o "$WORK/socket-filter.upatch" \
-		--vmlinux bpf/vmlinux.h --name socket-filter \
+		--vmlinux vendor/linux/vmlinux.h --name socket-filter \
 		--key "$WORK/k.pem" --cert "$WORK/c.der" ) \
 		>"$WORK/socket-filter.out" 2>&1 &&
 	grep -q "pinnable bpf_link lifecycle" "$WORK/socket-filter.out"
@@ -92,7 +92,7 @@ test_expect_success 'socket filter sections are rejected for lifecycle reasons' 
 test_expect_success 'generic cgroup skb sections require ingress or egress' '
 	! ( cd .. && "$B" "$WORK/cgroup-skb-generic.bpf.c" \
 		-o "$WORK/cgroup-skb-generic.upatch" \
-		--vmlinux bpf/vmlinux.h --name cgroup-skb-generic \
+		--vmlinux vendor/linux/vmlinux.h --name cgroup-skb-generic \
 		--key "$WORK/k.pem" --cert "$WORK/c.der" ) \
 		>"$WORK/cgroup-skb-generic.out" 2>&1 &&
 	grep -q "use cgroup_skb/ingress or cgroup_skb/egress" \

@@ -47,10 +47,10 @@ static int push(const char **argv, int *n, const char *arg)
 static const char *locate_bpf_headers(void)
 {
 	static const char installed[] = "-I" SHIRUDO_BPF_INCDIR;
-	static const char in_tree[] = "-I./bpf/include";
+	static const char in_tree[] = "-I./vendor/libbpf";
 	struct stat st;
 
-	if (stat("./bpf/include/bpf/bpf_helpers.h", &st) == 0)
+	if (stat("./vendor/libbpf/bpf/bpf_helpers.h", &st) == 0)
 		return in_tree;
 	if (stat(SHIRUDO_BPF_INCDIR "/bpf/bpf_helpers.h", &st) == 0)
 		return installed;

@@ -21,8 +21,7 @@
 
 # Generated headers
 /vmlinux.h
-/bpf/vmlinux.h
-/packaging/bpf/vmlinux.h
+/vendor/linux/
 *.skel.h
 
 # Generated systemd units (from systemd/*.service.in)
@@ -30,9 +29,6 @@
 /systemd/shirudo-map-export.service
 /systemd/shirudo-keepalive.service
 /systemd/shirudo-bpm-tree-sync.service
-
-# BPF-side headers copied from vendor/libbpf at build time
-/bpf/include/
 
 # Vendored bpf-next build state (do not commit)
 

@@ -173,7 +173,8 @@ load-bearing — consult them directly rather than reasoning from memory:
   `util/parse-options.{c,h}` under BSD-2-Clause.
 - `vmlinux.h` is generated from BTF by `tools/gen-vmlinux-h` (bpftool's
   `btf dump ... format c` logic under its BSD branch, linked against the
-  vendored libbpf), so bpftool is not built or needed. Build-time only.
+  vendored libbpf) into `vendor/linux/vmlinux.h`, which is gitignored;
+  `bpf/*.c` include it from there. bpftool is not built or needed.
 - BPF compiled with `clang -target bpf -O2 -g`, embedded into the userspace
   binary via `.incbin` inline asm. No generated skeleton headers.
 - Runtime deps (dynamic-linked, all BSD-2-Clause or with a

@@ -14,8 +14,8 @@ command -v clang >/dev/null 2>&1 || test_skip_all "no clang"
 command -v openssl >/dev/null 2>&1 || test_skip_all "no openssl"
 [ -x "$SHB" ] || test_skip_all "shirudo-build not built (make shirudo-build)"
 [ -x "$CHECK" ] || test_skip_all "metadata helper not built"
-[ -e ../bpf/vmlinux.h ] || test_skip_all "no bpf/vmlinux.h (build the tree)"
-[ -e ../bpf/include/bpf/bpf_helpers.h ] || test_skip_all "no in-tree bpf headers"
+[ -e ../vendor/linux/vmlinux.h ] || test_skip_all "no vendor/linux/vmlinux.h (build the tree)"
+[ -e ../vendor/libbpf/bpf/bpf_helpers.h ] || test_skip_all "no vendored bpf headers"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -48,7 +48,7 @@ EOF
 
 ( cd .. && "$B" "$WORK/netfilter.bpf.c" \
 	-o "$WORK/netfilter.upatch" \
-	--vmlinux bpf/vmlinux.h --name netfilter \
+	--vmlinux vendor/linux/vmlinux.h --name netfilter \
 	--key "$WORK/k.pem" --cert "$WORK/c.der" ) >/dev/null 2>&1 ||
 	test_skip_all "netfilter build failed"
 

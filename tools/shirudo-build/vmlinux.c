@@ -20,8 +20,8 @@ const char *shirudo_build_locate_vmlinux(const char *override)
 		return access(override, R_OK) == 0 ? override : NULL;
 	if (access("./vmlinux.h", R_OK) == 0)
 		return "./vmlinux.h";
-	if (access("./bpf/vmlinux.h", R_OK) == 0)
-		return "./bpf/vmlinux.h";
+	if (access("./vendor/linux/vmlinux.h", R_OK) == 0)
+		return "./vendor/linux/vmlinux.h";
 	if (access(SHIRUDO_VMLINUX_PATH, R_OK) == 0)
 		return SHIRUDO_VMLINUX_PATH;
 	return NULL;

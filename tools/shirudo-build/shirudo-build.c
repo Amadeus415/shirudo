@@ -58,7 +58,7 @@ static void usage(FILE *fp)
 		"           explicit --key/--cert override both.\n"
 		"--key default without --keys-dir/%s: %s\n"
 		"--cert default without --keys-dir/%s: %s\n"
-		"--vmlinux: explicit; else ./vmlinux.h, ./bpf/vmlinux.h,\n"
+		"--vmlinux: explicit; else ./vmlinux.h, ./vendor/linux/vmlinux.h,\n"
 		"           then %s.\n"
 		"--payload-sha256: 64 hex chars; if omitted, read from the local\n"
 		"                  archive /var/lib/shirudo/upatches/<name>.upatch,\n"
@@ -409,7 +409,7 @@ int main(int argc, char **argv)
 			shirudo_build_locate_vmlinux(vmlinux_override);
 		if (!vmlinux_h) {
 			pr_err("vmlinux.h not found (tried %s, ./vmlinux.h, "
-			       "./bpf/vmlinux.h, %s)",
+			       "./vendor/linux/vmlinux.h, %s)",
 			       vmlinux_override ? vmlinux_override
 						 : "(none)", SHIRUDO_VMLINUX_PATH);
 			return 1;

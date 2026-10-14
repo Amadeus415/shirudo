@@ -325,7 +325,7 @@ build_fixture()
 		"$REPO_ROOT/tools/shirudo-build/shirudo-build" \
 			"$REPO_ROOT/t/fixtures/$source" \
 			-o "$TMP_DIR/fixtures/$name.upatch" \
-			--name "$name" --vmlinux "$REPO_ROOT/bpf/vmlinux.h" \
+			--name "$name" --vmlinux "$REPO_ROOT/vendor/linux/vmlinux.h" \
 			--key "$keys_dir/signing_key.pem" \
 			--cert "$keys_dir/cert.der"
 	)
@@ -646,7 +646,7 @@ EOF
 		"$REPO_ROOT/tools/shirudo-build/shirudo-build" \
 			"$source_dir/linux-observability.bpf.c" \
 			-o "$TMP_DIR/fixtures/linux-observability.upatch" \
-			--name linux-observability --vmlinux "$REPO_ROOT/bpf/vmlinux.h" \
+			--name linux-observability --vmlinux "$REPO_ROOT/vendor/linux/vmlinux.h" \
 		--key "$keys_dir/signing_key.pem" \
 		--cert "$keys_dir/cert.der"
 	)

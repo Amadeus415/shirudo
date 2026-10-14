@@ -279,7 +279,7 @@ TEST_VM_BUNDLE_KERNEL_ARTIFACT_DIR ?= artifacts/bpf-next-kernel-debs
 TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
 	*.c *.h include/*.h util/*.c util/*.h \
 	bpf/*.c bpf/lib/*.h \
-	bpf/vmlinux.h \
+	vendor/linux/vmlinux.h \
 	tools/shirudo-build/*.c tools/shirudo-build/*.h \
 	t/helper/*.c t/helper/*.py completion/* systemd/*.in systemd/*.timer \
 	t/fixtures/*.c t/fixtures/*.lua \

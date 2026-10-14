@@ -22,8 +22,8 @@ command -v openssl >/dev/null 2>&1 || test_skip_all "no openssl"
 command -v python3 >/dev/null 2>&1 || test_skip_all "no python3"
 [ -x "$S" ] || test_skip_all "shirudo not built"
 [ -x "$SHB" ] || test_skip_all "shirudo-build not built (make shirudo-build)"
-[ -e ../bpf/vmlinux.h ] || test_skip_all "no bpf/vmlinux.h (build the tree)"
-[ -e ../bpf/include/bpf/bpf_helpers.h ] || test_skip_all "no in-tree bpf headers"
+[ -e ../vendor/linux/vmlinux.h ] || test_skip_all "no vendor/linux/vmlinux.h (build the tree)"
+[ -e ../vendor/libbpf/bpf/bpf_helpers.h ] || test_skip_all "no vendored bpf headers"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -55,7 +55,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -keyout "$WORK/rsa.pem" \
 	>/dev/null 2>&1 || test_skip_all "openssl RSA keygen failed"
 
 test_expect_success 'shirudo-build refuses to sign with an RSA key' '
-	! ( cd .. && "$B" "$WORK/t.bpf.c" -o "$WORK/rsa.upatch" --vmlinux bpf/vmlinux.h \
+	! ( cd .. && "$B" "$WORK/t.bpf.c" -o "$WORK/rsa.upatch" --vmlinux vendor/linux/vmlinux.h \
 		--name t0029rsa --key "$WORK/rsa.pem" --cert "$WORK/rsa.der" ) \
 		>"$WORK/rsa.out" 2>&1 &&
 	grep -q "ML-DSA only" "$WORK/rsa.out" &&
@@ -69,7 +69,7 @@ fi
 
 "$S" genkey --keys-dir "$WORK/keys" >/dev/null 2>&1 ||
 	test_skip_all "genkey failed"
-( cd .. && "$B" "$WORK/t.bpf.c" -o "$WORK/u.upatch" --vmlinux bpf/vmlinux.h \
+( cd .. && "$B" "$WORK/t.bpf.c" -o "$WORK/u.upatch" --vmlinux vendor/linux/vmlinux.h \
 	--name t0029 --key "$WORK/keys/signing_key.pem" \
 	--cert "$WORK/keys/cert.der" ) >/dev/null 2>&1 ||
 	test_skip_all "build failed (clang/headers?)"
