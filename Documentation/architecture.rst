@@ -484,8 +484,8 @@ that ``make target-deps`` builds from source, plus static libbpf,
 libelf, zlib, zstd, jitterentropy and LuaJIT, so it runs on a
 distribution whose OpenSSL predates ML-DSA.  ``SHIRUDO_VERSION_ID``
 hashes the source tree and build configuration, not binary bytes, so
-the same source yields the same identity on x86_64 and arm64; the
-pre-flight refuses a ``version_mismatch``.
+the same source yields the same identity on x86-64, arm64 and riscv64;
+the pre-flight refuses a ``version_mismatch``.
 
 shirudo requires Linux v7.4 or newer and the current upstream clang.
 There are no fallbacks for older kernels: a missing feature

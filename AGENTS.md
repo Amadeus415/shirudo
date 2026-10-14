@@ -168,7 +168,8 @@ one usually still compiles and passes tests.
 - **Bleeding-edge kernel and toolchain only.** Linux v7.4 or newer
   and current clang/LLVM are hard prerequisites. No legacy-kernel detection, no
   runtime feature-probe fallbacks; a missing kernel feature fails the
-  build or the load. x86_64 and arm64 are the supported architectures.
+  build or the load. x86-64, arm64 and riscv64 are the supported
+  architectures.
 - **BPF is CO-RE.** Hard-coded struct offsets sign fine and fail on the
   wrong kernel as `btf_mismatch`.
 
