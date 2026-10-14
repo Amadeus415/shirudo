@@ -316,8 +316,10 @@ instead, and the target stays in staging.  It does, in order:
    eventlog; the initrd run itself skips both, its root being
    read-only;
 6. loads bpf2 and, unless ``--no-seal``, seal through the signed path,
-   freezes the identity map, creates the links and pins each one before
-   doing anything else fallible;
+   freezes and pins the identity map (the bpffs, the executable that
+   keeps running the target, from the initrd also the initrd's own
+   copy for that run, and the keyring kind and serial), creates the
+   links and pins each one before doing anything else fallible;
 7. re-applies every ``.upatch`` under ``/var/lib/shirudo/upatches/`` in
    sorted name order, all or nothing;
 8. binds this boot's measurement register and extends it once with
@@ -592,6 +594,8 @@ mode.
         include/shirudo/        artifact and manifest definitions
         tools/shirudo-build/    operator-only helper: compile, sign,
                                 bpm build and publish, tree append
+        tools/gen-initrd/       dracut module, initrd generator,
+                                installer
         tools/gen-vmlinux-h/    vmlinux.h generator
         upatches/               shipped packages with their Beefiles
         vendor/libbpf/          vendored libbpf and UAPI headers

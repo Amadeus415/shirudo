@@ -547,6 +547,12 @@ context and the deferred mitigations the plan.
   records; a binding made from the root file system is one the
   verifier can reject, not one it can prevent.
 
+* **PCR 11 needs a UKI.**  systemd measures the initrd phases only on
+  a measured UKI boot; a kernel and initrd loaded by grub or passed to
+  QEMU directly leave PCR 11 at its boot value, ``init`` warns, and
+  the verifier has PCR 9 alone to tell an initrd binding from a later
+  one.
+
 * **A TPM reset without a reboot.**  Resuming from hibernation resets
   the TPM but keeps the kernel's boot ID, so the register is gone while
   the record of this boot stands; every extension then fails

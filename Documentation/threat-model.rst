@@ -126,7 +126,11 @@ T2  Detaching or replacing enforcement
     ``sb_remount`` deny everyone, so neither ``rm`` nor ``umount`` nor
     mounting over the directory removes a pin. Infrastructure maps are
     frozen at creation, so even with the LSM gone userspace could not
-    rewrite the identity map.
+    rewrite the identity map.  From the initrd, the identity records
+    the root's binary as the executable that lasts and the initrd's
+    own copy beside it for that one run; the copy is gone with the
+    initrd, and its inode is on a file system nothing can reach after
+    the switch.
 
 T3  Tampering with shirudo's files and process
     Every inode under ``/var/lib/shirudo`` carries the
@@ -172,7 +176,10 @@ T5  Silent state change
     is not the one ``init`` recorded, which also serialises concurrent
     operators.  ``shirudo status`` replays this boot's records and flags
     a register it cannot explain.  There is no unmeasured mode: a target
-    without a TPM 2.0 does not initialise.  The init record carries
+    without a TPM 2.0 does not initialise.  An init run from the initrd
+    leaves its record under ``/run``, labelled, until the root's run
+    appends it; a record forged or altered there fails the replay like
+    any other.  The init record carries
     the TPM's reset count: ``init`` binds one register per reset,
     refuses ``tampered`` when the one it recorded is gone, and
     ``status`` and ``attest verify`` reject a boot with two init
@@ -258,7 +265,9 @@ Each of these is known, documented and bounded; none is silent.
     ``/run/shirudo/bpffs`` tears the subtree down without firing
     ``sb_umount`` on the child.  The ancestor is ``/run`` or the root
     filesystem, a far higher bar than the direct unmount the guards
-    close.
+    close.  Mounting over ``/run/shirudo`` hides the pins without
+    detaching anything: enforcement stays, and every state-changing
+    command refuses ``lsm_detached`` until the mount is gone.
 
 4.  Register denial of service.  A process that can open
     ``/dev/tpmrm0`` can extend PCR 9 or the written register with
@@ -336,6 +345,17 @@ Each of these is known, documented and bounded; none is silent.
     7, and the binding then carries a PCR 11 value the verifier can
     reject.
 
+13. Emptying the sealed bpf keyring.  Sealing stops keys from being
+    linked into the keyring, not from being unlinked, and the kernel
+    grants root write permission on it, so root can unlink the enrolled
+    certificate.  Every load then fails ``ENOKEY``, including the
+    operator's own; enforcement stays and nothing unsigned loads, so
+    this is denial of service, visible in ``shirudo keys`` and in every
+    report, and costs a reboot.  The same permission is what a per-key
+    revocation would use; a ``key_permission`` hook that leaves writes
+    to the bpf keyring to shirudo alone closes the one and keeps the
+    other.
+
 Deferred mitigations
 ~~~~~~~~~~~~~~~~~~~~
 
@@ -345,8 +365,11 @@ values of each boot and systemd-aware verifiers find it in PCR 9 before
 the separator, and measuring the anchor through ``systemd-pcrextend`` so
 systemd's measurement log explains it (residual risk 11); signed PCR
 policies for the kernel and initrd PCRs so a verifier needs no golden
-values; and an in-kernel detach so the unload compare runs against
-signed ``.rodata`` (residual risk 1).
+values; an in-kernel detach so the unload compare runs against
+signed ``.rodata`` (residual risk 1); and several operator certificates
+in the bpf keyring with a measured per-key revocation, guarded by a
+``key_permission`` hook (residual risk 13; the `key-lifecycle
+<key-lifecycle.rst>`__ guide describes it).
 
 
 6) Out of scope
@@ -387,4 +410,8 @@ wrote about itself.  Build
 upatches against the target kernel's BTF and read verifier logs from
 the structured report.  Restrict who can register repositories and who
 can run state-changing commands, and drop ``CAP_SYS_RESOURCE`` from
-anything that does not need it.
+anything that does not need it.  Rotate the signing key in the order
+the `key-lifecycle <key-lifecycle.rst>`__ guide gives, rebuild the
+initrd after every change of binary or certificate, and reboot after
+upgrading shirudo; the `operations <operations.rst>`__ guide has the
+procedures.

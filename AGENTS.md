@@ -30,8 +30,9 @@ what is present on the machine, never by separate builds:
   signed `.upatch` artifacts (`shirudo build`, `shirudo bpm build`), and
   publishes packages (`shirudo bpm push`, `shirudo bpm tree append`);
 - the *target* holds only the public certificate in a sealed kernel
-  keyring plus a per-boot TPM2 measurement register anchored in PCR
-  15, verifies every load, emits TPM-signed evidence on request
+  keyring plus a per-boot TPM2 measurement register bound from the
+  initrd under PCRs 9 and 11 and anchored in PCR 9, verifies every
+  load, emits TPM-signed evidence on request
   (`shirudo attest`) and is agentless: no daemon, no listening socket,
   every operation is a one-shot CLI invocation run locally or by the
   systemd timers that pull packages (`bpm repo update`, `bpm upgrade`,
