@@ -195,6 +195,9 @@ assert m["attempts"] == 1
 
 test_expect_success 'HTTPS verifies by default and --otel-insecure disables verification noisily' '
 	command -v openssl >/dev/null || exit 0;
+	# The exporter only speaks TLS 1.3 with a hybrid ML-KEM group, which
+	# the mock server can offer only on an OpenSSL >= 3.5.
+	python3 -c "import ssl, sys; sys.exit(0 if ssl.OPENSSL_VERSION_INFO >= (3, 5) else 1)" || exit 0;
 	rm -f otel.crt otel.key otel.port otel.body otel.meta otel-tls.err;
 	openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
 		-subj /CN=localhost -addext subjectAltName=DNS:localhost \

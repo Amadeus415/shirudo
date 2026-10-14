@@ -224,7 +224,7 @@ DEPS     := $(DEP_OBJS:.o=.d)
 
 .PHONY: all install install-common install-target install-operator clean distclean check test \
 		test-helpers \
-        bpf libbpf bpftool
+        bpf libbpf
 
 all: shirudo
 

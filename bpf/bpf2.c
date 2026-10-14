@@ -131,7 +131,7 @@ int BPF_PROG(shirudo_lsm_bpf, int cmd, union bpf_attr *attr,
 	 * and shirudo's own infra maps are BPF_MAP_FREEZE'd at creation
 	 * (a userspace BPF_MAP_UPDATE_ELEM on them then fails -EPERM
 	 * regardless of this verdict). gen_loader emits no link-create and
-	 * bpf_sys_bpf() cannot BPF_OBJ_PIN (TODO.kernel 1-2), so shirudo's
+	 * bpf_sys_bpf() cannot BPF_OBJ_PIN, so shirudo's
 	 * one-shot CLI must create + pin the link itself. Attaching an
 	 * already-vetted program grants no new code-execution capability.
 	 */

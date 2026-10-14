@@ -1905,8 +1905,8 @@ static int upatch_apply(const char *path, bool verify_only,
 	 * than verify against an attacker-chosen cert. Absent pin (pre-pin
 	 * init) degrades to a warning, like the payload-xattr check; a
 	 * present-but-bad pin is treated as tampering. The complete fix
-	 * needs an lsm/key_permission hook with a key_ref->key kfunc
-	 * (TODO.kernel item 9).
+	 * needs an lsm/key_permission hook with a key_ref->key kfunc the
+	 * kernel does not offer yet.
 	 */
 	{
 		key_serial_t pinned = shirudo_keyring_read_pinned_serial();
@@ -2143,7 +2143,7 @@ static int upatch_apply(const char *path, bool verify_only,
 	 *    gen_loader has no link-create emit, and bpf_sys_bpf() can't
 	 *    BPF_OBJ_PIN. The inner prog fds it opens are installed in
 	 *    shirudo's fd table and surface in the ctx; shirudo attaches
-	 *    and pins them below (step 7). See TODO.kernel items 1-3.
+	 *    and pins them below (step 7).
 	 *
 	 * gen_loader writes map/prog descriptors into the trailing bytes
 	 * of its ctx, so the ctx is larger than struct
@@ -2968,7 +2968,7 @@ static int cmd_upatch_unload(int argc, const char **argv)
 	 * expected value read here is the directive's unsigned metadata
 	 * blob; a signature-covered copy also rides in the loader's .rodata
 	 * (inside insns || data), but the in-kernel detach that would read
-	 * it back is not implementable yet (TODO.kernel item 6), so this
+	 * it back is not implementable yet, so this
 	 * catches honest/accidental substitution, not a root attacker who
 	 * edits both the metadata and the expected value in lockstep.
 	 * Fail-closed: a live pin whose payload cannot be read is refused.

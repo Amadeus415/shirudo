@@ -13,7 +13,7 @@
  * security.bpf.shirudo.payload pin xattr. The signature-covered
  * expected_sha256 in .rodata is the value a future in-kernel
  * detach + compare would use once bpf_sys_bpf gains the
- * BPF_LINK_DETACH / BPF_OBJ_GET ops (TODO.kernel item 6); until then
+ * BPF_LINK_DETACH / BPF_OBJ_GET ops; until then
  * it documents intent and pins the value into the signature.
  */
 
@@ -44,7 +44,7 @@ int shirudo_unload(void *ctx)
 	 * payload_sha256 against the signature-covered
 	 * shirudo_unload_params.expected_sha256, then BPF_LINK_DETACH +
 	 * BPF_OBJ_UNPIN from kernel context. Blocked on bpf_sys_bpf()
-	 * gaining those ops (TODO.kernel item 6); until then the detach and
+	 * gaining those ops; until then the detach and
 	 * payload compare run in userspace.
 	 */
 	(void)ctx;
