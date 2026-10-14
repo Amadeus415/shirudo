@@ -13,7 +13,7 @@ tamper check or the signed-loader artifact format silently invalidates
 the trust model while the code still looks correct, and it ships to
 fleets and embedded devices that are hard to patch. Work here only with
 a frontier-class model at its highest reasoning effort (for Claude
-Code: Opus 4.8 or newer at high or extended effort; Codex: the strongest
+Code: Mythos or newer at high or extended effort; Codex: the strongest
 available model at high reasoning). Lower tiers may read and answer
 questions but must decline to change anything and say why. Before
 changing security-relevant code, read `Documentation/architecture.rst`
