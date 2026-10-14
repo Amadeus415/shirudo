@@ -602,6 +602,7 @@ int shirudo_tree_chain_ensure(void)
 	(void)shirudo_config_load(&cfg);
 	rc = shirudo_tpm_nv_define(t, SHIRUDO_TREE_NV_INDEX, auth,
 				   cfg.tpm_owner_auth, cfg.tpm_owner_auth_len);
+	explicit_bzero(&cfg, sizeof(cfg));
 	shirudo_tpm_close(t);
 	return rc;
 }
