@@ -26,6 +26,7 @@ struct shirudo_tpm {
 
 int shirudo_tpm_open(struct shirudo_tpm **out)
 {
+	struct shirudo_config cfg = {};
 	struct shirudo_tpm *t;
 	const char *tcti;
 	TSS2_RC rc;
@@ -55,19 +56,18 @@ int shirudo_tpm_open(struct shirudo_tpm **out)
 	 * the check rejects.
 	 */
 	tcti = getenv("SHIRUDO_TPM_TCTI");
-	if (!tcti || !*tcti) {
-		struct shirudo_config cfg = {};
-
-		if (shirudo_config_load(&cfg) == 0 && cfg.tpm_tcti[0])
-			tcti = cfg.tpm_tcti;
-	}
+	if ((!tcti || !*tcti) && shirudo_config_load(&cfg) == 0 &&
+	    cfg.tpm_tcti[0])
+		tcti = cfg.tpm_tcti;
 	if (!tcti || !*tcti)
 		tcti = "device:/dev/tpmrm0";
 
 	rc = Tss2_TctiLdr_Initialize(tcti, &t->tcti);
-	if (rc != TSS2_RC_SUCCESS) {
+	if (rc != TSS2_RC_SUCCESS)
 		pr_err("tpm: TctiLdr_Initialize(%s): rc=0x%08x", tcti,
 		       (unsigned)rc);
+	explicit_bzero(&cfg, sizeof(cfg));	/* scrub tpm_owner_auth */
+	if (rc != TSS2_RC_SUCCESS) {
 		xfree(t, sizeof(*t));
 		return -EIO;
 	}
