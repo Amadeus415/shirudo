@@ -58,7 +58,6 @@ MEMORY="${TEST_VM_MEMORY:-4G}"
 DISK_SIZE="${TEST_VM_DISK_SIZE:-30G}"
 VM_TIMEOUT="${TEST_VM_TIMEOUT:-3600}"
 VM_MODE="${VM_MODE:-test}"
-KERNEL_PROFILE="${TEST_VM_KERNEL_PROFILE:-full}"
 VM_SUITE="${TEST_VM_SUITE:-all}"
 SKIP_SEAL="${TEST_VM_SKIP_SEAL:-0}"
 VM_INITRD="${TEST_VM_INITRD:-0}"
@@ -175,10 +174,6 @@ validate_mode()
 	case "$VM_INITRD" in
 	0|1) ;;
 	*) die "TEST_VM_INITRD must be '0' or '1'" ;;
-	esac
-	case "$KERNEL_PROFILE" in
-	full|small) ;;
-	*) die "TEST_VM_KERNEL_PROFILE must be 'full' or 'small'" ;;
 	esac
 	[[ "$DNS_FUZZ_SEED" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]] ||
 		die "TEST_VM_DNS_FUZZ_SEED must be a decimal or hexadecimal integer"
@@ -1385,11 +1380,8 @@ log "booting $(basename "$KERNEL") with ${CPUS} CPUs and ${MEMORY} memory"
 
 # The bpf keyring is left open for init to enrol the certificate and
 # seal it, as a production initrd does.
-KERNEL_LSM_ARGS="lsm=landlock,lockdown,yama,integrity,apparmor,bpf bpf.keyring_unsealed=1"
+KERNEL_LSM_ARGS="lsm=bpf bpf.keyring_unsealed=1"
 KERNEL_NET_DEVICE="virtio-net-pci,netdev=net0"
-if [[ "$KERNEL_PROFILE" == small ]]; then
-	KERNEL_LSM_ARGS="lsm=bpf bpf.keyring_unsealed=1"
-fi
 
 QEMU_ARGS=(
 	-enable-kvm \

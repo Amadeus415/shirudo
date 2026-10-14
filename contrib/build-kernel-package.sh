@@ -6,7 +6,6 @@ KERNEL_COMMIT="${KERNEL_COMMIT:-}"
 KERNEL_REPOSITORY="${KERNEL_REPOSITORY:-https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git}"
 KERNEL_PATCHES="${KERNEL_PATCHES:-}"
 KERNEL_CONFIG="${KERNEL_CONFIG:-}"
-KERNEL_PROFILE="${KERNEL_PROFILE:-full}"
 KERNEL_BUILD_JOBS="${KERNEL_BUILD_JOBS:-$(nproc)}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KERNEL_SOURCE_DIR_INPUT="${KERNEL_SOURCE_DIR:-}"
@@ -16,18 +15,6 @@ fi
 if [[ "$KERNEL_TAG" != "bpf-next" &&
       ! "$KERNEL_TAG" =~ ^v[0-9]+\.[0-9]+([.][0-9]+)?$ ]]; then
   echo "KERNEL_TAG must be bpf-next or a Linux release tag such as v6.18" >&2
-  exit 1
-fi
-case "$KERNEL_PROFILE" in
-  full|small)
-    ;;
-  *)
-    echo "KERNEL_PROFILE must be full or small" >&2
-    exit 1
-    ;;
-esac
-if [[ "$KERNEL_PROFILE" == small && "$KERNEL_TAG" != bpf-next ]]; then
-  echo "KERNEL_PROFILE=small is supported only for bpf-next" >&2
   exit 1
 fi
 if [[ -n "$KERNEL_COMMIT" ]]; then
@@ -42,9 +29,6 @@ if [[ -n "$KERNEL_COMMIT" ]]; then
   KERNEL_COMMIT="${KERNEL_COMMIT,,}"
 fi
 KERNEL_ARTIFACT_NAME="bpf-next"
-if [[ "$KERNEL_PROFILE" == small ]]; then
-  KERNEL_ARTIFACT_NAME="bpf-next-small"
-fi
 if [[ "$KERNEL_TAG" != "bpf-next" ]]; then
   KERNEL_ARTIFACT_NAME="linux-${KERNEL_TAG}"
 fi
@@ -52,9 +36,7 @@ if [[ -n "$KERNEL_COMMIT" ]]; then
   KERNEL_ARTIFACT_NAME="${KERNEL_ARTIFACT_NAME}-${KERNEL_COMMIT}"
 fi
 if [[ -z "${KERNEL_LOCALVERSION:-}" ]]; then
-  if [[ "$KERNEL_PROFILE" == small ]]; then
-    KERNEL_LOCALVERSION="-bpf-next-small"
-  elif [[ "$KERNEL_TAG" == "bpf-next" ]]; then
+  if [[ "$KERNEL_TAG" == "bpf-next" ]]; then
     KERNEL_LOCALVERSION="-bpf-next"
   else
     KERNEL_LOCALVERSION="-shirudo-${KERNEL_TAG#v}"
@@ -85,8 +67,6 @@ else
 fi
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/artifacts/${KERNEL_ARTIFACT_NAME}-kernel-${PACKAGE_SUFFIX}}"
 BUNDLE_PATH="${BUNDLE_PATH:-${OUTPUT_DIR}.tar.gz}"
-KERNEL_OBSERVABILITY_CONFIGS_FILE="${KERNEL_OBSERVABILITY_CONFIGS_FILE:-${REPO_ROOT}/contrib/kernel-observability-configs.txt}"
-KERNEL_SMALL_CONFIG="${KERNEL_SMALL_CONFIG:-${REPO_ROOT}/contrib/kernel-small.config}"
 VMLINUX_PATH="${OUTPUT_DIR}/bzImage"
 VMLINUX_BTF_PATH="${OUTPUT_DIR}/vmlinux.btf"
 
@@ -329,268 +309,137 @@ for patch_entry in $KERNEL_PATCHES; do
 done
 
 kernel_commit="$(git rev-parse HEAD)"
-if [[ "$KERNEL_PROFILE" == small ]]; then
-  small_config="$KERNEL_SMALL_CONFIG"
-  if [[ -n "$KERNEL_CONFIG" ]]; then
-    small_config="$KERNEL_CONFIG"
+if [[ -n "$KERNEL_CONFIG" ]]; then
+  if [[ "$KERNEL_CONFIG" != /* ]]; then
+    KERNEL_CONFIG="${REPO_ROOT}/${KERNEL_CONFIG}"
   fi
-  if [[ "$small_config" != /* ]]; then
-    small_config="${REPO_ROOT}/${small_config}"
-  fi
-  if [[ ! -f "$small_config" ]]; then
-    echo "small kernel config fragment not found: ${small_config}" >&2
+  if [[ ! -f "$KERNEL_CONFIG" ]]; then
+    echo "kernel config not found: ${KERNEL_CONFIG}" >&2
     exit 1
   fi
-  make KCONFIG_ALLCONFIG="$small_config" allnoconfig
-  config_source="${small_config} (KCONFIG_ALLCONFIG)"
+  cp "$KERNEL_CONFIG" .config
+  config_source="$KERNEL_CONFIG"
+  config_profile=custom
 else
-  if [[ -n "$KERNEL_CONFIG" ]]; then
-    if [[ "$KERNEL_CONFIG" != /* ]]; then
-      KERNEL_CONFIG="${REPO_ROOT}/${KERNEL_CONFIG}"
-    fi
-    if [[ ! -f "$KERNEL_CONFIG" ]]; then
-      echo "kernel config not found: ${KERNEL_CONFIG}" >&2
-      exit 1
-    fi
-    cp "$KERNEL_CONFIG" .config
-    config_source="$KERNEL_CONFIG"
-  else
-    make x86_64_defconfig
-    config_source="x86_64_defconfig"
-  fi
+  config_fragment="${WORK_DIR}/kernel-slim.config"
+  cat > "$config_fragment" <<'EOF'
+CONFIG_64BIT=y
+CONFIG_X86_64=y
+CONFIG_X86=y
+CONFIG_SMP=y
+CONFIG_PARAVIRT=y
+CONFIG_PARAVIRT_CLOCK=y
+CONFIG_KVM_GUEST=y
+CONFIG_BPF=y
+CONFIG_BPF_SYSCALL=y
+CONFIG_BPF_JIT=y
+CONFIG_BPF_LSM=y
+CONFIG_BPF_EVENTS=y
+CONFIG_UPROBE_EVENTS=y
+CONFIG_CGROUPS=y
+CONFIG_CGROUP_BPF=y
+CONFIG_FTRACE=y
+CONFIG_FUNCTION_TRACER=y
+CONFIG_DYNAMIC_FTRACE=y
+CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS=y
+CONFIG_UPROBES=y
+CONFIG_DEBUG_INFO=y
+CONFIG_DEBUG_KERNEL=y
+CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
+CONFIG_DEBUG_INFO_BTF=y
+CONFIG_DEBUG_INFO_BTF_MODULES=n
+CONFIG_KEYS=y
+CONFIG_ASYMMETRIC_KEY_TYPE=y
+CONFIG_ASYMMETRIC_PUBLIC_KEY_SUBTYPE=y
+CONFIG_X509_CERTIFICATE_PARSER=y
+CONFIG_PKCS7_MESSAGE_PARSER=y
+CONFIG_SYSTEM_TRUSTED_KEYS=""
+CONFIG_SYSTEM_REVOCATION_KEYS=""
+CONFIG_CRYPTO_RSA=y
+CONFIG_CRYPTO_SHA256=y
+CONFIG_CRYPTO_MLDSA=y
+CONFIG_CRYPTO_SHA512=y
+CONFIG_TCG_TPM=y
+CONFIG_TCG_TIS_CORE=y
+CONFIG_TCG_TIS=y
+CONFIG_SECURITY=y
+CONFIG_SECURITYFS=y
+CONFIG_LSM="bpf"
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_BINFMT_ELF=y
+CONFIG_BINFMT_SCRIPT=y
+CONFIG_INOTIFY_USER=y
+CONFIG_MODULES=y
+CONFIG_MODULE_UNLOAD=y
+CONFIG_BLK_DEV=y
+CONFIG_BLOCK=y
+CONFIG_PARTITION_ADVANCED=y
+CONFIG_EFI_PARTITION=y
+CONFIG_FAT_FS=y
+CONFIG_VFAT_FS=y
+CONFIG_ISO9660_FS=y
+CONFIG_NLS_CODEPAGE_437=y
+CONFIG_NLS_ASCII=y
+CONFIG_NLS_ISO8859_1=y
+CONFIG_NLS_UTF8=y
+CONFIG_NLS_DEFAULT="utf8"
+CONFIG_VIRTIO_MENU=y
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_PCI=y
+CONFIG_VIRTIO_PCI_LEGACY=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_VIRTIO_NET=y
+CONFIG_PCI=y
+CONFIG_PCI_MSI=y
+CONFIG_PCIEPORTBUS=y
+CONFIG_NET=y
+CONFIG_PACKET=y
+CONFIG_NETDEVICES=y
+CONFIG_NET_CORE=y
+CONFIG_ETHERNET=y
+CONFIG_INET=y
+CONFIG_UNIX=y
+CONFIG_NETWORK_FILESYSTEMS=y
+CONFIG_NET_9P=y
+CONFIG_NET_9P_VIRTIO=y
+CONFIG_9P_FS=y
+CONFIG_OVERLAY_FS=y
+CONFIG_EXT4_FS=y
+CONFIG_TMPFS=y
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+CONFIG_TTY=y
+CONFIG_ACPI=y
+CONFIG_PNP=y
+CONFIG_PNPACPI=y
+CONFIG_NETFILTER=y
+CONFIG_NF_CONNTRACK=y
+CONFIG_NF_TABLES=m
+CONFIG_VETH=m
+CONFIG_BRIDGE=m
+CONFIG_VLAN_8021Q=m
+CONFIG_BRIDGE_NETFILTER=m
+CONFIG_NF_FLOW_TABLE=m
+CONFIG_NF_FLOW_TABLE_INET=m
+CONFIG_NF_FLOW_TABLE_PROCFS=y
+CONFIG_PROC_FS=y
+CONFIG_CC_OPTIMIZE_FOR_SIZE=y
+CONFIG_KERNEL_XZ=y
+CONFIG_KERNEL_GZIP=n
+CONFIG_KERNEL_ZSTD=n
+CONFIG_KERNEL_LZMA=n
+CONFIG_KERNEL_LZO=n
+CONFIG_KERNEL_LZ4=n
+CONFIG_KERNEL_UNCOMPRESSED=n
+EOF
+  make KCONFIG_ALLCONFIG="$config_fragment" allnoconfig
+  config_source="embedded slim kernel config (KCONFIG_ALLCONFIG)"
+  config_profile=slim
 fi
 
 scripts/config --set-str LOCALVERSION "$KERNEL_LOCALVERSION"
-if [[ "$KERNEL_PROFILE" != small ]]; then
-scripts/config --enable BPF
-scripts/config --enable BPF_SYSCALL
-scripts/config --enable BPF_JIT
-scripts/config --enable BPF_LSM
-scripts/config --enable CGROUP_BPF
-scripts/config --enable FUNCTION_TRACER
-scripts/config --disable DEBUG_INFO_NONE
-scripts/config --enable DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT
-scripts/config --enable DEBUG_INFO
-scripts/config --enable DEBUG_INFO_BTF
-scripts/config --enable KEYS
-scripts/config --enable ASYMMETRIC_KEY_TYPE
-scripts/config --enable X509_CERTIFICATE_PARSER
-scripts/config --enable PKCS7_MESSAGE_PARSER
-scripts/config --enable SYSTEM_DATA_VERIFICATION
-scripts/config --enable CRYPTO_RSA
-scripts/config --enable CRYPTO_SHA256
-scripts/config --enable CRYPTO_MLDSA
-scripts/config --enable CRYPTO_SHA512
-scripts/config --enable TCG_TPM
-scripts/config --enable TCG_TIS_CORE
-scripts/config --enable TCG_TIS
-scripts/config --enable TCG_CRB
-scripts/config --enable UPROBES
-scripts/config --enable SECURITY
-scripts/config --enable SECURITYFS
-scripts/config --enable DEVTMPFS
-scripts/config --enable DEVTMPFS_MOUNT
-scripts/config --enable VIRTIO
-scripts/config --enable VIRTIO_PCI
-scripts/config --enable VIRTIO_BLK
-scripts/config --enable VIRTIO_NET
-scripts/config --enable NET_9P
-scripts/config --enable NET_9P_VIRTIO
-scripts/config --enable 9P_FS
-scripts/config --enable OVERLAY_FS
-scripts/config --enable SQUASHFS
-scripts/config --enable SQUASHFS_XZ
-scripts/config --enable SQUASHFS_ZSTD
-scripts/config --enable EXT4_FS
-scripts/config --enable EFI_PARTITION
-scripts/config --enable ISO9660_FS
-scripts/config --enable SERIAL_8250
-scripts/config --enable SERIAL_8250_CONSOLE
-scripts/config --enable PCI
-scripts/config --enable PCI_MSI
-scripts/config --enable NETDEVICES
-scripts/config --enable ETHERNET
-scripts/config --enable NET_VENDOR_AMAZON
-scripts/config --module ENA_ETHERNET
-# Build additional drivers and filesystems as loadable modules for the VM
-# kernel artifact. COMPILE_TEST makes platform-specific drivers such as
-# mvpp2 available in an x86_64 compile.
-# 9p stays built in because the VM uses it for early boot mounts. The
-# upstream optee driver is ARM-only and cannot be selected by this x86_64
-# kernel build.
-scripts/config --enable COMPILE_TEST
-scripts/config --disable WERROR
-scripts/config --module BATMAN_ADV
-scripts/config --module BCMGENET
-scripts/config --module CEPH_FS
-scripts/config --module DM_CACHE
-scripts/config --enable WAN
-scripts/config --module HDLC
-scripts/config --module FARSYNC
-scripts/config --module HFS_FS
-scripts/config --module MVPP2
-scripts/config --enable NF_CONNTRACK
-scripts/config --module NETFILTER_CONNCOUNT
-scripts/config --module NFT_CONNLIMIT
-scripts/config --module NETFILTER_NETLINK_OSF
-scripts/config --module NFSD
-scripts/config --module OPENVSWITCH
-scripts/config --module CRYPTO_PCRYPT
-scripts/config --module QED
-scripts/config --module QEDE
-scripts/config --module SCSI_FC_ATTRS
-scripts/config --module SCSI_QLA_FC
-scripts/config --module RDS
-scripts/config --module SND
-scripts/config --module SND_PCM
-scripts/config --module TUN
-scripts/config --module UDF_FS
-scripts/config --module FUSE_FS
-scripts/config --module VIRTIO_FS
-scripts/config --module VETH
-scripts/config --module BRIDGE
-scripts/config --module VLAN_8021Q
-scripts/config --module BTRFS_FS
-scripts/config --enable NETFILTER_ADVANCED
-# NETFILTER_XTABLES_LEGACY was introduced after the older stable branches
-# supported by this workflow.  Those branches include legacy table support
-# in NETFILTER_XTABLES itself, so do not ask scripts/config to set a symbol
-# that their Kconfig does not define.
-netfilter_xtables_legacy_available=0
-if grep -RqsE '^[[:space:]]*config NETFILTER_XTABLES_LEGACY([[:space:]]|$)' \
-  net include; then
-  scripts/config --enable NETFILTER_XTABLES_LEGACY
-  netfilter_xtables_legacy_available=1
-fi
-if grep -RqsE '^[[:space:]]*config IP_NF_IPTABLES_LEGACY([[:space:]]|$)' \
-  net include; then
-  scripts/config --module IP_NF_IPTABLES_LEGACY
-  scripts/config --module IP6_NF_IPTABLES_LEGACY
-  if (( ! netfilter_xtables_legacy_available )); then
-    # In this intermediate Kconfig model, the table modules select the
-    # legacy base symbols. Keep every selector modular so the base symbols
-    # cannot be promoted back to y during olddefconfig.
-    for legacy_selector in \
-      IP_NF_FILTER IP_NF_MANGLE IP_NF_NAT IP_NF_SECURITY \
-      IP6_NF_FILTER IP6_NF_MANGLE IP6_NF_NAT IP6_NF_SECURITY; do
-      if grep -RqsE "^[[:space:]]*config ${legacy_selector}([[:space:]]|$)" \
-        net include; then
-        scripts/config --module "$legacy_selector"
-      fi
-    done
-  fi
-else
-  # Before the legacy selector split, these symbols also selected the
-  # legacy iptables implementations.
-  scripts/config --module IP_NF_IPTABLES
-  scripts/config --module IP6_NF_IPTABLES
-fi
-scripts/config --module IP_NF_RAW
-scripts/config --module IP6_NF_RAW
-scripts/config --module NETFILTER_XT_MATCH_LENGTH
-scripts/config --module BRIDGE_NETFILTER
-scripts/config --module NF_TABLES
-scripts/config --module NF_FLOW_TABLE
-scripts/config --module NF_FLOW_TABLE_INET
-scripts/config --enable NF_FLOW_TABLE_PROCFS
-scripts/config --enable NVME_CORE
-scripts/config --enable BLK_DEV_NVME
-scripts/config --enable NVME_MULTIPATH
-scripts/config --set-str SYSTEM_TRUSTED_KEYS ""
-scripts/config --set-str SYSTEM_REVOCATION_KEYS ""
-fi
-
-# Enable the CVE load-repair Kconfig set when the selected kernel defines it.
-# Tristate drivers are requested as modules so the VM can load them on demand;
-# existing y/m values are preserved. Kconfig dependency resolution remains the
-# kernel's authority, and the post-olddefconfig report records symbols that
-# could not be selected on this architecture or branch.
-kernel_config_value() {
-  local symbol="$1"
-  local value
-
-  value="$(awk -F= -v want="${symbol}" '$1 == want { print $2; exit }' .config)"
-  if [[ -n "$value" ]]; then
-    printf '%s\n' "$value"
-  elif grep -q "^# ${symbol} is not set$" .config; then
-    printf 'n\n'
-  else
-    printf 'unknown\n'
-  fi
-}
-
-declare -A KCONFIG_DEFINITION_CACHE=()
-
-kconfig_definition_file() {
-  local symbol="$1"
-  if [[ ${KCONFIG_DEFINITION_CACHE[$symbol]+present} ]]; then
-    printf '%s\n' "${KCONFIG_DEFINITION_CACHE[$symbol]}"
-    return
-  fi
-  local definition_file
-  definition_file="$(grep -Rls --include='Kconfig*' \
-    -E "^[[:space:]]*(config|menuconfig)[[:space:]]+${symbol}([[:space:]]|$)" \
-    . 2>/dev/null | head -n 1 || true)"
-  KCONFIG_DEFINITION_CACHE[$symbol]="$definition_file"
-  printf '%s\n' "$definition_file"
-}
-
-kconfig_symbol_kind() {
-  local symbol="$1"
-  local file="$2"
-  awk -v want="$symbol" '
-    /^[[:space:]]*(config|menuconfig)[[:space:]]+/ {
-      active = ($2 == want)
-      next
-    }
-    active && /^[[:space:]]*tristate([[:space:]]|$)/ { print "tristate"; exit }
-    active && /^[[:space:]]*bool([[:space:]]|$)/ { print "bool"; exit }
-  ' "$file"
-}
-
-if [[ "$KERNEL_PROFILE" != small && -f "$KERNEL_OBSERVABILITY_CONFIGS_FILE" ]]; then
-  while IFS= read -r requested_symbol; do
-    requested_symbol="${requested_symbol%%#*}"
-    requested_symbol="${requested_symbol//[[:space:]]/}"
-    [[ -n "$requested_symbol" ]] || continue
-    symbol="${requested_symbol#CONFIG_}"
-    definition_file="$(kconfig_definition_file "$symbol")"
-    [[ -n "$definition_file" ]] || continue
-    current="$(kernel_config_value "CONFIG_${symbol}")"
-    [[ "$current" == y || "$current" == m ]] && continue
-    kind="$(kconfig_symbol_kind "$symbol" "$definition_file")"
-    if [[ "$kind" == tristate ]]; then
-      scripts/config --module "$symbol"
-    else
-      scripts/config --enable "$symbol"
-    fi
-  done < "$KERNEL_OBSERVABILITY_CONFIGS_FILE"
-elif [[ "$KERNEL_PROFILE" != small ]]; then
-  echo "kernel observability Kconfig list not found: ${KERNEL_OBSERVABILITY_CONFIGS_FILE}" >&2
-fi
-
 make olddefconfig
-
-KERNEL_OBSERVABILITY_CONFIG_REPORT="${OUTPUT_DIR}/kernel-observability-configs.txt"
-{
-  printf '# Kernel profile: %s\n' "$KERNEL_PROFILE"
-  printf '# Kernel observability Kconfig results for %s\n' "$kernel_commit"
-  printf '# symbol\tvalue\tdefinition\n'
-  if [[ "$KERNEL_PROFILE" != small && -f "$KERNEL_OBSERVABILITY_CONFIGS_FILE" ]]; then
-    while IFS= read -r requested_symbol; do
-      requested_symbol="${requested_symbol%%#*}"
-      requested_symbol="${requested_symbol//[[:space:]]/}"
-      [[ -n "$requested_symbol" ]] || continue
-      symbol="${requested_symbol#CONFIG_}"
-      definition_file="$(kconfig_definition_file "$symbol")"
-      value="$(kernel_config_value "CONFIG_${symbol}")"
-      printf '%s\t%s\t%s\n' "$requested_symbol" "$value" "${definition_file:-not-defined}"
-    done < "$KERNEL_OBSERVABILITY_CONFIGS_FILE"
-  fi
-} > "$KERNEL_OBSERVABILITY_CONFIG_REPORT"
-enabled_count="$(awk -F '\t' '$2 == "y" || $2 == "m" { count++ } END { print count + 0 }' "$KERNEL_OBSERVABILITY_CONFIG_REPORT")"
-unmet_count="$(awk -F '\t' '$2 == "n" || $2 == "unknown" { count++ } END { print count + 0 }' "$KERNEL_OBSERVABILITY_CONFIG_REPORT")"
-echo "Kernel observability Kconfig results: enabled=${enabled_count} unmet_or_unknown=${unmet_count}"
 
 require_config() {
   local symbol="$1"
@@ -603,18 +452,9 @@ require_config() {
   fi
 }
 
-require_config_disabled() {
-  local symbol="$1"
-
-  if ! grep -Eq "^${symbol}=n$|^# ${symbol} is not set$" .config; then
-    echo "required kernel config ${symbol} is not disabled" >&2
-    grep -E "^${symbol}=|^# ${symbol} is not set" .config >&2 || true
-    exit 1
-  fi
-}
-
-if [[ "$KERNEL_PROFILE" == small ]]; then
 require_config CONFIG_BPF_LSM y
+require_config CONFIG_BPF_SYSCALL y
+require_config CONFIG_BPF_JIT y
 require_config CONFIG_CGROUP_BPF y
 require_config CONFIG_FUNCTION_TRACER y
 require_config CONFIG_DYNAMIC_FTRACE y
@@ -626,6 +466,7 @@ require_config CONFIG_TCG_TIS y
 require_config CONFIG_UPROBES y
 require_config CONFIG_SECURITY y
 require_config CONFIG_SECURITYFS y
+require_config CONFIG_MODULES y
 require_config CONFIG_PCI y
 require_config CONFIG_PCI_MSI y
 require_config CONFIG_PCIEPORTBUS y
@@ -651,98 +492,20 @@ require_config CONFIG_SERIAL_8250_CONSOLE y
 require_config CONFIG_ACPI y
 require_config CONFIG_PNP y
 require_config CONFIG_PNPACPI y
-require_config CONFIG_CC_OPTIMIZE_FOR_SIZE y
-require_config CONFIG_KERNEL_XZ y
-require_config_disabled CONFIG_MODULES
-else
-require_config CONFIG_BPF_LSM y
-require_config CONFIG_CGROUP_BPF y
-require_config CONFIG_FUNCTION_TRACER y
-require_config CONFIG_DYNAMIC_FTRACE y
-require_config CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS y
-require_config CONFIG_DEBUG_INFO_BTF y
-require_config CONFIG_TCG_TPM y
-require_config CONFIG_TCG_TIS_CORE y
-require_config CONFIG_TCG_TIS y
-require_config CONFIG_TCG_CRB y
-require_config CONFIG_UPROBES y
-require_config CONFIG_SECURITYFS y
-require_config CONFIG_PCI y
-require_config CONFIG_PCI_MSI y
-require_config CONFIG_NETDEVICES y
-require_config CONFIG_ETHERNET y
-require_config CONFIG_NET_VENDOR_AMAZON y
-require_config CONFIG_ENA_ETHERNET '[ym]'
-require_config CONFIG_COMPILE_TEST y
-require_config CONFIG_BATMAN_ADV m
-require_config CONFIG_BCMGENET m
-require_config CONFIG_CEPH_FS m
-require_config CONFIG_DM_CACHE m
-require_config CONFIG_WAN y
-require_config CONFIG_HDLC m
-require_config CONFIG_FARSYNC m
-require_config CONFIG_HFS_FS m
-require_config CONFIG_MVPP2 m
+require_config CONFIG_NETFILTER y
 require_config CONFIG_NF_CONNTRACK y
-if (( netfilter_xtables_legacy_available )); then
-  require_config CONFIG_NETFILTER_XTABLES_LEGACY y
-fi
-if grep -RqsE '^[[:space:]]*config IP_NF_IPTABLES_LEGACY([[:space:]]|$)' \
-  net include; then
-  require_config CONFIG_IP_NF_IPTABLES_LEGACY m
-  require_config CONFIG_IP6_NF_IPTABLES_LEGACY m
-else
-  require_config CONFIG_IP_NF_IPTABLES m
-  require_config CONFIG_IP6_NF_IPTABLES m
-fi
-require_config CONFIG_IP_NF_RAW m
-require_config CONFIG_IP6_NF_RAW m
-require_config CONFIG_NETFILTER_XT_MATCH_LENGTH m
-require_config CONFIG_NETFILTER_CONNCOUNT m
-require_config CONFIG_NFT_CONNLIMIT m
-require_config CONFIG_NETFILTER_NETLINK_OSF m
-require_config CONFIG_NFSD m
-require_config CONFIG_OPENVSWITCH m
-require_config CONFIG_CRYPTO_PCRYPT m
-require_config CONFIG_QED m
-require_config CONFIG_QEDE m
-require_config CONFIG_SCSI_FC_ATTRS m
-require_config CONFIG_SCSI_QLA_FC m
-require_config CONFIG_RDS m
-require_config CONFIG_SND m
-require_config CONFIG_SND_PCM m
-require_config CONFIG_TUN m
-require_config CONFIG_UDF_FS m
-require_config CONFIG_FUSE_FS m
-require_config CONFIG_VIRTIO_FS m
+require_config CONFIG_NF_TABLES m
 require_config CONFIG_VETH m
 require_config CONFIG_BRIDGE m
 require_config CONFIG_VLAN_8021Q m
-require_config CONFIG_BTRFS_FS m
 require_config CONFIG_BRIDGE_NETFILTER m
 require_config CONFIG_NF_FLOW_TABLE m
 require_config CONFIG_NF_FLOW_TABLE_INET m
 require_config CONFIG_NF_FLOW_TABLE_PROCFS y
-require_config CONFIG_NVME_CORE '[ym]'
-require_config CONFIG_BLK_DEV_NVME '[ym]'
-require_config CONFIG_DEVTMPFS y
-require_config CONFIG_DEVTMPFS_MOUNT y
-require_config CONFIG_VIRTIO y
-require_config CONFIG_VIRTIO_PCI y
-require_config CONFIG_VIRTIO_BLK y
-require_config CONFIG_VIRTIO_NET y
-require_config CONFIG_NET_9P y
-require_config CONFIG_NET_9P_VIRTIO y
-require_config CONFIG_9P_FS y
-require_config CONFIG_OVERLAY_FS y
-require_config CONFIG_SQUASHFS y
-require_config CONFIG_SQUASHFS_XZ y
-require_config CONFIG_SQUASHFS_ZSTD y
-require_config CONFIG_EXT4_FS y
-require_config CONFIG_EFI_PARTITION y
-require_config CONFIG_ISO9660_FS y
-require_config CONFIG_SERIAL_8250 y
-require_config CONFIG_SERIAL_8250_CONSOLE y
+require_config CONFIG_PROC_FS y
+if [[ "$config_profile" == slim ]]; then
+  require_config CONFIG_CC_OPTIMIZE_FOR_SIZE y
+  require_config CONFIG_KERNEL_XZ y
 fi
 
 # Refresh the generated release after the config edits above.  kernelrelease
@@ -812,13 +575,8 @@ for candidate in \
   fi
 done
 if [[ -z "$MODULES_SOURCE_DIR" ]]; then
-  if [[ "$KERNEL_PROFILE" == small ]]; then
-    echo "Small kernel has no loadable modules; continuing without a module tree"
-    mkdir -p "$OUTPUT_DIR/lib/modules/$kernel_release"
-  else
-    echo "kernel image deb has no modules for ${kernel_release}" >&2
-    exit 1
-  fi
+  echo "kernel image package has no modules for ${kernel_release}" >&2
+  exit 1
 else
   mkdir -p "$OUTPUT_DIR/lib/modules"
   cp -a "$MODULES_SOURCE_DIR" "$OUTPUT_DIR/lib/modules/"
@@ -858,7 +616,7 @@ commit=${kernel_commit}
 package_format=${PACKAGE_FORMAT}
 patches_requested=${KERNEL_PATCHES}
 patches_applied=${applied_patches[*]}
-profile=${KERNEL_PROFILE}
+profile=${config_profile}
 config_source=${config_source}
 kernel_release=${kernel_release}
 package_version=${package_version}

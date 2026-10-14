@@ -51,7 +51,7 @@ export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdi
        SHIRUDO_TARGET_STATIC_LIBDIR
 export VM_SSH_COMMAND
 
-.PHONY: all help html-docs target target-deps target-deps-clean shirudo-target target-config shirudo-build bpf-deps test-helpers linux-obs-ipv4-shields bundle test-vm-bundle kernel bpf-next kernel-small vm vm-small test-vm-small-bundle vm-console vm-ssh vm-stop vm-clean test-op test-installer test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
+.PHONY: all help html-docs target target-deps target-deps-clean shirudo-target target-config shirudo-build bpf-deps test-helpers linux-obs-ipv4-shields bundle test-vm-bundle kernel bpf-next vm vm-console vm-ssh vm-stop vm-clean test-op test-tgt test-tgt-obs test-tgt-obs-fuzz test-vm test-vm-clean install \
         install-target install-operator bindeb-pkg binrpm-pkg bintar-pkg clean \
         distclean test config
 
@@ -168,12 +168,11 @@ shirudo make targets (run from the repo root):
                            package, never to a target)
     make kernel KERNEL_TAG=v6.18 [KERNEL_COMMIT=sha]
                            build a tagged or exact-commit third-party Linux
-                           kernel DEB/BTF bundle (KERNEL_CONFIG=path overrides
-                           defconfig)
-    make bpf-next          build bpf-next kernel packages, BTF, and BPF tools
+                           slim kernel DEB/BTF bundle (KERNEL_CONFIG=path
+                           overrides the slim defaults)
+    make bpf-next          build slim bpf-next kernel packages, BTF, and BPF tools
                            (default: DEBs; set PACKAGE_FORMAT=rpm for RPMs)
-    make kernel-small      build the minimal bpf-next kernel used by vm-small
-    make vm KERNEL=6.18   boot a VM using a locally built stable kernel;
+    make vm KERNEL=6.18   boot a VM using a locally built slim stable kernel;
                            KERNEL_COMMIT selects an exact stable commit
                            supported selections: 7.2, 6.18, 6.12, 6.6, 6.1
     make clean             remove build artifacts
@@ -193,8 +192,6 @@ shirudo make targets (run from the repo root):
                            uprobe, and OTEL map-export coverage
     make vm                boot a uniquely named persistent vTPM VM, prepare
                            Shirudo, and return without running the test suite
-    make vm-small          boot the minimal persistent vTPM VM (1 CPU, 512 MiB,
-                           4 GiB), prepare Shirudo, and report memory usage
     make vm-console        attach to the serial console of a named running VM
     make vm-ssh             open an SSH shell to a named running VM
     make test-tgt          boot a uniquely named vTPM VM with QEMU + swtpm,
@@ -264,7 +261,7 @@ shirudo make targets (run from the repo root):
              KERNEL_COMMIT (optional 7-40 hex stable-kernel commit),
              KERNEL_REPOSITORY (third-party Linux git repository),
              KERNEL_SOURCE_DIR (existing clean Linux checkout),
-             KERNEL_CONFIG (optional kernel config),
+             KERNEL_CONFIG (optional config overriding slim defaults),
              VM_SSH_COMMAND (optional one-off command for make vm-ssh),
              TEST_VM_SSH_PORT (optional fixed localhost SSH port),
              TEST_VM_MAP_EXPORT_ENDPOINT (OTLP base URL),
@@ -339,7 +336,7 @@ test-helpers: config
 	+$(Q)$(MAKE) -f Makefile.shirudo test-helpers
 
 TEST_VM_WORK_DIR ?= build/test-vm
-TEST_VM_BUNDLE_DIR ?= $(TEST_VM_WORK_DIR)/host-bundle
+TEST_VM_BUNDLE_DIR ?= $(TEST_VM_WORK_DIR)/host-bundle-$(VM_KERNEL_TAG)$(KERNEL_COMMIT_SUFFIX)
 TEST_VM_RUNTIME_CACHE_DIR ?= $(TEST_VM_WORK_DIR)/cache/runtime
 TEST_VM_CPUS ?= 4
 TEST_VM_MEMORY ?= 4G
@@ -348,50 +345,6 @@ TEST_VM_UBUNTU_CODENAME ?= resolute
 TEST_VM_VERBOSE ?= 0
 DNS_OBS_FUZZ_SEED ?= 0x53484952
 DNS_OBS_FUZZ_CASES ?= 5000
-TEST_VM_BUNDLE_STAMP := $(TEST_VM_BUNDLE_DIR)/.stamp
-TEST_VM_BUNDLE_KERNEL_ARTIFACT_DIR ?= artifacts/bpf-next-kernel-debs
-TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
-	*.c *.h include/*.h util/*.c util/*.h \
-	bpf/*.c bpf/lib/*.h \
-	vendor/linux/vmlinux.h \
-	tools/shirudo-build/*.c tools/shirudo-build/*.h \
-	testing/helper/*.c testing/helper/*.py completion/* systemd/*.in \
-	systemd/*.timer testing/fixtures/*.c testing/fixtures/*.lua \
-	testing/fixtures/decoders/* \
-	upatches/linux_obs/*.c upatches/linux_obs/*.h upatches/linux_obs/*.list \
-		upatches/linux_obs/*.py upatches/linux_obs/Beefile \
-	upatches/linux_obs/decoders/*))
-TEST_VM_BUNDLE_ARTIFACTS := $(sort $(wildcard \
-	artifacts/bpf-next-kernel-debs \
-	artifacts/bpf-next-kernel-debs/*))
-TEST_VM_BUNDLE_INPUTS := $(sort \
-	Makefile Makefile.config Makefile.shirudo Makefile.version config.mk \
-	contrib/build-test-vm-bundle.sh contrib/test-vm-guest.sh \
-	contrib/prepare-test-vm-runtime.sh contrib/test-vm-runtime-packages \
-	$(TEST_VM_BUNDLE_SOURCES) $(TEST_VM_BUNDLE_ARTIFACTS) \
-	$(if $(strip $(TEST_VM_PACKAGE_CERT)),$(TEST_VM_PACKAGE_CERT)))
-
-TEST_VM_SMALL_WORK_DIR ?= build/test-vm-small
-TEST_VM_SMALL_BUNDLE_DIR ?= $(TEST_VM_SMALL_WORK_DIR)/host-bundle
-TEST_VM_SMALL_RUNTIME_CACHE_DIR ?= $(TEST_VM_SMALL_WORK_DIR)/cache/runtime
-TEST_VM_SMALL_RUNTIME_DISK_SIZE ?= 4G
-TEST_VM_SMALL_KERNEL_ARTIFACT_DIR ?= artifacts/bpf-next-small-kernel-debs
-TEST_VM_SMALL_KERNEL_IMAGE := $(TEST_VM_SMALL_KERNEL_ARTIFACT_DIR)/bzImage
-TEST_VM_SMALL_KERNEL_STAMP := $(TEST_VM_SMALL_KERNEL_ARTIFACT_DIR)/bzImage.sha256sum
-TEST_VM_SMALL_BUNDLE_STAMP := $(TEST_VM_SMALL_BUNDLE_DIR)/.stamp
-TEST_VM_SMALL_BUNDLE_ARTIFACTS := $(sort $(wildcard \
-	$(TEST_VM_SMALL_KERNEL_ARTIFACT_DIR) \
-	$(TEST_VM_SMALL_KERNEL_ARTIFACT_DIR)/* \
-	$(TEST_VM_SMALL_KERNEL_ARTIFACT_DIR)/*))
-TEST_VM_BUNDLE_COMMON_INPUTS := $(sort \
-	Makefile Makefile.config Makefile.shirudo Makefile.version config.mk \
-	contrib/build-test-vm-bundle.sh contrib/test-vm-guest.sh \
-	contrib/prepare-test-vm-runtime.sh contrib/test-vm-runtime-packages \
-	contrib/kernel-small.config $(TEST_VM_BUNDLE_SOURCES) \
-	$(if $(strip $(TEST_VM_PACKAGE_CERT)),$(TEST_VM_PACKAGE_CERT)))
-TEST_VM_SMALL_BUNDLE_INPUTS := $(sort \
-	$(TEST_VM_BUNDLE_COMMON_INPUTS) $(TEST_VM_SMALL_BUNDLE_ARTIFACTS))
-
 # `make vm` keeps bpf-next as its default, but can select a stable kernel
 # built from an upstream Linux tag. The stable list is intentionally explicit
 # so a typo cannot silently create a new VM kernel artifact directory.
@@ -406,18 +359,15 @@ ifneq ($(strip $(KERNEL_COMMIT)),)
 endif
   VM_KERNEL_TAG := bpf-next
   VM_KERNEL_ARTIFACT_DIR := artifacts/bpf-next-kernel-debs
-  VM_KERNEL_IMAGE :=
-  VM_KERNEL_STAMP :=
-  VM_KERNEL_DEP :=
 else ifneq ($(filter $(VM_KERNEL_VERSION),$(VM_KERNEL_STABLE_VERSIONS)),)
   VM_KERNEL_TAG := v$(VM_KERNEL_VERSION)
   VM_KERNEL_ARTIFACT_DIR := artifacts/linux-$(VM_KERNEL_TAG)$(KERNEL_COMMIT_SUFFIX)-kernel-debs
-  VM_KERNEL_IMAGE := $(VM_KERNEL_ARTIFACT_DIR)/bzImage
-  VM_KERNEL_STAMP := $(VM_KERNEL_ARTIFACT_DIR)/bzImage.sha256sum
-  VM_KERNEL_DEP := $(VM_KERNEL_STAMP)
 else
   $(error unsupported VM KERNEL '$(VM_KERNEL)'; choose bpf-next, 7.2, 6.18, 6.12, 6.6, or 6.1)
 endif
+VM_KERNEL_IMAGE := $(VM_KERNEL_ARTIFACT_DIR)/bzImage
+VM_KERNEL_STAMP := $(VM_KERNEL_ARTIFACT_DIR)/bzImage.sha256sum
+VM_KERNEL_DEP := $(VM_KERNEL_STAMP)
 
 KERNEL_TAG ?= $(if $(strip $(TAG)),$(TAG),bpf-next)
 KERNEL_TAG_VERSION := $(patsubst v%,%,$(KERNEL_TAG))
@@ -425,7 +375,6 @@ KERNEL_REPOSITORY ?= https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/li
 KERNEL_SOURCE_DIR ?=
 KERNEL_CONFIG ?=
 KERNEL_BUILD_JOBS ?= $(shell nproc)
-KERNEL_OBSERVABILITY_CONFIGS_FILE ?= $(abspath contrib/kernel-observability-configs.txt)
 ifeq ($(KERNEL_TAG),bpf-next)
 ifneq ($(filter kernel bpf-next,$(MAKECMDGOALS)),)
 ifneq ($(strip $(KERNEL_COMMIT)),)
@@ -440,8 +389,27 @@ else
 endif
 KERNEL_BUILD_STAMP := $(KERNEL_BUILD_ARTIFACT_DIR)/bzImage.sha256sum
 
+TEST_VM_BUNDLE_STAMP := $(TEST_VM_BUNDLE_DIR)/.stamp
+TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
+	*.c *.h include/*.h util/*.c util/*.h \
+	bpf/*.c bpf/lib/*.h \
+	tools/shirudo-build/*.c tools/shirudo-build/*.h \
+	testing/helper/*.c testing/helper/*.py completion/* systemd/*.in \
+	systemd/*.timer testing/fixtures/*.c testing/fixtures/*.lua \
+	testing/fixtures/decoders/* \
+	upatches/linux_obs/*.c upatches/linux_obs/*.h upatches/linux_obs/*.list \
+		upatches/linux_obs/*.py upatches/linux_obs/Beefile \
+	upatches/linux_obs/decoders/*))
+TEST_VM_BUNDLE_ARTIFACTS := $(sort $(wildcard \
+	$(VM_KERNEL_ARTIFACT_DIR) $(VM_KERNEL_ARTIFACT_DIR)/*))
+TEST_VM_BUNDLE_INPUTS := $(sort \
+	Makefile Makefile.config Makefile.shirudo Makefile.version config.mk \
+	contrib/build-test-vm-bundle.sh contrib/test-vm-guest.sh \
+	contrib/prepare-test-vm-runtime.sh contrib/test-vm-runtime-packages \
+	$(TEST_VM_BUNDLE_SOURCES) $(TEST_VM_BUNDLE_ARTIFACTS) \
+	$(if $(strip $(TEST_VM_PACKAGE_CERT)),$(TEST_VM_PACKAGE_CERT)))
 
-test-vm-bundle: $(TEST_VM_BUNDLE_STAMP)
+test-vm-bundle: $(VM_KERNEL_DEP) $(TEST_VM_BUNDLE_STAMP)
 
 $(TEST_VM_BUNDLE_STAMP): $(TEST_VM_BUNDLE_INPUTS)
 	$(Q)TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
@@ -453,35 +421,7 @@ $(TEST_VM_BUNDLE_STAMP): $(TEST_VM_BUNDLE_INPUTS)
 		TEST_VM_PACKAGE_CERT="$(TEST_VM_PACKAGE_CERT)" \
 		TEST_VM_BUNDLE_STAMP="$(abspath $(TEST_VM_BUNDLE_STAMP))" \
 		TEST_VM_BUNDLE_INPUTS="$(abspath $(TEST_VM_BUNDLE_INPUTS))" \
-		contrib/build-test-vm-bundle.sh
-
-kernel-small: $(TEST_VM_SMALL_KERNEL_STAMP)
-
-$(TEST_VM_SMALL_KERNEL_STAMP): contrib/build-kernel-package.sh contrib/kernel-small.config
-	$(Q)KERNEL_TAG='bpf-next' \
-		KERNEL_PROFILE='small' \
-		KERNEL_SMALL_CONFIG='$(abspath contrib/kernel-small.config)' \
-		PACKAGE_FORMAT='$(PACKAGE_FORMAT)' \
-		KERNEL_PATCHES='$(KERNEL_PATCHES)' \
-		KERNEL_BUILD_JOBS='$(KERNEL_BUILD_JOBS)' \
-		KERNEL_REPOSITORY='$(KERNEL_REPOSITORY)' \
-		KERNEL_SOURCE_DIR='$(KERNEL_SOURCE_DIR)' \
-		OUTPUT_DIR="$(abspath $(TEST_VM_SMALL_KERNEL_ARTIFACT_DIR))" \
-		contrib/build-kernel-package.sh
-
-test-vm-small-bundle: $(TEST_VM_SMALL_KERNEL_STAMP) $(TEST_VM_SMALL_BUNDLE_STAMP)
-
-$(TEST_VM_SMALL_BUNDLE_STAMP): $(TEST_VM_SMALL_BUNDLE_INPUTS)
-	$(Q)TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_SMALL_BUNDLE_DIR))" \
-		TEST_VM_WORK_DIR="$(abspath $(TEST_VM_SMALL_WORK_DIR))" \
-		TEST_VM_RUNTIME_CACHE_DIR="$(abspath $(TEST_VM_SMALL_RUNTIME_CACHE_DIR))" \
-		TEST_VM_RUNTIME_DISK_SIZE="$(TEST_VM_SMALL_RUNTIME_DISK_SIZE)" \
-		TEST_VM_UBUNTU_CODENAME="$(TEST_VM_UBUNTU_CODENAME)" \
-		TEST_VM_ROOTFS_URL="$(TEST_VM_ROOTFS_URL)" \
-		TEST_VM_ROOTFS_SHA256="$(TEST_VM_ROOTFS_SHA256)" \
-		TEST_VM_PACKAGE_CERT="$(TEST_VM_PACKAGE_CERT)" \
-		TEST_VM_BUNDLE_STAMP="$(abspath $(TEST_VM_SMALL_BUNDLE_STAMP))" \
-		TEST_VM_BUNDLE_INPUTS="$(abspath $(TEST_VM_SMALL_BUNDLE_INPUTS))" \
+		BPF_VMLINUX_BTF="$(abspath $(VM_KERNEL_ARTIFACT_DIR)/vmlinux.btf)" \
 		contrib/build-test-vm-bundle.sh
 
 kernel: $(KERNEL_BUILD_STAMP)
@@ -489,11 +429,11 @@ kernel: $(KERNEL_BUILD_STAMP)
 bpf-next:
 	$(Q)PACKAGE_FORMAT='$(PACKAGE_FORMAT)' \
 		KERNEL_PATCHES='$(KERNEL_PATCHES)' \
+		KERNEL_CONFIG='$(KERNEL_CONFIG)' \
 		KERNEL_BUILD_JOBS='$(KERNEL_BUILD_JOBS)' \
-		KERNEL_OBSERVABILITY_CONFIGS_FILE='$(KERNEL_OBSERVABILITY_CONFIGS_FILE)' \
 		contrib/build-kernel-package.sh
 
-$(KERNEL_BUILD_STAMP): contrib/build-kernel-package.sh $(KERNEL_OBSERVABILITY_CONFIGS_FILE)
+$(KERNEL_BUILD_STAMP): contrib/build-kernel-package.sh
 	$(Q)KERNEL_TAG='$(KERNEL_TAG_NORMALIZED)' \
 		KERNEL_COMMIT='$(KERNEL_COMMIT)' \
 		KERNEL_PATCHES='$(KERNEL_PATCHES)' \
@@ -502,7 +442,6 @@ $(KERNEL_BUILD_STAMP): contrib/build-kernel-package.sh $(KERNEL_OBSERVABILITY_CO
 		KERNEL_CONFIG='$(KERNEL_CONFIG)' \
 		PACKAGE_FORMAT='$(PACKAGE_FORMAT)' \
 		KERNEL_BUILD_JOBS='$(KERNEL_BUILD_JOBS)' \
-		KERNEL_OBSERVABILITY_CONFIGS_FILE='$(KERNEL_OBSERVABILITY_CONFIGS_FILE)' \
 		OUTPUT_DIR="$(abspath $(KERNEL_BUILD_ARTIFACT_DIR))" \
 		contrib/build-kernel-package.sh
 
@@ -511,13 +450,12 @@ $(KERNEL_BUILD_STAMP): contrib/build-kernel-package.sh $(KERNEL_OBSERVABILITY_CO
 ifneq ($(VM_KERNEL_DEP),)
 ifneq ($(VM_KERNEL_TAG),$(KERNEL_TAG_NORMALIZED))
 $(VM_KERNEL_STAMP):
-	+$(Q)$(MAKE) kernel KERNEL_TAG='$(VM_KERNEL_TAG)' KERNEL_COMMIT='$(KERNEL_COMMIT)'
+	+$(Q)$(MAKE) kernel KERNEL_TAG='$(VM_KERNEL_TAG)' KERNEL_COMMIT='$(KERNEL_COMMIT)' KERNEL_CONFIG='$(KERNEL_CONFIG)'
 endif
 endif
 
 vm: $(VM_KERNEL_DEP) test-vm-bundle
 	$(Q)VM_MODE=interactive VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
-		TEST_VM_KERNEL_PROFILE="full" \
 		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
 		TEST_VM_KERNEL_ARTIFACT_DIR="$(abspath $(VM_KERNEL_ARTIFACT_DIR))" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
@@ -537,30 +475,6 @@ vm: $(VM_KERNEL_DEP) test-vm-bundle
 		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		contrib/test-vm.sh
-
-vm-small: kernel-small test-vm-small-bundle
-	$(Q)VM_MODE=interactive VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
-		TEST_VM_KERNEL_PROFILE="small" \
-		TEST_VM_KERNEL="$(abspath $(TEST_VM_SMALL_KERNEL_IMAGE))" \
-		TEST_VM_KERNEL_ARTIFACT_DIR="" \
-		TEST_VM_WORK_DIR="$(TEST_VM_SMALL_WORK_DIR)" \
-		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_SMALL_RUNTIME_CACHE_DIR)" \
-		TEST_VM_CPUS="1" \
-		TEST_VM_MEMORY="512M" \
-		TEST_VM_DISK_SIZE="4G" \
-		TEST_VM_SSH_PORT="$(TEST_VM_SSH_PORT)" \
-		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
-		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
-		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
-		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
-		TEST_VM_OCI_CA="$(TEST_VM_OCI_CA)" \
-		TEST_VM_BPM_TREE_CONFIG="$(TEST_VM_BPM_TREE_CONFIG)" \
-		TEST_VM_PACKAGE_CERT="$(TEST_VM_PACKAGE_CERT)" \
-		TEST_VM_BPM_OCI_REPOSITORY="$(TEST_VM_BPM_OCI_REPOSITORY)" \
-		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
-		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_SMALL_BUNDLE_DIR))" \
-		contrib/test-vm.sh
-
 vm-console:
 	$(Q)VM_NAME="$(VM_NAME)" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" contrib/test-vm.sh --console

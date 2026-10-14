@@ -24,8 +24,10 @@ pre-flight checks that the running kernel has that support
 older kernel reports ``kernel_abi_unsupported``.
 
 The table below is what shirudo itself needs; without any of it,
-``shirudo init`` does not complete.  ``contrib/kernel-small.config``
-carries the same list for the test VM kernel.
+``shirudo init`` does not complete. The test VM kernel uses the slim
+configuration embedded in ``contrib/build-kernel-package.sh``. It also
+builds the networking modules used by the VM test setup: veth, bridge,
+802.1Q, bridge netfilter, and the netfilter flow table.
 
 .. list-table::
    :header-rows: 1

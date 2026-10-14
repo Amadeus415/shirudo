@@ -48,13 +48,18 @@ LIBBPF_DIR       := $(LIBBPF_VENDOR)/bpf
 LIBBPF_A         := $(LIBBPF_VENDOR)/libbpf.a
 BPF_UAPI_INCLUDE := $(LIBBPF_VENDOR)/include/uapi
 VMLINUX_GEN      := tools/gen-vmlinux-h/gen-vmlinux-h
-# Generated, never committed: the C rendering of the BTF the build points
-# at, kept beside the other vendored kernel-derived inputs.
-VMLINUX_H        := vendor/linux/vmlinux.h
 BPF_VMLINUX_H ?=
 # Prefer the BTF emitted by `make bpf-next`; otherwise use the running host.
 # A caller can still override this explicitly for another target kernel.
 BPF_VMLINUX_BTF ?= $(if $(wildcard artifacts/bpf-next-kernel-debs/vmlinux.btf),artifacts/bpf-next-kernel-debs/vmlinux.btf,/sys/kernel/btf/vmlinux)
+# Generated, never committed: the C rendering of the selected BTF.
+VMLINUX_H := vendor/linux/vmlinux.h
+VMLINUX_BTF_SOURCE := vendor/linux/.vmlinux-btf-source
+VMLINUX_BTF_SOURCE_CURRENT := $(shell cat $(VMLINUX_BTF_SOURCE) 2>/dev/null)
+VMLINUX_BTF_SOURCE_SELECTED := $(if $(BPF_VMLINUX_H),header:$(BPF_VMLINUX_H),$(BPF_VMLINUX_BTF))
+ifneq ($(VMLINUX_BTF_SOURCE_SELECTED),$(VMLINUX_BTF_SOURCE_CURRENT))
+VMLINUX_BTF_SOURCE_CHANGED := FORCE_VMLINUX_BTF
+endif
 
 SHIRUDO_LIBEXEC_DIR ?= $(libexecdir)/shirudo
 
@@ -271,16 +276,21 @@ $(VMLINUX_GEN): tools/gen-vmlinux-h/gen-vmlinux-h.c $(LIBBPF_A)
 # ----- phase 2: generated headers ---------------------------------
 
 ifneq ($(BPF_VMLINUX_H),)
-$(VMLINUX_H): $(BPF_VMLINUX_H)
+$(VMLINUX_H): $(BPF_VMLINUX_H) $(VMLINUX_BTF_SOURCE_CHANGED)
 	@printf '  COPY    $@\n'
 	$(Q)mkdir -p $(dir $@)
 	$(Q)cp $< $@
+	$(Q)printf '%s\n' '$(VMLINUX_BTF_SOURCE_SELECTED)' > $(VMLINUX_BTF_SOURCE)
 else
-$(VMLINUX_H): $(VMLINUX_GEN)
+$(VMLINUX_H): $(VMLINUX_GEN) $(BPF_VMLINUX_BTF) $(VMLINUX_BTF_SOURCE_CHANGED)
 	@printf '  GEN     $@\n'
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$< $(BPF_VMLINUX_BTF) > $@
+	$(Q)printf '%s\n' '$(VMLINUX_BTF_SOURCE_SELECTED)' > $(VMLINUX_BTF_SOURCE)
 endif
+
+.PHONY: FORCE_VMLINUX_BTF
+FORCE_VMLINUX_BTF:
 
 # ----- phase 3: compile rules -------------------------------------
 
