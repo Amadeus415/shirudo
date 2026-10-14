@@ -1,0 +1,224 @@
+# AGENTS.md
+
+Guidance for coding agents (Claude Code, Codex, and others) working in
+this repository. The code and `Documentation/` are authoritative for
+what shirudo does; this file holds the rules and the reasoning that are
+not visible from the code.
+
+## Capability requirement
+
+shirudo is a security-critical BPF LSM platform. A subtle error in
+signature verification, LSM hook policy, TPM measurement, the pre-flight
+tamper check or the signed-loader artifact format silently invalidates
+the trust model while the code still looks correct, and it ships to
+fleets and embedded devices that are hard to patch. Work here only with
+a frontier-class model at its highest reasoning effort (for Claude
+Code: Opus 4.8 or newer at high or extended effort; Codex: the strongest
+available model at high reasoning). Lower tiers may read and answer
+questions but must decline to change anything and say why. Before
+changing security-relevant code, read `Documentation/architecture.rst`
+and `Documentation/threat-model.rst`.
+
+## What shirudo is
+
+A BPF LSM that locks down the `bpf()` syscall so only signed in-kernel
+BPF loader programs can install BPF code, create maps or attach links,
+even for `CAP_SYS_ADMIN`. One plain-C binary serves two roles, chosen by
+what is present on the machine, never by separate builds:
+
+- the *operator* holds the private ML-DSA-87 signing key and produces
+  signed `.upatch` artifacts (`shirudo build`, `shirudo bpm build`), and
+  publishes packages (`shirudo bpm push`, `shirudo bpm tree append`);
+- the *target* holds only the public certificate in a sealed kernel
+  keyring plus a TPM2 NV-extend chain, verifies every load and is
+  agentless: no daemon, no listening socket, every operation is a
+  one-shot CLI invocation that the operator reaches over existing
+  `ssh`/`scp`.
+
+Artifacts flow outward from the credential holder, like `git push`.
+shirudo owns neither the transport nor fleet state; do not reintroduce
+the removed fleet, remote-management or SSH layers.
+
+## Where things are documented
+
+| Path | Purpose |
+|---|---|
+| `Documentation/threat-model.rst` | Authoritative security design: trust boundaries, threats, residual risks, deferred mitigations. Consult before touching any security-relevant path. |
+| `Documentation/architecture.rst` | Implemented architecture, operator/target boundary, BPM package and upatch tree formats. |
+| `Documentation/upatch-spec.rst` | The `.upatch` container and signing scheme. |
+| `Documentation/requirements.rst` | Kernel options, operator toolchain, target runtime. |
+| `Documentation/getting-started.rst` | Operator quickstart: build, package, transfer, load, status, unload. |
+| `Documentation/coding-style.rst` | The kernel's coding style, applied to all C here. |
+| `TODO.kernel` | Kernel and libbpf limitations the design works around, by item number. |
+
+The kernel side of the signing design is the kernel's own
+`Documentation/bpf/signing.rst`; `bpf_prog_verify_signature()` runs
+before the LSM hooks and `attr.keyring_id` is a key serial, not a name.
+
+## Coding conventions
+
+- **Plain C.** Userspace and BPF both. No C++.
+- **Zero-initialise with `= {}`, not `= {0}`.** The empty-initializer
+  form is the kernel convention (a GNU extension shirudo's `-std=gnu11`
+  accepts). Use it for every struct/array/union zero-init. When adding
+  new code, write `= {}`.
+- **Declare locals in reverse-Christmas-tree order** (the netdev
+  convention): longest declaration line first, shortest last. Group
+  declarations that have no initializer dependency and sort them by
+  descending line length; a declaration whose initializer references an
+  earlier local must stay after it (correctness wins over the sort).
+  Apply this whenever you add or touch a declaration block.
+- **Linux kernel coding style** (`Documentation/coding-style.rst` —
+  the kernel's own coding-style.rst, copied into this tree). Tabs
+  (8-wide), 80-col soft limit, K&R braces, no spaces inside parens.
+  Apply to userspace too — eases review. **Comments are scarce and
+  follow §8**: WHAT/WHY at the function head, not HOW inside the
+  body; file headers are SPDX + Copyright + at most one line of
+  purpose, never multi-paragraph descriptions.
+- **Multi-line comments**: the opening `/*` and closing `*/` each
+  go on their own line, with every content line beginning with ` *`.
+  Single-line comments (`/* foo */`) and trailing field annotations
+  (`int x; /* sticky */`) are fine. WRONG:
+  ```
+  /* Foo bar
+   * baz quux. */
+  ```
+  RIGHT:
+  ```
+  /*
+   * Foo bar
+   * baz quux.
+   */
+  ```
+  This applies to every block comment — function-head doc comments,
+  TODO blocks, struct-internal explanations, multi-line trailing
+  comments inside a function body. The rule mirrors the kernel
+  example in `Documentation/coding-style.rst` §8.
+- **`//` is for SPDX only.** Per the kernel convention, .c files
+  use `// SPDX-License-Identifier: …` and nothing else `//`-style;
+  .h files use `/* SPDX-License-Identifier: … */` and nothing else
+  `//`-style. Every other comment is `/* */`.
+- **License: BSD-2-Clause** for userspace. The BPF program must declare
+  `char _license[] SEC("license") = "Dual BSD/GPL";` (the LSM hook framework
+  rejects non-GPL-compatible BPF).
+- **No emojis** anywhere — code, comments, commit messages, logs.
+- **Comments are scarce.** Kernel style: explain the *why*, not the *what*.
+  No multi-paragraph docstrings. No "added for issue X" or "used by Y" — those
+  go in commit messages.
+
+## Invariants that are easy to break
+
+Each of these is enforced by the design, not by a compiler. Breaking
+one usually still compiles and passes tests.
+
+- **No subprocesses, no daemons.** The core `shirudo` binary never
+  forks or execs on either side; every external operation goes through
+  a linked library. The single exception is the operator-only dispatch
+  in `builtin-build.c`: `shirudo build` and the operator bpm commands
+  exec the separate `shirudo-build` binary, which signs in-process and
+  execs `clang`. `shirudo-build` and `clang` ship only in the operator
+  package, so the invariant is absolute on every target-side path. A
+  feature that seems to need a shell-out needs a library binding, not
+  `system(3)`.
+- **Operator code does not ship to targets.** Signing (`util/sign.c`)
+  and the package builder and publisher (`tools/shirudo-build/`) are
+  linked only into `shirudo-build`. The core binary only dispatches.
+- **The signature-gated `BPF_PROG_LOAD` is the trust boundary.** Every
+  signed artifact (the LSM bootstrap, every load and unload directive)
+  goes through the same load path; a second loading path is wrong.
+  Userspace may attach, pin and run the signed-loader data-map
+  pattern, because none of those can introduce unsigned code; detach,
+  update and corruption of BPF objects from userspace are denied by the
+  LSM. In the `lsm/bpf` hook the `bool kernel` argument is the
+  discriminator: calls from inside a signed loader are allowed,
+  userspace calls are filtered.
+- **The operator never touches the kernel keyring or the TPM; the
+  target never touches the private key.**
+- **The operator is stateless.** It writes only the keypair (`genkey`)
+  and the artifacts or reports the caller names. No hidden caches,
+  state files, logs or staging directories; `--expect-chain` comes
+  from the caller.
+- **Every target state change extends the TPM NV chain** with a
+  domain-separated tag, in deterministic order, and refuses on chain
+  drift (`tampered`) rather than retrying. Boot restore is exactly one
+  chain event. A TPM 2.0 is mandatory; there is no unmeasured mode.
+- **Pin the bpf_link before anything else fallible** in `shirudo init`,
+  or a crash leaves an attached, unowned link that the kernel detaches.
+- **Single shirudo instance per host.** Keyring name, private bpffs,
+  `/var/lib/shirudo`, the `security.bpf.shirudo` xattr namespace and
+  the NV index are single-tenant by design.
+- **Kernel + shirudo is the target TCB.** Ask of every change whether it
+  grows the TCB; the agentless design exists to keep it minimal.
+- **Bleeding-edge kernel and toolchain only.** Current upstream kernel
+  and clang/LLVM are hard prerequisites. No legacy-kernel detection, no
+  runtime feature-probe fallbacks; a missing kernel feature fails the
+  build or the load. x86_64 and arm64 are the supported architectures.
+- **BPF is CO-RE.** Hard-coded struct offsets sign fine and fail on the
+  wrong kernel as `btf_mismatch`.
+
+## Memory, JSON and logging
+
+- Use the zeroing allocator in `util/malloc.{c,h}`: `xmalloc`/`xcalloc`
+  return NULL on failure (never die), `xfree(ptr, size)` and
+  `xstrfree` scrub before freeing. The libc allocators are poisoned
+  project-wide; do not add exceptions, wrap in `util/malloc.c` instead.
+  `xstrdup` is strlen-based, so never apply it to user, file or network
+  input; use `xstrndup(s, bound)`.
+- `util/json.{c,h}` is the only JSON code. Extend its schema
+  definitions for new fields or documents; never open-code JSON bytes
+  elsewhere.
+- Logging is `syslog(3)` through `util/log.c` (`pr_info`, `pr_warn`,
+  `pr_err`, `pr_audit`); journald picks it up. No `libsystemd`, no
+  on-disk log of shirudo's own.
+
+## Dependencies and licensing
+
+- The binary links exactly `libc`, `libcrypto`/`libssl` (OpenSSL >= 3.5;
+  ML-DSA-87 is the only signing algorithm, TLS is 1.3 with hybrid ML-KEM
+  only), `libcurl`, `libtss2-esys` + `libtss2-tctildr`, `libelf`,
+  `zlib`, `libluajit` and the vendored `libbpf`. A new library must be
+  absolutely necessary, universally available, actively maintained,
+  BSD-2-Clause compatible and load-bearing for one thing. `libsystemd`,
+  `libsubcmd`, `libkeyutils`, `libcap` and any JSON/YAML/TOML parser
+  are refused; whiteroom or open-code instead.
+- Every line in the binary is fresh BSD-2-Clause or vendored from a
+  permissive OR-branch with its SPDX header kept (`vendor/libbpf`,
+  `util/sign.c`). Never copy or link GPL-2.0 code; study a pattern,
+  then write it from scratch without the GPL source open.
+- No kernel tree or submodule is needed to build: libbpf and the BPF
+  UAPI headers live in `vendor/libbpf/` and `vmlinux.h` is generated
+  into `vendor/linux/` from BTF. `make update-bpf-deps` refreshes the
+  vendored copy and is run only when asked.
+
+## Building, testing, packaging
+
+- `make` builds the operator binary; `make shirudo-build` the helper;
+  `make target` the static-OpenSSL target profile (`make target-deps`
+  builds OpenSSL, libcurl and tpm2-tss from source first).
+- `make test-op` runs the host-side suite (`t/t0*`), no root needed;
+  `make test-tgt` runs the target suite in the QEMU/swtpm VM
+  (`make help` lists the VM targets and variables).
+- `make bindeb-pkg`, `make binrpm-pkg` and `make bintar-pkg` build the
+  distribution packages. The target package is static apart from glibc
+  and portable; the operator package links the host's shared libraries
+  and is built on the distribution it is for (`PKG_ROLES=operator`),
+  against a bpf-next `vmlinux.h` (`BPF_VMLINUX_H=`). Package targets
+  start from `make clean`.
+- When a checkout is used in place of an installed operator package,
+  `SHIRUDO_BUILD=<path>` names the helper, or put
+  `tools/shirudo-build` and the checkout root on `PATH`.
+
+## Out of scope
+
+Do not propose features in these areas; the design delegates them:
+
+- SSH key management and transport: shirudo uses whatever SSH
+  infrastructure already exists.
+- Audit and log retention: journald's job. The TPM chain is append-only
+  and unbounded by design.
+- Operator-host and on-disk binary integrity: signed packages, IMA,
+  dm-verity, measured boot.
+- Kernel hardening and TPM hardware attacks: trusted components.
+
+Deferred work that is in scope is listed under deferred mitigations in
+`Documentation/threat-model.rst`.

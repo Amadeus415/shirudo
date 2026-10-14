@@ -30,7 +30,7 @@ bpm build|push|tree append` hand their full argument vector to
 `shirudo-build bpm ...` the same way.
 
 The rationale is in `Documentation/architecture.rst` (operator and
-target boundary) and `CLAUDE.md` (the no-subprocess invariant).
+target boundary) and `AGENTS.md` (the no-subprocess invariant).
 
 ## Modes
 

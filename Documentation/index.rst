@@ -48,7 +48,8 @@ Quick orientation
 Companion files in the repository root
 ======================================
 
-- ``CLAUDE.md`` — guidance for AI-driven contribution to shirudo.
+- ``AGENTS.md`` — guidance for coding agents contributing to shirudo
+  (``CLAUDE.md`` is a symlink to it).
 - ``TODO.kernel`` — kernel/libbpf limitations shirudo's design bumps
   into, with the userspace workaround for each (the docs reference
   these by item number).
