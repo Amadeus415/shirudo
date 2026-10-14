@@ -111,12 +111,6 @@ int shirudo_tree_event_append(int64_t seq, const char *operation_digest,
 			      const uint8_t projection_root[32]);
 int shirudo_tree_event_replay(uint8_t out[32]);
 
-/* Dedicated TPM projection chain. */
-int shirudo_tree_chain_ensure(void);
-int shirudo_tree_chain_read(uint8_t out[32]);
-int shirudo_tree_chain_extend(const uint8_t operation_digest[32],
-			     uint8_t out[32]);
-
 /* Emit report-only tree state into an already-open JSON object. */
 void shirudo_tree_emit_status(struct shirudo_json_emit *e);
 

@@ -4,7 +4,8 @@
 # and the loaded upatch set must be re-applied on every boot. This unit
 # re-runs `shirudo init` -- which re-mounts the private bpffs, re-links
 # the cert into the keyring, re-attaches bpf2 + seal, re-applies the
-# persisted upatches, and extends the TPM chain by one boot event.
+# persisted upatches, binds this boot's measurement register and
+# extends it by one event.
 #
 # It runs as EARLY as a filesystem-dependent service can: right after
 # local filesystems are up (so /var/lib/shirudo is readable) and inside
@@ -16,10 +17,8 @@
 #
 # Install: `make install` drops this file; enable with
 #   systemctl enable shirudo.service
-# On a target without a TPM, create /etc/shirudo/init.env containing
-#   SHIRUDO_INIT_ARGS=--no-tpm
-# Combine options in one value when needed, for example:
-#   SHIRUDO_INIT_ARGS="--no-tpm --no-seal"
+# Extra init options go in /etc/shirudo/init.env, for example:
+#   SHIRUDO_INIT_ARGS=--no-seal
 
 [Unit]
 Description=shirudo: bring up the BPF LSM and re-apply signed upatches

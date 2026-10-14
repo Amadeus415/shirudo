@@ -71,10 +71,10 @@ static int count_eventlog(long *entries, long *bytes)
 	ssize_t n;
 	int fd;
 
-	if (stat(SHIRUDO_EVENTLOG_PATH, &st) != 0)
+	if (stat(shirudo_eventlog_path(), &st) != 0)
 		return -errno;
 	*bytes = (long)st.st_size;
-	fd = open(SHIRUDO_EVENTLOG_PATH, O_RDONLY | O_CLOEXEC);
+	fd = open(shirudo_eventlog_path(), O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return -errno;
 	while ((n = read(fd, buf, sizeof(buf))) > 0) {
@@ -153,7 +153,7 @@ static void gather_assets(struct asset_view *a)
 	a->cert = access(SHIRUDO_CERT_PATH, F_OK) == 0;
 	a->signing_key = access(SHIRUDO_SIGNING_KEY_PATH, F_OK) == 0;
 	a->keyring_serial = access(SHIRUDO_KEYRING_SERIAL_PATH, F_OK) == 0;
-	if (stat(SHIRUDO_EVENTLOG_PATH, &st) == 0) {
+	if (stat(shirudo_eventlog_path(), &st) == 0) {
 		a->eventlog = true;
 		a->eventlog_bytes = (long)st.st_size;
 	}
@@ -209,7 +209,7 @@ static int read_eventlog(char **buf, size_t *len)
 
 	*buf = NULL;
 	*len = 0;
-	fd = open(SHIRUDO_EVENTLOG_PATH, O_RDONLY | O_CLOEXEC);
+	fd = open(shirudo_eventlog_path(), O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return -errno;
 	if (fstat(fd, &st) != 0 || st.st_size > (off_t)SHIRUDO_JSON_MAX_BYTES) {
@@ -570,8 +570,10 @@ int cmd_status(int argc, const char **argv)
 	struct shirudo_otel_opts otel_opts = {};
 	struct asset_view assets;
 	struct dirent **ups = NULL;
-	uint8_t chain[SHIRUDO_CHAIN_DIGEST_LEN];
-	char chain_hex[2 * SHIRUDO_CHAIN_DIGEST_LEN + 1];
+	char pcr_before_hex[2 * SHIRUDO_CHAIN_DIGEST_LEN + 1] = "";
+	char chain_hex[2 * SHIRUDO_CHAIN_DIGEST_LEN + 1] = "";
+	char name_hex[2 * SHIRUDO_TPM_NAME_LEN + 1] = "";
+	struct shirudo_chain_status cst = {};
 	char nv_index[16];
 	char *json_buf = NULL;
 	size_t json_cap = 0;
@@ -683,21 +685,33 @@ int cmd_status(int argc, const char **argv)
 
 	if (include_tpm) {
 		snprintf(nv_index, sizeof(nv_index), "0x%08X", SHIRUDO_NV_INDEX);
-		chain_rc = shirudo_chain_read(chain);
-		if (chain_rc == 0)
-			shirudo_hex_encode(chain, sizeof(chain), chain_hex);
+		chain_rc = shirudo_chain_status(&cst);
+		if (chain_rc == 0 && !(cst.defined && cst.written))
+			chain_rc = -ENODEV;
+		if (chain_rc == 0) {
+			shirudo_hex_encode(cst.value, sizeof(cst.value),
+					   chain_hex);
+			shirudo_hex_encode(cst.name, cst.name_len, name_hex);
+		}
+		if (cst.logged)
+			shirudo_hex_encode(cst.init.pcr_before,
+					   sizeof(cst.init.pcr_before),
+					   pcr_before_hex);
 		ev_rc = count_eventlog(&ev_entries, &ev_bytes);
 
 		/*
-		 * Tamper check: a live chain must equal the eventlog
-		 * replayed from zero. Any replay failure (malformed or
-		 * missing log while a chain exists) is a mismatch.
+		 * Tamper check: the live register must be the index init
+		 * bound this boot and equal this boot's eventlog records
+		 * replayed from zero. A replay failure (malformed log, or
+		 * no init record while a register exists) is a mismatch.
 		 */
 		if (chain_rc == 0) {
 			uint8_t replay[SHIRUDO_CHAIN_DIGEST_LEN];
 
-			match = shirudo_eventlog_replay(replay) == 0 &&
-				shirudo_ct_eq(chain, replay, sizeof(replay));
+			match = cst.anchored &&
+				shirudo_eventlog_replay(replay) == 0 &&
+				shirudo_ct_eq(cst.value, replay,
+					      sizeof(replay));
 		}
 	}
 
@@ -823,6 +837,20 @@ int cmd_status(int argc, const char **argv)
 				shirudo_json_kv_string(&e, "chain", chain_hex);
 			else
 				shirudo_json_kv_null(&e, "chain");
+			if (chain_rc == 0)
+				shirudo_json_kv_string(&e, "nv_name", name_hex);
+			else
+				shirudo_json_kv_null(&e, "nv_name");
+			shirudo_json_kv_bool(&e, "register_bound",
+					     chain_rc == 0);
+			shirudo_json_kv_bool(&e, "register_anchored",
+					     cst.anchored);
+			shirudo_json_kv_int(&e, "pcr", SHIRUDO_CHAIN_PCR);
+			if (cst.logged)
+				shirudo_json_kv_string(&e, "pcr_before",
+						       pcr_before_hex);
+			else
+				shirudo_json_kv_null(&e, "pcr_before");
 			if (match < 0)
 				shirudo_json_kv_null(&e, "chain_matches_eventlog");
 			else
@@ -1026,19 +1054,29 @@ int cmd_status(int argc, const char **argv)
 
 		if (include_tpm) {
 			printf("\nTPM Measurement:\n");
-			printf("  %-18s %s\n", "NV index:", nv_index);
-			if (chain_rc == 0)
+			printf("  %-18s %s (anchored in PCR %u)\n", "NV index:",
+			       nv_index, SHIRUDO_CHAIN_PCR);
+			if (chain_rc == 0) {
 				printf("  %-18s %s\n", "Chain:", chain_hex);
-			else
+				printf("  %-18s %s\n", "Register name:",
+				       name_hex);
+				printf("  %-18s %s\n", "Anchored:",
+				       cst.anchored ? "yes (name on record)" :
+				       "NO (index is not the one init bound)");
+			} else {
 				printf("  %-18s %s\n", "Chain:",
-				       "unavailable (no TPM / index "
-				       "undefined)");
+				       "unavailable (no TPM / register not "
+				       "bound this boot)");
+			}
+			if (cst.logged)
+				printf("  %-18s %s\n", "PCR before init:",
+				       pcr_before_hex);
 			printf("  %-18s %s\n", "Chain vs eventlog:",
 			       match < 0 ? "n/a" :
 			       match ? "matches" : "MISMATCH (tamper?)");
 			if (ev_rc == 0)
 				printf("  %-18s %s  (%ld entries, %ld bytes)\n",
-				       "Eventlog:", SHIRUDO_EVENTLOG_PATH,
+				       "Eventlog:", shirudo_eventlog_path(),
 				       ev_entries, ev_bytes);
 			else
 				printf("  %-18s absent\n", "Eventlog:");

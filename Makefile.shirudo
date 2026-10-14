@@ -461,6 +461,7 @@ TPMSIM_HELPER := $(if $(TPMSIM_LIBS),t/helper/tpmsim-cmd,)
 TEST_HELPERS := t/helper/test-json-parser \
                 t/helper/test-chain \
                 t/helper/test-tpm-wire \
+                t/helper/test-register \
                 $(TPMSIM_HELPER) \
 		t/helper/test-config \
 		t/helper/test-bpm-source \
@@ -485,15 +486,26 @@ t/helper/test-json-parser: t/helper/test-json-parser.c util/json.o
 # only exercise the pure helpers, but the symbols must still resolve.
 # util/malloc.o brings in x*/shirudo_libc_free that chain.o/tpm.o use.
 # util/config.o resolves shirudo_config_load(), called by tpm.o.
-t/helper/test-chain: t/helper/test-chain.c util/chain.o util/hex.o util/crypto_openssl.o util/tpm.o util/log.o \
-                     util/config.o util/malloc.o
+# The register code pulls in the eventlog, which pulls in the seal
+# label writer and the JSON codec.
+REGISTER_OBJS := util/chain.o util/tpm.o util/tpm_wire.o util/eventlog.o \
+                 util/hex.o util/crypto_openssl.o util/json.o util/io.o \
+                 util/seal.o util/config.o util/log.o util/malloc.o \
+                 $(VERSION_OBJ)
+REGISTER_LIBS := -lcrypto -lssl -ltss2-esys -ltss2-tctildr
+
+t/helper/test-chain: t/helper/test-chain.c $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl -ltss2-esys -ltss2-tctildr
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
 t/helper/test-tpm-wire: t/helper/test-tpm-wire.c util/tpm_wire.o util/hex.o \
                         util/crypto_openssl.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl
+
+t/helper/test-register: t/helper/test-register.c $(REGISTER_OBJS)
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
 t/helper/tpmsim-cmd: t/helper/tpmsim-cmd.c
 	@printf '  CC      $@\n'

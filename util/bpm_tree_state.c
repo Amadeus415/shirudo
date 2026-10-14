@@ -22,7 +22,6 @@
 
 #include "bpm_tree.h"
 #include "chain.h"
-#include "config.h"
 #include "io.h"
 #include "json.h"
 #include "kernel_build_id.h"
@@ -32,7 +31,6 @@
 #include "malloc.h"
 #include "paths.h"
 #include "seal.h"
-#include "tpm.h"
 
 static int tree_mkdir_p(const char *path, mode_t mode)
 {
@@ -581,65 +579,6 @@ int shirudo_tree_event_replay(uint8_t out[32])
 	return rc;
 }
 
-static int tree_chain_auth(uint8_t auth[32])
-{
-	uint8_t cert[32];
-	int rc = shirudo_chain_cert_sha256(cert);
-	if (rc) return rc;
-	shirudo_chain_auth_value(cert, auth);
-	return 0;
-}
-
-int shirudo_tree_chain_ensure(void)
-{
-	struct shirudo_tpm *t = NULL;
-	struct shirudo_config cfg = {};
-	uint8_t auth[32];
-	int rc = tree_chain_auth(auth);
-	if (rc) return -ENODEV;
-	rc = shirudo_tpm_open(&t);
-	if (rc) return -ENODEV;
-	(void)shirudo_config_load(&cfg);
-	rc = shirudo_tpm_nv_define(t, SHIRUDO_TREE_NV_INDEX, auth,
-				   cfg.tpm_owner_auth, cfg.tpm_owner_auth_len);
-	explicit_bzero(&cfg, sizeof(cfg));
-	shirudo_tpm_close(t);
-	return rc;
-}
-
-int shirudo_tree_chain_read(uint8_t out[32])
-{
-	struct shirudo_tpm *t = NULL;
-	uint8_t auth[32];
-	int rc = tree_chain_auth(auth);
-	if (rc || shirudo_tpm_open(&t)) return -ENODEV;
-	rc = shirudo_tpm_nv_read(t, SHIRUDO_TREE_NV_INDEX, auth, out);
-	shirudo_tpm_close(t);
-	return rc ? -ENODEV : 0;
-}
-
-int shirudo_tree_chain_extend(const uint8_t operation_digest[32],
-				      uint8_t out[32])
-{
-	struct shirudo_tpm *t = NULL;
-	uint8_t auth[32], before[32], actual[32], expected[32];
-	int rc = tree_chain_auth(auth);
-	if (rc || shirudo_tpm_open(&t)) return -ENODEV;
-	rc = shirudo_tpm_nv_read(t, SHIRUDO_TREE_NV_INDEX, auth, before);
-	if (!rc) rc = shirudo_tpm_nv_extend(t, SHIRUDO_TREE_NV_INDEX, auth,
-					  operation_digest);
-	if (!rc) rc = shirudo_tpm_nv_read(t, SHIRUDO_TREE_NV_INDEX, auth, actual);
-	shirudo_tpm_close(t);
-	if (rc) return -EIO;
-	shirudo_sha256_2(before, 32, operation_digest, 32, expected);
-	if (!shirudo_ct_eq(actual, expected, 32))
-		return -EIO;
-	if (out) {
-		memcpy(out, actual, 32);
-	}
-	return 0;
-}
-
 void shirudo_tree_emit_status(struct shirudo_json_emit *e)
 {
 	struct shirudo_tree_state s = {};
@@ -660,17 +599,16 @@ void shirudo_tree_emit_status(struct shirudo_json_emit *e)
 	} else {
 		shirudo_json_kv_null(e, "state");
 	}
-	if (shirudo_tree_chain_read(live) == 0) {
-		shirudo_hex_encode(live, 32, hex);
-		shirudo_json_kv_string(e, "live_projection_root_tpm", hex);
-		if (shirudo_tree_event_replay(replay) == 0)
-			shirudo_json_kv_bool(e, "eventlog_matches_tpm",
-					shirudo_ct_eq(live, replay, 32));
-		else
-			shirudo_json_kv_null(e, "eventlog_matches_tpm");
+	if (shirudo_tree_event_replay(replay) == 0) {
+		shirudo_hex_encode(replay, 32, hex);
+		shirudo_json_kv_string(e, "eventlog_projection_root", hex);
+		shirudo_json_kv_bool(e, "eventlog_matches_state",
+				     shirudo_hex_decode(s.projection_root, live,
+							32) == 0 &&
+				     shirudo_ct_eq(live, replay, 32));
 	} else {
-		shirudo_json_kv_null(e, "live_projection_root_tpm");
-		shirudo_json_kv_null(e, "eventlog_matches_tpm");
+		shirudo_json_kv_null(e, "eventlog_projection_root");
+		shirudo_json_kv_null(e, "eventlog_matches_state");
 	}
 	shirudo_json_obj_close(e);
 }

@@ -35,7 +35,9 @@
 #include "util/bpm_package.h"
 #include "util/bpm_tree.h"
 #include "util/bpm_source_config.h"
+#include "util/chain.h"
 #include "util/crypto.h"
+#include "util/eventlog.h"
 #include "util/help.h"
 #include "util/hex.h"
 #include "util/io.h"
@@ -1318,15 +1320,62 @@ static int tree_read_pending(struct bpm_tree_pending *pending)
 	return rc;
 }
 
-/* Complete the only non-idempotent window: the process may have extended
- * TPM and/or appended the event before the sealed cursor was committed. */
+/*
+ * Measure one applied tree operation into this boot's register and
+ * record it: event = SHA256("shirudo-tree\0" || seq || operation_digest).
+ * The tree's own projection stays a file-based chain; the register is
+ * what an operator attests.
+ */
+static int tree_measure_operation(const struct shirudo_tree_operation *op,
+				  const uint8_t operation_digest[32])
+{
+	uint8_t event[32], chain[32];
+	struct shirudo_json_emit e;
+	char line[4096], ts[32], boot_id[64], nv_index[16];
+	char digest_hex[65], chain_hex[65];
+	int rc;
+
+	shirudo_chain_tree_event(op->seq, operation_digest, event);
+	rc = shirudo_chain_extend(event, chain);
+	if (rc)
+		return rc;
+
+	shirudo_eventlog_timestamp(ts, sizeof(ts));
+	shirudo_eventlog_boot_id(boot_id, sizeof(boot_id));
+	snprintf(nv_index, sizeof(nv_index), "0x%08X", SHIRUDO_NV_INDEX);
+	shirudo_hex_encode(event, 32, digest_hex);
+	shirudo_hex_encode(chain, 32, chain_hex);
+	e = (struct shirudo_json_emit){ .buf = line, .cap = sizeof(line) };
+	shirudo_json_obj_open(&e);
+	shirudo_json_kv_int(&e, "schema", 2);
+	shirudo_json_kv_string(&e, "ts", ts);
+	shirudo_json_kv_string(&e, "nv_index", nv_index);
+	shirudo_json_kv_string(&e, "alg", "sha256");
+	shirudo_json_kv_string(&e, "digest", digest_hex);
+	shirudo_json_kv_string(&e, "type", "tree_op");
+	shirudo_json_kv_string(&e, "boot_id", boot_id);
+	shirudo_json_obj_open_key(&e, "tree");
+	shirudo_json_kv_int(&e, "seq", op->seq);
+	shirudo_json_kv_string(&e, "op", op->op);
+	shirudo_json_kv_string(&e, "id", op->id);
+	shirudo_json_kv_string(&e, "operation_digest", op->operation_digest);
+	shirudo_json_obj_close(&e);
+	shirudo_json_kv_string(&e, "chain", chain_hex);
+	shirudo_json_obj_close(&e);
+	if (e.err)
+		return e.err;
+	return shirudo_eventlog_append(line);
+}
+
+/* Complete the only non-idempotent window: the process may have
+ * appended the event before the sealed cursor was committed. */
 static int tree_recover_pending(const struct shirudo_tree_publication *pub,
 					struct shirudo_tree_state *state)
 {
 	struct bpm_tree_pending pending = {};
 	const struct shirudo_tree_operation *op = NULL;
-	uint8_t digest[32], previous[32], next[32], live[32], replay[32];
-	bool have_live = false, applied = false, event_present = false;
+	uint8_t digest[32], previous[32], next[32], replay[32];
+	bool applied = false, event_present = false;
 	int rc;
 
 	rc = tree_read_pending(&pending);
@@ -1354,21 +1403,9 @@ static int tree_recover_pending(const struct shirudo_tree_publication *pub,
 		return -EINVAL;
 	shirudo_sha256_2(previous, sizeof(previous), digest, sizeof(digest), next);
 
-	rc = shirudo_tree_chain_read(live);
-	if (!rc) {
-		have_live = true;
-		if (shirudo_ct_eq(live, next, sizeof(live)))
-			applied = true;
-		else if (!shirudo_ct_eq(live, previous, sizeof(live)))
-			return -EKEYREJECTED;
-	} else if (rc != -ENODEV) {
-		return rc;
-	}
 	rc = shirudo_tree_event_replay(replay);
 	if (!rc) {
 		if (shirudo_ct_eq(replay, next, sizeof(replay))) {
-			if (have_live && !shirudo_ct_eq(live, next, sizeof(live)))
-				return -EKEYREJECTED;
 			applied = true;
 			event_present = true;
 		} else if (!shirudo_ct_eq(replay, previous, sizeof(replay))) {
@@ -1378,15 +1415,14 @@ static int tree_recover_pending(const struct shirudo_tree_publication *pub,
 		return -EKEYREJECTED;
 	}
 	if (!applied)
-		return 0; /* TPM/event state is still pre-operation; retry normally. */
+		return 0; /* Still pre-operation; retry normally. */
 	if (!event_present) {
 		rc = shirudo_tree_event_append(op->seq, op->operation_digest, next);
 		if (rc)
 			return rc;
 	}
 	shirudo_hex_encode(next, sizeof(next), state->projection_root);
-	if (have_live)
-		shirudo_hex_encode(next, sizeof(next), state->projection_root_tpm);
+	shirudo_hex_encode(next, sizeof(next), state->projection_root_tpm);
 	state->last_seq = op->seq;
 	rc = shirudo_tree_state_write(state);
 	if (rc)
@@ -1416,33 +1452,6 @@ static int tree_validate_operation(const struct shirudo_tree_operation *op)
 	    tree_digest_hex(op->expected_payload_sha256, digest))
 		return -EINVAL;
 	return 0;
-}
-
-static int tree_check_live_projection(const struct shirudo_tree_state *state)
-{
-	uint8_t live[32], replay[32], expected[32] = {};
-	int rc;
-
-	rc = shirudo_tree_chain_read(live);
-	if (rc == -ENODEV)
-		return 0;
-	if (rc)
-		return rc;
-	if (state->last_seq) {
-		if (shirudo_hex_decode(state->projection_root_tpm, expected, 32) ||
-		    !shirudo_ct_eq(live, expected, 32))
-			return -EKEYREJECTED;
-	} else if (!shirudo_ct_eq(live, expected, 32)) {
-		return -EKEYREJECTED;
-	}
-	rc = shirudo_tree_event_replay(replay);
-	if (rc == 0 && !shirudo_ct_eq(live, replay, 32))
-		return -EKEYREJECTED;
-	if (rc == -ENOENT && state->last_seq)
-		return -EKEYREJECTED;
-	if (rc != 0 && rc != -ENOENT)
-		return -EKEYREJECTED;
-	return 1;
 }
 
 static void tree_sync_report_error(const char *phase,
@@ -1564,32 +1573,7 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 		tree_sync_report_error("pending_recovery", NULL, rc);
 		TREE_SYNC_RETURN(rc);
 	}
-	rc = shirudo_tree_chain_ensure();
-	if (rc == -ENODEV) {
-		tpm_available = 0;
-	} else if (rc) {
-		tree_sync_report_error("tree_chain_ensure", NULL, rc);
-		TREE_SYNC_RETURN(rc);
-	} else {
-		tpm_available = tree_check_live_projection(&state);
-		if (tpm_available < 0) {
-			tree_sync_report_error("tree_projection_check", NULL,
-					       tpm_available);
-			TREE_SYNC_RETURN(tpm_available);
-		}
-		if (tpm_available) {
-			uint8_t live[32];
-			char live_hex[65];
-			rc = shirudo_tree_chain_read(live);
-			if (rc) {
-				tree_sync_report_error("tree_chain_read", NULL, rc);
-				TREE_SYNC_RETURN(-ENODEV);
-			}
-			shirudo_hex_encode(live, 32, live_hex);
-			bpm_copy_string(state.projection_root_tpm,
-					 sizeof(state.projection_root_tpm), live_hex);
-		}
-	}
+	tpm_available = shirudo_chain_read((uint8_t[32]){}) == 0;
 	for (int i = 0; i < pub.n_operations; i++) {
 		struct shirudo_tree_operation *op = &pub.operations[i];
 		uint8_t digest[32], previous[32], next[32];
@@ -1650,18 +1634,14 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 			tree_sync_report_error("projection_root_decode", op, -EINVAL);
 			TREE_SYNC_RETURN(-EINVAL);
 		}
-		if (tpm_available) {
-			rc = shirudo_tree_chain_extend(digest, next);
-			if (rc) {
-				tree_sync_report_error("tree_projection_extend", op, rc);
-				TREE_SYNC_RETURN(rc);
-			}
-		} else {
-			shirudo_sha256_2(previous, 32, digest, 32, next);
+		rc = tree_measure_operation(op, digest);
+		if (rc) {
+			tree_sync_report_error("register_extend", op, rc);
+			TREE_SYNC_RETURN(rc);
 		}
+		shirudo_sha256_2(previous, 32, digest, 32, next);
 		shirudo_hex_encode(next, 32, state.projection_root);
-		if (tpm_available)
-			shirudo_hex_encode(next, 32, state.projection_root_tpm);
+		shirudo_hex_encode(next, 32, state.projection_root_tpm);
 		rc = shirudo_tree_event_append(op->seq, op->operation_digest, next);
 		if (rc) {
 			tree_sync_report_error("tree_event_append", op, rc);

@@ -2325,7 +2325,7 @@ static int eventlog_room(struct shirudo_op_report *rep, const char *op)
 	if (shirudo_eventlog_would_exceed(cfg.eventlog_max_bytes)) {
 		pr_err("upatch %s: eventlog %s would exceed "
 		       "eventlog.max_bytes=%lu; refusing -- no load, no extend",
-		       op, SHIRUDO_EVENTLOG_PATH, cfg.eventlog_max_bytes);
+		       op, shirudo_eventlog_path(), cfg.eventlog_max_bytes);
 		rep_fail(rep, "pre_flight", "eventlog_full", ENOSPC,
 			 "eventlog would exceed eventlog.max_bytes");
 		return -1;
@@ -2365,20 +2365,22 @@ static int append_upatch_event(const char *type, const char *name,
 {
 	char buf[4096];
 	struct shirudo_json_emit e = { .buf = buf, .cap = sizeof(buf) };
-	char ts[32], nv_index[16], payload_hex[65], digest_hex[65];
+	char ts[32], boot_id[64], nv_index[16], payload_hex[65], digest_hex[65];
 
 	shirudo_eventlog_timestamp(ts, sizeof(ts));
+	shirudo_eventlog_boot_id(boot_id, sizeof(boot_id));
 	snprintf(nv_index, sizeof(nv_index), "0x%08X", SHIRUDO_NV_INDEX);
 	shirudo_hex_encode(payload, 32, payload_hex);
 	shirudo_hex_encode(event, 32, digest_hex);
 
 	shirudo_json_obj_open(&e);
-	shirudo_json_kv_int(&e, "schema", 1);
+	shirudo_json_kv_int(&e, "schema", 2);
 	shirudo_json_kv_string(&e, "ts", ts);
 	shirudo_json_kv_string(&e, "nv_index", nv_index);
 	shirudo_json_kv_string(&e, "alg", "sha256");
 	shirudo_json_kv_string(&e, "digest", digest_hex);
 	shirudo_json_kv_string(&e, "type", type);
+	shirudo_json_kv_string(&e, "boot_id", boot_id);
 	shirudo_json_obj_open_key(&e, "upatch");
 	shirudo_json_kv_string(&e, "name", name);
 	shirudo_json_kv_string(&e, "payload_sha256", payload_hex);
@@ -2406,28 +2408,25 @@ static int upatch_chain_event(const char *tag, const char *type,
 			      const char *op, const char *name,
 			      const uint8_t payload[32], char out_chain[65])
 {
-	uint8_t buf[sizeof("shirudo-unload") + 32 + SHIRUDO_UPATCH_NAME_MAX];
 	uint8_t event[32], chain[32];
 	char chain_hex[65];
-	size_t taglen = strlen(tag) + 1, namelen, off = 0;
 	int rc;
 
 	if (out_chain)
 		out_chain[0] = '\0';
-	namelen = strnlen(name, SHIRUDO_UPATCH_NAME_MAX);
-	memcpy(buf + off, tag, taglen);		/* tag + its NUL */
-	off += taglen;
-	memcpy(buf + off, payload, 32);
-	off += 32;
-	memcpy(buf + off, name, namelen);
-	off += namelen;
-	shirudo_sha256(buf, off, event);
+	shirudo_chain_upatch_event(tag, name, payload, event);
 
 	rc = shirudo_chain_extend(event, chain);
 	if (rc == -ENODEV) {
-		pr_err("upatch %s: TPM/chain unavailable (category: tpm_error) "
-		       "-- op done but NOT measured; shirudo requires the "
-		       "chain init established", op);
+		pr_err("upatch %s: TPM/register unavailable (category: "
+		       "tpm_error) -- op done but NOT measured; shirudo "
+		       "requires the register init bound this boot", op);
+		return rc;
+	}
+	if (rc == -EACCES) {
+		pr_err("upatch %s: register is not the one init bound "
+		       "(category: tampered) -- op done but NOT measured; "
+		       "operator must reconcile", op);
 		return rc;
 	}
 	if (rc) {

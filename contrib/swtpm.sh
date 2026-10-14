@@ -22,9 +22,9 @@
 # Notes:
 # - The server only ever binds to loopback. swtpm has no auth on its TCP
 #   socket; do not expose it on a real interface.
-# - "stop" leaves the state dir so the next "start" continues the same
-#   NV chain. "clean" wipes it -- that is the only way to reset shirudo's
-#   NV-extend chain on this emulator.
+# - "stop" leaves the state dir; a restart is a TPM reset, which clears
+#   the per-boot measurement register the way a reboot does. "clean"
+#   wipes the state (new endorsement and attestation keys).
 # - shirudo's pre-flight skips the /dev/tpmrm0 check when SHIRUDO_TPM_TCTI
 #   is set; shirudo has no unmeasured mode, so on a machine without a TPM
 #   this emulator is the way to run it at all.

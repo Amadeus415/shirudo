@@ -85,9 +85,6 @@
 #ifndef SHIRUDO_NV_INDEX
 #define SHIRUDO_NV_INDEX		0x01818E00u
 #endif
-#ifndef SHIRUDO_TREE_NV_INDEX
-#define SHIRUDO_TREE_NV_INDEX		0x01818E01u
-#endif
 
 /* Site config. */
 #define SHIRUDO_CONF_PATH		"/etc/shirudo/shirudo.conf"

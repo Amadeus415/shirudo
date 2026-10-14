@@ -27,6 +27,7 @@
 #include <shirudo/upatch.h>
 
 #include "builtin.h"
+#include "util/bpm_tree.h"
 #include "util/chain.h"
 #include "util/config.h"
 #include "util/eventlog.h"
@@ -615,18 +616,6 @@ out:
 
 #define HEXLEN(n)	((n) * 2 + 1)
 
-/* One member of the restored set, for set_digest and the eventlog. */
-struct restore_entry {
-	char	name[SHIRUDO_UPATCH_NAME_MAX + 1];
-	char	payload_hex[HEXLEN(SHIRUDO_UPATCH_PAYLOAD_HASH_LEN)];
-};
-
-static int entry_cmp(const void *a, const void *b)
-{
-	return strcmp(((const struct restore_entry *)a)->name,
-		      ((const struct restore_entry *)b)->name);
-}
-
 static int select_upatch(const struct dirent *e)
 {
 	size_t n = strlen(e->d_name);
@@ -734,9 +723,9 @@ static void remove_stale_state(void)
  * measurement chain by exactly one event over the whole set. The set
  * may be empty (no upatches installed) -- the init event still fires.
  */
-static int boot_restore(struct restore_entry **out_set, size_t *out_n)
+static int boot_restore(struct shirudo_measured_upatch **out_set, size_t *out_n)
 {
-	struct restore_entry *set = NULL;
+	struct shirudo_measured_upatch *set = NULL;
 	struct dirent **names = NULL;
 	int n, i, rc = 0;
 	size_t cnt = 0;
@@ -808,7 +797,6 @@ next:
 		return rc;
 	}
 
-	qsort(set, cnt, sizeof(*set), entry_cmp);
 	*out_set = set;
 	*out_n = cnt;
 	pr_info("boot-restore: %zu upatch%s re-applied", cnt,
@@ -817,19 +805,25 @@ next:
 }
 
 /*
- * Append the single "init" eventlog entry recording this boot's chain
- * extension. The entry's digest is the per-event extension value, so
- * replaying the log reproduces the live NV value.
+ * Append the single "init" eventlog entry recording this boot's
+ * register: the event digest, the set it covers, and the binding
+ * (anchoring PCR value, index name, anchor record) a verifier needs
+ * to recompute the register's public area.
  */
-static int append_init_event(const struct restore_entry *set, size_t n,
+static int append_init_event(const struct shirudo_measured_upatch *set,
+			     size_t n,
 			     const uint8_t cert_sha[32],
 			     const uint8_t set_digest[32],
-			     const uint8_t init_digest[32])
+			     const uint8_t tree_root[32],
+			     const uint8_t init_digest[32],
+			     const struct shirudo_chain_init_info *info)
 {
 	char buf[64 * 1024];
 	struct shirudo_json_emit e = { .buf = buf, .cap = sizeof(buf) };
-	char ts[32], boot_id[64], nv_index[16];
 	char cert_hex[HEXLEN(32)], set_hex[HEXLEN(32)], digest_hex[HEXLEN(32)];
+	char pcr_hex[HEXLEN(32)], anchor_hex[HEXLEN(32)], chain_hex[HEXLEN(32)];
+	char name_hex[HEXLEN(SHIRUDO_TPM_NAME_LEN)], tree_hex[HEXLEN(32)];
+	char ts[32], boot_id[64], nv_index[16];
 	size_t i;
 
 	shirudo_eventlog_timestamp(ts, sizeof(ts));
@@ -837,10 +831,15 @@ static int append_init_event(const struct restore_entry *set, size_t n,
 	snprintf(nv_index, sizeof(nv_index), "0x%08X", SHIRUDO_NV_INDEX);
 	shirudo_hex_encode(cert_sha, 32, cert_hex);
 	shirudo_hex_encode(set_digest, 32, set_hex);
+	shirudo_hex_encode(tree_root, 32, tree_hex);
 	shirudo_hex_encode(init_digest, 32, digest_hex);
+	shirudo_hex_encode(info->pcr_before, 32, pcr_hex);
+	shirudo_hex_encode(info->name, SHIRUDO_TPM_NAME_LEN, name_hex);
+	shirudo_hex_encode(info->anchor_digest, 32, anchor_hex);
+	shirudo_hex_encode(info->value, 32, chain_hex);
 
 	shirudo_json_obj_open(&e);
-	shirudo_json_kv_int(&e, "schema", 1);
+	shirudo_json_kv_int(&e, "schema", 2);
 	shirudo_json_kv_string(&e, "ts", ts);
 	shirudo_json_kv_string(&e, "nv_index", nv_index);
 	shirudo_json_kv_string(&e, "alg", "sha256");
@@ -849,6 +848,7 @@ static int append_init_event(const struct restore_entry *set, size_t n,
 	shirudo_json_kv_string(&e, "boot_id", boot_id);
 	shirudo_json_kv_string(&e, "cert_sha256", cert_hex);
 	shirudo_json_kv_string(&e, "set_digest", set_hex);
+	shirudo_json_kv_string(&e, "tree_root", tree_hex);
 	shirudo_json_arr_open(&e, "set");
 	for (i = 0; i < n; i++) {
 		shirudo_json_obj_open(&e);
@@ -857,6 +857,12 @@ static int append_init_event(const struct restore_entry *set, size_t n,
 		shirudo_json_obj_close(&e);
 	}
 	shirudo_json_arr_close(&e);
+	shirudo_json_kv_int(&e, "pcr", SHIRUDO_CHAIN_PCR);
+	shirudo_json_kv_string(&e, "pcr_before", pcr_hex);
+	shirudo_json_kv_string(&e, "nv_name", name_hex);
+	shirudo_json_kv_string(&e, "anchor", info->anchor);
+	shirudo_json_kv_string(&e, "anchor_digest", anchor_hex);
+	shirudo_json_kv_string(&e, "chain", chain_hex);
 	shirudo_json_obj_close(&e);
 
 	if (e.err) {
@@ -867,22 +873,31 @@ static int append_init_event(const struct restore_entry *set, size_t n,
 	return shirudo_eventlog_append(buf);
 }
 
+/* The upatch tree's projection root at boot, zeros when no tree is kept. */
+static void tree_root_at_boot(uint8_t out[32])
+{
+	struct shirudo_tree_state s = {};
+
+	memset(out, 0, 32);
+	if (shirudo_tree_state_read(&s) == 0 &&
+	    shirudo_hex_decode(s.projection_root, out, 32) != 0)
+		memset(out, 0, 32);
+}
+
 /*
- * Extend the TPM2 NV measurement chain by one "init" event covering
+ * Bind this boot's register and extend it by one "init" event covering
  * the restored set, then append the matching eventlog entry. One
  * extension per boot regardless of upatch count (architecture.rst,
- * boot restore). The chain is mandatory: a TPM that cannot be opened or an
- * index that cannot be defined is a hard error (category tpm_error),
- * never an unmeasured init, because an unmeasured target is
- * indistinguishable from a tampered one to the operator.
+ * boot restore); a re-run of init finds the register written and on
+ * record and leaves it alone. The register is mandatory: a TPM that
+ * cannot be opened or an index that cannot be bound is a hard error
+ * (category tpm_error), never an unmeasured init, because an
+ * unmeasured target is indistinguishable from a tampered one.
  */
-static int chain_extend_init(const struct restore_entry *set, size_t n)
+static int chain_extend_init(struct shirudo_measured_upatch *set, size_t n)
 {
-	uint8_t cert_sha[32], auth[32], set_digest[32], init_digest[32];
-	uint8_t tag_buf[sizeof("shirudo-init") + 64];
-	size_t taglen, listing_len = 0, off, i;
-	struct shirudo_tpm *tpm = NULL;
-	char *listing;
+	uint8_t cert_sha[32], set_digest[32], tree_root[32], init_digest[32];
+	struct shirudo_chain_init_info info;
 	int rc;
 
 	{
@@ -897,7 +912,7 @@ static int chain_extend_init(const struct restore_entry *set, size_t n)
 		if (full) {
 			pr_err("eventlog %s would exceed eventlog.max_bytes=%lu; "
 			       "refusing chain extend (eventlog_full)",
-			       SHIRUDO_EVENTLOG_PATH, max_bytes);
+			       shirudo_eventlog_path(), max_bytes);
 			return -ENOSPC;
 		}
 	}
@@ -907,70 +922,52 @@ static int chain_extend_init(const struct restore_entry *set, size_t n)
 		pr_err("chain: read %s: %s", SHIRUDO_CERT_PATH, strerror(-rc));
 		return rc;
 	}
-	shirudo_chain_auth_value(cert_sha, auth);
 
-	/* set_digest = SHA256(canonical sorted "<payload_hex> <name>\n" list) */
-	for (i = 0; i < n; i++)
-		listing_len += strlen(set[i].payload_hex) + 1 +
-			       strlen(set[i].name) + 1;
-	listing = xmalloc(listing_len + 1);
-	if (!listing)
-		return -ENOMEM;
-	for (i = 0, off = 0; i < n; i++)
-		off += (size_t)snprintf(listing + off, listing_len + 1 - off,
-					"%s %s\n", set[i].payload_hex,
-					set[i].name);
-	shirudo_sha256(listing, listing_len, set_digest);
-	xfree(listing, listing_len + 1);
+	/*
+	 * init_event = SHA256("shirudo-init\0" || cert_sha256 || set_digest
+	 *                     || tree_root), the formula the operator's
+	 * predictor shares (util/attest.c).
+	 */
+	tree_root_at_boot(tree_root);
+	shirudo_chain_init_event(cert_sha, set, n, tree_root, set_digest,
+				  init_digest);
 
-	/* init_event = SHA256("shirudo-init\0" || cert_sha256 || set_digest) */
-	taglen = sizeof("shirudo-init");
-	memcpy(tag_buf, "shirudo-init", taglen);
-	memcpy(tag_buf + taglen, cert_sha, 32);
-	memcpy(tag_buf + taglen + 32, set_digest, 32);
-	shirudo_sha256(tag_buf, taglen + 64, init_digest);
-
-	rc = shirudo_tpm_open(&tpm);
-	if (rc) {
-		pr_err("tpm: not usable (%s); shirudo requires a TPM 2.0 "
-		       "(tpm_error)", strerror(-rc));
+	rc = shirudo_chain_init(init_digest, &info);
+	if (rc == -ENODEV) {
+		pr_err("tpm: not usable; shirudo requires a TPM 2.0 "
+		       "(tpm_error)");
 		return rc;
 	}
-	{
-		struct shirudo_config cfg;
-
-		shirudo_config_load(&cfg);
-		rc = shirudo_tpm_nv_define(tpm, SHIRUDO_NV_INDEX, auth,
-					   cfg.tpm_owner_auth,
-					   cfg.tpm_owner_auth_len);
-		explicit_bzero(&cfg, sizeof(cfg));
-	}
-	if (rc) {
-		pr_err("tpm: NV index 0x%08X cannot be defined (tpm_error); "
-		       "on a TPM with owner auth set, supply it via "
+	if (rc == -EACCES) {
+		pr_err("tpm: register 0x%08X cannot be bound (tpm_error); on "
+		       "a TPM with owner auth set, supply it via "
 		       "tpm.owner_auth in /etc/shirudo/shirudo.conf or "
 		       "SHIRUDO_TPM_OWNER_AUTH", SHIRUDO_NV_INDEX);
-		shirudo_tpm_close(tpm);
 		return rc;
 	}
-	rc = shirudo_tpm_nv_extend(tpm, SHIRUDO_NV_INDEX, auth, init_digest);
 	if (rc) {
-		pr_err("tpm: NV_Extend failed -- chain NOT advanced while LSM "
-		       "active (tpm_error); operator must reconcile");
-		shirudo_tpm_close(tpm);
+		pr_err("tpm: register extend failed -- chain NOT advanced "
+		       "while LSM active (tpm_error); operator must "
+		       "reconcile");
 		return rc;
 	}
-	shirudo_tpm_close(tpm);
+	if (info.reused) {
+		pr_info("tpm: register already bound this boot; chain "
+			"unchanged (index 0x%08X)", SHIRUDO_NV_INDEX);
+		return 0;
+	}
 
-	rc = append_init_event(set, n, cert_sha, set_digest, init_digest);
+	rc = append_init_event(set, n, cert_sha, set_digest, tree_root,
+			       init_digest, &info);
 	if (rc) {
 		pr_err("eventlog: append failed after extend -- chain/log "
 		       "desync; operator must reconcile");
 		return rc;
 	}
 
-	pr_info("tpm: chain extended (index 0x%08X, %zu upatch%s in set)",
-		SHIRUDO_NV_INDEX, n, n == 1 ? "" : "es");
+	pr_info("tpm: register bound and extended (index 0x%08X, PCR %u "
+		"anchored, %zu upatch%s in set)", SHIRUDO_NV_INDEX,
+		SHIRUDO_CHAIN_PCR, n, n == 1 ? "" : "es");
 	return 0;
 }
 
@@ -1057,7 +1054,7 @@ int cmd_init(int argc, const char **argv)
 		return 1;
 
 	{
-		struct restore_entry *set = NULL;
+		struct shirudo_measured_upatch *set = NULL;
 		size_t n = 0;
 
 		rc = boot_restore(&set, &n);

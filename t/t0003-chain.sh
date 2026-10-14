@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Authors of shirudo
 #
-# t0003 -- util/chain pure helpers: sha256, hex encode/decode bounds,
-# constant-time compare, and the NV auth-value formula. These underpin
-# the TPM measurement chain; a drift here silently breaks attestation.
+# t0003 -- util/chain pure helpers: sha256, hex encode/decode bounds
+# and constant-time compare. These underpin the measurement register;
+# a drift here silently breaks attestation.
 
 cd "$(dirname "$0")"
 . ./test-lib.sh
@@ -33,15 +33,6 @@ test_expect_success 'hex_decode rejects non-hex chars -> EINVAL' '
 test_expect_success 'ct_eq: equal buffers -> 1, one-bit diff -> 0' '
 	[ "$(./$H cteq 00ff 00ff)" = "1" ] &&
 	[ "$(./$H cteq 00ff 01ff)" = "0" ]
-'
-
-test_expect_success 'auth_value = SHA256("shirudo-nv-auth\\0" || cert_sha)' '
-	cert=$(python3 -c "print(\"ab\"*32)") &&
-	want=$(python3 -c "
-import hashlib, binascii
-cs = binascii.unhexlify(\"ab\"*32)
-print(hashlib.sha256(b\"shirudo-nv-auth\\x00\" + cs).hexdigest())") &&
-	[ "$(./$H auth "$cert")" = "$want" ]
 '
 
 test_done

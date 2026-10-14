@@ -3,8 +3,8 @@
  * Copyright (c) 2026 Authors of shirudo
  *
  * Harness for util/chain's pure helpers (hex, sha256, constant-time
- * compare, NV auth-value derivation). Subcommand on argv[1]; inputs as
- * argv. Prints the result so a shell test can assert on it.
+ * compare). Subcommand on argv[1]; inputs as argv. Prints the result
+ * so a shell test can assert on it.
  */
 
 #include <stdint.h>
@@ -57,15 +57,6 @@ int main(int argc, char **argv)
 		    shirudo_hex_decode(argv[3], b, nb))
 			return 2;
 		printf("%d\n", shirudo_ct_eq(a, b, na));
-		return 0;
-	}
-	if (strcmp(argv[1], "auth") == 0 && argc == 3) {
-		uint8_t cert[32], out[32];
-
-		if (shirudo_hex_decode(argv[2], cert, 32))
-			return 2;
-		shirudo_chain_auth_value(cert, out);
-		puthex(out, 32);
 		return 0;
 	}
 	return 2;
