@@ -198,7 +198,7 @@ static int init_line(const char *line, size_t len, bool is_init, void *ctx)
 	char pcr_before[2 * 32 + 1], name[2 * SHIRUDO_TPM_NAME_LEN + 1];
 	char anchor[2 * 32 + 1];
 	struct shirudo_eventlog_init *out = ctx;
-	int64_t pcr = -1;
+	int64_t pcr = -1, reset_count = -1;
 	struct shirudo_json_field f[] = {
 		{ "pcr_before", SHIRUDO_JSON_T_STRING, pcr_before,
 		  sizeof(pcr_before), 0, NULL, 0 },
@@ -207,17 +207,36 @@ static int init_line(const char *line, size_t len, bool is_init, void *ctx)
 		{ "anchor_digest", SHIRUDO_JSON_T_STRING, anchor,
 		  sizeof(anchor), 0, NULL, 0 },
 		{ "pcr", SHIRUDO_JSON_T_INT, &pcr, 0, 0, NULL, 0 },
+		{ "tpm_reset_count", SHIRUDO_JSON_T_INT, &reset_count, 0, 0,
+		  NULL, 0 },
 	};
+	bool have_reset_count;
 
 	if (!is_init)
 		return 0;
-	if (shirudo_json_parse(line, len, f, 4) || !f[0].seen || !f[1].seen ||
+	if (shirudo_json_parse(line, len, f, 5) || !f[0].seen || !f[1].seen ||
 	    !f[2].seen || !f[3].seen || pcr < 0 || pcr >= 24 ||
+	    (f[4].seen && (reset_count < 0 || reset_count > UINT32_MAX)) ||
 	    strlen(name) != 2 * SHIRUDO_TPM_NAME_LEN ||
 	    shirudo_hex_decode(pcr_before, out->pcr_before, 32) ||
 	    shirudo_hex_decode(name, out->name, SHIRUDO_TPM_NAME_LEN) ||
 	    shirudo_hex_decode(anchor, out->anchor_digest, 32))
 		return -EINVAL;
+	/*
+	 * Records are of one TPM reset unless both carry a count and
+	 * the counts differ; a record without one cannot vouch for a
+	 * reset in between.
+	 */
+	have_reset_count = f[4].seen;
+	out->records++;
+	if (out->records == 1 ||
+	    (have_reset_count && out->have_reset_count &&
+	     (uint32_t)reset_count != out->reset_count))
+		out->records_epoch = 1;
+	else
+		out->records_epoch++;
+	out->have_reset_count = have_reset_count;
+	out->reset_count = (uint32_t)reset_count;
 	out->name_len = SHIRUDO_TPM_NAME_LEN;
 	out->pcr = (unsigned int)pcr;
 	return 0;

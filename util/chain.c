@@ -237,25 +237,35 @@ int shirudo_chain_init(const uint8_t event[32],
 	struct shirudo_eventlog_init rec;
 	struct shirudo_tpm_nv_info nv;
 	struct shirudo_tpm *tpm = NULL;
+	bool recorded;
 	int rc;
 
 	memset(info, 0, sizeof(*info));
 	rc = shirudo_tpm_open(&tpm);
 	if (rc)
 		return -ENODEV;
+	rc = shirudo_tpm_reset_count(tpm, &info->reset_count);
+	if (rc)
+		goto out;
 	rc = shirudo_tpm_nv_info(tpm, SHIRUDO_NV_INDEX, &nv);
 	if (rc)
 		goto out;
 
 	/*
-	 * Written this boot: ours if the eventlog explains it, in which
-	 * case init is a re-run and the register stays as it is. Written
-	 * by someone else before we ran, it is rebound below; the PCR
-	 * keeps the record of both bindings.
+	 * A record of this boot for the TPM's current reset count means
+	 * init already bound a register. Written and carrying the
+	 * recorded name, it is a re-run and the register stays as it is.
+	 * Anything else is refused: a second binding would restart the
+	 * history the record vouches for, and only a TPM reset clears a
+	 * register legitimately. Without such a record the index is
+	 * bound, after a warning if someone wrote it before we ran; the
+	 * PCR keeps the record of both bindings.
 	 */
-	if (nv.defined && nv.written) {
-		if (shirudo_eventlog_boot_init(&rec) == 0 &&
-		    name_equals(&nv, rec.name)) {
+	recorded = shirudo_eventlog_boot_init(&rec) == 0 &&
+		   (!rec.have_reset_count ||
+		    rec.reset_count == info->reset_count);
+	if (recorded) {
+		if (nv.defined && nv.written && name_equals(&nv, rec.name)) {
 			rc = shirudo_tpm_nv_read(tpm, SHIRUDO_NV_INDEX,
 						 info->value);
 			if (rc)
@@ -269,9 +279,16 @@ int shirudo_chain_init(const uint8_t event[32],
 			info->reused = true;
 			goto out;
 		}
+		pr_err("tpm: register 0x%08x bound this boot is %s; not "
+		       "binding another before the next TPM reset",
+		       SHIRUDO_NV_INDEX, !nv.defined ? "gone" :
+		       !nv.written ? "unwritten" : "not the recorded index");
+		rc = -EEXIST;
+		goto out;
+	}
+	if (nv.defined && nv.written)
 		pr_warn("tpm: register 0x%08x written this boot without a "
 			"record; rebinding it", SHIRUDO_NV_INDEX);
-	}
 
 	rc = shirudo_tpm_pcr_read(tpm, SHIRUDO_CHAIN_PCR, info->pcr_before);
 	if (rc)
@@ -378,14 +395,19 @@ int shirudo_chain_status(struct shirudo_chain_status *st)
 {
 	struct shirudo_tpm_nv_info nv;
 	struct shirudo_tpm *tpm = NULL;
+	uint32_t reset_count = 0;
 	int rc;
 
 	memset(st, 0, sizeof(*st));
 	st->logged = shirudo_eventlog_boot_init(&st->init) == 0;
+	st->rebound = st->logged && st->init.records_epoch > 1;
 	rc = shirudo_tpm_open(&tpm);
 	if (rc)
 		return -ENODEV;
 	st->tpm = true;
+	rc = shirudo_tpm_reset_count(tpm, &reset_count);
+	if (rc)
+		goto out;
 	rc = shirudo_tpm_nv_info(tpm, SHIRUDO_NV_INDEX, &nv);
 	if (rc)
 		goto out;
@@ -396,7 +418,9 @@ int shirudo_chain_status(struct shirudo_chain_status *st)
 	if (nv.defined && nv.written)
 		rc = shirudo_tpm_nv_read(tpm, SHIRUDO_NV_INDEX, st->value);
 	st->anchored = nv.defined && nv.written && st->logged &&
-		       name_equals(&nv, st->init.name);
+		       name_equals(&nv, st->init.name) &&
+		       (!st->init.have_reset_count ||
+			st->init.reset_count == reset_count);
 out:
 	shirudo_tpm_close(tpm);
 	return rc;

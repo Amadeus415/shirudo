@@ -32,13 +32,21 @@ int shirudo_eventlog_append(const char *json_line);
  */
 int shirudo_eventlog_replay(uint8_t out[SHIRUDO_TPM_DIGEST_LEN]);
 
-/* What the last init record of this boot says about the register. */
+/*
+ * What the last init record of this boot says about the register, and
+ * how many init records the boot holds: more than one for the TPM reset
+ * the last one names means the register was bound again.
+ */
 struct shirudo_eventlog_init {
 	unsigned int	pcr;
 	uint8_t		pcr_before[SHIRUDO_TPM_DIGEST_LEN];
 	uint8_t		name[SHIRUDO_TPM_NAME_LEN];
 	size_t		name_len;
 	uint8_t		anchor_digest[SHIRUDO_TPM_DIGEST_LEN];
+	bool		have_reset_count;
+	uint32_t	reset_count;
+	unsigned int	records;	/* init records this boot */
+	unsigned int	records_epoch;	/* for this reset count */
 };
 
 int shirudo_eventlog_boot_init(struct shirudo_eventlog_init *out);

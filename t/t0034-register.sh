@@ -133,6 +133,12 @@ test_expect_success 'a recreated index is unwritable and no longer anchored' '
 	./$R status | grep -qx "tpm=1 defined=1 written=0 logged=1 anchored=0"
 '
 
+test_expect_success 'init refuses a second binding before the next TPM reset' '
+	./$R init "$(cat "$WORK/init")" | grep -qx "rc=-17" &&
+	[ "$(wc -l <"$WORK/eventlog")" = 2 ] &&
+	./$R status | grep -qx "rebound=0"
+'
+
 test_expect_success 'a TPM reset clears the register; init binds it again' '
 	rm -f "$WORK/tpm/volatile" &&
 	./$R read | grep -qx "rc=-19" &&
@@ -141,7 +147,14 @@ test_expect_success 'a TPM reset clears the register; init binds it again' '
 	echo "$out" | grep -qx "reused=0" &&
 	[ "$(echo "$out" | field name)" = "$(cat "$WORK/name")" ] &&
 	[ "$(echo "$out" | field value)" = "$(sha "$Z$(cat "$WORK/init")")" ] &&
-	./$R status | grep -qx "tpm=1 defined=1 written=1 logged=1 anchored=1"
+	./$R status | grep -qx "tpm=1 defined=1 written=1 logged=1 anchored=1" &&
+	./$R status | grep -qx "rebound=0" &&
+	python3 - "$WORK/eventlog" <<"PY"
+import json, sys
+inits = [json.loads(l) for l in open(sys.argv[1]) if json.loads(l)["type"] == "init"]
+assert len(inits) == 2, inits
+assert inits[0]["tpm_reset_count"] != inits[1]["tpm_reset_count"], inits
+PY
 '
 
 test_expect_success 'after the reset the evidence matches the set at boot' '
@@ -149,7 +162,45 @@ test_expect_success 'after the reset the evidence matches the set at boot' '
 	./$R evidence $nonce >"$WORK/evidence2.json" &&
 	$S attest verify --evidence="$WORK/evidence2.json" --nonce=$nonce \
 		--ak-name="$(cat "$WORK/ak")" --cert="$WORK/keys/cert.der" \
-		--strict-anchor | grep -qx "verdict: ok"
+		--strict-anchor >"$WORK/report6" &&
+	grep -qx "verdict: ok" "$WORK/report6" &&
+	grep -q "^ok:   eventlog: one init record for this TPM reset (2 this boot)" "$WORK/report6" &&
+	grep -q "^ok:   register: init record is of the TPM" "$WORK/report6" &&
+	grep -q "^ok:   quote and certification are of one TPM reset" "$WORK/report6"
+'
+
+test_expect_success 'a second init record for one TPM reset fails status and verify' '
+	nonce=f00d &&
+	cp "$WORK/eventlog" "$WORK/eventlog.orig" &&
+	tail -n 1 "$WORK/eventlog" >>"$WORK/eventlog" &&
+	./$R status | grep -qx "rebound=1" &&
+	$S status --json >"$WORK/status2.json" &&
+	python3 - "$WORK/status2.json" <<"PY"
+import json, sys
+t = json.load(open(sys.argv[1]))["tpm"]
+assert t["register_rebound"] is True, t
+assert t["init_records"] == 3, t
+assert t["chain_matches_eventlog"] is False, t
+PY
+	./$R evidence $nonce >"$WORK/evidence3.json" &&
+	$S attest verify --evidence="$WORK/evidence3.json" --nonce=$nonce \
+		--ak-name="$(cat "$WORK/ak")" --cert="$WORK/keys/cert.der" \
+		>"$WORK/report7"; rc=$? &&
+	[ "$rc" = 1 ] &&
+	grep -q "^FAIL: eventlog: one init record for this TPM reset" "$WORK/report7" &&
+	cp "$WORK/eventlog.orig" "$WORK/eventlog" &&
+	./$R status | grep -qx "rebound=0"
+'
+
+test_expect_success 'an init record of another TPM reset fails verification' '
+	nonce=cafe &&
+	sed "s/\"tpm_reset_count\":[0-9]*/\"tpm_reset_count\":4000000000/g" \
+		"$WORK/evidence2.json" >"$WORK/evidence4.json" &&
+	$S attest verify --evidence="$WORK/evidence4.json" --nonce=$nonce \
+		--ak-name="$(cat "$WORK/ak")" --cert="$WORK/keys/cert.der" \
+		>"$WORK/report8"; rc=$? &&
+	[ "$rc" = 1 ] &&
+	grep -q "^FAIL: register: init record is of the TPM" "$WORK/report8"
 '
 
 test_done

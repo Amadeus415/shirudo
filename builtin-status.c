@@ -700,7 +700,7 @@ int cmd_status(int argc, const char **argv)
 		if (chain_rc == 0) {
 			uint8_t replay[SHIRUDO_CHAIN_DIGEST_LEN];
 
-			match = cst.anchored &&
+			match = cst.anchored && !cst.rebound &&
 				shirudo_eventlog_replay(replay) == 0 &&
 				shirudo_ct_eq(cst.value, replay,
 					      sizeof(replay));
@@ -837,6 +837,11 @@ int cmd_status(int argc, const char **argv)
 					     chain_rc == 0);
 			shirudo_json_kv_bool(&e, "register_anchored",
 					     cst.anchored);
+			shirudo_json_kv_int(&e, "init_records",
+					    cst.logged ? (int)cst.init.records :
+					    0);
+			shirudo_json_kv_bool(&e, "register_rebound",
+					     cst.rebound);
 			shirudo_json_kv_int(&e, "pcr", SHIRUDO_CHAIN_PCR);
 			if (cst.logged)
 				shirudo_json_kv_string(&e, "pcr_before",
@@ -1063,6 +1068,11 @@ int cmd_status(int argc, const char **argv)
 			if (cst.logged)
 				printf("  %-18s %s\n", "PCR before init:",
 				       pcr_before_hex);
+			if (cst.rebound)
+				printf("  %-18s %u for this TPM reset "
+				       "(REBOUND after init; tamper?)\n",
+				       "Init records:",
+				       cst.init.records_epoch);
 			printf("  %-18s %s\n", "Chain vs eventlog:",
 			       match < 0 ? "n/a" :
 			       match ? "matches" : "MISMATCH (tamper?)");

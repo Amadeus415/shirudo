@@ -170,6 +170,22 @@ int shirudo_tpm_pcr_extend(struct shirudo_tpm *t, unsigned int pcr,
 	return 0;
 }
 
+int shirudo_tpm_reset_count(struct shirudo_tpm *t, uint32_t *out)
+{
+	TPMS_TIME_INFO *info = NULL;
+	TSS2_RC rc;
+
+	rc = Esys_ReadClock(t->esys, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
+			    &info);
+	if (rc != TSS2_RC_SUCCESS) {
+		pr_err("tpm: ReadClock: rc=0x%08x", (unsigned)rc);
+		return -EIO;
+	}
+	*out = info->clockInfo.resetCount;
+	Esys_Free(info);
+	return 0;
+}
+
 static int nv_handle(struct shirudo_tpm *t, uint32_t index, ESYS_TR *out)
 {
 	TSS2_RC rc;

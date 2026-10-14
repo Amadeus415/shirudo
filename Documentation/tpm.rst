@@ -106,14 +106,20 @@ installed set, in this order:
    reset, because PCR 15 no longer holds ``pcr_before``.
 
 5. Append the ``init`` record to the eventlog (section 3) with
-   ``pcr_before``, the written name, the anchor and its digest, and
-   the register value.
+   ``pcr_before``, the written name, the anchor and its digest, the
+   register value and the TPM's reset count.
 
-A re-run of ``init`` in the same boot finds the index written and its
-name on this boot's record, reuses it and adds no event.  An index
-found written this boot without a record (someone wrote it before
-``shirudo.service`` ran) is undefined and bound again, with a warning;
-PCR 15 then carries both anchors.
+The reset count, read with ``TPM2_ReadClock``, changes at every TPM
+reset and nowhere else, so a record of this boot for the current count
+means this register period already has its binding.  A re-run of
+``init`` then finds the index written with the recorded name, reuses
+it and adds no event; finds it gone, unwritten or renamed, it refuses
+with ``tampered`` and binds nothing before the next TPM reset, because
+a second binding would restart the history the record vouches for.
+Without a record for the current count, whether the boot is new or
+the TPM was reset without a reboot, the index is bound; one found
+written by someone else first is undefined and bound again, with a
+warning, and PCR 15 then carries both anchors.
 
 Extending later
 ~~~~~~~~~~~~~~~
@@ -189,10 +195,11 @@ extension, written with ``fsync`` and sealed like everything under
 ``boot_id``.  By type:
 
 ``init``
-    ``cert_sha256``, ``set_digest``, ``tree_root``, ``set`` (the
-    listing as ``name`` and ``payload_sha256`` pairs), ``pcr`` (15),
-    ``pcr_before``, ``nv_name`` (the written name), ``anchor``,
-    ``anchor_digest`` and ``chain`` (the register after the event).
+    ``tpm_reset_count``, ``cert_sha256``, ``set_digest``,
+    ``tree_root``, ``set`` (the listing as ``name`` and
+    ``payload_sha256`` pairs), ``pcr`` (15), ``pcr_before``,
+    ``nv_name`` (the written name), ``anchor``, ``anchor_digest`` and
+    ``chain`` (the register after the event).
 
 ``upatch_load`` and ``upatch_unload``
     ``upatch`` with ``name`` and ``payload_sha256``.
@@ -204,11 +211,14 @@ extension, written with ``fsync`` and sealed like everything under
 "This boot" is every line with the running ``boot_id`` from its last
 ``init`` record on.  Replaying those lines from zeros must reproduce
 the live register; ``shirudo status`` does that replay, checks that
-the live index carries the recorded name, and reports ``register_bound``,
-``register_anchored``, ``nv_name``, ``pcr``, ``pcr_before``, ``chain``
-and ``chain_matches_eventlog``.  A register that exists without a
-record of this boot, or that the records do not explain, is reported
-as a mismatch.  An operation that would push the eventlog past
+the live index carries the recorded name and that the record is of
+the TPM's current reset count, and reports ``register_bound``,
+``register_anchored``, ``init_records``, ``register_rebound``,
+``nv_name``, ``pcr``, ``pcr_before``, ``chain`` and
+``chain_matches_eventlog``.  A register that exists without a record
+of this boot, that the records do not explain, or that a second init
+record for one reset count shows was bound again, is reported as a
+mismatch.  An operation that would push the eventlog past
 ``eventlog.max_bytes`` refuses with ``eventlog_full`` before it
 touches the TPM, so register and log never diverge.
 
@@ -310,14 +320,19 @@ and a verdict.  The checks, in order:
    software from the handle, the attributes with ``TPMA_NV_WRITTEN``,
    the policy and the size, equals both the certified name and the
    recorded one.
-6. The replay: this boot's records fold from zeros to the certified
+6. The reset: the boot holds one init record for the reset count the
+   last one names, that count is the one the certification carries,
+   and the quote and the certification carry the same reset count and
+   firmware version, so a register bound again after boot cannot pass
+   as the boot's.
+7. The replay: this boot's records fold from zeros to the certified
    value.
-7. The anchor: the record's anchor digest is the digest of the anchor
+8. The anchor: the record's anchor digest is the digest of the anchor
    string for the recorded name, and the quoted PCR 15 equals
    ``pcr_before`` extended by it.  When PCR 15 holds further
    measurements the check is a note unless ``--strict-anchor`` makes
    it a failure.
-8. The expected state: with ``--cert`` the init event equals the one
+9. The expected state: with ``--cert`` the init event equals the one
    computed from the certificate, the ``--upatch`` and ``--expect``
    members and ``--tree-root``; the register equals ``--expect-chain``
    when given, else the value predicted for the set at boot, else,
@@ -396,22 +411,13 @@ These are the known limits of the design as implemented; the
 context and the deferred mitigations the plan.
 
 * **The binding is read from the target.**  ``verify`` recomputes the
-  index name from the ``pcr_before`` the init record claims.  Root
-  with the owner authorisation (empty on most TPMs) can undefine the
-  written index at runtime and run ``init`` again, which binds a fresh
-  register under the current PCR 15 value, anchors a second time and
-  appends a second init record; the register then shows the init event
-  alone and the loads and unloads before it are gone from it, although
-  the sealed eventlog keeps every record and PCR 15 keeps both anchors.
-  The checks above pass on such evidence, ``--strict-anchor``
-  included.  Two things catch it today: ``--expect-pcr=15=<hex>`` with
-  the value PCR 15 held after the legitimate anchor, which the
-  enrolment evidence shows and which a second anchor cannot reproduce,
-  and more than one ``init`` record for the boot in the evidence, which
-  the operator can count.  Making ``init`` refuse to rebind a register
-  this boot already recorded, and ``verify`` and ``status`` fail on more
-  than one init record per boot, is the planned fix (threat model,
-  residual risk 13).
+  index name from the ``pcr_before`` the init record claims rather
+  than from a value it knows independently, which is why one init
+  record per TPM reset and the reset count in the certification are
+  checked.  Root with the owner authorisation (empty on most TPMs) can
+  still undefine the written index at runtime; from then on every
+  extension and ``init`` itself refuse ``tampered`` until the next TPM
+  reset, a denial of service and not an erasure.
 
 * **The attestation key is trusted on first use.**  The operator pins
   its name when enrolling the target.  The evidence carries the
@@ -431,9 +437,8 @@ context and the deferred mitigations the plan.
 * **A TPM reset without a reboot.**  Resuming from hibernation resets
   the TPM but keeps the kernel's boot ID, so the register is gone while
   the record of this boot stands; every extension then fails
-  ``tpm_error`` until ``init`` is run again, which rebinds.  The TPM's
-  reset count would make the two cases distinguishable; today they are
-  not.
+  ``tpm_error`` until ``init`` is run again, which the reset count on
+  the record lets it do.
 
 * **The evidence is classical.**  TPMs sign with ECDSA P-256; the
   artifacts the evidence describes are ML-DSA-87.

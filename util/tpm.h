@@ -31,6 +31,12 @@ int shirudo_tpm_pcr_read(struct shirudo_tpm *t, unsigned int pcr,
 int shirudo_tpm_pcr_extend(struct shirudo_tpm *t, unsigned int pcr,
 			   const uint8_t digest[SHIRUDO_TPM_DIGEST_LEN]);
 
+/*
+ * The TPM's reset count, a new value at every TPM reset: the identity
+ * of the period a clear-on-reset index lives through.
+ */
+int shirudo_tpm_reset_count(struct shirudo_tpm *t, uint32_t *out);
+
 struct shirudo_tpm_nv_info {
 	bool		defined;
 	bool		written;

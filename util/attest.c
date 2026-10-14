@@ -324,6 +324,8 @@ struct record {
 
 struct init_record {
 	bool		present;
+	bool		have_reset_count;
+	uint32_t	reset_count;
 	unsigned int	pcr;
 	uint8_t		digest[32];
 	uint8_t		pcr_before[32];
@@ -361,6 +363,7 @@ struct parse {
 	char		anchor_digest_hex[65];
 	char		chain_hex[65];
 	int64_t		rec_pcr;
+	int64_t		rec_reset;
 	char		upatch_name[SHIRUDO_UPATCH_NAME_MAX + 1];
 	char		tree_id[SHIRUDO_UPATCH_NAME_MAX + 1];
 	char		tree_op[16];
@@ -368,6 +371,8 @@ struct parse {
 	/* results */
 	struct record	*recs;
 	size_t		n_recs;
+	unsigned int	inits;		/* init records this boot */
+	unsigned int	inits_epoch;	/* for the last reset count */
 	struct init_record init;
 	int		err;
 };
@@ -397,9 +402,12 @@ static int on_record(void *ctx)
 		return -EINVAL;
 	if (!strcmp(p->type, "init")) {
 		struct init_record *in = &p->init;
+		uint32_t prev_reset = in->reset_count;
+		bool prev_have = in->have_reset_count;
 
 		memset(in, 0, sizeof(*in));
 		if (p->rec_pcr < 0 || p->rec_pcr >= 24 ||
+		    p->rec_reset > UINT32_MAX ||
 		    strlen(p->nv_name_hex) != 2 * SHIRUDO_TPM_NAME_LEN ||
 		    shirudo_hex_decode(p->pcr_before_hex, in->pcr_before, 32) ||
 		    shirudo_hex_decode(p->nv_name_hex, in->name,
@@ -410,8 +418,21 @@ static int on_record(void *ctx)
 			return -EINVAL;
 		memcpy(in->digest, r->digest, 32);
 		in->pcr = (unsigned int)p->rec_pcr;
+		in->have_reset_count = p->rec_reset >= 0;
+		in->reset_count = (uint32_t)p->rec_reset;
 		snprintf(in->anchor, sizeof(in->anchor), "%s", p->anchor);
 		in->present = true;
+		/*
+		 * Records are of one TPM reset unless both carry a count
+		 * and the counts differ; a second record for one reset is
+		 * a register bound again after boot.
+		 */
+		p->inits++;
+		if (p->inits == 1 || (in->have_reset_count && prev_have &&
+				      in->reset_count != prev_reset))
+			p->inits_epoch = 1;
+		else
+			p->inits_epoch++;
 		p->n_recs = 0;	/* this boot's register starts here */
 		r = &p->recs[0];
 		memset(r, 0, sizeof(*r));
@@ -432,6 +453,7 @@ static int on_record(void *ctx)
 	p->anchor[0] = '\0';
 	p->tree_seq = 0;
 	p->rec_pcr = -1;
+	p->rec_reset = -1;
 	return 0;
 }
 
@@ -563,7 +585,7 @@ int shirudo_attest_verify(const char *evidence, size_t len,
 	size_t reg_name_len, reg_value_len, i, runtime = 0;
 	uint32_t reg_index;
 	unsigned int bit;
-	int rc = 0;
+	int rc = 0, qrc = -1, crc = -1;
 
 	if (report_cap)
 		report[0] = '\0';
@@ -576,6 +598,7 @@ int shirudo_attest_verify(const char *evidence, size_t len,
 		return -ENOMEM;
 	}
 	p->rec_pcr = -1;
+	p->rec_reset = -1;
 
 	{
 		struct shirudo_json_array pcr_sink = { on_pcr, p };
@@ -631,6 +654,8 @@ int shirudo_attest_verify(const char *evidence, size_t len,
 			  sizeof(p->digest_hex), 0, NULL, 0 },
 			{ "pcr", SHIRUDO_JSON_T_INT, &p->rec_pcr, 0, 0, NULL,
 			  0 },
+			{ "tpm_reset_count", SHIRUDO_JSON_T_INT, &p->rec_reset,
+			  0, 0, NULL, 0 },
 			{ "pcr_before", SHIRUDO_JSON_T_STRING,
 			  p->pcr_before_hex, sizeof(p->pcr_before_hex), 0,
 			  NULL, 0 },
@@ -721,6 +746,7 @@ int shirudo_attest_verify(const char *evidence, size_t len,
 			  sizeof(attest), &attest_len, &quote);
 	if (rc == -EINVAL)
 		goto out;
+	qrc = rc;
 	if (rc == 0) {
 		struct shirudo_sha256_ctx ctx;
 		uint8_t digest[32] = {};
@@ -749,6 +775,7 @@ int shirudo_attest_verify(const char *evidence, size_t len,
 			  sizeof(attest), &attest_len, &certify);
 	if (rc == -EINVAL)
 		goto out;
+	crc = rc;
 	if (hex_bytes(p->reg_name_hex, reg_name, sizeof(reg_name),
 		      &reg_name_len) ||
 	    reg_name_len != SHIRUDO_TPM_NAME_LEN ||
@@ -770,6 +797,10 @@ int shirudo_attest_verify(const char *evidence, size_t len,
 		    shirudo_ct_eq(certify.nv_data, reg_value, 32),
 		    "register: certified contents match the listed value");
 	}
+	if (qrc == 0 && crc == 0)
+		say(&rep, quote.reset_count == certify.reset_count &&
+		    quote.firmware_version == certify.firmware_version,
+		    "quote and certification are of one TPM reset");
 
 	/*
 	 * The binding: the certified index must have the public area a
@@ -791,6 +822,20 @@ int shirudo_attest_verify(const char *evidence, size_t len,
 	    shirudo_ct_eq(expected_name, p->init.name, SHIRUDO_TPM_NAME_LEN),
 	    "register: public area is bound to PCR %u as recorded",
 	    p->init.pcr);
+
+	/*
+	 * The epoch: one binding per TPM reset, and the one on record is
+	 * of the reset the TPM certifies in, so no register bound again
+	 * after boot can pass as the boot's.
+	 */
+	say(&rep, p->inits_epoch == 1,
+	    "eventlog: one init record for this TPM reset (%u this boot)",
+	    p->inits);
+	if (crc == 0)
+		say(&rep, p->init.have_reset_count &&
+		    p->init.reset_count == certify.reset_count,
+		    "register: init record is of the TPM's current reset "
+		    "count");
 
 	/* The replay: this boot's records reproduce the certified value. */
 	for (i = 0; i < p->n_recs; i++) {

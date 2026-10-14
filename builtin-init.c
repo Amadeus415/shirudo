@@ -846,6 +846,7 @@ static int append_init_event(const struct shirudo_measured_upatch *set,
 	shirudo_json_kv_string(&e, "digest", digest_hex);
 	shirudo_json_kv_string(&e, "type", "init");
 	shirudo_json_kv_string(&e, "boot_id", boot_id);
+	shirudo_json_kv_int(&e, "tpm_reset_count", info->reset_count);
 	shirudo_json_kv_string(&e, "cert_sha256", cert_hex);
 	shirudo_json_kv_string(&e, "set_digest", set_hex);
 	shirudo_json_kv_string(&e, "tree_root", tree_hex);
@@ -936,6 +937,12 @@ static int chain_extend_init(struct shirudo_measured_upatch *set, size_t n)
 	if (rc == -ENODEV) {
 		pr_err("tpm: not usable; shirudo requires a TPM 2.0 "
 		       "(tpm_error)");
+		return rc;
+	}
+	if (rc == -EEXIST) {
+		pr_err("tpm: the register this boot recorded is gone or "
+		       "replaced; refusing to bind another before the next "
+		       "TPM reset (tampered)");
 		return rc;
 	}
 	if (rc == -EACCES) {

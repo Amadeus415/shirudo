@@ -64,6 +64,7 @@ void shirudo_chain_anchor(const uint8_t name[SHIRUDO_TPM_NAME_LEN],
 
 struct shirudo_chain_init_info {
 	bool		reused;		/* written and on record */
+	uint32_t	reset_count;	/* the TPM's, for the record */
 	uint8_t		value[SHIRUDO_CHAIN_DIGEST_LEN];
 	uint8_t		pcr_before[SHIRUDO_CHAIN_DIGEST_LEN];
 	uint8_t		name[SHIRUDO_TPM_NAME_LEN];
@@ -77,11 +78,13 @@ struct shirudo_chain_init_info {
  * init event: define (or redefine) the index under a policy computed
  * from the anchoring PCR, extend it through the init branch, then
  * extend the PCR with the index name so the branch can never be
- * satisfied again until the next reset. A register already written
- * this boot and explained by the eventlog is reused untouched. Returns
- * 0, -ENODEV without a TPM, -EACCES when the owner hierarchy or the
- * policy refuses, -EPROTO when the TPM's name disagrees with the
- * computed one, or another -errno.
+ * satisfied again until the next reset. A register written this boot
+ * and on record for the TPM's current reset count is reused untouched;
+ * a record for this reset count whose index is gone, unwritten or
+ * renamed refuses with -EEXIST, since binding another would restart
+ * the history the record vouches for. -ENODEV without a TPM, -EACCES
+ * when the owner hierarchy refuses, -EPROTO when the TPM's name is not
+ * the computed one, or another -errno.
  */
 int shirudo_chain_init(const uint8_t event[SHIRUDO_CHAIN_DIGEST_LEN],
 		       struct shirudo_chain_init_info *info);
@@ -103,7 +106,8 @@ struct shirudo_chain_status {
 	bool		defined;
 	bool		written;
 	bool		logged;		/* init record this boot */
-	bool		anchored;	/* live name == recorded name */
+	bool		anchored;	/* recorded name, same reset */
+	bool		rebound;	/* two records for one reset */
 	uint8_t		value[SHIRUDO_CHAIN_DIGEST_LEN];
 	uint8_t		name[SHIRUDO_TPM_NAME_LEN];
 	size_t		name_len;

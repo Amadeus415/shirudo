@@ -311,7 +311,8 @@ an operator predicts its value from the certificate and the installed
 set alone (``shirudo attest predict``); no history is needed.  If any
 re-apply fails the register is not written and ``status`` reports
 ``init-pending``.  A re-run of ``init`` finds the register bound and on
-record and leaves it alone.
+record and leaves it alone; one that finds the recorded register gone
+refuses ``tampered`` until the next TPM reset.
 
 Measurement register.  The measurement lives in a TPM 2.0 NV index
 (default ``0x01818E00``) built the way systemd builds its NvPCRs: an
@@ -340,8 +341,9 @@ line per register extension: timestamp, boot ID, type (``init``,
 ``upatch_load``, ``upatch_unload``, ``tree_op``), the digest extended,
 and the name and payload digest, the set digest or the tree operation.
 The ``init`` record also carries the binding: the PCR value the policy
-was computed from, the index name, and the anchor record with its
-digest.  Replaying this boot's records from its ``init`` on must
+was computed from, the index name, the anchor record with its digest,
+and the TPM's reset count, which tells one register period from the
+next.  Replaying this boot's records from its ``init`` on must
 reproduce the live value; ``shirudo status`` does that replay, checks
 that the live index carries the recorded name, and reports ``Chain vs
 eventlog`` and ``Anchored``.  When ``eventlog.max_bytes`` would be

@@ -51,6 +51,7 @@ static int append_init(const uint8_t event[32],
 	shirudo_json_kv_string(&e, "digest", hex);
 	shirudo_json_kv_string(&e, "type", "init");
 	shirudo_json_kv_string(&e, "boot_id", boot_id);
+	shirudo_json_kv_int(&e, "tpm_reset_count", info->reset_count);
 	shirudo_json_kv_int(&e, "pcr", SHIRUDO_CHAIN_PCR);
 	shirudo_hex_encode(info->pcr_before, 32, hex);
 	shirudo_json_kv_string(&e, "pcr_before", hex);
@@ -114,6 +115,7 @@ int main(int argc, char **argv)
 		if (rc)
 			return 1;
 		printf("reused=%d\n", info.reused);
+		printf("reset_count=%u\n", info.reset_count);
 		printf("value=");
 		puthex(info.value, 32);
 		printf("name=");
@@ -168,6 +170,7 @@ int main(int argc, char **argv)
 		printf("rc=%d\n", rc);
 		printf("tpm=%d defined=%d written=%d logged=%d anchored=%d\n",
 		       st.tpm, st.defined, st.written, st.logged, st.anchored);
+		printf("rebound=%d\n", st.rebound);
 		if (st.defined && st.written) {
 			printf("value=");
 			puthex(st.value, 32);
