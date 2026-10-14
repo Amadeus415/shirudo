@@ -248,8 +248,10 @@ int shirudo_sysinfo_kernel_config_foreach(const char *kernel_release,
 			if (!entries[n].key || !entries[n].value) {
 				xstrfree(entries[n].key);
 				xstrfree(entries[n].value);
+				entries[n].key = NULL;
+				entries[n].value = NULL;
 				fclose(f);
-				kernel_config_entries_free(entries, n);
+				kernel_config_entries_free(entries, n + 1);
 				return -1;
 			}
 		}
@@ -257,7 +259,8 @@ int shirudo_sysinfo_kernel_config_foreach(const char *kernel_release,
 	}
 	fclose(f);
 
-	qsort(entries, n, sizeof(*entries), kernel_config_entry_cmp);
+	if (n)
+		qsort(entries, n, sizeof(*entries), kernel_config_entry_cmp);
 	for (i = 0; i < n; i++)
 		cb(ctx, entries[i].key, entries[i].value);
 	kernel_config_entries_free(entries, n);
