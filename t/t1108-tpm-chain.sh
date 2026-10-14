@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Authors of shirudo
 #
-# t1108 -- TPM measurement chain: on a host with a live NV chain, the
+# t1108 -- TPM measurement register: on a host with a bound register, the
 # eventlog replayed from zero must reproduce the live NV value (that is
 # exactly the chain_matches_eventlog verdict `status` computes). Needs a
 # usable TPM; init refuses to run without one, so a host with no chain
@@ -22,9 +22,9 @@ print(t.get(sys.argv[1], "") if t.get(sys.argv[1], None) is not None else "")
 }
 
 [ -n "$(tpm_chain chain)" ] ||
-	test_skip_all "no live TPM chain (init not run / no usable TPM)"
+	test_skip_all "no bound register (init not run / no usable TPM)"
 
-test_expect_success 'eventlog replay reproduces the live NV chain value' '
+test_expect_success 'eventlog replay reproduces the live register value' '
 	[ "$(tpm_chain chain_matches_eventlog)" = "True" ]
 '
 

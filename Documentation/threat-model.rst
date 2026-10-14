@@ -35,7 +35,7 @@ The assets, in the order an attacker would want them:
   bpffs: losing them means losing enforcement;
 - the loaded upatches, their pins and the payload xattrs that bind a
   pin to its artifact;
-- the TPM NV chain and the eventlog that explains it;
+- the TPM measurement register and the eventlog that explains it;
 - the installed artifacts and the configuration under
   ``/var/lib/shirudo`` and ``/etc/shirudo``;
 - the status, reports and exported telemetry an operator acts on.

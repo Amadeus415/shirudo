@@ -165,7 +165,8 @@ static const struct shirudo_help upatch_load_help = {
 		   "                       <file.upatch>",
 	.summary = "Load a signed LOAD .upatch into the target kernel: verify "
 		   "the\nsignature, run the loader, pin the resulting link, "
-		   "and extend the\nTPM NV chain. Target-only.",
+		   "and extend this\nboot's TPM measurement register. "
+		   "Target-only.",
 	.footer  =
 "Examples:\n"
 "  shirudo upatch load cve-2026-31431.upatch\n"
@@ -180,8 +181,8 @@ static const struct shirudo_help upatch_unload_help = {
 		   "[--report=<path>]\n"
 		   "                       <unload-directive.upatch>",
 	.summary = "Apply a signed UNLOAD directive: detach the named upatch,\n"
-		   "remove its pin, and extend the TPM NV chain forward "
-		   "(unloads\nmove the chain forward, never roll it back). "
+		   "remove its pin, and extend the TPM measurement register "
+		   "(unloads\nmove the register forward, never roll it back). "
 		   "Target-only.",
 	.footer  =
 "Examples:\n"
@@ -2242,7 +2243,7 @@ int shirudo_upatch_apply(const char *path)
  * Runs before any BPF_PROG_LOAD: the live kernel must expose the private
  * signed-loader ABI, the shirudo keyring must exist, the LSM link must still
  * be pinned (enforcing), and -- when the caller supplied --expect-chain --
- * the live TPM NV chain must still match what the operator last observed.
+ * the live register must still match what the operator expects.
  * An ABI mismatch is kernel_abi_unsupported; state mismatches are tampered.
  * No kernel state is touched. This is the optimistic-concurrency / tamper
  * gate: a concurrent operator that advanced the chain, a detached LSM, or a
@@ -2291,7 +2292,7 @@ static int upatch_preflight(const char *expect_chain,
 	rc = shirudo_chain_read(have);
 	if (rc == -ENODEV) {
 		pr_err("upatch load: pre-flight refused (category: tampered, "
-		       "message: chain_drift) -- TPM chain unreadable, cannot "
+		       "message: chain_drift) -- register unreadable, cannot "
 		       "confirm --expect-chain");
 		return -1;
 	}

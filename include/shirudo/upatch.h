@@ -41,7 +41,7 @@ struct shirudo_upatch_header {
 	 * SHA-256 of the signed content, insns || data. Distinct from the
 	 * loader's excl_prog_hash (SHA-256 of insns alone), which the target
 	 * recomputes at load. This is the value recorded as the pin xattr,
-	 * the TPM chain event, and the unload match target.
+	 * the TPM register event, and the unload match target.
 	 */
 	uint8_t		payload_sha256[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN];
 	uint32_t	loader_insns_off;	/* file offset */

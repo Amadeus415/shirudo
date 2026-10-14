@@ -63,8 +63,8 @@ do_start() {
 	mkdir -p "$STATE" || die "cannot create $STATE"
 	chmod 0700 "$STATE"
 
-	# EK/platform certs are nice-to-have but irrelevant to shirudo's
-	# NV-extend chain; if swtpm_setup is not installed, libtpms will
+	# EK/platform certs are nice-to-have (attest carries the EK cert
+	# when present); if swtpm_setup is not installed, libtpms will
 	# provision the basic TPM state on first --startup-clear.
 	if [ ! -e "$STATE/tpm2-00.permall" ] && command -v swtpm_setup >/dev/null 2>&1; then
 		swtpm_setup --tpm2 --tpm-state "$STATE" \

@@ -77,10 +77,11 @@
 #define SHIRUDO_KEYRING_NAME		"shirudo"
 
 /*
- * TPM2 NV-extend index for the measurement chain (owner-defined
- * range). Override at build time if it collides with site policy.
- * An NV-extend index rather than a PCR: no free PCR exists on a stock
- * Linux + grub + IMA system and PCR 23 is application-resettable.
+ * TPM2 NV index of the measurement register (owner-defined range).
+ * Override at build time if it collides with site policy. An NV
+ * extend index rather than a PCR, as systemd's NvPCRs: no free PCR
+ * exists on a stock Linux + grub + IMA system and PCR 23 is
+ * application-resettable; PCR 15 only anchors the index name.
  */
 #ifndef SHIRUDO_NV_INDEX
 #define SHIRUDO_NV_INDEX		0x01818E00u

@@ -386,7 +386,7 @@ static void print_kernel_config_human(const struct shirudo_sysinfo *si)
 static const struct shirudo_help_item status_options[] = {
 	{ "--json",                 "machine-readable JSON output" },
 	{ "--otel",                 "export the status report as an OTLP log" },
-	{ "--include-tpm",          "read the live NV chain and replay the eventlog" },
+	{ "--include-tpm",          "read the live register and replay the eventlog" },
 	{ "--include-system",       "add a `system` block (hostname, kernel, arch, cpus, ...)" },
 	{ "--include-eventlog",     "dump eventlog entries (implies --include-tpm)" },
 	{ "--include-kernellog[=N]","last N lines of the kernel ring buffer "

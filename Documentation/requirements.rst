@@ -80,13 +80,13 @@ carries the same list for the test VM kernel.
      - The signed-attributes digest OpenSSL 3.x emits next to an
        ML-DSA signature; ``CONFIG_CRYPTO_MLDSA`` does not select it.
    * - ``CONFIG_CRYPTO_SHA256``
-     - ``excl_prog_hash``, ``payload_sha256``, the TPM chain and the
-       eventlog digests.
+     - ``excl_prog_hash``, ``payload_sha256``, the measurement register
+       and the eventlog digests.
    * - ``CONFIG_TCG_TPM`` plus a TPM driver (``CONFIG_TCG_TIS``,
        ``CONFIG_TCG_CRB``, or the platform's virtual TPM)
-     - The NV-extend measurement chain.  A TPM 2.0 is mandatory; there
-       is no unmeasured mode.  ``contrib/swtpm.sh`` provides a software
-       TPM for machines without one.
+     - The measurement register and the attestation key.  A TPM 2.0 is
+       mandatory; there is no unmeasured mode.  ``contrib/swtpm.sh``
+       provides a software TPM for machines without one.
 
 ``CONFIG_PKCS7_WAIVE_AUTHATTRS_REJECTION_FOR_MLDSA`` is not required: it
 only relaxes module-signature checks, and BPF signature verification
@@ -217,11 +217,12 @@ fleet.
        behalf of ``shirudo bpm push`` and ``shirudo bpm tree append``,
        verified on the target with libcrypto against the registered
        certificate.
-   * - Payload, program and chain digests
-     - SHA-256: ``payload_sha256``, ``excl_prog_hash``, the TPM
-       NV-extend chain and the eventlog.
-   * - TPM NV index authorisation
-     - A SHA-256-derived auth value.  No asymmetric TPM keys are used.
+   * - Payload, program and register digests
+     - SHA-256: ``payload_sha256``, ``excl_prog_hash``, the measurement
+       register, its policy and the eventlog.
+   * - TPM attestation
+     - ECDSA P-256 (the attestation key); TPMs sign with nothing
+       post-quantum today, so the evidence is classical.
    * - TLS (registries, OTLP and S3 export)
      - TLS 1.3 only with hybrid ML-KEM key exchange only
        (X25519MLKEM768, SecP256r1MLKEM768), on every libcurl client in

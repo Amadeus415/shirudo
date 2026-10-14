@@ -12,7 +12,8 @@ and it makes sure a target runs only the BPF its operator signed.  Once
 inside a signed loader program whose signature verifies against the
 certificate in a sealed kernel keyring; root without the signing key
 cannot load, replace or detach BPF, and every state change is measured
-into a TPM NV-extend chain.  The userspace side is one agentless
+into a per-boot TPM register the TPM certifies on request.  The
+userspace side is one agentless
 ``shirudo`` binary: no daemon, no listening socket, one-shot commands
 driven by systemd timers that pull signed packages from OCI registries
 and push state to an OTLP collector.

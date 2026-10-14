@@ -346,9 +346,9 @@ with open(sys.argv[1], encoding="utf-8") as status_file:
     status = json.load(status_file)
 tpm = status.get("tpm") or {}
 if not tpm.get("chain"):
-    raise SystemExit("shirudo status reported no TPM chain")
+    raise SystemExit("shirudo status reported no bound register")
 if tpm.get("chain_matches_eventlog") is not True:
-    raise SystemExit("TPM chain does not match the Shirudo event log")
+    raise SystemExit("register does not match the shirudo eventlog")
 PY
 
 if [[ -n "${TEST_VM_BPM_TREE_INPUT:-}" ]]; then

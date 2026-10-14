@@ -51,15 +51,15 @@ size_t shirudo_conditions(const struct shirudo_conditions_input *in,
 		if (!in->chain_seen) {
 			c[n].status = "WARN";
 			snprintf(c[n].detail, sizeof(c[n].detail),
-				 "no TPM chain (init incomplete or TPM lost)");
+				 "no TPM register (init incomplete or TPM lost)");
 		} else if (in->cm_seen && in->chain_matches) {
 			c[n].status = "OK";
 			snprintf(c[n].detail, sizeof(c[n].detail),
-				 "live NV chain == eventlog replay");
+				 "live register == eventlog replay");
 		} else if (in->cm_seen) {
 			c[n].status = "ALERT";
 			snprintf(c[n].detail, sizeof(c[n].detail),
-				 "live NV chain != eventlog replay (tamper?)");
+				 "live register != eventlog replay (tamper?)");
 		} else {
 			c[n].status = "WARN";
 			snprintf(c[n].detail, sizeof(c[n].detail),
@@ -124,7 +124,7 @@ void shirudo_status_reason(const struct shirudo_conditions_input *in,
 		snprintf(buf, cap, "status JSON unparseable");
 	} else if (strcmp(v, "tampered") == 0) {
 		if (in->cm_seen && !in->chain_matches)
-			snprintf(buf, cap, "live NV chain != eventlog replay");
+			snprintf(buf, cap, "live register != eventlog replay");
 		else
 			snprintf(buf, cap, "keyring serial swap detected");
 	} else if (strcmp(v, "lsm-off") == 0) {
@@ -132,6 +132,6 @@ void shirudo_status_reason(const struct shirudo_conditions_input *in,
 	} else if (strcmp(v, "init-pending") == 0) {
 		snprintf(buf, cap, "target hasn't been `shirudo init`'d");
 	} else if (strcmp(v, "degraded") == 0) {
-		snprintf(buf, cap, "no TPM chain (unmeasured)");
+		snprintf(buf, cap, "no TPM register (unmeasured)");
 	}
 }

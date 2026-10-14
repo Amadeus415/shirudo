@@ -720,7 +720,7 @@ static void remove_stale_state(void)
  * All-or-nothing: a single failure stops the sweep and leaves init
  * incomplete (the chain is not extended). On success, returns the
  * loaded set (sorted by upatch name) so the caller can extend the
- * measurement chain by exactly one event over the whole set. The set
+ * measurement register by exactly one event over the whole set. The set
  * may be empty (no upatches installed) -- the init event still fires.
  */
 static int boot_restore(struct shirudo_measured_upatch **out_set, size_t *out_n)
@@ -1070,7 +1070,7 @@ int cmd_init(int argc, const char **argv)
 		xfree(set, n * sizeof(*set));
 		if (rc) {
 			pr_err("init: incomplete -- LSM active and upatches "
-			       "loaded, but TPM chain not advanced");
+			       "loaded, but TPM register not advanced");
 			return 1;
 		}
 	}
