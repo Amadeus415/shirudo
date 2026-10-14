@@ -106,12 +106,16 @@ Build and publish
     (shirudo/bpm-index:stable, CMS by
             shirudo-build --sign)
 
-``gen_loader``, BPF CMS signing and the detached CMS over the repository
-index are performed by the operator-side ``shirudo-build`` helper; the
-core binary dispatches to it and never links the signer. ``bpm push``
-updates the index only when given the signing material (``--keys-dir``
-or ``--index-cert``/``--index-key``); published versions are immutable,
-so an index that already lists the version with different digests is
+``shirudo bpm build``, ``push`` and ``tree append`` are implemented in the
+operator-side ``shirudo-build`` helper, not in the ``shirudo`` binary
+shipped to targets: the core binary only execs the helper with the
+argument vector. ``gen_loader``, BPF CMS signing and the detached CMS
+over the repository index and tree publications therefore happen in one
+process that links the signer, while the target binary carries neither
+the signer nor the publishing code. ``bpm push`` updates the index only
+when given the signing material (``--keys-dir`` or
+``--index-cert``/``--index-key``); published versions are immutable, so
+an index that already lists the version with different digests is
 refused.
 
 Pull and load

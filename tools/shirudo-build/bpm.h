@@ -2,19 +2,19 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Beefile model shared by `bpm build` and `bpm tree append`.
+ * Operator-only BPM commands and the Beefile model they share.
  */
 
-#ifndef SHIRUDO_BUILTIN_BPM_BUILD_H
-#define SHIRUDO_BUILTIN_BPM_BUILD_H
+#ifndef SHIRUDO_BUILD_BPM_H
+#define SHIRUDO_BUILD_BPM_H
 
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "util/bpm_tree.h"
-#include "util/crypto.h"
-#include "util/upatch.h"
+#include "bpm_tree.h"
+#include "crypto.h"
+#include "upatch.h"
 
 #define BPM_BUILD_MAX_ENTRIES 128
 
@@ -70,13 +70,16 @@ int bpm_build_parse_beefile(const unsigned char *body, size_t len,
 void bpm_build_spec_free(struct bpm_build_spec *spec);
 
 /*
- * The operator-only shirudo-build helper: SHIRUDO_BUILD, the compiled-in
- * libexec path, then PATH. bpm_build_run_helper() forks and execs the
- * NULL-terminated argv (argv[0] names the helper) in workdir and returns 0
- * only on a zero exit status.
+ * `shirudo-build bpm <build|push|tree append> ...`, reached through the
+ * core binary's `shirudo bpm` dispatch. argv[0] is the subcommand.
  */
-const char *bpm_build_helper(void);
-bool bpm_build_helper_available(void);
-int bpm_build_run_helper(const char *workdir, char *const argv[]);
+int shirudo_build_bpm(int argc, char **argv);
+int shirudo_build_bpm_build(int argc, char **argv);
+int shirudo_build_bpm_push(int argc, char **argv);
+int shirudo_build_bpm_tree(int argc, char **argv);
+bool shirudo_build_is_help(const char *arg);
 
-#endif /* SHIRUDO_BUILTIN_BPM_BUILD_H */
+/* Readable 0600 private key and readable certificate, else 1 with a diagnostic. */
+int shirudo_build_check_keys(const char *pkey, const char *cert);
+
+#endif /* SHIRUDO_BUILD_BPM_H */

@@ -130,7 +130,11 @@ UTIL_SRCS := \
     util/io.c \
     util/tpm.c \
     util/chain.c \
+    util/hex.c \
     util/bpm_tree.c \
+    util/bpm_tree_state.c \
+    util/bpm_oci.c \
+    util/bpm_package.c \
     util/kernel_build_id.c \
     util/kernel_release.c \
     util/config.c \
@@ -166,7 +170,6 @@ BUILTIN_SRCS := \
     builtin-config.c \
     builtin-upatch.c \
     builtin-bpm.c \
-    builtin-bpm-build.c \
     builtin-build.c \
     builtin-version.c
 
@@ -195,7 +198,9 @@ BUILD_SRCS := \
     tools/shirudo-build/shirudo-build.c \
     tools/shirudo-build/compile.c \
     tools/shirudo-build/package.c \
-    tools/shirudo-build/vmlinux.c
+    tools/shirudo-build/vmlinux.c \
+    tools/shirudo-build/bpm-build.c \
+    tools/shirudo-build/bpm-publish.c
 
 # ----- derived names ----------------------------------------------
 
@@ -332,14 +337,18 @@ util/loader.o: $(BPF_OBJS)
 build/target/util/loader.o: $(BPF_OBJS)
 
 # shirudo-build links util/sign.c (CMS signer) plus a subset of util,
-# plus util/loader.o for its .incbin of bpf/unload.bpf.o (used by
-# the --unload directive emission path). Not linked into the core
+# util/loader.o for its .incbin of bpf/unload.bpf.o (used by the
+# --unload directive emission path), and the OCI client for the
+# operator-only `bpm build|push|tree append`. Not linked into the core
 # shirudo binary.
 tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o \
                                    util/parse-options.o util/upatch.o \
                                    util/log.o util/json.o util/loader.o \
                                    util/io.o util/malloc.o util/paths.o \
-                                   util/elf_target.o \
+                                   util/elf_target.o util/hex.o \
+                                   util/crypto_openssl.o util/tls_openssl.o \
+                                   util/bpm_oci.o util/bpm_package.o \
+                                   util/bpm_tree.o $(VERSION_OBJ) \
                                    $(LIBBPF_A)
 	@printf '  LD      $@\n'
 	$(Q)$(LD) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS)
@@ -458,7 +467,7 @@ t/helper/test-json-parser: t/helper/test-json-parser.c util/json.o
 # only exercise the pure helpers, but the symbols must still resolve.
 # util/malloc.o brings in x*/shirudo_libc_free that chain.o/tpm.o use.
 # util/config.o resolves shirudo_config_load(), called by tpm.o.
-t/helper/test-chain: t/helper/test-chain.c util/chain.o util/crypto_openssl.o util/tpm.o util/log.o \
+t/helper/test-chain: t/helper/test-chain.c util/chain.o util/hex.o util/crypto_openssl.o util/tpm.o util/log.o \
                      util/config.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl -ltss2-esys -ltss2-tctildr

@@ -203,12 +203,14 @@ load-bearing — consult them directly rather than reasoning from memory:
   through a linked library (OpenSSL, libtss2, libbpf,
   raw `syscall()` for keyctl). The core binary never `fork`s and
   never `execve`s any program on either side. **The single
-  exception** is the operator-only signing dispatch: `shirudo
-  build`, `shirudo bpm build`, `shirudo bpm push` (signed index)
-  and `shirudo bpm tree append` `execv` a separate `shirudo-build`
+  exception** is the operator-only dispatch in `builtin-build.c`:
+  `shirudo build` and the operator bpm subcommands (`shirudo bpm
+  build`, `push`, `tree append`) `execv` a separate `shirudo-build`
   binary at `$(libexecdir)/shirudo/shirudo-build` (git-style
-  libexec dispatch; `shirudo-build --sign` is the detached-CMS
-  mode); `shirudo-build` itself `execv`s `clang`. Neither
+  libexec dispatch) with their whole argument vector; the
+  implementation of those commands lives only in `shirudo-build`
+  (`tools/shirudo-build/bpm-build.c`, `bpm-publish.c`), which
+  signs in-process and `execv`s `clang`. Neither
   `shirudo-build` nor `clang` ship to the target — they live
   only in the operator package, so the invariant remains
   absolute on every target-side code path. If a future feature
@@ -226,8 +228,9 @@ load-bearing — consult them directly rather than reasoning from memory:
   blocked by systemd's private-keyring isolation.
 - **The `shirudo-build` dispatch is the sole subprocess exception,
   and it's operator-only by physical packaging.** The core `shirudo`
-  binary (`builtin-build.c`, and `builtin-bpm-build.c` for the bpm
-  commands) resolves the helper in this order:
+  binary's `builtin-build.c` (`shirudo_build_exec()`, also used by
+  `builtin-bpm.c` for `bpm build|push|tree append`) resolves the
+  helper in this order:
   `SHIRUDO_BUILD`, the compiled-in `$(libexecdir)/shirudo/shirudo-build`,
   then `shirudo-build` on `$PATH`. The `shirudo-build` binary itself
   `execv`s `clang -target bpf …`. Both `shirudo-build` and

@@ -302,6 +302,13 @@ PY
 	grep -q "no \[upatches.tree\] entries" "$WORK/plain.err"
 '
 
+test_expect_success 'the operator commands are reachable directly in shirudo-build' '
+	"$B" bpm --help | grep -q "tree append <package-file> <repository>" &&
+	"$B" bpm tree append --help 2>&1 | grep -q "\-\-op add|delete" &&
+	"$B" bpm push --help 2>&1 | grep -q "shirudo/bpm-index:stable" &&
+	! "$B" bpm not-a-command >/dev/null 2>&1
+'
+
 test_expect_success 'tree append needs readable signing material' '
 	! "$S" bpm tree append "$WORK/t0031-1.0.0.bee" "oci://$REGISTRY/ns/tree" \
 		--key "$WORK/missing.pem" --cert "$WORK/keys/cert.der" >/dev/null 2>&1

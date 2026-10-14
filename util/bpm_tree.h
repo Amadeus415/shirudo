@@ -89,6 +89,17 @@ int shirudo_tree_publication_append(struct shirudo_tree_publication *pub,
 				    const struct shirudo_tree_operation *op);
 void shirudo_tree_publication_free(struct shirudo_tree_publication *pub);
 
+/*
+ * Canonical forms shared by publisher and target: the operation digest
+ * ("sha256:" + 64 hex) over an operation without its digest field, and
+ * the publication document. The emitted document is xmalloc'd; release
+ * it with xfree(out, out_len).
+ */
+int shirudo_tree_operation_digest(const struct shirudo_tree_operation *op,
+				  char out[72]);
+int shirudo_tree_emit_publication(const struct shirudo_tree_publication *pub,
+				  char **out, size_t *out_len);
+
 /* Evaluate a publication selector against the running node.  An empty
  * selector is an unconstrained wildcard and matches every node. */
 int shirudo_tree_selector_matches(const struct shirudo_tree_selector *selector);

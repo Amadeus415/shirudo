@@ -8,15 +8,24 @@
 #ifndef SHIRUDO_BUILTIN_H
 #define SHIRUDO_BUILTIN_H
 
+#include <stdbool.h>
+
 /* Operator-side. */
 int cmd_genkey(int argc, const char **argv);
 int cmd_build(int argc, const char **argv);
+
+/*
+ * The shirudo-build helper (operator package only): whether it can be
+ * reached, and the single exec site that hands an argument vector to
+ * it (argv[0] is replaced; returns only on failure).
+ */
+bool shirudo_build_available(void);
+int shirudo_build_exec(const char *label, char **argv);
 
 /* Target-side. */
 int cmd_init(int argc, const char **argv);
 int cmd_upatch(int argc, const char **argv);
 int cmd_bpm(int argc, const char **argv);
-int cmd_bpm_build(int argc, const char **argv);
 
 /*
  * Target-side shared op: load + attach + pin one signed LOAD upatch.

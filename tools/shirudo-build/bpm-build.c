@@ -2,9 +2,9 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Operator-side BPM package builder: a Beefile describes ordinary files and
- * upatches, shirudo-build creates the signed upatches, and the result is a
- * deterministic gzip-compressed ustar archive.
+ * `bpm build`: a Beefile describes ordinary files and upatches, each
+ * upatch is compiled and signed in-process, and the result is a
+ * deterministic gzip-compressed ustar archive. Also the `bpm` entry.
  */
 
 #include <ctype.h>
@@ -18,20 +18,23 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
-#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include <zlib.h>
 
-#include "builtin.h"
-#include "builtin-bpm-build.h"
-#include "util/crypto.h"
-#include "util/json.h"
-#include "util/paths.h"
-#include "util/upatch.h"
+#include "bpm.h"
+#include "compile.h"
+#include "crypto.h"
+#include "json.h"
+#include "log.h"
+#include "malloc.h"
+#include "package.h"
+#include "paths.h"
+#include "upatch.h"
+#include "vmlinux.h"
 
-#ifndef SHIRUDO_LIBEXEC_DIR
-#define SHIRUDO_LIBEXEC_DIR "/usr/local/libexec/shirudo"
+#ifndef SHIRUDO_VMLINUX_PATH
+#define SHIRUDO_VMLINUX_PATH "/usr/local/share/shirudo/vmlinux.h"
 #endif
 
 #define BPM_BUILD_MAX_FILE (256u * 1024u * 1024u)
@@ -106,7 +109,7 @@ static int build_read_file(const char *path, unsigned char **out, size_t *len,
 		close(fd);
 		return rc;
 	}
-	body = malloc((size_t)st.st_size + 1);
+	body = xmalloc((size_t)st.st_size + 1);
 	if (!body) {
 		close(fd);
 		return -ENOMEM;
@@ -119,7 +122,7 @@ static int build_read_file(const char *path, unsigned char **out, size_t *len,
 			int rc = got < 0 ? -errno : -EIO;
 
 			close(fd);
-			free(body);
+			xfree(body, (size_t)st.st_size + 1);
 			return rc;
 		}
 		n += got;
@@ -398,7 +401,7 @@ static int build_parse_spec(struct bpm_build_spec *spec, char *body)
 				tree_owner->tree.present = true;
 				if (!tree_owner->tree.selector) {
 					tree_owner->tree.selector =
-						calloc(1, sizeof(*tree_owner->tree.selector));
+						xmalloc(sizeof(*tree_owner->tree.selector));
 					if (!tree_owner->tree.selector)
 						return -ENOMEM;
 				}
@@ -539,11 +542,13 @@ int bpm_build_parse_beefile(const unsigned char *body, size_t len,
 
 	if (!body || !spec || memchr(body, '\0', len))
 		return -EINVAL;
-	spec->build_file = malloc(len + 1);
-	scratch = malloc(len + 1);
+	spec->build_file = xmalloc(len + 1);
+	scratch = xmalloc(len + 1);
 	if (!spec->build_file || !scratch) {
-		free(scratch);
-		free(spec->build_file);
+		if (scratch)
+			xfree(scratch, len + 1);
+		if (spec->build_file)
+			xfree(spec->build_file, len + 1);
 		spec->build_file = NULL;
 		return -ENOMEM;
 	}
@@ -553,7 +558,7 @@ int bpm_build_parse_beefile(const unsigned char *body, size_t len,
 	memcpy(scratch, body, len);
 	scratch[len] = '\0';
 	rc = build_parse_spec(spec, (char *)scratch);
-	free(scratch);
+	xfree(scratch, len + 1);
 	return rc;
 }
 
@@ -562,9 +567,12 @@ void bpm_build_spec_free(struct bpm_build_spec *spec)
 	if (!spec)
 		return;
 	for (size_t i = 0; i < spec->n_upatches; i++)
-		free(spec->upatches[i].tree.selector);
-	free(spec->build_file);
-	free(spec);
+		if (spec->upatches[i].tree.selector)
+			xfree(spec->upatches[i].tree.selector,
+			      sizeof(*spec->upatches[i].tree.selector));
+	if (spec->build_file)
+		xfree(spec->build_file, spec->build_file_len + 1);
+	xfree(spec, sizeof(*spec));
 }
 
 static bool build_within(const char *dir, const char *path)
@@ -674,95 +682,6 @@ static int build_entry_name(char *out, size_t cap, const char *top,
 	return 0;
 }
 
-const char *bpm_build_helper(void)
-{
-	const char *override = getenv("SHIRUDO_BUILD");
-
-	if (override && *override)
-		return override;
-	if (!access(SHIRUDO_LIBEXEC_DIR "/shirudo-build", X_OK))
-		return SHIRUDO_LIBEXEC_DIR "/shirudo-build";
-	return "shirudo-build";
-}
-
-bool bpm_build_helper_available(void)
-{
-	const char *helper = bpm_build_helper();
-	const char *path;
-
-	if (strchr(helper, '/'))
-		return !access(helper, X_OK);
-	for (path = getenv("PATH"); path && *path; path = *path ? path + 1 : path) {
-		const char *end = strchr(path, ':');
-		char candidate[PATH_MAX];
-		size_t len;
-
-		if (!end)
-			end = path + strlen(path);
-		len = (size_t)(end - path);
-		if (len && len + 1 + strlen(helper) < sizeof(candidate)) {
-			memcpy(candidate, path, len);
-			candidate[len] = '/';
-			strcpy(candidate + len + 1, helper);
-			if (!access(candidate, X_OK))
-				return true;
-		}
-		path = end;
-	}
-	return false;
-}
-
-int bpm_build_run_helper(const char *workdir, char *const argv[])
-{
-	const char *helper = bpm_build_helper();
-	pid_t pid;
-	int status;
-
-	pid = fork();
-	if (pid < 0)
-		return -errno;
-	if (!pid) {
-		if (workdir && chdir(workdir))
-			_exit(127);
-		if (strchr(helper, '/'))
-			execv(helper, argv);
-		else
-			execvp(helper, argv);
-		_exit(127);
-	}
-	if (waitpid(pid, &status, 0) < 0)
-		return -errno;
-	if (!WIFEXITED(status) || WEXITSTATUS(status))
-		return -EIO;
-	return 0;
-}
-
-static int build_run_helper(const char *workdir, const char *keys_dir,
-				const char *source, const char *output,
-				const char *unload_name, const char *payload)
-{
-	char *argv[16];
-	int n = 0;
-
-	argv[n++] = (char *)bpm_build_helper();
-	if (unload_name) {
-		argv[n++] = (char *)"--unload";
-		argv[n++] = (char *)unload_name;
-	} else {
-		argv[n++] = (char *)source;
-	}
-	argv[n++] = (char *)"-o";
-	argv[n++] = (char *)output;
-	argv[n++] = (char *)"--keys-dir";
-	argv[n++] = (char *)keys_dir;
-	if (unload_name) {
-		argv[n++] = (char *)"--payload-sha256";
-		argv[n++] = (char *)payload;
-	}
-	argv[n] = NULL;
-	return bpm_build_run_helper(workdir, argv);
-}
-
 static void build_hex(const unsigned char *in, char *out, size_t n)
 {
 	static const char hex[] = "0123456789abcdef";
@@ -774,12 +693,44 @@ static void build_hex(const unsigned char *in, char *out, size_t n)
 	out[n * 2] = '\0';
 }
 
-static int build_upatches(struct bpm_build_spec *spec, const char *keys_dir)
+static bool build_ends_with(const char *s, const char *suffix)
 {
+	size_t n = strlen(s), m = strlen(suffix);
+
+	return n >= m && !strcmp(s + n - m, suffix);
+}
+
+/* The upatch name shirudo-build derives from an input file name. */
+static void build_upatch_name(const char *source, char *out, size_t cap)
+{
+	const char *base = strrchr(source, '/');
+	size_t n;
+
+	build_copy(out, cap, base ? base + 1 : source);
+	n = strlen(out);
+	if (n > 6 && (!strcmp(out + n - 6, ".bpf.c") || !strcmp(out + n - 6, ".bpf.o")))
+		out[n - 6] = '\0';
+	else if (n > 2 && !strcmp(out + n - 2, ".o"))
+		out[n - 2] = '\0';
+}
+
+/*
+ * Compile, sign and package every upatch of the spec with the same
+ * pipeline as `shirudo build`, then its unload directive bound to the
+ * payload digest the load artifact ended up with.
+ */
+static int build_upatches(struct bpm_build_spec *spec, const char *pkey,
+			  const char *cert)
+{
+	const char *vmlinux_h = NULL;
+
 	for (size_t i = 0; i < spec->n_upatches; i++) {
-		struct bpm_build_upatch *u = &spec->upatches[i];
-		struct shirudo_upatch parsed = {};
 		char source[PATH_MAX], load[PATH_MAX], unload[PATH_MAX];
+		char object[PATH_MAX], name[SHIRUDO_UPATCH_NAME_MAX];
+		unsigned char payload[SHIRUDO_CRYPTO_SHA256_LEN];
+		struct bpm_build_upatch *u = &spec->upatches[i];
+		const char *bpf_o = source, *src_path = NULL;
+		struct shirudo_upatch parsed = {};
 		int rc;
 
 		if (build_resolve_source(spec, u->source, source, sizeof(source),
@@ -794,10 +745,38 @@ static int build_upatches(struct bpm_build_spec *spec, const char *keys_dir)
 		build_copy(u->unload_path, sizeof(u->unload_path), unload);
 		unlink(load);
 		unlink(unload);
-		rc = build_run_helper(spec->scope, keys_dir, u->source, load,
-				      NULL, NULL);
+		if (build_ends_with(source, ".bpf.c")) {
+			if (!vmlinux_h) {
+				vmlinux_h = shirudo_build_locate_vmlinux(NULL);
+				if (!vmlinux_h) {
+					pr_err("bpm build: vmlinux.h not found (tried "
+					       "./vmlinux.h, ./vendor/linux/vmlinux.h, %s)",
+					       SHIRUDO_VMLINUX_PATH);
+					return -ENOENT;
+				}
+			}
+			if (snprintf(object, sizeof(object), "%s.bpf.o", load) >=
+			    (int)sizeof(object))
+				return -ENAMETOOLONG;
+			rc = shirudo_build_compile(source, object, vmlinux_h, NULL);
+			if (rc) {
+				pr_err("bpm build: compile %s failed", u->source);
+				return rc < 0 ? rc : -EIO;
+			}
+			bpf_o = object;
+			src_path = source;
+		} else if (!build_ends_with(source, ".bpf.o") &&
+			   !build_ends_with(source, ".o")) {
+			pr_err("bpm build: %s is neither .bpf.c nor .bpf.o", u->source);
+			return -EINVAL;
+		}
+		build_upatch_name(source, name, sizeof(name));
+		rc = shirudo_build_package_load(bpf_o, src_path, load, name, pkey,
+						cert);
+		if (bpf_o == object)
+			unlink(object);
 		if (rc)
-			return rc;
+			return rc < 0 ? rc : -EIO;
 		if (shirudo_upatch_open(load, &parsed))
 			return -EINVAL;
 		if (shirudo_upatch_is_unload(&parsed) || !parsed.hdr.name[0]) {
@@ -807,12 +786,13 @@ static int build_upatches(struct bpm_build_spec *spec, const char *keys_dir)
 		build_copy(u->name, sizeof(u->name), parsed.hdr.name);
 		build_hex(parsed.hdr.payload_sha256, u->payload_sha256,
 			  SHIRUDO_CRYPTO_SHA256_LEN);
+		memcpy(payload, parsed.hdr.payload_sha256, sizeof(payload));
 		build_copy(u->type, sizeof(u->type), shirudo_upatch_type_str(&parsed));
 		shirudo_upatch_close(&parsed);
-		rc = build_run_helper(spec->scope, keys_dir, NULL, unload,
-				      u->name, u->payload_sha256);
+		rc = shirudo_build_package_unload(u->name, payload, unload, pkey,
+						  cert);
 		if (rc)
-			return rc;
+			return rc < 0 ? rc : -EIO;
 	}
 	return 0;
 }
@@ -821,7 +801,7 @@ static int build_environment(const struct bpm_build_spec *spec,
 				     const char *version, const char *fingerprint,
 				     unsigned char **out, size_t *out_len)
 {
-	char *body = calloc(1, BPM_BUILD_MAX_JSON);
+	char *body = xmalloc(BPM_BUILD_MAX_JSON);
 	struct shirudo_json_emit e = { .buf = body, .cap = BPM_BUILD_MAX_JSON };
 	struct utsname un = {};
 	char self[PATH_MAX] = "shirudo";
@@ -832,7 +812,8 @@ static int build_environment(const struct bpm_build_spec *spec,
 
 	if (!body || uname(&un) || !gmtime_r(&now, &tm) ||
 	    !strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &tm)) {
-		free(body);
+		if (body)
+			xfree(body, BPM_BUILD_MAX_JSON);
 		return -EIO;
 	}
 	self_len = readlink("/proc/self/exe", self, sizeof(self) - 1);
@@ -874,7 +855,7 @@ static int build_environment(const struct bpm_build_spec *spec,
 	shirudo_json_arr_close(&e);
 	shirudo_json_obj_close(&e);
 	if (e.err) {
-		free(body);
+		xfree(body, BPM_BUILD_MAX_JSON);
 		return e.err;
 	}
 	*out = (unsigned char *)body;
@@ -934,36 +915,37 @@ static int tar_path(struct bpm_tar *tar, const char *name, const char *path)
 	if (!S_ISREG(st.st_mode))
 		return -EINVAL;
 	rc = build_read_file(path, &body, &len, BPM_BUILD_MAX_FILE);
-	if (!rc)
+	if (!rc) {
 		rc = tar_entry(tar, name, body, len, st.st_mode, '0');
-	free(body);
+		xfree(body, len + 1);
+	}
 	return rc;
 }
 
 static int build_archive(const struct bpm_build_spec *spec, const char *version,
-			 const char *keys_dir, const char *fingerprint)
+			 const char *cert_path, const char *fingerprint,
+			 const char *out_dir)
 {
-	char output[PATH_MAX], top[PATH_MAX], name[PATH_MAX], path[PATH_MAX];
+	char output[PATH_MAX], top[PATH_MAX], name[PATH_MAX];
 	unsigned char *environment = NULL, *cert = NULL;
-	size_t environment_len, cert_len;
+	size_t environment_len = 0, cert_len = 0;
 	struct bpm_tar tar;
 	int rc;
 
 	if (snprintf(top, sizeof(top), "%s-%s", spec->name, version) >= (int)sizeof(top) ||
-	    snprintf(output, sizeof(output), "%s.bee", top) >= (int)sizeof(output))
+	    snprintf(output, sizeof(output), "%s/%s.bee", out_dir, top) >= (int)sizeof(output))
 		return -ENAMETOOLONG;
 	if (build_environment(spec, version, fingerprint, &environment,
 			       &environment_len))
 		return -EIO;
-	if (build_join(path, sizeof(path), keys_dir, SHIRUDO_CERT_FILE) ||
-	    build_read_file(path, &cert, &cert_len, BPM_BUILD_MAX_FILE)) {
-		free(environment);
+	if (build_read_file(cert_path, &cert, &cert_len, BPM_BUILD_MAX_FILE)) {
+		xfree(environment, BPM_BUILD_MAX_JSON);
 		return -ENOENT;
 	}
 	tar.gz = gzopen(output, "wb9");
 	if (!tar.gz) {
-		free(environment);
-		free(cert);
+		xfree(environment, BPM_BUILD_MAX_JSON);
+		xfree(cert, cert_len + 1);
 		return -errno;
 	}
 	rc = build_entry_name(name, sizeof(name), top, "");
@@ -1035,8 +1017,8 @@ static int build_archive(const struct bpm_build_spec *spec, const char *version,
 	}
 	if (gzclose(tar.gz) != Z_OK)
 		rc = rc ? rc : -EIO;
-	free(environment);
-	free(cert);
+	xfree(environment, BPM_BUILD_MAX_JSON);
+	xfree(cert, cert_len + 1);
 	if (rc)
 		unlink(output);
 	else
@@ -1049,7 +1031,7 @@ static const char *build_resolve_keys_dir(const char *arg, char *out, size_t cap
 	const char *home = getenv("HOME");
 
 	if (!arg || !*arg)
-		arg = "~/.config/bpm/";
+		arg = shirudo_keys_dir_resolve(NULL);
 	if (arg[0] == '~' && (!arg[1] || arg[1] == '/')) {
 		if (!home || snprintf(out, cap, "%s%s", home, arg + 1) >= (int)cap)
 			return NULL;
@@ -1061,58 +1043,84 @@ static const char *build_resolve_keys_dir(const char *arg, char *out, size_t cap
 	return out;
 }
 
-int cmd_bpm_build(int argc, const char **argv)
+static void build_usage(void)
+{
+	fprintf(stderr,
+		"usage: shirudo bpm build [context] --version <version>\n"
+		"       shirudo bpm build [context] -f <Beefile> --version <version>\n"
+		"                              [--keys-dir <dir>]\n\n"
+		"Builds a signed .bee package from a Beefile. The build command\n"
+		"is available only in shirudo-operator and requires signing keys.\n");
+}
+
+int shirudo_build_bpm_build(int argc, char **argv)
 {
 	const char *context = ".", *file_arg = NULL, *version = NULL, *keys_arg = NULL;
 	char build_file[PATH_MAX], resolved_file[PATH_MAX], keys_dir[PATH_MAX];
+	char keys_abs[PATH_MAX], pkey[PATH_MAX], cert_path[PATH_MAX];
 	char fingerprint[SHIRUDO_CRYPTO_SHA256_LEN * 2 + 1];
 	unsigned char digest[SHIRUDO_CRYPTO_SHA256_LEN];
 	struct shirudo_cert cert = {};
 	struct bpm_build_spec *spec;
 	unsigned char *body = NULL;
 	int positional = 0, rc;
+	char out_dir[PATH_MAX];
 	size_t body_len = 0;
 
 	for (int i = 1; i < argc; i++) {
-		if (!strcmp(argv[i], "-f") || !strcmp(argv[i], "--file")) {
+		if (shirudo_build_is_help(argv[i])) {
+			build_usage();
+			return 0;
+		} else if (!strcmp(argv[i], "-f") || !strcmp(argv[i], "--file")) {
 			if (++i >= argc)
-				return -EINVAL;
+				goto usage;
 			file_arg = argv[i];
 		} else if (!strncmp(argv[i], "--file=", 7)) {
 			file_arg = argv[i] + 7;
 		} else if (!strcmp(argv[i], "--version")) {
 			if (++i >= argc)
-				return -EINVAL;
+				goto usage;
 			version = argv[i];
 		} else if (!strncmp(argv[i], "--version=", 10)) {
 			version = argv[i] + 10;
 		} else if (!strcmp(argv[i], "--keys-dir")) {
 			if (++i >= argc)
-				return -EINVAL;
+				goto usage;
 			keys_arg = argv[i];
 		} else if (!strncmp(argv[i], "--keys-dir=", 11)) {
 			keys_arg = argv[i] + 11;
 		} else if (argv[i][0] == '-') {
-			return -EINVAL;
+			goto usage;
 		} else if (++positional == 1) {
 			context = argv[i];
 		} else {
-			return -EINVAL;
+			goto usage;
 		}
 	}
-	if (!version || !build_version_ok(version))
-		return -EINVAL;
-	if (!build_resolve_keys_dir(keys_arg, keys_dir, sizeof(keys_dir)))
-		return -EINVAL;
+	if (!version || !build_version_ok(version)) {
+		pr_err("bpm build: --version <version> is required");
+		goto usage;
+	}
+	if (!build_resolve_keys_dir(keys_arg, keys_dir, sizeof(keys_dir)) ||
+	    !realpath(keys_dir, keys_abs)) {
+		pr_err("bpm build: keys directory %s is not usable", keys_dir);
+		return -ENOENT;
+	}
+	rc = shirudo_key_paths(keys_abs, pkey, sizeof(pkey), cert_path,
+			       sizeof(cert_path));
+	if (rc)
+		return rc;
+	if (shirudo_build_check_keys(pkey, cert_path))
+		return -EACCES;
+	if (!getcwd(out_dir, sizeof(out_dir)))
+		return -errno;
 	if (file_arg)
 		build_copy(build_file, sizeof(build_file), file_arg);
 	else if (build_join(build_file, sizeof(build_file), context, "Beefile"))
 		return -ENAMETOOLONG;
 	if (!realpath(build_file, resolved_file))
 		return -errno;
-	if (strlen(resolved_file) >= sizeof(resolved_file))
-		return -ENAMETOOLONG;
-	spec = calloc(1, sizeof(*spec));
+	spec = xmalloc(sizeof(*spec));
 	if (!spec)
 		return -ENOMEM;
 	build_copy(spec->scope, sizeof(spec->scope), resolved_file);
@@ -1131,10 +1139,11 @@ int cmd_bpm_build(int argc, const char **argv)
 	rc = bpm_build_parse_beefile(body, body_len, spec);
 	if (!rc)
 		rc = build_validate(spec);
-	if (rc)
+	if (rc) {
+		pr_err("bpm build: %s is not a valid Beefile", resolved_file);
 		goto out;
-	if (build_join(build_file, sizeof(build_file), keys_dir, SHIRUDO_CERT_FILE) ||
-	    shirudo_cert_read_file(build_file, &cert)) {
+	}
+	if (shirudo_cert_read_file(cert_path, &cert)) {
 		rc = -ENOENT;
 		goto out;
 	}
@@ -1142,13 +1151,66 @@ int cmd_bpm_build(int argc, const char **argv)
 	if (rc)
 		goto out_cert;
 	build_hex(digest, fingerprint, sizeof(digest));
-	rc = build_upatches(spec, keys_dir);
+	/*
+	 * Compile in the package directory so ./vmlinux.h and the vendored
+	 * headers resolve the way they do for `shirudo build` run there.
+	 */
+	if (chdir(spec->scope)) {
+		rc = -errno;
+		goto out_cert;
+	}
+	rc = build_upatches(spec, pkey, cert_path);
 	if (!rc)
-		rc = build_archive(spec, version, keys_dir, fingerprint);
+		rc = build_archive(spec, version, cert_path, fingerprint, out_dir);
 out_cert:
 	shirudo_cert_free(&cert);
 out:
-	free(body);
+	if (body)
+		xfree(body, body_len + 1);
 	bpm_build_spec_free(spec);
 	return rc;
+usage:
+	build_usage();
+	return -EINVAL;
+}
+
+static void bpm_usage(FILE *fp)
+{
+	fprintf(fp,
+		"usage: shirudo bpm build [context] --version <version> [-f <Beefile>]\n"
+		"                         [--keys-dir <dir>]\n"
+		"       shirudo bpm push <package-file> <repository> [--keys-dir <dir> |\n"
+		"                        --index-cert <cert.der> --index-key <key.pem>]\n"
+		"       shirudo bpm tree append <package-file> <repository> [options]\n\n"
+		"Operator-only BPM commands, implemented in shirudo-build and reached\n"
+		"through `shirudo bpm`. Each accepts --help.\n");
+}
+
+bool shirudo_build_is_help(const char *arg)
+{
+	return arg && (!strcmp(arg, "--help") || !strcmp(arg, "-h") ||
+		       !strcmp(arg, "help"));
+}
+
+int shirudo_build_bpm(int argc, char **argv)
+{
+	int rc;
+
+	if (argc < 2 || shirudo_build_is_help(argv[1])) {
+		bpm_usage(argc < 2 ? stderr : stdout);
+		return argc < 2 ? 2 : 0;
+	}
+	if (!strcmp(argv[1], "build")) {
+		rc = shirudo_build_bpm_build(argc - 1, argv + 1);
+		if (rc < 0 && rc != -EINVAL)
+			pr_err("bpm build: %s", strerror(-rc));
+		return rc ? 1 : 0;
+	}
+	if (!strcmp(argv[1], "push"))
+		return shirudo_build_bpm_push(argc - 1, argv + 1);
+	if (!strcmp(argv[1], "tree"))
+		return shirudo_build_bpm_tree(argc - 1, argv + 1);
+	pr_err("shirudo-build bpm: '%s' is not an operator bpm command", argv[1]);
+	bpm_usage(stderr);
+	return 2;
 }
