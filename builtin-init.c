@@ -43,6 +43,7 @@
 #include "util/seal.h"
 #include "util/tpm.h"
 #include "util/upatch.h"
+#include "util/upatch_resolve.h"
 
 static void print_preflight(const struct shirudo_preflight_result *r)
 {
@@ -716,12 +717,16 @@ static void remove_stale_state(void)
 /*
  * Boot-restore: re-apply the installed upatch set after a reboot.
  * Scans /var/lib/shirudo/upatches/ and runs each through the same
- * signed load + attach + pin path as `shirudo upatch load`.
- * All-or-nothing: a single failure stops the sweep and leaves init
- * incomplete (the chain is not extended). On success, returns the
- * loaded set (sorted by upatch name) so the caller can extend the
- * measurement register by exactly one event over the whole set. The set
- * may be empty (no upatches installed) -- the init event still fires.
+ * signed load + attach + pin path as `shirudo upatch load`. On a
+ * re-run of init an upatch whose link is already pinned this boot is
+ * counted and left alone, provided the payload the pin records is the
+ * archived one; loading it again would only attach a second link to
+ * fail at the pin. All-or-nothing: a single failure stops the sweep
+ * and leaves init incomplete (the chain is not extended). On success,
+ * returns the loaded set (sorted by upatch name) so the caller can
+ * extend the measurement register by exactly one event over the whole
+ * set. The set may be empty (no upatches installed) -- the init event
+ * still fires.
  */
 static int boot_restore(struct shirudo_measured_upatch **out_set, size_t *out_n)
 {
@@ -758,8 +763,10 @@ static int boot_restore(struct shirudo_measured_upatch **out_set, size_t *out_n)
 		n, n == 1 ? "" : "es", SHIRUDO_UPATCHES_DIR);
 
 	for (i = 0; i < n; i++) {
+		char pinned_hex[2 * SHIRUDO_UPATCH_PAYLOAD_HASH_LEN + 1];
 		char path[PATH_MAX];
 		struct shirudo_upatch u;
+		int fd;
 
 		if (rc)
 			goto next;
@@ -779,6 +786,23 @@ static int boot_restore(struct shirudo_measured_upatch **out_set, size_t *out_n)
 				   SHIRUDO_UPATCH_PAYLOAD_HASH_LEN,
 				   set[cnt].payload_hex);
 			shirudo_upatch_close(&u);
+		}
+		fd = shirudo_upatch_open_first_link(set[cnt].name);
+		if (fd >= 0) {
+			close(fd);
+			shirudo_upatch_payload_sha256(set[cnt].name, pinned_hex,
+						      sizeof(pinned_hex));
+			if (strcmp(pinned_hex, set[cnt].payload_hex) != 0) {
+				pr_err("boot-restore: %s is loaded with a "
+				       "payload other than the archived one "
+				       "(tampered)", set[cnt].name);
+				rc = -EINVAL;
+				goto next;
+			}
+			pr_info("boot-restore: %s already loaded",
+				set[cnt].name);
+			cnt++;
+			goto next;
 		}
 		if (shirudo_upatch_apply(path) != 0) {
 			pr_err("boot-restore: failed to apply %s",
