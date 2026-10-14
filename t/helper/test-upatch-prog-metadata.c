@@ -21,67 +21,67 @@ static int fail(const char *msg)
 static int expect_attach(const struct shirudo_upatch *u, uint32_t kind,
 			 const char *target, uint64_t offset)
 {
-	const struct shirudo_upatch_prog_metadata *md;
-	const struct shirudo_upatch_prog_entry *prog;
+	struct shirudo_upatch_prog_metadata md;
+	struct shirudo_upatch_prog_entry prog;
+	const unsigned char *raw;
 
 	if (u->hdr.nr_progs != 1)
 		return fail("unexpected metadata prog count");
-	if (u->hdr.metadata_len !=
-	    sizeof(*md) + sizeof(struct shirudo_upatch_prog_entry))
+	if (u->hdr.metadata_len != sizeof(md) + sizeof(prog))
 		return fail("unexpected metadata length");
-	md = shirudo_upatch_metadata(u);
-	if (!md)
+	raw = shirudo_upatch_metadata(u);
+	if (!raw)
 		return fail("missing metadata");
-	if (le32toh(md->magic) != SHIRUDO_UPATCH_PROG_MAGIC ||
-	    le32toh(md->version) != SHIRUDO_UPATCH_PROG_VERSION)
+	memcpy(&md, raw, sizeof(md));
+	memcpy(&prog, raw + sizeof(md), sizeof(prog));
+	if (le32toh(md.magic) != SHIRUDO_UPATCH_PROG_MAGIC ||
+	    le32toh(md.version) != SHIRUDO_UPATCH_PROG_VERSION)
 		return fail("unexpected metadata magic/version");
-	if (le32toh(md->nr_progs) != 1)
+	if (le32toh(md.nr_progs) != 1)
 		return fail("unexpected metadata prog count");
-	prog = &md->progs[0];
-	if (le32toh(prog->role) != SHIRUDO_UPATCH_PROG_ROLE_ATTACH)
+	if (le32toh(prog.role) != SHIRUDO_UPATCH_PROG_ROLE_ATTACH)
 		return fail("program is not an attach program");
-	if (le32toh(prog->kind) != kind)
+	if (le32toh(prog.kind) != kind)
 		return fail("attach kind mismatch");
-	if (le64toh(prog->offset) != offset)
+	if (le64toh(prog.offset) != offset)
 		return fail("unexpected attach offset");
-	if (!memchr(prog->target, '\0', sizeof(prog->target)))
+	if (!memchr(prog.target, '\0', sizeof(prog.target)))
 		return fail("unterminated attach target");
 	if (target) {
-		if (strcmp(prog->target, target) != 0)
+		if (strcmp(prog.target, target) != 0)
 			return fail("attach target mismatch");
-	} else if (prog->target[0]) {
+	} else if (prog.target[0]) {
 		return fail("unexpected attach target");
 	}
-	if (prog->map[0])
+	if (prog.map[0])
 		return fail("unexpected attach map");
 	return 0;
 }
 
 static int expect_serializer(const struct shirudo_upatch *u)
 {
-	const struct shirudo_upatch_prog_metadata *md;
-	const struct shirudo_upatch_prog_entry *prog;
-	uint32_t nr_progs;
+	struct shirudo_upatch_prog_metadata md;
+	struct shirudo_upatch_prog_entry prog;
+	const unsigned char *raw;
 
 	if (u->hdr.nr_maps != 3 || u->hdr.nr_progs != 1)
 		return fail("unexpected map/prog counts");
-	if (u->hdr.metadata_len !=
-	    sizeof(*md) + sizeof(struct shirudo_upatch_prog_entry))
+	if (u->hdr.metadata_len != sizeof(md) + sizeof(prog))
 		return fail("unexpected metadata length");
-	md = shirudo_upatch_metadata(u);
-	if (!md)
+	raw = shirudo_upatch_metadata(u);
+	if (!raw)
 		return fail("missing metadata");
-	if (le32toh(md->magic) != SHIRUDO_UPATCH_PROG_MAGIC ||
-	    le32toh(md->version) != SHIRUDO_UPATCH_PROG_VERSION)
+	memcpy(&md, raw, sizeof(md));
+	memcpy(&prog, raw + sizeof(md), sizeof(prog));
+	if (le32toh(md.magic) != SHIRUDO_UPATCH_PROG_MAGIC ||
+	    le32toh(md.version) != SHIRUDO_UPATCH_PROG_VERSION)
 		return fail("unexpected metadata magic/version");
-	nr_progs = le32toh(md->nr_progs);
-	if (nr_progs != 1)
+	if (le32toh(md.nr_progs) != 1)
 		return fail("unexpected metadata prog count");
-	prog = &md->progs[0];
-	if (le32toh(prog->role) != SHIRUDO_UPATCH_PROG_ROLE_SERIALIZER)
+	if (le32toh(prog.role) != SHIRUDO_UPATCH_PROG_ROLE_SERIALIZER)
 		return fail("program is not a serializer");
-	if (!memchr(prog->map, '\0', sizeof(prog->map)) ||
-	    strcmp(prog->map, "tree_arena") != 0)
+	if (!memchr(prog.map, '\0', sizeof(prog.map)) ||
+	    strcmp(prog.map, "tree_arena") != 0)
 		return fail("serializer map mismatch");
 	return 0;
 }
@@ -90,37 +90,40 @@ static int expect_uprobe_multi(const struct shirudo_upatch *u,
 			       const char *path, const char *pattern,
 			       uint32_t expected_offsets)
 {
-	const struct shirudo_upatch_prog_metadata *md;
-	const struct shirudo_upatch_prog_entry *prog;
-	const struct shirudo_upatch_uprobe_targets *targets;
+	struct shirudo_upatch_uprobe_targets targets;
 	struct shirudo_upatch_uprobe_target record;
-	const unsigned char *cursor, *end;
+	struct shirudo_upatch_prog_metadata md;
+	struct shirudo_upatch_prog_entry prog;
+	const unsigned char *raw, *cursor, *end;
 	uint32_t path_len, build_id_len, nr_offsets, i;
 	uint64_t previous = 0;
 
 	if (u->hdr.nr_progs != 1)
 		return fail("unexpected metadata prog count");
-	md = shirudo_upatch_metadata(u);
-	if (!md || u->hdr.metadata_len < sizeof(*md) + sizeof(*prog) +
-	    sizeof(*targets) + sizeof(record))
+	raw = shirudo_upatch_metadata(u);
+	if (!raw || u->hdr.metadata_len < sizeof(md) + sizeof(prog) +
+	    sizeof(targets) + sizeof(record))
 		return fail("missing uprobe metadata");
-	if (le32toh(md->magic) != SHIRUDO_UPATCH_PROG_MAGIC ||
-	    le32toh(md->version) != SHIRUDO_UPATCH_PROG_VERSION ||
-	    le32toh(md->nr_progs) != 1)
+	memcpy(&md, raw, sizeof(md));
+	memcpy(&prog, raw + sizeof(md), sizeof(prog));
+	if (le32toh(md.magic) != SHIRUDO_UPATCH_PROG_MAGIC ||
+	    le32toh(md.version) != SHIRUDO_UPATCH_PROG_VERSION ||
+	    le32toh(md.nr_progs) != 1)
 		return fail("unexpected metadata header");
-	prog = &md->progs[0];
-	if (le32toh(prog->role) != SHIRUDO_UPATCH_PROG_ROLE_ATTACH ||
-	    le32toh(prog->kind) != SHIRUDO_UPATCH_ATTACH_UPROBE_MULTI ||
-	    le64toh(prog->offset) != 0 || strcmp(prog->target, pattern) != 0)
+	if (le32toh(prog.role) != SHIRUDO_UPATCH_PROG_ROLE_ATTACH ||
+	    le32toh(prog.kind) != SHIRUDO_UPATCH_ATTACH_UPROBE_MULTI ||
+	    le64toh(prog.offset) != 0 ||
+	    !memchr(prog.target, '\0', sizeof(prog.target)) ||
+	    strcmp(prog.target, pattern) != 0)
 		return fail("uprobe program entry mismatch");
-	cursor = (const unsigned char *)md + sizeof(*md) + sizeof(*prog);
-	end = (const unsigned char *)md + u->hdr.metadata_len;
-	targets = (const void *)cursor;
-	if (le32toh(targets->magic) != SHIRUDO_UPATCH_UPROBE_TARGET_MAGIC ||
-	    le32toh(targets->version) != SHIRUDO_UPATCH_UPROBE_TARGET_VERSION ||
-	    le32toh(targets->nr_targets) != 1 || targets->reserved)
+	cursor = raw + sizeof(md) + sizeof(prog);
+	end = raw + u->hdr.metadata_len;
+	memcpy(&targets, cursor, sizeof(targets));
+	if (le32toh(targets.magic) != SHIRUDO_UPATCH_UPROBE_TARGET_MAGIC ||
+	    le32toh(targets.version) != SHIRUDO_UPATCH_UPROBE_TARGET_VERSION ||
+	    le32toh(targets.nr_targets) != 1 || targets.reserved)
 		return fail("uprobe target header mismatch");
-	cursor += sizeof(*targets);
+	cursor += sizeof(targets);
 	memcpy(&record, cursor, sizeof(record));
 	cursor += sizeof(record);
 	path_len = le32toh(record.path_len);
