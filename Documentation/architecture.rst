@@ -567,7 +567,7 @@ Both profiles need OpenSSL 3.5 or newer for ML-DSA.  The operator links
 the system shared libraries.  The target image (``make target``) links
 a static OpenSSL, an OpenSSL-backed static libcurl and a static tpm2-tss
 that ``make target-deps`` builds from source, plus static libbpf,
-libelf, zlib, zstd, jitterentropy and LuaJIT, so it runs on a
+libelf, zlib, zstd and LuaJIT, so it runs on a
 distribution whose OpenSSL predates ML-DSA.  ``SHIRUDO_VERSION_ID``
 hashes the source tree and build configuration, not binary bytes, so
 the same source yields the same identity on x86-64, arm64 and riscv64;

@@ -30,8 +30,8 @@ From the checkout::
 ``make`` probes the toolchain and libraries and refuses an OpenSSL
 older than 3.5.  ``make target`` first runs ``make target-deps``, which
 builds a static OpenSSL, libcurl and tpm2-tss from source; the build
-host must also provide static ``libelf``, ``zlib``, ``zstd``,
-``jitterentropy`` and LuaJIT archives, with
+host must also provide static ``libelf``, ``zlib``, ``zstd`` and
+LuaJIT archives, with
 ``SHIRUDO_TARGET_STATIC_LIBDIR`` naming their directory when it is not
 the system one.  ``make help`` lists every target.
 

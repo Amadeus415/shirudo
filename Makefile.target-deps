@@ -65,7 +65,6 @@ ENV_FILE := $(TARGET_DEPS_DIR)/target.env
 
 # libzstd is libelf's compression dependency on current distributions.
 SYSTEM_ARCHIVES := \
-	$(TARGET_SYSTEM_LIBDIR)/libjitterentropy.a \
 	$(TARGET_SYSTEM_LIBDIR)/libelf.a \
 	$(TARGET_SYSTEM_LIBDIR)/libz.a \
 	$(TARGET_SYSTEM_LIBDIR)/libzstd.a \

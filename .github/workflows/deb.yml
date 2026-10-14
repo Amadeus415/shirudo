@@ -70,7 +70,6 @@ jobs:
               libftdi1-dev \
               libini-config-dev \
               libssl-dev \
-              libjitterentropy3-dev \
               libfido2-dev \
               libtss2-dev \
               libelf-dev \
@@ -165,7 +164,6 @@ jobs:
 
             install -m 0644 /tmp/shirudo-openssl/lib/libcrypto.a /tmp/shirudo-target-deps/lib/libcrypto.a
             install -m 0644 /tmp/shirudo-openssl/lib/libssl.a /tmp/shirudo-target-deps/lib/libssl.a
-            install -m 0644 /usr/lib/x86_64-linux-gnu/libjitterentropy.a /tmp/shirudo-target-deps/lib/libjitterentropy.a
             install -m 0644 /usr/lib/x86_64-linux-gnu/libelf.a /tmp/shirudo-target-deps/lib/libelf.a
             install -m 0644 /usr/lib/x86_64-linux-gnu/libz.a /tmp/shirudo-target-deps/lib/libz.a
             install -m 0644 /usr/lib/x86_64-linux-gnu/libzstd.a /tmp/shirudo-target-deps/lib/libzstd.a

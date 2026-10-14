@@ -268,9 +268,9 @@ the private key under ``/var/lib/shirudo/keys/``.
 * Root (``CAP_SYS_ADMIN``, ``CAP_BPF``) for ``shirudo init`` and every
   state-changing command.
 * The target binary from ``make target`` links OpenSSL, libcurl,
-  tpm2-tss, libbpf, libelf, zlib, zstd, jitterentropy and LuaJIT
-  statically and needs only the C library at runtime, so it runs on a
-  distribution whose own OpenSSL predates ML-DSA.
+  tpm2-tss, libbpf, libelf, zlib, zstd and LuaJIT statically and
+  needs only the C library at runtime, so it runs on a distribution
+  whose own OpenSSL predates ML-DSA.
 * A TPM 2.0 exposed as ``/dev/tpmrm0`` (discrete, firmware or cloud
   vTPM), or a software TPM reachable through ``tpm.tcti``.  TPM 1.2 is
   refused; there is no opt-out.
@@ -293,7 +293,7 @@ format is little-endian and the signature is architecture-neutral.
 ``make target`` runs ``make target-deps`` first, which builds OpenSSL,
 an OpenSSL-backed libcurl and tpm2-tss from source and stages them as
 static archives.  The build host then needs static ``libelf``,
-``zlib``, ``zstd``, ``jitterentropy`` and ``libluajit-5.1`` archives;
+``zlib``, ``zstd`` and ``libluajit-5.1`` archives;
 ``SHIRUDO_TARGET_STATIC_LIBDIR`` names their directory when it is not
 the system one.  The operator package, by contrast, links the host's
 shared libraries and must be built on the distribution it is installed
