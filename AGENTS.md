@@ -163,10 +163,10 @@ one usually still compiles and passes tests.
   systemd's NvPCR construction (`util/chain.c`): an NV extend index that
   clears at TPM reset, a first write only possible while PCR 15 holds
   the value the policy was computed from, and the index name extended
-  into PCR 15 right after it. Do not reintroduce a persistent index, an
-  auth value derived from the certificate, or a second index; the
-  upatch tree measures into the same register. A TPM 2.0 is mandatory;
-  there is no unmeasured mode.
+  into PCR 15 right after it. Do not reintroduce a persistent index or
+  an auth value derived from the certificate; the upatch tree measures
+  into the same register. A TPM 2.0 is mandatory; there is no
+  unmeasured mode.
 - **Evidence is signed by the TPM, verified by the operator.** The
   attestation key is a fixed-template primary under the endorsement
   hierarchy, pinned by name; `shirudo attest verify` recomputes the
