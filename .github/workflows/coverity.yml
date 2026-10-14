@@ -1,0 +1,109 @@
+name: Coverity
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coverity:
+    name: Coverity Scan
+    runs-on: ubuntu-latest-4cores-16gb
+    if: github.repository == 'shirudo-dev/shirudo'
+    env:
+      COVERITY_SCAN_TOKEN: ${{ secrets.COVERITY_SCAN_TOKEN }}
+
+    steps:
+      - name: Check out repository
+        if: env.COVERITY_SCAN_TOKEN != ''
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The guest reads the token from the host mount; it never appears in
+      # the command the VM runs.
+      - name: Stage the scan token for the VM
+        if: env.COVERITY_SCAN_TOKEN != ''
+        run: |
+          mkdir -p build
+          (umask 077 && printf '%s\n' "$COVERITY_SCAN_TOKEN" > build/coverity-token)
+
+      # Same VM as the package build: the embedded BPF objects need the BTF
+      # of a signed-BPF capable bpf-next kernel. The analysis tools live on
+      # the host mount because the guest disk is small.
+      - name: Build under cov-build in LVH VM and upload the result
+        if: env.COVERITY_SCAN_TOKEN != ''
+        uses: cilium/little-vm-helper@v0.0.30
+        with:
+          test-name: shirudo-coverity
+          image: kind
+          image-version: bpf-next-20260603.072225
+          kernel-version: bpf-next-main
+          host-mount: ${{ github.workspace }}
+          images-folder-parent: ${{ github.workspace }}/../lvh
+          install-dependencies: true
+          cpu: 4
+          mem: 8G
+          cmd: |
+            grep -aq 'signature_size' /sys/kernel/btf/vmlinux || {
+              echo 'kernel BTF lacks bpf_attr.signature_size; needs a signed-BPF capable bpf-next kernel' >&2
+              exit 1
+            }
+            cd /host
+
+            apt-get update
+            apt-get install -y --no-install-recommends \
+              build-essential \
+              ca-certificates \
+              clang \
+              llvm \
+              curl \
+              git \
+              pkg-config \
+              python3 \
+              libcurl4-openssl-dev \
+              libelf-dev \
+              libluajit-5.1-dev \
+              libtss2-dev \
+              zlib1g-dev
+
+            git config --global --add safe.directory /host
+
+            curl -fsSL https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz \
+              -o /tmp/openssl-3.5.9.tar.gz
+            tar -C /tmp -xf /tmp/openssl-3.5.9.tar.gz
+            cd /tmp/openssl-3.5.9
+            ./Configure --prefix=/tmp/shirudo-openssl --openssldir=/etc/ssl \
+              --libdir=lib no-docs no-tests
+            make -j4
+            make install_sw
+            cd /host
+
+            token=\$(cat build/coverity-token)
+            curl -fsSL -o build/cov-analysis.tgz \
+              -d "token=\$token&project=shirudo-dev%2Fshirudo" \
+              https://scan.coverity.com/download/cxx/linux64
+            mkdir -p build/cov-analysis
+            tar -C build/cov-analysis --strip-components=1 -xzf build/cov-analysis.tgz
+
+            export PATH=/host/build/cov-analysis/bin:/tmp/shirudo-openssl/bin:\$PATH
+            export PKG_CONFIG_PATH=/tmp/shirudo-openssl/lib/pkgconfig
+            export LD_LIBRARY_PATH=/tmp/shirudo-openssl/lib
+
+            # Capture the gcc-driven userspace compiles only; the BPF objects
+            # are built by clang -target bpf and are not analysed.
+            cov-configure --gcc
+            cov-build --dir build/cov-int make -j4 all shirudo-build
+            tar -C build -czf build/cov-int.tgz cov-int
+
+            curl -fsS \
+              --form token="\$token" \
+              --form email="${{ github.actor }}@users.noreply.github.com" \
+              --form file=@build/cov-int.tgz \
+              --form version="\$(git describe --tags --always)" \
+              --form description="GitHub Actions ${{ github.sha }}" \
+              https://scan.coverity.com/builds?project=shirudo-dev%2Fshirudo
+            rm -f build/coverity-token
