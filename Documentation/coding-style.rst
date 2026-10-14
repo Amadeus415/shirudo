@@ -613,7 +613,7 @@ of the function, telling people what it does, and possibly WHY it does
 it.
 
 When commenting the kernel API functions, please use the kernel-doc format.
-See the files at :ref:`Documentation/doc-guide/ <doc_guide>` and
+See the kernel's ``Documentation/doc-guide/`` and
 ``tools/docs/kernel-doc`` for details. Note that the danger of over-commenting
 applies to kernel-doc comments all the same. Do not add boilerplate
 kernel-doc which simply reiterates what's obvious from the signature
@@ -723,7 +723,7 @@ these rules, to quickly re-format parts of your code automatically,
 and to review full files in order to spot coding style mistakes,
 typos and possible improvements. It is also handy for sorting ``#includes``,
 for aligning variables/macros, for reflowing text and other similar tasks.
-See the file :ref:`Documentation/dev-tools/clang-format.rst <clangformat>`
+See the kernel's ``Documentation/dev-tools/clang-format.rst``
 for more details.
 
 Some basic editor settings, such as indentation and line endings, will be
@@ -938,8 +938,7 @@ used.
 The kernel provides the following general purpose memory allocators:
 kmalloc(), kzalloc(), kmalloc_array(), kcalloc(), vmalloc(), and
 vzalloc().  Please refer to the API documentation for further information
-about them.  :ref:`Documentation/core-api/memory-allocation.rst
-<memory_allocation>`
+about them in the kernel's ``Documentation/core-api/memory-allocation.rst``.
 
 The preferred form for passing a size of a struct is the following:
 
