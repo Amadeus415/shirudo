@@ -337,9 +337,13 @@ is the TCG default template under the endorsement policy, so no
 ordinary decryption key can pose as one.  When the evidence carries
 an endorsement certificate, the certificate's key must be that key,
 and with ``--ek-ca`` the certificate must chain to the PEM bundle of
-issuers given; without ``--ek-ca`` the command says the certificate was
-not checked, and without a certificate it says the endorsement key is
-trusted as presented.  It then draws a random 32-byte credential and
+issuers given.  The endorsement key has to be vouched for: by that
+chain, by ``--ek-name`` from an inventory or a platform's API, or
+explicitly waived with ``--trust-presented-ek``, which proves only that
+the same party answers each time; the command makes no challenge
+otherwise.  ``--ak-name`` makes the challenge for the pinned
+attestation key rather than the one the document names.  It then draws
+a random 32-byte credential and
 protects it the way ``TPM2_MakeCredential`` does (Part 1, 24.4): a
 seed only the endorsement key can recover, wrapped with RSA-OAEP under
 the label ``IDENTITY`` for an RSA key or derived by KDFe from an
@@ -379,8 +383,8 @@ exists because many TPMs carry only an RSA endorsement certificate.
 Both run on the operator and touch no TPM.
 
 ``shirudo attest verify --evidence=<path> --nonce=<hex> --ak-name=<hex>
-[--cert=<cert.der> --upatch=<file>... --expect=<name>=<hex>...
---tree-root=<hex>] [--expect-chain=<hex>]
+[--ek-name=<hex>] [--cert=<cert.der> --upatch=<file>...
+--expect=<name>=<hex>... --tree-root=<hex>] [--expect-chain=<hex>]
 [--expect-pcr=<n>=<hex>...] [--expect-bind-pcr=<n>=<hex>...]
 [--require-initrd] [--expect-credential=<hex>] [--allow-runtime-events]
 [--strict-anchor]`` prints one line per check and a verdict.  The
@@ -393,8 +397,9 @@ checks, in order:
    it is the pinned name.  Without ``--ak-name`` the signer is only
    noted, and the command warns.  The endorsement key's name matches
    its public area and that area is the TCG default template under
-   the endorsement policy; with ``--expect-credential`` the document's
-   ``credential`` equals the value the challenge carried.
+   the endorsement policy; with ``--ek-name`` it is the pinned key;
+   with ``--expect-credential`` the document's ``credential`` equals
+   the value the challenge carried.
 3. The quote: ECDSA signature by that key over the ``TPMS_ATTEST``,
    signer equal to the key's qualified name under the endorsement
    hierarchy, the nonce as extra data, the selection equal to

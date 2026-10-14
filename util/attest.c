@@ -869,6 +869,16 @@ int shirudo_attest_verify(const char *evidence, size_t len,
 	} else {
 		note(&rep, "no endorsement key in the evidence");
 	}
+	if (expect->have_ek_name) {
+		uint8_t ek_name[SHIRUDO_TPM_NAME_LEN];
+		size_t n;
+
+		say(&rep, have_ek &&
+		    !hex_bytes(p->ek_name_hex, ek_name, sizeof(ek_name), &n) &&
+		    n == SHIRUDO_TPM_NAME_LEN &&
+		    shirudo_ct_eq(ek_name, expect->ek_name, SHIRUDO_TPM_NAME_LEN),
+		    "endorsement key: the pinned key");
+	}
 	if (have_cred && hex_bytes(p->cred_hex, cred, sizeof(cred), &cred_len)) {
 		rc = -EINVAL;
 		goto out;
@@ -1181,11 +1191,13 @@ static bool cert_describes(const struct shirudo_cert_pubkey *key,
 }
 
 int shirudo_attest_challenge_make(const char *evidence, size_t len,
-				  const char *ek_ca,
+				  const struct shirudo_attest_challenge_policy *pol,
 				  uint8_t credential[SHIRUDO_TPM_CREDENTIAL_LEN],
 				  char **out, size_t *out_len, size_t *cap,
 				  char *report, size_t report_cap)
 {
+	const char *ek_ca = pol->ek_ca;
+	bool vouched = pol->ek_name || pol->trust_presented;
 	struct reporter rep = { .buf = report, .cap = report_cap };
 	char ek_public_hex[2 * SHIRUDO_TPM_PUBLIC_MAX + 1], hex[2 * 256 + 1];
 	char ak_hex[2 * SHIRUDO_TPM_NAME_LEN + 1], ek_type[8];
@@ -1253,6 +1265,19 @@ int shirudo_attest_challenge_make(const char *evidence, size_t len,
 	    (pub.type == SHIRUDO_TPM_ALG_RSA) != rsa)
 		goto out;
 
+	/*
+	 * The operator's pins come first: the challenge is for the key the
+	 * operator enrolled, not for whatever the document names.
+	 */
+	if (pol->ak_name)
+		say(&rep, shirudo_ct_eq(ak_name, pol->ak_name,
+					SHIRUDO_TPM_NAME_LEN),
+		    "attestation key: the pinned key");
+	if (pol->ek_name)
+		say(&rep, shirudo_ct_eq(ek_name, pol->ek_name,
+					SHIRUDO_TPM_NAME_LEN),
+		    "endorsement key: the pinned key");
+
 	/* The key must be an endorsement key, not any decryption key. */
 	shirudo_tpm_object_name(ek_public, ek_public_len, computed);
 	say(&rep, shirudo_ct_eq(computed, ek_name, SHIRUDO_TPM_NAME_LEN),
@@ -1290,15 +1315,24 @@ int shirudo_attest_challenge_make(const char *evidence, size_t len,
 					    "certificate: chains to %s%s%s",
 					    ek_ca, vrc ? ": " : "",
 					    vrc ? reason : "");
-			} else {
+			} else if (vouched) {
 				note(&rep, "endorsement certificate: not "
 				     "checked against an issuer bundle "
 				     "(--ek-ca)");
+			} else {
+				say(&rep, false, "endorsement certificate: "
+				    "not checked against an issuer bundle; "
+				    "pass --ek-ca, pin the key with "
+				    "--ek-name or waive with "
+				    "--trust-presented-ek");
 			}
 		}
-	} else {
+	} else if (vouched) {
 		note(&rep, "no endorsement certificate: the endorsement key "
 		     "is trusted as presented");
+	} else {
+		say(&rep, false, "no endorsement certificate: pin the key "
+		    "with --ek-name or waive with --trust-presented-ek");
 	}
 	if (rep.failed) {
 		rc = -EKEYREJECTED;

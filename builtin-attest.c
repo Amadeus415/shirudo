@@ -58,13 +58,17 @@ static const struct shirudo_help_item verify_options[] = {
 	{ "--allow-runtime-events", "accept loads and unloads after boot" },
 	{ "--strict-anchor",       "require the anchoring PCR to hold only the anchor" },
 	{ "--expect-credential=<hex>", "the credential the challenge given to the target carried" },
+	{ "--ek-name=<hex>",       "the endorsement key name pinned at enrollment" },
 	{ "--expect-bind-pcr=<n>=<hex>", "a PCR value the register was bound under (repeatable)" },
 	{ "--require-initrd",      "fail unless init bound the register from the initrd" },
 };
 
 static const struct shirudo_help_item challenge_options[] = {
 	{ "--evidence=<path>",  "a document the target produced, carrying its keys" },
+	{ "--ak-name=<hex>",    "the attestation key name the challenge is for" },
 	{ "--ek-ca=<bundle>",   "PEM issuers the endorsement certificate must chain to" },
+	{ "--ek-name=<hex>",    "an endorsement key name known out of band" },
+	{ "--trust-presented-ek", "accept an endorsement key nothing vouches for" },
 	{ "--out=<path>",       "write the challenge there (0600)" },
 };
 
@@ -96,7 +100,8 @@ static const struct shirudo_help attest_help = {
 		      "--ak-name=<hex> [options]\n"
 		      "       shirudo attest predict --cert=<cert.der> [options]\n"
 		      "       shirudo attest challenge --evidence=<path> "
-		      "--out=<path> [--ek-ca=<bundle>]",
+		      "--out=<path> --ek-ca=<bundle>|--ek-name=<hex>|"
+		      "--trust-presented-ek [options]",
 	.summary    = "Without a subcommand: emit a TPM-signed evidence document "
 		      "for this\ntarget (quote over the PCRs, certification of "
 		      "the measurement register,\nthis boot's eventlog, the "
@@ -489,6 +494,17 @@ static int cmd_attest_verify(int argc, const char **argv)
 					x.credential))
 				goto out;
 			x.have_credential = true;
+		} else if (!strncmp(a, "--ek-name=", 10)) {
+			size_t n;
+
+			if (parse_hex(a + 10, x.ek_name, sizeof(x.ek_name),
+				      &n) || n != SHIRUDO_TPM_NAME_LEN) {
+				pr_err("attest verify: --ek-name must be %d "
+				       "hex characters",
+				       2 * SHIRUDO_TPM_NAME_LEN);
+				goto out;
+			}
+			x.have_ek_name = true;
 		} else if (!strncmp(a, "--expect-bind-pcr=", 18)) {
 			char *end;
 			unsigned long n = strtoul(a + 18, &end, 10);
@@ -548,11 +564,13 @@ out:
 
 static int cmd_attest_challenge(int argc, const char **argv)
 {
+	struct shirudo_attest_challenge_policy pol = {};
 	uint8_t credential[SHIRUDO_TPM_CREDENTIAL_LEN];
-	const char *evidence_path = NULL, *out_path = NULL, *ek_ca = NULL;
+	uint8_t ak_name[SHIRUDO_TPM_NAME_LEN], ek_name[SHIRUDO_TPM_NAME_LEN];
+	const char *evidence_path = NULL, *out_path = NULL;
 	char *evidence = NULL, *doc = NULL, *report;
 	char hex[2 * SHIRUDO_TPM_CREDENTIAL_LEN + 1];
-	size_t evidence_len = 0, len = 0, cap = 0, i;
+	size_t evidence_len = 0, len = 0, cap = 0, i, n;
 	int rc, ret = 2;
 
 	report = xmalloc(SHIRUDO_ATTEST_REPORT_MAX);
@@ -564,7 +582,25 @@ static int cmd_attest_challenge(int argc, const char **argv)
 		if (!strncmp(a, "--evidence=", 11)) {
 			evidence_path = a + 11;
 		} else if (!strncmp(a, "--ek-ca=", 8)) {
-			ek_ca = a + 8;
+			pol.ek_ca = a + 8;
+		} else if (!strncmp(a, "--ak-name=", 10)) {
+			if (parse_hex(a + 10, ak_name, sizeof(ak_name), &n) ||
+			    n != SHIRUDO_TPM_NAME_LEN) {
+				pr_err("attest challenge: --ak-name must be %d "
+				       "hex characters", 2 * SHIRUDO_TPM_NAME_LEN);
+				goto out;
+			}
+			pol.ak_name = ak_name;
+		} else if (!strncmp(a, "--ek-name=", 10)) {
+			if (parse_hex(a + 10, ek_name, sizeof(ek_name), &n) ||
+			    n != SHIRUDO_TPM_NAME_LEN) {
+				pr_err("attest challenge: --ek-name must be %d "
+				       "hex characters", 2 * SHIRUDO_TPM_NAME_LEN);
+				goto out;
+			}
+			pol.ek_name = ek_name;
+		} else if (!strcmp(a, "--trust-presented-ek")) {
+			pol.trust_presented = true;
 		} else if (!strncmp(a, "--out=", 6)) {
 			out_path = a + 6;
 		} else if (shirudo_is_help(a)) {
@@ -582,7 +618,7 @@ static int cmd_attest_challenge(int argc, const char **argv)
 	}
 	if (read_evidence(evidence_path, &evidence, &evidence_len))
 		goto out;
-	rc = shirudo_attest_challenge_make(evidence, evidence_len, ek_ca,
+	rc = shirudo_attest_challenge_make(evidence, evidence_len, &pol,
 					   credential, &doc, &len, &cap, report,
 					   SHIRUDO_ATTEST_REPORT_MAX);
 	fputs(report, stdout);

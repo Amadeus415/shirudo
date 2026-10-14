@@ -334,9 +334,13 @@ and request the next evidence with it::
 
 The target's TPM recovers the credential only if the attestation key
 and the endorsement key live in it; pass the value as
-``--expect-credential=<hex>`` to ``verify`` below.  Leave ``--ek-ca``
-out and the certificate is not checked against an issuer; a virtual
-TPM without a certificate is pinned by its endorsement key name.
+``--expect-credential=<hex>`` to ``verify`` below.  ``--ek-ca`` names
+the manufacturer's issuers the endorsement certificate must chain to;
+an endorsement key known from an inventory or a platform's API is
+pinned with ``--ek-name`` instead, and ``--trust-presented-ek`` accepts
+one nothing vouches for, which proves only that the same party answers
+each time.  Pass ``--ak-name`` with the pinned attestation key so the
+challenge is made for it and not for whatever the document names.
 
 On the operator, with the artifacts the target was given::
 
@@ -358,8 +362,8 @@ firmware PCR to a value you know (``systemd-measure calculate`` for a
 UKI's PCR 11); ``--expect-bind-pcr=11=<hex>`` pins the PCR 11 value the
 register was bound under, the ``enter-initrd`` phase value the same
 tool computes, and ``--require-initrd`` refuses a binding made from the
-root file system; ``--strict-anchor`` fails instead of noting when PCR
-9 holds more than
+root file system; ``--ek-name`` pins the endorsement key;
+``--strict-anchor`` fails instead of noting when PCR 9 holds more than
 the initrd and the anchor.  Neither command needs the other machine.
 
 

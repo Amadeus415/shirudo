@@ -62,8 +62,15 @@ int shirudo_attest_evidence(const uint8_t *nonce, size_t nonce_len,
  * is xmalloc'd to *cap bytes. -EKEYREJECTED when a check failed and no
  * challenge was made.
  */
+struct shirudo_attest_challenge_policy {
+	const char	*ek_ca;		/* issuer bundle, or NULL */
+	const uint8_t	*ak_name;	/* pinned attestation key, or NULL */
+	const uint8_t	*ek_name;	/* pinned endorsement key, or NULL */
+	bool		trust_presented; /* accept an unvouched endorsement key */
+};
+
 int shirudo_attest_challenge_make(const char *evidence, size_t len,
-				  const char *ek_ca,
+				  const struct shirudo_attest_challenge_policy *pol,
 				  uint8_t credential[SHIRUDO_TPM_CREDENTIAL_LEN],
 				  char **out, size_t *out_len, size_t *cap,
 				  char *report, size_t report_cap);
@@ -83,6 +90,8 @@ struct shirudo_attest_expect {
 	uint8_t		pcrs[24][32];
 	bool		have_credential;
 	uint8_t		credential[SHIRUDO_TPM_CREDENTIAL_LEN];
+	bool		have_ek_name;
+	uint8_t		ek_name[SHIRUDO_TPM_NAME_LEN];
 	bool		require_initrd;	/* the binding must be the initrd's */
 	uint32_t	bind_expect_mask; /* PCR values at binding time */
 	uint8_t		bind_values[24][32];
