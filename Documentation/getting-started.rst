@@ -107,7 +107,8 @@ Review before shipping::
 ``info`` prints the header, the sections, the attach metadata and the
 signed decoders.  It is an offline view of the file; the program as
 the kernel actually loaded it is shown by ``upatch get`` after the
-load.
+load.  The `upatch <upatch.rst>`__ guide covers the BPF side of a
+upatch, decoders, serializers and the release workflow.
 
 
 4) Initialise a target
@@ -270,7 +271,8 @@ upgrade::
     sudo shirudo bpm uninstall bpf-observability
 
 ``shirudo bpm install oci://quay.io/example/bpf-observability:1.0.0``
-installs a reference directly.  ``bpm info`` prints a package's README
+installs a reference directly; the `upatch <upatch.rst>`__ guide has
+the Beefile reference and the tree workflow in full.  ``bpm info`` prints a package's README
 before installing it, from a local ``.bee`` or a reference.  ``bpm
 uninstall`` loads the unload directives the package shipped.
 

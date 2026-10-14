@@ -42,6 +42,12 @@ Deploying shirudo
     creating a signing key, initialising a target, loading an upatch
     and publishing packages to a registry.
 
+Writing and shipping upatches
+    `upatch <upatch.rst>`__ is the author's and operator's guide: the
+    BPF side of a upatch, building and signing, testing on a target,
+    the Beefile and ``bpm build``, publishing to a registry and to the
+    signed upatch tree, and what a target does with both.
+
 Understanding what shirudo does
     `architecture <architecture.rst>`__ describes why shirudo exists,
     its design properties, the signed-loader path, the kernel
