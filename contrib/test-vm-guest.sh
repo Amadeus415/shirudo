@@ -334,6 +334,15 @@ fi
 cmp -s "$package_cert" /var/lib/shirudo/keys/cert.der ||
 	install -m 0644 "$package_cert" \
 		/var/lib/shirudo/keys/cert.der
+# The own-keyring certificate is a second trusted certificate, so the
+# enrolled set has two members for the tests to work with.
+own_cert="$BUNDLE/fixtures/own.der"
+if [[ -s "$own_cert" ]]; then
+	install -d -m 0700 /var/lib/shirudo/keys/trusted
+	own_fp="$(/usr/local/bin/shirudo bpm key fingerprint "$own_cert")"
+	cmp -s "$own_cert" "/var/lib/shirudo/keys/trusted/$own_fp.der" ||
+		install -m 0644 "$own_cert" "/var/lib/shirudo/keys/trusted/$own_fp.der"
+fi
 rm -f /var/lib/shirudo/keys/signing_key.pem
 init_args=()
 if [[ "$SKIP_SEAL" == 1 ]]; then

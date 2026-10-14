@@ -26,6 +26,12 @@ const char *shirudo_sysroot(void)
 	return env && *env ? env : "/sysroot";
 }
 
+const char *shirudo_keys_dir(void)
+{
+	return shirudo_in_initrd() ? SHIRUDO_INITRD_KEYS_DIR :
+				     SHIRUDO_KEYS_DIR;
+}
+
 const char *shirudo_cert_path(void)
 {
 	return shirudo_in_initrd() ? SHIRUDO_INITRD_CERT_PATH :

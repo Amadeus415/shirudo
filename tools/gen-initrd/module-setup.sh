@@ -12,8 +12,10 @@
 #   shirudo_binary=<file>       the binary to copy
 #   shirudo_binary_path=<path>  where it lives on the root file system,
 #                               which is where the initrd runs it from
-#   shirudo_cert=<file>         the certificate (default:
+#   shirudo_cert=<file>         the primary certificate (default:
 #                               /var/lib/shirudo/keys/cert.der)
+#   shirudo_trusted_dir=<dir>   the further trusted certificates
+#                               (default: trusted/ beside the primary)
 #   shirudo_conf=<file>         shirudo.conf, when the TPM has an owner
 #                               password (default: /etc/shirudo/shirudo.conf)
 #   shirudo_unit=<file>         shirudo-initrd.service (default: the
@@ -66,7 +68,7 @@ installkernel() {
 }
 
 install() {
-	local bin path cert conf unit
+	local bin path cert conf unit trusted f
 
 	bin=${shirudo_binary:-$(shirudo_binary_default)}
 	path=${shirudo_binary_path:-${bin#"$dracutsysrootdir"}}
@@ -79,8 +81,18 @@ install() {
 	inst_binary "$bin" "$path" || return 1
 	# bpm key keeps cert.der as a symlink into keys/; the initrd gets
 	# the file, not a link into a tree it does not have.
+	trusted=${shirudo_trusted_dir:-$(dirname "$cert")/trusted}
 	cert=$(readlink -f "$cert") || return 1
-	inst_simple "$cert" /etc/shirudo/cert.der || return 1
+	inst_simple "$cert" /etc/shirudo/keys/cert.der || return 1
+	# The trusted set is enrolled with the primary; the revoked ones
+	# stay on the root, where init reads them through its bind.
+	if [[ -d $trusted ]]; then
+		for f in "$trusted"/*.der; do
+			[[ -f $f ]] || continue
+			inst_simple "$(readlink -f "$f")" \
+				"/etc/shirudo/keys/trusted/${f##*/}" || return 1
+		done
+	fi
 	if [[ -r $conf ]]; then
 		inst_simple "$conf" /etc/shirudo/shirudo.conf || return 1
 	fi

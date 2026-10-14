@@ -18,8 +18,12 @@
 #define SHIRUDO_KEYS_DIR_ENV		"SHIRUDO_KEYS_DIR"
 #define SHIRUDO_CERT_FILE		"cert.der"
 #define SHIRUDO_CERT_PATH		SHIRUDO_KEYS_DIR "/" SHIRUDO_CERT_FILE
-/* The initrd's own copy of the certificate, measured with the initrd. */
-#define SHIRUDO_INITRD_CERT_PATH	"/etc/shirudo/" SHIRUDO_CERT_FILE
+/* Further certificates enrolled beside cert.der, and the revoked ones. */
+#define SHIRUDO_KEYS_TRUSTED_DIR	SHIRUDO_KEYS_DIR "/trusted"
+#define SHIRUDO_KEYS_REVOKED_DIR	SHIRUDO_KEYS_DIR "/revoked"
+/* The initrd's own copy of the keys, measured with the initrd. */
+#define SHIRUDO_INITRD_KEYS_DIR		"/etc/shirudo/keys"
+#define SHIRUDO_INITRD_CERT_PATH	SHIRUDO_INITRD_KEYS_DIR "/" SHIRUDO_CERT_FILE
 #define SHIRUDO_UPATCHES_DIR		SHIRUDO_VAR_LIB "/upatches"
 #define SHIRUDO_INCOMING_DIR		SHIRUDO_VAR_LIB "/incoming"
 #define SHIRUDO_LOCKS_DIR		SHIRUDO_VAR_LIB "/locks"

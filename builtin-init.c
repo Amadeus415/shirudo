@@ -38,6 +38,7 @@
 #include "util/identity.h"
 #include "util/initrd.h"
 #include "util/keyring.h"
+#include "util/keys.h"
 #include "util/loader.h"
 #include "util/log.h"
 #include "util/malloc.h"
@@ -101,180 +102,259 @@ static int read_der(const char *path, unsigned char **out, size_t *out_sz)
 	return 0;
 }
 
-static int read_cert_der(unsigned char **out, size_t *out_sz)
+static void keyring_count_asymmetric(key_serial_t serial, const char *type,
+				     const char *description, void *ud)
 {
-	return read_der(shirudo_cert_path(), out, out_sz);
-}
-
-static void keyring_note_asymmetric(key_serial_t serial, const char *type,
-				    const char *description, void *ud)
-{
-	bool *found = ud;
+	size_t *n = ud;
 
 	(void)serial;
 	(void)description;
 	if (strcmp(type, "asymmetric") == 0)
-		*found = true;
+		(*n)++;
 }
 
-static int keyring_has_cert(key_serial_t ring)
+/* The asymmetric keys a keyring holds, or -errno. */
+static int keyring_asymmetric_count(key_serial_t ring)
 {
-	bool found = false;
-	int rc = shirudo_keyring_list(ring, keyring_note_asymmetric, &found);
+	size_t n = 0;
+	int rc = shirudo_keyring_list(ring, keyring_count_asymmetric, &n);
 
 	if (rc)
 		return rc;
-	return found ? 1 : 0;
+	return (int)n;
 }
 
 /* Set once init_keyring has chosen the trust anchor for this boot. */
 static bool bpf_keyring_mode;
 
+/* The certificates init enrolled this boot; the init event covers them. */
+static struct shirudo_trusted_set enrolled;
+
 /* Set when init runs in the initrd, the root file system at /sysroot. */
 static bool initrd_mode;
 
 /*
- * The initrd enrols its own, measured copy of the certificate. The
- * root's copy is what every later command reads, so the two differing
- * means an initrd that was not regenerated after the certificate
- * changed: worth a warning, not a refusal, since the measured copy is
- * the one a verifier pins through PCR 11.
+ * The initrd enrols its own, measured copies of the keys. The root's
+ * copies are what every later command reads, so the two differing
+ * means an initrd that was not regenerated after the keys changed:
+ * worth a warning, not a refusal, since the measured copies are the
+ * ones a verifier pins through PCR 11.
  */
-static void warn_root_cert_differs(const unsigned char *der, size_t der_sz)
+static void warn_root_keys_differ(const struct shirudo_trusted_set *set)
 {
-	unsigned char *root = NULL;
-	size_t root_sz = 0;
+	struct shirudo_trusted_set root;
+	bool differ;
+	size_t i;
 	int rc;
 
-	rc = read_der(SHIRUDO_CERT_PATH, &root, &root_sz);
+	rc = shirudo_keys_load(SHIRUDO_KEYS_DIR, NULL, true, &root);
 	if (rc) {
-		pr_warn("initrd: the root file system has no certificate at "
-			"%s (%s); %s is the anchor", SHIRUDO_CERT_PATH,
-			strerror(-rc), SHIRUDO_INITRD_CERT_PATH);
+		pr_warn("initrd: the root file system has no certificate "
+			"under %s (%s); the copies under %s are the anchor",
+			SHIRUDO_KEYS_DIR, strerror(-rc),
+			SHIRUDO_INITRD_KEYS_DIR);
 		return;
 	}
-	if (root_sz != der_sz || memcmp(root, der, der_sz) != 0)
-		pr_warn("initrd: %s differs from the root file system's %s; "
-			"the initrd's copy is the anchor, regenerate the "
-			"initrd after rotating the certificate",
-			SHIRUDO_INITRD_CERT_PATH, SHIRUDO_CERT_PATH);
-	xfree(root, root_sz);
+	differ = root.n != set->n;
+	for (i = 0; !differ && i < set->n; i++)
+		differ = memcmp(root.certs[i].sha256, set->certs[i].sha256,
+				32) != 0;
+	if (differ)
+		pr_warn("initrd: the keys under %s differ from the root "
+			"file system's under %s; the initrd's copies are the "
+			"anchor, regenerate the initrd after changing the keys",
+			SHIRUDO_INITRD_KEYS_DIR, SHIRUDO_KEYS_DIR);
+}
+
+/* How many of the set's certificates <ring> holds, or -errno. */
+static int keyring_holds_set(key_serial_t ring,
+			     const struct shirudo_trusted_set *set)
+{
+	size_t i, held = 0;
+
+	for (i = 0; i < set->n; i++) {
+		unsigned char *der = NULL;
+		size_t der_sz = 0;
+		int rc;
+
+		rc = read_der(set->certs[i].path, &der, &der_sz);
+		if (rc)
+			return rc;
+		rc = shirudo_keyring_holds_cert(ring, der, der_sz);
+		xfree(der, der_sz);
+		if (rc < 0)
+			return rc;
+		held += rc;
+	}
+	return (int)held;
 }
 
 /*
  * The bpf keyring is the trust anchor a signed loader is verified
  * against once it is sealed. Booted with bpf.keyring_unsealed=1 it
  * takes keys until the first seal, which is init's job from the initrd:
- * enrol the certificate and seal. Found sealed, it either holds this
- * certificate (-EEXIST: use it) or was sealed empty by the kernel at
- * boot (-ENOKEY: the user keyring stages the certificate until the
- * target reboots into the production configuration); sealed around
- * someone else's key, it is refused.
+ * enrol every trusted certificate and seal. Found sealed, it either
+ * holds exactly that set (-EEXIST: use it) or was sealed empty by the
+ * kernel at boot (-ENOKEY: the user keyring stages the primary
+ * certificate until the target reboots into the production
+ * configuration); sealed around anything else, it is refused.
  */
-static int init_bpf_keyring(key_serial_t ring, const unsigned char *der,
-			    size_t der_sz)
+static int init_bpf_keyring(key_serial_t ring,
+			    const struct shirudo_trusted_set *set)
 {
-	key_serial_t key;
-	int rc;
+	int count, held, rc;
+	size_t i;
 
-	key = shirudo_keyring_bpf_add_cert(der, der_sz);
-	if (key >= 0) {
-		rc = shirudo_keyring_bpf_seal();
+	for (i = 0; i < set->n; i++) {
+		unsigned char *der = NULL;
+		size_t der_sz = 0;
+		key_serial_t key;
+
+		rc = read_der(set->certs[i].path, &der, &der_sz);
 		if (rc) {
-			pr_err("bpf keyring: certificate enrolled but the "
-			       "keyring could not be sealed: %s",
+			pr_err("read %s: %s", set->certs[i].path,
 			       strerror(-rc));
 			return rc;
 		}
-		pr_info("bpf keyring serial=%d: certificate enrolled (key "
-			"serial=%d) and sealed", (int)ring, (int)key);
-		return 0;
+		key = shirudo_keyring_bpf_add_cert(der, der_sz);
+		xfree(der, der_sz);
+		if (key >= 0) {
+			pr_info("bpf keyring serial=%d: %s enrolled (key "
+				"serial=%d)", (int)ring, set->certs[i].path,
+				(int)key);
+			continue;
+		}
+		if (key != -EPERM && key != -EACCES) {
+			pr_err("bpf keyring: add %s: %s", set->certs[i].path,
+			       strerror(-key));
+			if (key == -ENOENT || key == -ENOPKG)
+				pr_err("kernel cannot verify this cert's "
+				       "public-key algorithm (ML-DSA needs "
+				       "CONFIG_CRYPTO_MLDSA=y and "
+				       "CONFIG_CRYPTO_SHA512=y; see "
+				       "Documentation/requirements.rst)");
+			return key;
+		}
+		if (i > 0) {
+			pr_err("bpf keyring serial=%d was sealed while init "
+			       "enrolled the certificates (tampered)",
+			       (int)ring);
+			return -EKEYREJECTED;
+		}
+		/* Sealed before init: by init earlier this boot, or not. */
+		held = keyring_holds_set(ring, set);
+		if (held < 0) {
+			pr_err("bpf keyring: compare: %s", strerror(-held));
+			return held;
+		}
+		count = keyring_asymmetric_count(ring);
+		if (count < 0) {
+			pr_err("bpf keyring: list: %s", strerror(-count));
+			return count;
+		}
+		if (count == 0)
+			return -ENOKEY;
+		if ((size_t)held == set->n && (size_t)count == set->n) {
+			pr_info("bpf keyring serial=%d: already holds the %zu "
+				"trusted certificate%s, sealed this boot",
+				(int)ring, set->n, set->n == 1 ? "" : "s");
+			return -EEXIST;
+		}
+		pr_err("bpf keyring serial=%d is sealed around %d key%s, "
+		       "%d of the %zu trusted certificates (tampered)",
+		       (int)ring, count, count == 1 ? "" : "s", held, set->n);
+		return -EKEYREJECTED;
 	}
-	if (key != -EPERM && key != -EACCES) {
-		pr_err("bpf keyring: add cert: %s", strerror(-key));
-		if (key == -ENOENT || key == -ENOPKG)
-			pr_err("kernel cannot verify this cert's public-key "
-			       "algorithm (ML-DSA needs CONFIG_CRYPTO_MLDSA=y "
-			       "and CONFIG_CRYPTO_SHA512=y; see "
-			       "Documentation/requirements.rst)");
-		return key;
-	}
-	rc = shirudo_keyring_holds_cert(ring, der, der_sz);
-	if (rc < 0) {
-		pr_err("bpf keyring: compare: %s", strerror(-rc));
-		return rc;
-	}
+	rc = shirudo_keyring_bpf_seal();
 	if (rc) {
-		pr_info("bpf keyring serial=%d: already enrolled and sealed "
-			"this boot", (int)ring);
-		return -EEXIST;
-	}
-	rc = keyring_has_cert(ring);
-	if (rc < 0) {
-		pr_err("bpf keyring: list: %s", strerror(-rc));
+		pr_err("bpf keyring: certificates enrolled but the keyring "
+		       "could not be sealed: %s", strerror(-rc));
 		return rc;
 	}
-	if (rc == 0)
-		return -ENOKEY;
-	pr_err("bpf keyring serial=%d is sealed around a certificate that is "
-	       "not %s (tampered)", (int)ring, SHIRUDO_CERT_PATH);
-	return -EKEYREJECTED;
+	pr_info("bpf keyring serial=%d: %zu certificate%s enrolled and sealed",
+		(int)ring, set->n, set->n == 1 ? "" : "s");
+	return 0;
 }
 
 static int init_keyring(void)
 {
+	const struct shirudo_trusted_cert *primary = NULL;
+	struct shirudo_trusted_set set;
 	struct shirudo_identity id;
 	unsigned char *der = NULL;
 	key_serial_t ring, key;
-	size_t der_sz = 0;
+	size_t der_sz = 0, i;
 	bool frozen;
 	int rc;
 
-	rc = read_cert_der(&der, &der_sz);
+	rc = shirudo_keys_load(shirudo_keys_dir(), SHIRUDO_KEYS_REVOKED_DIR,
+			       true, &set);
 	if (rc) {
-		pr_err("read %s: %s", shirudo_cert_path(), strerror(-rc));
+		pr_err("read the keys under %s: %s", shirudo_keys_dir(),
+		       strerror(-rc));
 		return rc;
 	}
+	if (set.n_revoked)
+		pr_warn("%zu revoked certificate%s under %s left out; "
+			"regenerate the initrd", set.n_revoked,
+			set.n_revoked == 1 ? "" : "s", shirudo_keys_dir());
 	if (initrd_mode)
-		warn_root_cert_differs(der, der_sz);
+		warn_root_keys_differ(&set);
 	frozen = shirudo_identity_read(&id) == 0;
 
 	ring = shirudo_keyring_bpf_serial();
 	if (ring > 0) {
-		rc = init_bpf_keyring(ring, der, der_sz);
+		rc = init_bpf_keyring(ring, &set);
 		if (rc == 0 || rc == -EEXIST) {
-			xfree(der, der_sz);
 			if (frozen &&
 			    (id.keyring_type != SHIRUDO_SIG_KEYRING_BPF ||
 			     id.keyring_serial != ring)) {
 				pr_err("bpf keyring serial=%d holds the "
-				       "certificate, but the anchor frozen "
+				       "certificates, but the anchor frozen "
 				       "this boot is another keyring "
 				       "(tampered)", (int)ring);
 				return -EKEYREJECTED;
 			}
 			bpf_keyring_mode = true;
+			enrolled = set;
 			return 0;
 		}
-		if (rc != -ENOKEY) {
-			xfree(der, der_sz);
+		if (rc != -ENOKEY)
 			return rc;
-		}
 		pr_warn("bpf keyring serial=%d is sealed empty; staging the "
-			"certificate in the user keyring. Boot with "
+			"primary certificate in the user keyring. Boot with "
 			"bpf.keyring_unsealed=1 and run init from the initrd "
 			"for the production trust anchor", (int)ring);
 	} else {
 		pr_warn("kernel has no bpf keyring (%s); staging the "
-			"certificate in the user keyring", strerror(-ring));
+			"primary certificate in the user keyring",
+			strerror(-ring));
 	}
 
 	/*
-	 * Staging. The keyring found by name must be the one whose serial
-	 * init froze this boot, if it froze one: a substitute or a missing
-	 * keyring cannot be repaired before the next boot, because the
-	 * frozen identity is what lsm/bpf_prog_load enforces.
+	 * Staging holds the primary certificate alone: the user keyring
+	 * is a stopgap until the reboot, not a place for a set. The
+	 * keyring found by name must be the one whose serial init froze
+	 * this boot, if it froze one: a substitute or a missing keyring
+	 * cannot be repaired before the next boot, because the frozen
+	 * identity is what lsm/bpf_prog_load enforces.
 	 */
+	for (i = 0; i < set.n; i++)
+		if (set.certs[i].primary)
+			primary = &set.certs[i];
+	if (!primary) {
+		pr_err("no primary certificate at %s", shirudo_cert_path());
+		return -ENOENT;
+	}
+	rc = read_der(primary->path, &der, &der_sz);
+	if (rc) {
+		pr_err("read %s: %s", primary->path, strerror(-rc));
+		return rc;
+	}
+	memset(&enrolled, 0, sizeof(enrolled));
+	enrolled.certs[0] = *primary;
+	enrolled.n = 1;
+
 	ring = shirudo_keyring_find(SHIRUDO_KEYRING_NAME);
 	if (frozen && id.keyring_type == SHIRUDO_SIG_KEYRING_USER &&
 	    ring != id.keyring_serial) {
@@ -1110,6 +1190,14 @@ static int append_init_event(const struct shirudo_measured_upatch *set,
 	shirudo_json_kv_string(&e, "boot_id", boot_id);
 	shirudo_json_kv_int(&e, "tpm_reset_count", info->reset_count);
 	shirudo_json_kv_string(&e, "cert_sha256", cert_hex);
+	shirudo_json_arr_open(&e, "certs");
+	for (i = 0; i < enrolled.n; i++) {
+		char sha_hex[HEXLEN(32)];
+
+		shirudo_hex_encode(enrolled.certs[i].sha256, 32, sha_hex);
+		shirudo_json_str(&e, sha_hex);
+	}
+	shirudo_json_arr_close(&e);
 	shirudo_json_kv_string(&e, "set_digest", set_hex);
 	shirudo_json_kv_string(&e, "tree_root", tree_hex);
 	shirudo_json_arr_open(&e, "set");
@@ -1200,12 +1288,11 @@ static int chain_extend_init(struct shirudo_measured_upatch *set, size_t n)
 		}
 	}
 
-	rc = shirudo_chain_cert_sha256(cert_sha);
-	if (rc) {
-		pr_err("chain: read %s: %s", shirudo_cert_path(),
-		       strerror(-rc));
-		return rc;
+	if (!enrolled.n) {
+		pr_err("chain: no certificate enrolled");
+		return -ENOENT;
 	}
+	shirudo_keys_set_digest(&enrolled, cert_sha);
 
 	/*
 	 * init_event = SHA256("shirudo-init\0" || cert_sha256 || set_digest

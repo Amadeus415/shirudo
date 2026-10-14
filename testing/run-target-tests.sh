@@ -34,6 +34,7 @@ for t in \
 	t1117-otel-serialized-metric.sh \
 	t1121-bpf-keyring.sh \
 	t1122-initrd.sh \
+	t1123-keys.sh \
 	t1106-keyring-swap.sh
 do
 	if sh "$t"; then

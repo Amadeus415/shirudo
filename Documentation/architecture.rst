@@ -297,7 +297,7 @@ instead, and the target stays in staging.  It does, in order:
    --check-only`` stops here.  In the initrd, told by
    ``/etc/initrd-release``, ``init`` also binds the root's
    ``/var/lib/shirudo`` read-only at its usual path and reads the
-   certificate from the initrd's own ``/etc/shirudo/cert.der``;
+   certificate from the initrd's own ``/etc/shirudo/keys/cert.der``;
 2. mounts the private bpffs at ``/run/shirudo/bpffs`` with
    ``mode=0700,nosuid,nodev,noexec``;
 3. removes state left behind by features that no longer exist;

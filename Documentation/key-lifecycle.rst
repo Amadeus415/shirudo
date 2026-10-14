@@ -70,7 +70,7 @@ A target needs the certificate in two places, for two purposes.
     list`` and ``bpm key fingerprint`` show what is installed; the
     fingerprint is the SHA-256 of the certificate's public key.
 
-``/etc/shirudo/cert.der`` in the initrd
+``/etc/shirudo/keys/cert.der`` in the initrd
     The copy the production configuration enrols.  dracut's shirudo
     module copies the active certificate into the initrd when the
     initrd is built, so the enrolment is done by measured code with a

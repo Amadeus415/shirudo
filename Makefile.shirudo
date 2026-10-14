@@ -131,6 +131,7 @@ UTIL_SRCS := \
     util/loader.c \
     util/upatch.c \
     util/keyring.c \
+    util/keys.c \
     util/identity.c \
     util/initrd.c \
     util/paths.c \
@@ -480,6 +481,7 @@ TEST_HELPERS := testing/helper/test-json-parser \
                 testing/helper/test-tpm-wire \
                 testing/helper/test-register \
                 testing/helper/test-eventlog \
+                testing/helper/test-keys \
                 $(TPMSIM_HELPER) \
 		testing/helper/test-config \
 		testing/helper/test-bpm-source \
@@ -511,6 +513,10 @@ REGISTER_OBJS := util/chain.o util/tpm.o util/tpm_wire.o util/eventlog.o \
                  util/seal.o util/config.o util/log.o util/malloc.o \
                  util/initrd.o $(VERSION_OBJ)
 REGISTER_LIBS := -lcrypto -lssl -ltss2-esys -ltss2-tctildr
+
+testing/helper/test-keys: testing/helper/test-keys.c util/keys.o $(REGISTER_OBJS)
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
 testing/helper/test-eventlog: testing/helper/test-eventlog.c $(REGISTER_OBJS)
 	@printf '  CC      $@\n'

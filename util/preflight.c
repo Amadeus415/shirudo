@@ -20,6 +20,7 @@
 #include "initrd.h"
 #include "crypto.h"
 #include "kernel_abi.h"
+#include "keys.h"
 #include "loader.h"
 #include "malloc.h"
 #include "paths.h"
@@ -182,14 +183,14 @@ static void check_cert(struct shirudo_preflight_result *r)
 		     shirudo_cert_path());
 }
 
-static int read_cert(unsigned char **out, size_t *out_sz)
+static int read_cert(const char *path, unsigned char **out, size_t *out_sz)
 {
 	unsigned char *buf;
 	struct stat st;
 	ssize_t n;
 	int fd;
 
-	fd = open(shirudo_cert_path(), O_RDONLY | O_CLOEXEC);
+	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return -errno;
 	if (fstat(fd, &st) < 0) {
@@ -223,33 +224,54 @@ static int read_cert(unsigned char **out, size_t *out_sz)
  * disk is refused before any kernel state is touched, so a fleet cannot
  * drift back to RSA by provisioning the wrong cert.der.
  */
+/*
+ * The certificates init would enrol: cert.der and the trusted set
+ * beside it. A set that cannot be read is reported by cert_on_disk;
+ * the checks below skip rather than fail twice.
+ */
+static int preflight_keys(struct shirudo_trusted_set *set)
+{
+	return shirudo_keys_load(shirudo_keys_dir(), SHIRUDO_KEYS_REVOKED_DIR,
+				 true, set);
+}
+
 static void check_cert_algorithm(struct shirudo_preflight_result *r)
 {
 	struct shirudo_preflight_check *c =
 		next_slot(r, SHIRUDO_PRE_CERT_ALGORITHM, "cert_algorithm");
-	struct shirudo_cert cert = {};
-	char name[64];
-	int rc;
+	struct shirudo_trusted_set set;
+	size_t i;
 
-	if (shirudo_cert_read_file(shirudo_cert_path(), &cert)) {
+	if (preflight_keys(&set)) {
 		pass(c);
 		snprintf(c->detail, sizeof(c->detail),
 			 "skipped (cert unreadable)");
 		return;
 	}
-	rc = shirudo_cert_key_algorithm(&cert, name, sizeof(name));
-	shirudo_cert_free(&cert);
-	if (rc) {
-		fail(r, c, "%s: cannot determine public-key algorithm",
-		     shirudo_cert_path());
-		return;
+	for (i = 0; i < set.n; i++) {
+		struct shirudo_cert cert = {};
+		char name[64];
+		int rc;
+
+		if (shirudo_cert_read_file(set.certs[i].path, &cert)) {
+			fail(r, c, "%s: cannot parse", set.certs[i].path);
+			return;
+		}
+		rc = shirudo_cert_key_algorithm(&cert, name, sizeof(name));
+		shirudo_cert_free(&cert);
+		if (rc) {
+			fail(r, c, "%s: cannot determine public-key algorithm",
+			     set.certs[i].path);
+			return;
+		}
+		if (strcmp(name, "ML-DSA-87") != 0) {
+			fail(r, c, "%s is %s; shirudo accepts only ML-DSA-87 "
+			     "certificates (re-key with shirudo genkey)",
+			     set.certs[i].path, name);
+			return;
+		}
 	}
-	if (strcmp(name, "ML-DSA-87") == 0)
-		pass(c);
-	else
-		fail(r, c, "%s is %s; shirudo accepts only ML-DSA-87 "
-		     "certificates (re-key with shirudo genkey)",
-		     shirudo_cert_path(), name);
+	pass(c);
 }
 
 /*
@@ -266,37 +288,48 @@ static void check_cert_kernel_algo(struct shirudo_preflight_result *r)
 {
 	struct shirudo_preflight_check *c =
 		next_slot(r, SHIRUDO_PRE_CERT_KERNEL_ALGO, "cert_kernel_support");
-	unsigned char *der = NULL;
-	size_t der_sz = 0;
-	long key;
-	int rc;
+	struct shirudo_trusted_set set;
+	size_t i;
 
-	rc = read_cert(&der, &der_sz);
-	if (rc) {
+	if (preflight_keys(&set)) {
 		pass(c);
 		snprintf(c->detail, sizeof(c->detail),
-			 "skipped (cert unreadable: %s)", strerror(-rc));
+			 "skipped (cert unreadable)");
 		return;
 	}
-	key = syscall(__NR_add_key, "asymmetric", "", der, der_sz,
-		      (long)KEY_SPEC_THREAD_KEYRING);
-	rc = key < 0 ? errno : 0;
-	xfree(der, der_sz);
-	syscall(__NR_keyctl, KEYCTL_CLEAR, (long)KEY_SPEC_THREAD_KEYRING,
-		0L, 0L, 0L);
-	if (!rc) {
-		pass(c);
+	for (i = 0; i < set.n; i++) {
+		unsigned char *der = NULL;
+		size_t der_sz = 0;
+		long key;
+		int rc;
+
+		rc = read_cert(set.certs[i].path, &der, &der_sz);
+		if (rc) {
+			fail(r, c, "%s: %s", set.certs[i].path, strerror(-rc));
+			return;
+		}
+		key = syscall(__NR_add_key, "asymmetric", "", der, der_sz,
+			      (long)KEY_SPEC_THREAD_KEYRING);
+		rc = key < 0 ? errno : 0;
+		xfree(der, der_sz);
+		syscall(__NR_keyctl, KEYCTL_CLEAR,
+			(long)KEY_SPEC_THREAD_KEYRING, 0L, 0L, 0L);
+		if (!rc)
+			continue;
+		if (rc == ENOENT || rc == ENOPKG)
+			fail(r, c,
+			     "kernel cannot verify the public-key algorithm of "
+			     "%s (ML-DSA certs need CONFIG_CRYPTO_MLDSA=y and "
+			     "CONFIG_CRYPTO_SHA512=y; see "
+			     "Documentation/requirements.rst)",
+			     set.certs[i].path);
+		else
+			fail(r, c, "kernel rejected %s: %s "
+			     "(add_key asymmetric)", set.certs[i].path,
+			     strerror(rc));
 		return;
 	}
-	if (rc == ENOENT || rc == ENOPKG)
-		fail(r, c,
-		     "kernel cannot verify the public-key algorithm of %s "
-		     "(ML-DSA certs need CONFIG_CRYPTO_MLDSA=y and "
-		     "CONFIG_CRYPTO_SHA512=y; see Documentation/requirements.rst)",
-		     shirudo_cert_path());
-	else
-		fail(r, c, "kernel rejected %s: %s (add_key asymmetric)",
-		     shirudo_cert_path(), strerror(rc));
+	pass(c);
 }
 
 static void check_keyring(struct shirudo_preflight_result *r)

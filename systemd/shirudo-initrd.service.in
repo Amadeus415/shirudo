@@ -18,7 +18,7 @@
 Description=shirudo: bring up the BPF LSM and bind the register from the initrd
 DefaultDependencies=no
 ConditionPathExists=/etc/initrd-release
-ConditionPathExists=/etc/shirudo/cert.der
+ConditionPathExists=/etc/shirudo/keys/cert.der
 After=initrd-root-fs.target tpm2.target systemd-pcrphase-initrd.service
 After=systemd-tpm2-setup-early.service
 Before=initrd.target initrd-switch-root.target shutdown.target

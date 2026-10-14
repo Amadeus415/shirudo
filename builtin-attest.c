@@ -23,6 +23,7 @@
 #include "util/hex.h"
 #include "util/io.h"
 #include "util/json.h"
+#include "util/keys.h"
 #include "util/log.h"
 #include "util/macros.h"
 #include "util/malloc.h"
@@ -49,7 +50,7 @@ static const struct shirudo_help_item verify_options[] = {
 	{ "--evidence=<path>",     "the document a target produced" },
 	{ "--nonce=<hex>",         "the nonce that document was requested with" },
 	{ "--ak-name=<hex>",       "the attestation key name pinned at enrollment" },
-	{ "--cert=<cert.der>",     "the operator certificate the target holds" },
+	{ "--cert=<cert.der>",     "a certificate the target enrols (repeatable)" },
 	{ "--upatch=<file>",       "an installed artifact (repeatable)" },
 	{ "--expect=<name>=<hex>", "an installed upatch by name and payload digest" },
 	{ "--tree-root=<hex>",     "the upatch tree projection root at boot" },
@@ -73,7 +74,7 @@ static const struct shirudo_help_item challenge_options[] = {
 };
 
 static const struct shirudo_help_item predict_options[] = {
-	{ "--cert=<cert.der>",     "the operator certificate the target holds" },
+	{ "--cert=<cert.der>",     "a certificate the target enrols (repeatable)" },
 	{ "--upatch=<file>",       "an installed artifact (repeatable)" },
 	{ "--expect=<name>=<hex>", "an installed upatch by name and payload digest" },
 	{ "--tree-root=<hex>",     "the upatch tree projection root at boot" },
@@ -270,6 +271,8 @@ static int apply_event(const char *spec, uint8_t chain[32])
 static int cmd_attest_predict(int argc, const char **argv)
 {
 	uint8_t cert_sha[32], tree_root[32] = {}, set_digest[32], init[32];
+	uint8_t cert_shas[SHIRUDO_KEYS_MAX][32];
+	size_t n_certs = 0;
 	uint8_t bind[2][32], chain[32] = {};
 	const char *events[EVENTS_MAX];
 	struct members m = {};
@@ -285,8 +288,14 @@ static int cmd_attest_predict(int argc, const char **argv)
 		const char *a = argv[i];
 
 		if (!strncmp(a, "--cert=", 7)) {
-			if (cert_digest(a + 7, cert_sha))
+			if (n_certs >= SHIRUDO_KEYS_MAX) {
+				pr_err("attest predict: at most %d --cert",
+				       SHIRUDO_KEYS_MAX);
 				goto out;
+			}
+			if (cert_digest(a + 7, cert_shas[n_certs]))
+				goto out;
+			n_certs++;
 			have_cert = true;
 		} else if (!strncmp(a, "--upatch=", 9)) {
 			if (member_add_file(&m, a + 9))
@@ -331,6 +340,7 @@ static int cmd_attest_predict(int argc, const char **argv)
 		pr_err("attest predict: --cert is required");
 		goto out;
 	}
+	shirudo_keys_anchor_digest(cert_shas, n_certs, cert_sha);
 	shirudo_chain_init_event(cert_sha, m.set, m.n, tree_root, set_digest,
 				  init);
 	shirudo_hex_encode(set_digest, 32, hex);
@@ -419,6 +429,8 @@ static int cmd_attest_verify(int argc, const char **argv)
 {
 	struct shirudo_attest_expect x = {};
 	uint8_t nonce[SHIRUDO_ATTEST_NONCE_MAX], cert_sha[32], set_digest[32];
+	uint8_t cert_shas[SHIRUDO_KEYS_MAX][32];
+	size_t n_certs = 0;
 	uint8_t tree_root[32] = {};
 	const char *evidence_path = NULL;
 	struct members m = {};
@@ -457,8 +469,14 @@ static int cmd_attest_verify(int argc, const char **argv)
 			}
 			x.have_ak_name = true;
 		} else if (!strncmp(a, "--cert=", 7)) {
-			if (cert_digest(a + 7, cert_sha))
+			if (n_certs >= SHIRUDO_KEYS_MAX) {
+				pr_err("attest verify: at most %d --cert",
+				       SHIRUDO_KEYS_MAX);
 				goto out;
+			}
+			if (cert_digest(a + 7, cert_shas[n_certs]))
+				goto out;
+			n_certs++;
 			have_cert = true;
 		} else if (!strncmp(a, "--upatch=", 9)) {
 			if (member_add_file(&m, a + 9))
@@ -535,6 +553,7 @@ static int cmd_attest_verify(int argc, const char **argv)
 	x.nonce = nonce;
 	x.nonce_len = nonce_len;
 	if (have_cert) {
+		shirudo_keys_anchor_digest(cert_shas, n_certs, cert_sha);
 		shirudo_chain_init_event(cert_sha, m.set, m.n, tree_root,
 					  set_digest, x.init_event);
 		x.have_init = true;

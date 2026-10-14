@@ -24,7 +24,7 @@ The initrd run
     mounted at ``/sysroot`` and after ``systemd-pcrphase-initrd.service``
     has measured ``enter-initrd`` into PCR 11, and finishes before the
     switch to the root file system.  It enrols the initrd's own copy of
-    the certificate, ``/etc/shirudo/cert.der``, in the kernel's bpf
+    the certificate, ``/etc/shirudo/keys/cert.der``, in the kernel's bpf
     keyring and seals it, which needs the kernel booted with
     ``bpf.keyring_unsealed=1``; mounts the private bpffs at
     ``/run/shirudo/bpffs`` and attaches the enforcement programs with
@@ -88,7 +88,7 @@ installed binary.
 
 * The target binary at its installed path.  It is static apart from
   the C library.
-* ``/etc/shirudo/cert.der``, a copy of ``/var/lib/shirudo/keys/cert.der``.
+* ``/etc/shirudo/keys/cert.der``, a copy of ``/var/lib/shirudo/keys/cert.der``.
   This copy is measured with the initrd, so a verifier that pins PCR 11
   knows which certificate was enrolled.  ``init`` warns when the root's
   copy differs, which means an initrd that was not regenerated after
@@ -135,7 +135,7 @@ the first two.
 The dracut module
     ``module-setup.sh``, installed as
     ``/usr/lib/dracut/modules.d/90shirudo``, copies the installed
-    binary at its own path, the certificate as ``/etc/shirudo/cert.der``,
+    binary at its own path, the certificate as ``/etc/shirudo/keys/cert.der``,
     ``shirudo.conf`` when there is one and ``shirudo-initrd.service``,
     enables the unit in ``initrd.target`` and depends on dracut's
     ``tpm2-tss`` and ``systemd-pcrphase`` modules.  It includes itself

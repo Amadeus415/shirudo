@@ -58,36 +58,6 @@ int shirudo_ct_eq(const void *a, const void *b, size_t n)
 	return diff == 0;
 }
 
-int shirudo_chain_cert_sha256(uint8_t out[32])
-{
-	unsigned char *buf;
-	struct stat st;
-	int fd, rc = 0;
-	ssize_t got;
-
-	fd = open(shirudo_cert_path(), O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		return -errno;
-	if (fstat(fd, &st) < 0 || st.st_size <= 0 ||
-	    st.st_size > 1024 * 1024) {
-		close(fd);
-		return -EINVAL;
-	}
-	buf = xmalloc((size_t)st.st_size);
-	if (!buf) {
-		close(fd);
-		return -ENOMEM;
-	}
-	got = read(fd, buf, (size_t)st.st_size);
-	close(fd);
-	if (got != st.st_size)
-		rc = -EIO;
-	else
-		shirudo_sha256(buf, (size_t)st.st_size, out);
-	xfree(buf, (size_t)st.st_size);
-	return rc;
-}
-
 static int member_cmp(const void *a, const void *b)
 {
 	return strcmp(((const struct shirudo_measured_upatch *)a)->name,

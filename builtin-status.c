@@ -42,6 +42,7 @@
 #include "util/macros.h"
 #include "util/identity.h"
 #include "util/keyring.h"
+#include "util/keys.h"
 #include "util/log.h"
 #include "util/malloc.h"
 #include "util/paths.h"
@@ -565,7 +566,9 @@ int cmd_status(int argc, const char **argv)
 	key_serial_t keyring_serial, keyring_pinned;
 	const char *keyring_mode, *mode;
 	struct shirudo_sysinfo sysi = {};
+	struct shirudo_trusted_set certs = {};
 	struct shirudo_identity ident;
+	int certs_rc = -ENOENT;
 	struct shirudo_config otel_cfg = {};
 	struct shirudo_otel_opts otel_opts = {};
 	struct asset_view assets;
@@ -685,6 +688,9 @@ int cmd_status(int argc, const char **argv)
 		keyring_mode = keyring_serial >= 0 ? "user" : "none";
 	}
 	keyring_present = keyring_serial >= 0;
+	/* The certificates the keyring of that kind would have been given. */
+	certs_rc = shirudo_keys_load(SHIRUDO_KEYS_DIR, NULL,
+				     !strcmp(keyring_mode, "bpf"), &certs);
 	/*
 	 * Enforcing with the certificate in the user keyring is staging:
 	 * the kernel's bpf keyring was sealed empty at boot, so the trust
@@ -829,6 +835,23 @@ int cmd_status(int argc, const char **argv)
 		else
 			shirudo_json_kv_null(&e, "keyring_serial_matches");
 		shirudo_json_kv_bool(&e, "cert_present", cert_present);
+		shirudo_json_arr_open(&e, "certs");
+		for (i = 0; certs_rc == 0 && i < (int)certs.n; i++) {
+			char sha_hex[65], fp_hex[65];
+
+			shirudo_hex_encode(certs.certs[i].sha256, 32, sha_hex);
+			shirudo_hex_encode(certs.certs[i].fingerprint, 32,
+					   fp_hex);
+			shirudo_json_obj_open(&e);
+			shirudo_json_kv_string(&e, "sha256", sha_hex);
+			shirudo_json_kv_string(&e, "fingerprint", fp_hex);
+			shirudo_json_kv_bool(&e, "primary",
+					     certs.certs[i].primary);
+			shirudo_json_obj_close(&e);
+		}
+		shirudo_json_arr_close(&e);
+		shirudo_json_kv_int(&e, "certs_revoked",
+				    certs_rc == 0 ? (int)certs.n_revoked : 0);
 		shirudo_json_kv_bool(&e, "signing_key_present", is_operator);
 		{
 			struct shirudo_upatch_table_row *rows = NULL;
@@ -1086,6 +1109,19 @@ int cmd_status(int argc, const char **argv)
 			       keyring_serial == keyring_pinned ?
 				       "  (matches)" :
 				       "  (MISMATCH -- swapped?)");
+		if (certs_rc == 0) {
+			printf("  %-22s %zu enrolled, %zu revoked\n",
+			       "Certificates:", certs.n, certs.n_revoked);
+			for (i = 0; i < (int)certs.n; i++) {
+				char fp_hex[65];
+
+				shirudo_hex_encode(certs.certs[i].fingerprint,
+						   32, fp_hex);
+				printf("    %s%s\n", fp_hex,
+				       certs.certs[i].primary ? "  (primary)" :
+				       "");
+			}
+		}
 
 		if (include_system) {
 			print_system_human(&sysi);

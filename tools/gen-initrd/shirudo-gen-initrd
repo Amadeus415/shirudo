@@ -20,7 +20,8 @@ Regenerate the initrd of a kernel with shirudo inside, through dracut.
   --output <file>        initrd to write (default: dracut's for the release)
   --check [<file>]       only check an initrd, do not build one
   --print-cmdline        print the kernel parameter the initrd needs
-  --cert <file>          certificate to embed (default: the installed one)
+  --cert <file>          primary certificate to embed (default: the installed one)
+  --trusted-dir <dir>    further trusted certificates (default: trusted/ beside it)
   --binary <file>        shirudo binary to embed (default: the installed one)
   --binary-path <path>   where that binary lives on the root file system
   --unit <file>          shirudo-initrd.service to embed (default: installed)
@@ -55,6 +56,7 @@ check_only=0
 check_file=
 print_cmdline=0
 cert=
+trusted_dir=
 binary=
 binary_path=
 unit=
@@ -75,6 +77,7 @@ while [ $# -gt 0 ]; do
 		shift ;;
 	--print-cmdline) print_cmdline=1; shift ;;
 	--cert) cert=${2:?}; shift 2 ;;
+	--trusted-dir) trusted_dir=${2:?}; shift 2 ;;
 	--binary) binary=${2:?}; shift 2 ;;
 	--binary-path) binary_path=${2:?}; shift 2 ;;
 	--unit) unit=${2:?}; shift 2 ;;
@@ -113,7 +116,7 @@ check_initrd()
 	command -v lsinitrd >/dev/null 2>&1 || die "lsinitrd not found; install dracut"
 	[ -s "$img" ] || die "no initrd at $img"
 	listing=$(lsinitrd "$img" 2>/dev/null) || die "lsinitrd cannot read $img"
-	for want in "etc/shirudo/cert.der" \
+	for want in "etc/shirudo/keys/cert.der" \
 		    "usr/lib/systemd/system/shirudo-initrd.service" \
 		    "initrd.target.wants/shirudo-initrd.service" \
 		    "systemd-pcrphase-initrd.service" \
@@ -176,6 +179,7 @@ if [ -z "$unit" ] && [ ! -f "$UNIT_INSTALLED" ]; then
 fi
 
 [ -z "$cert" ] || [ -s "$cert" ] || die "no certificate at $cert"
+[ -z "$trusted_dir" ] || [ -d "$trusted_dir" ] || die "no directory at $trusted_dir"
 [ -z "$binary" ] || [ -x "$binary" ] || die "no executable at $binary"
 if [ -n "$binary" ] && [ -z "$binary_path" ]; then
 	die "--binary needs --binary-path, the path of that binary on the root file system"
@@ -188,10 +192,11 @@ trap 'rm -rf "$tmp"' EXIT
 # dracut.conf(5) file of their own, which also shuts out the host's
 # drop-ins so that a test initrd depends on nothing but what was asked.
 conf_args=()
-if [ -n "$cert$binary$unit" ]; then
+if [ -n "$cert$trusted_dir$binary$unit" ]; then
 	{
 		printf 'add_dracutmodules+=" shirudo "\n'
 		[ -z "$cert" ] || printf 'shirudo_cert=%q\n' "$cert"
+		[ -z "$trusted_dir" ] || printf 'shirudo_trusted_dir=%q\n' "$trusted_dir"
 		[ -z "$binary" ] || printf 'shirudo_binary=%q\n' "$binary"
 		[ -z "$binary_path" ] || printf 'shirudo_binary_path=%q\n' "$binary_path"
 		[ -z "$unit" ] || printf 'shirudo_unit=%q\n' "$unit"

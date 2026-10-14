@@ -161,7 +161,7 @@ The production configuration runs it from the initrd first.  Boot the
 kernel with ``bpf.keyring_unsealed=1``, which leaves the bpf keyring
 open until ``init`` seals it, and give the initrd the target binary,
 ``shirudo-initrd.service`` and a copy of the certificate at
-``/etc/shirudo/cert.der``; the ``initrd`` document describes that run,
+``/etc/shirudo/keys/cert.der``; the ``initrd`` document describes that run,
 what ``shirudo.service`` then finishes from the root file system, and
 the dracut module and installer under ``tools/gen-initrd`` that set a
 target up that way.  The register then binds while PCR 11 holds a

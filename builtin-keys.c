@@ -26,8 +26,10 @@
 
 #include "builtin.h"
 #include "util/help.h"
+#include "util/hex.h"
 #include "util/identity.h"
 #include "util/keyring.h"
+#include "util/keys.h"
 #include "util/log.h"
 #include "util/macros.h"
 #include "util/malloc.h"
@@ -330,13 +332,13 @@ static void collect_key(key_serial_t serial, const char *type,
 	c->count++;
 }
 
-static int keys_list_keyring(key_serial_t ring)
+static int keys_list_keyring(key_serial_t ring, const char *label)
 {
 	struct shirudo_identity id;
 	struct list_ctx c = {};
 	int rc, i;
 
-	printf("Keyring (%s):\n", SHIRUDO_KEYRING_NAME);
+	printf("Keyring (%s):\n", label);
 	printf("  %-22s %d\n", "Serial:", (int)ring);
 
 	if (shirudo_identity_read(&id) == 0) {
@@ -417,6 +419,8 @@ static void usage(void)
 int cmd_keys(int argc, const char **argv)
 {
 	const char *keys_dir_arg = NULL;
+	struct shirudo_trusted_set set;
+	struct shirudo_identity id;
 	const char *keys_dir;
 	char pkey_path[PATH_MAX];
 	char cert_path[PATH_MAX];
@@ -462,11 +466,45 @@ int cmd_keys(int argc, const char **argv)
 		shown = true;
 	}
 
+	/*
+	 * The set a target enrols in the bpf keyring: the primary and the
+	 * trusted certificates beside it, less the revoked ones.
+	 */
+	if (shirudo_keys_load(keys_dir, NULL, true, &set) == 0 &&
+	    (set.n > 1 || set.n_revoked)) {
+		size_t i;
+
+		printf("%sTrusted set (%zu enrolled, %zu revoked):\n",
+		       shown ? "\n" : "", set.n, set.n_revoked);
+		for (i = 0; i < set.n; i++) {
+			char fp[65], sha[65];
+
+			shirudo_hex_encode(set.certs[i].fingerprint, 32, fp);
+			shirudo_hex_encode(set.certs[i].sha256, 32, sha);
+			printf("  %s%s\n    sha256 %s\n", fp,
+			       set.certs[i].primary ? "  (primary)" : "", sha);
+		}
+		shown = true;
+	}
+
+	/* The live anchor: the bpf keyring, or the staged one below. */
+	if (shirudo_identity_read(&id) == 0 &&
+	    id.keyring_type == SHIRUDO_SIG_KEYRING_BPF) {
+		ring = shirudo_keyring_bpf_serial();
+		if (ring > 0) {
+			if (shown)
+				printf("\n");
+			if (keys_list_keyring(ring, ".bpf"))
+				rc = 1;
+			shown = true;
+		}
+	}
+
 	ring = shirudo_keyring_find(SHIRUDO_KEYRING_NAME);
 	if (ring >= 0) {
 		if (shown)
 			printf("\n");
-		if (keys_list_keyring(ring))
+		if (keys_list_keyring(ring, SHIRUDO_KEYRING_NAME))
 			rc = 1;
 		shown = true;
 	} else if (ring == -ENOKEY) {

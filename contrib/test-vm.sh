@@ -879,7 +879,7 @@ kernel_release_of()
 # identity and the cloud-init stage later finds the files in place.
 build_initrd()
 {
-	local kver gen unit seed
+	local kver gen unit seed trusted fp
 	local -a args
 
 	kver="$(kernel_release_of "$KERNEL")" ||
@@ -900,14 +900,23 @@ RequiresMountsFor=/sysroot
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'mkdir -p /sysroot/usr/local/bin /sysroot/var/lib/shirudo/keys && cp /usr/local/bin/shirudo /sysroot/usr/local/bin/shirudo && chmod 0755 /sysroot/usr/local/bin/shirudo && cp /etc/shirudo/cert.der /sysroot/var/lib/shirudo/keys/cert.der && chmod 0700 /sysroot/var/lib/shirudo /sysroot/var/lib/shirudo/keys'
+ExecStart=/bin/sh -c 'mkdir -p /sysroot/usr/local/bin /sysroot/var/lib/shirudo/keys/trusted && cp /usr/local/bin/shirudo /sysroot/usr/local/bin/shirudo && chmod 0755 /sysroot/usr/local/bin/shirudo && cp /etc/shirudo/keys/cert.der /sysroot/var/lib/shirudo/keys/cert.der && cp /etc/shirudo/keys/trusted/*.der /sysroot/var/lib/shirudo/keys/trusted/ && chmod 0700 /sysroot/var/lib/shirudo /sysroot/var/lib/shirudo/keys /sysroot/var/lib/shirudo/keys/trusted'
 EOF
 	ln -sf ../shirudo-test-seed.service \
 		"$seed/usr/lib/systemd/system/initrd.target.wants/shirudo-test-seed.service"
+	# The bundle's own-keyring certificate rides along as a second
+	# trusted certificate, for the tests of the enrolled set.
+	trusted="$RUN_DIR/trusted"
+	mkdir -p "$trusted"
+	fp="$("$TEST_VM_HOST_BUNDLE/root/usr/local/bin/shirudo" bpm key fingerprint \
+		"$TEST_VM_HOST_BUNDLE/fixtures/own.der" 2>/dev/null)" ||
+		die "cannot fingerprint the bundle's own certificate"
+	cp "$TEST_VM_HOST_BUNDLE/fixtures/own.der" "$trusted/$fp.der"
 	args=(--kver "$kver" --output "$RUN_DIR/initrd.img"
 	      --binary "$TEST_VM_HOST_BUNDLE/root/usr/local/bin/shirudo"
 	      --binary-path /usr/local/bin/shirudo
 	      --cert "$TEST_VM_HOST_BUNDLE/fixtures/cert.der"
+	      --trusted-dir "$trusted"
 	      --unit "$unit" --module-dir "$REPO_ROOT/tools/gen-initrd")
 	if [[ -n "$KERNEL_ARTIFACT_DIR" ]]; then
 		args+=(--kmoddir "$KERNEL_ARTIFACT_DIR/lib/modules")

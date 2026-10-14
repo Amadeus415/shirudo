@@ -44,8 +44,6 @@ void shirudo_sha256_2(const void *a, size_t a_len,
 /* Constant-time equality of two equal-length buffers (1 == equal). */
 int shirudo_ct_eq(const void *a, const void *b, size_t n);
 
-/* SHA-256 of the on-disk cert.der. 0 on success, -errno on failure. */
-int shirudo_chain_cert_sha256(uint8_t out[SHIRUDO_CHAIN_DIGEST_LEN]);
 
 /* One upatch of the set an init event covers. */
 struct shirudo_measured_upatch {

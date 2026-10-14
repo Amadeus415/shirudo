@@ -20,9 +20,11 @@ bool shirudo_in_initrd(void);
 const char *shirudo_sysroot(void);
 
 /*
- * The certificate init enrols: the initrd's own, measured copy while
- * the initrd runs, the one in the state tree otherwise.
+ * The keys init enrols: the initrd's own, measured copies while the
+ * initrd runs, the state tree's otherwise. cert.der is the primary
+ * certificate in that directory.
  */
+const char *shirudo_keys_dir(void);
 const char *shirudo_cert_path(void);
 
 #endif /* SHIRUDO_UTIL_INITRD_H */

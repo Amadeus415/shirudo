@@ -200,7 +200,7 @@ one usually still compiles and passes tests.
 - **init runs twice in production and the two halves are fixed.** The
   initrd run (`shirudo-initrd.service`, detected by `/etc/initrd-release`
   with the root at `/sysroot`) enrols the initrd's own
-  `/etc/shirudo/cert.der`, attaches the LSM with its pins under
+  `/etc/shirudo/keys/cert.der`, attaches the LSM with its pins under
   `/run/shirudo/bpffs`, records the root's binary as the lasting
   identity beside its own, restores the archived upatches read through
   a read-only bind of `/sysroot/var/lib/shirudo`, binds the register
