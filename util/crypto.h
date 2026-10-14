@@ -35,6 +35,15 @@ int shirudo_sha256_buffer(const void *data, size_t len,
 int shirudo_base64_encode(const uint8_t *data, size_t len,
 			  char *out, size_t out_sz);
 
+/*
+ * Verify an ECDSA P-256 signature (r, s) over a SHA-256 digest with
+ * the public point (x, y). Returns 0 when valid, -EKEYREJECTED when
+ * not, another -errno when the key or signature cannot be built.
+ */
+int shirudo_ecdsa_p256_verify(const uint8_t x[32], const uint8_t y[32],
+			      const uint8_t digest[SHIRUDO_CRYPTO_SHA256_LEN],
+			      const uint8_t r[32], const uint8_t s[32]);
+
 struct shirudo_cert {
 	void *impl;
 };

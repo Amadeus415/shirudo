@@ -14,7 +14,11 @@
 #include <openssl/bio.h>
 #include <openssl/cms.h>
 #include <openssl/err.h>
+#include <openssl/bn.h>
+#include <openssl/core_names.h>
+#include <openssl/ec.h>
 #include <openssl/evp.h>
+#include <openssl/param_build.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 
@@ -114,6 +118,60 @@ int shirudo_base64_encode(const uint8_t *data, size_t len,
 		return -EIO;
 	out[need - 1] = '\0';
 	return 0;
+}
+
+int shirudo_ecdsa_p256_verify(const uint8_t x[32], const uint8_t y[32],
+			      const uint8_t digest[32],
+			      const uint8_t r[32], const uint8_t s[32])
+{
+	unsigned char point[65], *der = NULL;
+	EVP_PKEY_CTX *kctx = NULL, *vctx = NULL;
+	OSSL_PARAM params[3];
+	BIGNUM *br = NULL, *bs = NULL;
+	ECDSA_SIG *sig = NULL;
+	EVP_PKEY *pkey = NULL;
+	int der_len, rc = -EIO;
+
+	point[0] = 0x04;
+	memcpy(point + 1, x, 32);
+	memcpy(point + 33, y, 32);
+	params[0] = OSSL_PARAM_construct_utf8_string("group", (char *)"P-256",
+						     0);
+	params[1] = OSSL_PARAM_construct_octet_string("pub", point,
+						      sizeof(point));
+	params[2] = OSSL_PARAM_construct_end();
+	kctx = EVP_PKEY_CTX_new_from_name(NULL, "EC", NULL);
+	if (!kctx || EVP_PKEY_fromdata_init(kctx) <= 0 ||
+	    EVP_PKEY_fromdata(kctx, &pkey, EVP_PKEY_PUBLIC_KEY, params) <= 0) {
+		rc = -EINVAL;
+		goto out;
+	}
+	br = BN_bin2bn(r, 32, NULL);
+	bs = BN_bin2bn(s, 32, NULL);
+	sig = ECDSA_SIG_new();
+	if (!br || !bs || !sig || !ECDSA_SIG_set0(sig, br, bs))
+		goto out;
+	br = NULL;
+	bs = NULL;
+	der_len = i2d_ECDSA_SIG(sig, &der);
+	if (der_len <= 0)
+		goto out;
+	vctx = EVP_PKEY_CTX_new_from_pkey(NULL, pkey, NULL);
+	if (!vctx || EVP_PKEY_verify_init(vctx) <= 0 ||
+	    EVP_PKEY_CTX_set_signature_md(vctx, EVP_sha256()) <= 0)
+		goto out;
+	rc = EVP_PKEY_verify(vctx, der, (size_t)der_len, digest, 32) == 1 ?
+	     0 : -EKEYREJECTED;
+out:
+	OPENSSL_free(der);
+	ECDSA_SIG_free(sig);
+	BN_free(br);
+	BN_free(bs);
+	EVP_PKEY_CTX_free(vctx);
+	EVP_PKEY_CTX_free(kctx);
+	EVP_PKEY_free(pkey);
+	ERR_clear_error();
+	return rc;
 }
 
 int shirudo_cert_read_file(const char *path, struct shirudo_cert *cert)
