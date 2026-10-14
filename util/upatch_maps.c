@@ -466,8 +466,11 @@ static char *btf_format_value(const struct btf *btf, uint32_t type_id,
 		if (!out)
 			return NULL;
 		out[0] = '\0';
-		if (strbuf_append_take(&out, &cap, &off, fmt_alloc("{ ")) != 0)
+		if (strbuf_append_take(&out, &cap, &off,
+				       fmt_alloc("{ ")) != 0) {
+			xfree(out, cap);
 			return NULL;
+		}
 		for (i = 0; i < vlen; i++) {
 			uint32_t bit_off = BTF_INFO_KFLAG(t->info) ?
 					   BTF_MEMBER_BIT_OFFSET(m[i].offset) :
