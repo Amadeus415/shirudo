@@ -701,6 +701,30 @@ static int attach_seal(struct bpf_object **obj_out, struct bpf_link **links)
 	return 0;
 }
 
+_Static_assert(SHIRUDO_IDENTITY_KEYS_MAX == SHIRUDO_KEYS_MAX,
+	       "the identity map holds one serial per trusted certificate");
+
+struct anchor_keys {
+	int32_t	serials[SHIRUDO_IDENTITY_KEYS_MAX];
+	size_t	n;
+	bool	overflow;
+};
+
+static void collect_asymmetric(key_serial_t serial, const char *type,
+			       const char *description, void *ud)
+{
+	struct anchor_keys *k = ud;
+
+	(void)description;
+	if (strcmp(type, "asymmetric"))
+		return;
+	if (k->n >= ARRAY_SIZE(k->serials)) {
+		k->overflow = true;
+		return;
+	}
+	k->serials[k->n++] = (int32_t)serial;
+}
+
 static int init_lsm(bool attach_filesystem_seal)
 {
 	struct shirudo_identity id = {};
@@ -724,7 +748,10 @@ static int init_lsm(bool attach_filesystem_seal)
 	struct bpf_object *obj = NULL, *seal_obj = NULL;
 	struct bpf_link *link_bpf = NULL, *link_unlink = NULL;
 	struct bpf_link *link_setx = NULL, *link_rmx = NULL, *link_pload = NULL;
+	struct bpf_link *link_keyperm = NULL;
 	struct bpf_link *seal_links[8] = {};
+	struct bpf_program *p_keyperm;
+	struct anchor_keys keys = {};
 	key_serial_t keyring;
 	struct bpf_map *m_sb;
 	struct stat st;
@@ -800,6 +827,26 @@ static int init_lsm(bool attach_filesystem_seal)
 	}
 	id.keyring_serial = (int32_t)keyring;
 
+	/*
+	 * The keys that keyring holds, for lsm/key_permission: with the
+	 * keyring itself, what no task but shirudo may write, unlink,
+	 * revoke or invalidate for the rest of the boot.
+	 */
+	err = shirudo_keyring_list(keyring, collect_asymmetric, &keys);
+	if (err) {
+		pr_err("list the anchor keyring %d: %s", (int)keyring,
+		       strerror(-err));
+		goto out;
+	}
+	if (keys.overflow || keys.n == 0) {
+		pr_err("anchor keyring %d holds %s asymmetric keys",
+		       (int)keyring, keys.overflow ? "too many" : "no");
+		err = keys.overflow ? -E2BIG : -ENOKEY;
+		goto out;
+	}
+	id.n_keys = (uint32_t)keys.n;
+	memcpy(id.key_serials, keys.serials, keys.n * sizeof(keys.serials[0]));
+
 	m_sb = bpf_object__find_map_by_name(obj, "shirudo_bpffs_sb");
 	if (!m_sb) {
 		pr_err("shirudo_bpffs_sb map not in embedded bpf2");
@@ -837,8 +884,11 @@ static int init_lsm(bool attach_filesystem_seal)
 						 "shirudo_lsm_inode_removexattr");
 	p_pload = bpf_object__find_program_by_name(obj,
 						   "shirudo_lsm_bpf_prog_load");
+	p_keyperm = bpf_object__find_program_by_name(
+				obj, "shirudo_lsm_key_permission");
 	p_bpf = bpf_object__find_program_by_name(obj, "shirudo_lsm_bpf");
-	if (!p_unlink || !p_setx || !p_rmx || !p_pload || !p_bpf) {
+	if (!p_unlink || !p_setx || !p_rmx || !p_pload || !p_bpf ||
+	    !p_keyperm) {
 		pr_err("expected programs missing in bpf2 object");
 		err = -ENOENT;
 		goto out;
@@ -865,6 +915,12 @@ static int init_lsm(bool attach_filesystem_seal)
 	err = attach_pin(p_rmx, SHIRUDO_INODE_RMXATTR_LINK_PIN, &link_rmx);
 	if (err) {
 		pr_err("attach lsm/inode_removexattr: %s", strerror(-err));
+		goto out;
+	}
+	err = attach_pin(p_keyperm, SHIRUDO_KEY_PERMISSION_LINK_PIN,
+			 &link_keyperm);
+	if (err) {
+		pr_err("attach lsm/key_permission: %s", strerror(-err));
 		goto out;
 	}
 
@@ -924,6 +980,7 @@ out:
 	bpf_object__close(seal_obj);
 	bpf_link__destroy(link_bpf);
 	bpf_link__destroy(link_pload);
+	bpf_link__destroy(link_keyperm);
 	bpf_link__destroy(link_rmx);
 	bpf_link__destroy(link_setx);
 	bpf_link__destroy(link_unlink);

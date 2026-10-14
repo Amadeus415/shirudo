@@ -42,6 +42,15 @@
  *                       is the interim of the xattr-based identity
  *                       seal will use; both are defeatable only with
  *                       CAP_SYS_RESOURCE (threat-model residual #12).
+ *   lsm/key_permission -- guards the trust anchor in the kernel's
+ *                       keyrings: the sealed keyring init froze and the
+ *                       keys it holds may be viewed and searched by
+ *                       anyone, but written, unlinked, revoked, given
+ *                       attributes or looked up for invalidation only
+ *                       by shirudo's own executable. Sealing stops keys
+ *                       from being added; this stops root from taking
+ *                       them away, which is what makes unlinking a key
+ *                       the revocation primitive and nothing else.
  *   lsm/inode_setxattr,
  *   lsm/inode_removexattr -- same exe-identity gate over the bpffs
  *                       superblock, so only shirudo may set or remove
@@ -86,6 +95,8 @@ char _license[] SEC("license") = "Dual BSD/GPL";
  * been verified against. Must match struct shirudo_identity in
  * util/identity.h byte-for-byte.
  */
+#define SHIRUDO_IDENTITY_KEYS_MAX	16
+
 struct shirudo_sb_id {
 	__u32	sb_dev;
 	__u32	exe_dev;
@@ -95,6 +106,9 @@ struct shirudo_sb_id {
 	__u32	alt_exe_dev;
 	__u32	pad;
 	__u64	alt_exe_ino;
+	__u32	n_keys;
+	__u32	pad2;
+	__s32	key_serials[SHIRUDO_IDENTITY_KEYS_MAX];
 };
 
 struct {
@@ -253,6 +267,28 @@ int BPF_PROG(shirudo_lsm_bpf_prog_load, struct bpf_prog *prog,
 }
 
 /*
+ * Whether the calling task runs shirudo's own executable, the one
+ * recorded at init, or the initrd's copy of it while that finishes
+ * init. A task without an executable is not shirudo.
+ */
+static __always_inline bool shirudo_task_is_self(const struct shirudo_sb_id *id)
+{
+	struct task_struct *task = bpf_get_current_task_btf();
+	struct file *exe = BPF_CORE_READ(task, mm, exe_file);
+	__u32 exe_dev;
+	__u64 exe_ino;
+
+	if (!exe)
+		return false;
+	exe_dev = BPF_CORE_READ(exe, f_inode, i_sb, s_dev);
+	exe_ino = BPF_CORE_READ(exe, f_inode, i_ino);
+	if (exe_dev == id->exe_dev && exe_ino == id->exe_ino)
+		return true;
+	return id->alt_exe_ino && exe_dev == id->alt_exe_dev &&
+	       exe_ino == id->alt_exe_ino;
+}
+
+/*
  * Verdict for an operation targeting an inode in superblock target_dev:
  * allow (0) if it is not shirudo's bpffs, or if the calling task's
  * exe_file matches the identity recorded at init; deny (-EPERM)
@@ -262,31 +298,62 @@ int BPF_PROG(shirudo_lsm_bpf_prog_load, struct bpf_prog *prog,
 static __always_inline int shirudo_bpffs_guard(__u32 target_dev)
 {
 	struct shirudo_sb_id *id;
-	struct task_struct *task;
-	__u32 zero = 0, exe_dev;
-	struct file *exe;
-	__u64 exe_ino;
+	__u32 zero = 0;
 
 	id = bpf_map_lookup_elem(&shirudo_bpffs_sb, &zero);
 	if (!id || id->sb_dev == 0)
 		return 0;
 	if (target_dev != id->sb_dev)
 		return 0;	/* not shirudo's bpffs -- not ours to guard */
+	return shirudo_task_is_self(id) ? 0 : -EPERM;
+}
 
-	task = bpf_get_current_task_btf();
-	exe = BPF_CORE_READ(task, mm, exe_file);
-	if (!exe)
-		return -EPERM;
-	exe_dev = BPF_CORE_READ(exe, f_inode, i_sb, s_dev);
-	exe_ino = BPF_CORE_READ(exe, f_inode, i_ino);
-	if (exe_dev == id->exe_dev && exe_ino == id->exe_ino)
-		return 0;
-	/* The initrd's copy of shirudo, while it finishes init. */
-	if (id->alt_exe_ino && exe_dev == id->alt_exe_dev &&
-	    exe_ino == id->alt_exe_ino)
-		return 0;
+/*
+ * The trust anchor in the kernel's keyrings: the keyring init froze
+ * and the keys it holds. Root owns the bpf keyring with write and
+ * setattr permission, so without this hook a single keyctl could
+ * unlink, clear, revoke or invalidate the certificates every load is
+ * verified against. Deny those needs to every task but shirudo. A
+ * search is denied only through an unpossessed reference, which is
+ * how keyctl reaches a key by serial to invalidate it; the kernel
+ * verifies a signature by searching the keyring it possesses, and
+ * that stays open to every loader.
+ */
+SEC("lsm/key_permission")
+int BPF_PROG(shirudo_lsm_key_permission, key_ref_t key_ref,
+	     const struct cred *cred, enum key_need_perm need)
+{
+	struct shirudo_sb_id *id;
+	__u32 zero = 0, i;
+	struct key *key;
+	bool possessed;
+	__s32 serial;
 
-	return -EPERM;
+	switch (need) {
+	case KEY_NEED_WRITE:
+	case KEY_NEED_SEARCH:
+	case KEY_NEED_SETATTR:
+	case KEY_NEED_UNLINK:
+		break;
+	default:
+		return 0;
+	}
+	id = bpf_map_lookup_elem(&shirudo_bpffs_sb, &zero);
+	if (!id || id->keyring_serial == 0)
+		return 0;
+	possessed = (unsigned long)key_ref & 1;
+	key = (struct key *)((unsigned long)key_ref & ~1UL);
+	serial = BPF_CORE_READ(key, serial);
+	if (serial != id->keyring_serial) {
+		for (i = 0; i < SHIRUDO_IDENTITY_KEYS_MAX; i++)
+			if (i < id->n_keys && id->key_serials[i] == serial)
+				break;
+		if (i == SHIRUDO_IDENTITY_KEYS_MAX)
+			return 0;	/* not the anchor -- not ours */
+	}
+	if (need == KEY_NEED_SEARCH && possessed)
+		return 0;
+	return shirudo_task_is_self(id) ? 0 : -EACCES;
 }
 
 /*

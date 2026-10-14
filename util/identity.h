@@ -14,10 +14,15 @@
 #define SHIRUDO_SIG_KEYRING_USER	4
 #define SHIRUDO_SIG_KEYRING_BPF		5
 
+/* The most keys the anchor keyring holds; util/keys.h bounds the set. */
+#define SHIRUDO_IDENTITY_KEYS_MAX	16
+
 /*
  * Must match struct shirudo_sb_id in bpf/bpf2.c byte for byte. exe is
  * the binary that keeps running the target; alt_exe, when set, the
  * initrd's copy that ran init and is gone after the switch to the root.
+ * key_serials are the anchor keyring's keys, which lsm/key_permission
+ * guards with the keyring itself.
  */
 struct shirudo_identity {
 	uint32_t	sb_dev;
@@ -28,6 +33,9 @@ struct shirudo_identity {
 	uint32_t	alt_exe_dev;
 	uint32_t	pad;
 	uint64_t	alt_exe_ino;
+	uint32_t	n_keys;
+	uint32_t	pad2;
+	int32_t		key_serials[SHIRUDO_IDENTITY_KEYS_MAX];
 };
 
 /*
