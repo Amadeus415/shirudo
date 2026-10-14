@@ -543,8 +543,8 @@ require_running_vm()
 
 run_console()
 {
-	check_access_dependency socat
 	require_running_vm
+	check_access_dependency socat
 	[[ -S "$RUN_DIR/console.sock" ]] ||
 		die "VM '$VM_NAME' has no serial console socket"
 	log "attaching to VM console: $VM_NAME (Ctrl-] detaches)"
@@ -571,8 +571,8 @@ run_ssh()
 {
 	local ready=0
 
-	check_access_dependency ssh
 	require_running_vm
+	check_access_dependency ssh
 	SSH_DIR="${RUN_DIR}/ssh"
 	[[ -s "$RUN_DIR/ssh.port" && -r "$SSH_DIR/id_ed25519" ]] ||
 		die "VM '$VM_NAME' has no SSH access metadata"
