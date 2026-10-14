@@ -428,6 +428,13 @@ install-target: shirudo-target install-common systemd/shirudo.service \
 	@printf '  INSTALL $(DESTDIR)$(bindir)/shirudo (static OpenSSL)\n'
 	$(Q)install -d $(DESTDIR)$(bindir)
 	$(Q)install -m 0755 shirudo-target $(DESTDIR)$(bindir)/shirudo
+	@printf '  INSTALL $(DESTDIR)$(bindir)/shirudo-gen-initrd\n'
+	$(Q)install -m 0755 tools/gen-initrd/shirudo-gen-initrd \
+	    $(DESTDIR)$(bindir)/shirudo-gen-initrd
+	@printf '  INSTALL $(DESTDIR)$(dracutmodulesdir)/90shirudo\n'
+	$(Q)install -d $(DESTDIR)$(dracutmodulesdir)/90shirudo
+	$(Q)install -m 0755 tools/gen-initrd/module-setup.sh \
+	    $(DESTDIR)$(dracutmodulesdir)/90shirudo/module-setup.sh
 	@printf '  INSTALL $(DESTDIR)$(systemdunitdir)/shirudo*.service,timer\n'
 	$(Q)install -d $(DESTDIR)$(systemdunitdir)
 	$(Q)install -m 0644 systemd/shirudo.service \

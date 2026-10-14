@@ -1,0 +1,218 @@
+#!/bin/bash
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Authors of shirudo
+#
+# Build an initrd that brings shirudo up before the switch to the root
+# file system (Documentation/initrd.rst): drive dracut with the shirudo
+# module, then check that the result holds what shirudo-initrd.service
+# needs and say what the kernel command line must carry.
+
+set -euo pipefail
+
+usage()
+{
+	cat <<'EOF'
+usage: shirudo-gen-initrd [options] [-- <dracut arguments>]
+
+Regenerate the initrd of a kernel with shirudo inside, through dracut.
+
+  --kver <release>       kernel release (default: the running kernel)
+  --output <file>        initrd to write (default: dracut's for the release)
+  --check [<file>]       only check an initrd, do not build one
+  --print-cmdline        print the kernel parameter the initrd needs
+  --cert <file>          certificate to embed (default: the installed one)
+  --binary <file>        shirudo binary to embed (default: the installed one)
+  --binary-path <path>   where that binary lives on the root file system
+  --unit <file>          shirudo-initrd.service to embed (default: installed)
+  --kmoddir <dir>        kernel modules to take from <dir>/<release>
+  --no-kernel            embed no kernel modules (all-built-in kernels)
+  --module-dir <dir>     dracut module to install from (default: this
+                         script's directory, when it holds module-setup.sh)
+  -h, --help             this text
+
+Everything after -- goes to dracut unchanged.
+EOF
+}
+
+die()
+{
+	printf 'shirudo-gen-initrd: %s\n' "$*" >&2
+	exit 1
+}
+
+say()
+{
+	printf 'shirudo-gen-initrd: %s\n' "$*"
+}
+
+CMDLINE_PARAM=bpf.keyring_unsealed=1
+MODULE_DIR_INSTALLED=/usr/lib/dracut/modules.d/90shirudo
+UNIT_INSTALLED=/usr/lib/systemd/system/shirudo-initrd.service
+
+kver=$(uname -r)
+output=
+check_only=0
+check_file=
+print_cmdline=0
+cert=
+binary=
+binary_path=
+unit=
+kmoddir=
+no_kernel=0
+module_dir=
+dracut_args=()
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--kver) kver=${2:?}; shift 2 ;;
+	--output) output=${2:?}; shift 2 ;;
+	--check)
+		check_only=1
+		if [ $# -gt 1 ] && [ "${2#-}" = "$2" ]; then
+			check_file=$2; shift
+		fi
+		shift ;;
+	--print-cmdline) print_cmdline=1; shift ;;
+	--cert) cert=${2:?}; shift 2 ;;
+	--binary) binary=${2:?}; shift 2 ;;
+	--binary-path) binary_path=${2:?}; shift 2 ;;
+	--unit) unit=${2:?}; shift 2 ;;
+	--kmoddir) kmoddir=${2:?}; shift 2 ;;
+	--no-kernel) no_kernel=1; shift ;;
+	--module-dir) module_dir=${2:?}; shift 2 ;;
+	-h|--help) usage; exit 0 ;;
+	--) shift; dracut_args=("$@"); break ;;
+	*) usage >&2; die "unknown option: $1" ;;
+	esac
+done
+
+if [ "$print_cmdline" = 1 ]; then
+	printf '%s\n' "$CMDLINE_PARAM"
+	exit 0
+fi
+
+# What dracut writes when told nothing: the distribution's layout.
+default_output()
+{
+	if [ -d /boot/loader/entries ] || [ -f /etc/kernel/cmdline ]; then
+		printf '/boot/initramfs-%s.img\n' "$kver"
+	elif [ -f /etc/debian_version ]; then
+		printf '/boot/initrd.img-%s\n' "$kver"
+	else
+		printf '/boot/initramfs-%s.img\n' "$kver"
+	fi
+}
+
+# The initrd holds the binary at the root's path, the certificate, the
+# unit and its enablement; lsinitrd lists the archive's members.
+check_initrd()
+{
+	local img=$1 listing missing=0 want
+
+	command -v lsinitrd >/dev/null 2>&1 || die "lsinitrd not found; install dracut"
+	[ -s "$img" ] || die "no initrd at $img"
+	listing=$(lsinitrd "$img" 2>/dev/null) || die "lsinitrd cannot read $img"
+	for want in "etc/shirudo/cert.der" \
+		    "usr/lib/systemd/system/shirudo-initrd.service" \
+		    "initrd.target.wants/shirudo-initrd.service" \
+		    "systemd-pcrphase-initrd.service" \
+		    "etc/initrd-release"; do
+		if ! grep -q -- "$want" <<<"$listing"; then
+			say "missing from $img: $want"
+			missing=1
+		fi
+	done
+	if ! grep -q -E -- '(^| )[^ ]*bin/shirudo( |$)' <<<"$listing" &&
+	   ! grep -q -- 'bin/shirudo$' <<<"$listing"; then
+		say "missing from $img: the shirudo binary"
+		missing=1
+	fi
+	if ! grep -q -i -E -- 'tpm' <<<"$listing"; then
+		say "note: $img names nothing TPM-related; the kernel must have the TPM driver built in"
+	fi
+	[ "$missing" = 0 ] || die "$img is not a shirudo initrd; regenerate it"
+	say "$img holds shirudo, the certificate and shirudo-initrd.service"
+}
+
+if [ "$check_only" = 1 ]; then
+	check_initrd "${check_file:-${output:-$(default_output)}}"
+	exit 0
+fi
+
+[ "$(id -u)" = 0 ] || die "run as root"
+command -v dracut >/dev/null 2>&1 ||
+	die "dracut not found; the production configuration needs a systemd initrd built by dracut"
+
+# The module comes from the package or from this checkout; dracut only
+# takes modules from its modules.d, so a checkout's copy is installed.
+if [ -z "$module_dir" ]; then
+	here=$(cd "$(dirname "$0")" && pwd)
+	if [ -f "$here/module-setup.sh" ]; then
+		module_dir=$here
+	fi
+fi
+if [ -n "$module_dir" ] && [ "$module_dir" != "$MODULE_DIR_INSTALLED" ]; then
+	[ -f "$module_dir/module-setup.sh" ] || die "no module-setup.sh in $module_dir"
+	if ! cmp -s "$module_dir/module-setup.sh" "$MODULE_DIR_INSTALLED/module-setup.sh"; then
+		install -d "$MODULE_DIR_INSTALLED"
+		install -m 0755 "$module_dir/module-setup.sh" "$MODULE_DIR_INSTALLED/module-setup.sh"
+		say "installed the dracut module into $MODULE_DIR_INSTALLED"
+	fi
+fi
+[ -f "$MODULE_DIR_INSTALLED/module-setup.sh" ] ||
+	die "no dracut module at $MODULE_DIR_INSTALLED; install the shirudo-target package"
+
+if [ -z "$unit" ] && [ ! -f "$UNIT_INSTALLED" ]; then
+	here=${here:-$(cd "$(dirname "$0")" && pwd)}
+	for candidate in "$here/../../systemd/shirudo-initrd.service" \
+			 "$here/shirudo-initrd.service"; do
+		if [ -f "$candidate" ]; then
+			unit=$candidate
+			break
+		fi
+	done
+	[ -n "$unit" ] || die "no $UNIT_INSTALLED; install the shirudo-target package or pass --unit"
+fi
+
+[ -z "$cert" ] || [ -s "$cert" ] || die "no certificate at $cert"
+[ -z "$binary" ] || [ -x "$binary" ] || die "no executable at $binary"
+if [ -n "$binary" ] && [ -z "$binary_path" ]; then
+	die "--binary needs --binary-path, the path of that binary on the root file system"
+fi
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+# Paths that differ from the installed ones reach the module through a
+# dracut.conf(5) file of their own, which also shuts out the host's
+# drop-ins so that a test initrd depends on nothing but what was asked.
+conf_args=()
+if [ -n "$cert$binary$unit" ]; then
+	{
+		printf 'add_dracutmodules+=" shirudo "\n'
+		[ -z "$cert" ] || printf 'shirudo_cert=%q\n' "$cert"
+		[ -z "$binary" ] || printf 'shirudo_binary=%q\n' "$binary"
+		[ -z "$binary_path" ] || printf 'shirudo_binary_path=%q\n' "$binary_path"
+		[ -z "$unit" ] || printf 'shirudo_unit=%q\n' "$unit"
+	} >"$tmp/shirudo.conf"
+	conf_args=(--conf "$tmp/shirudo.conf" --confdir "$tmp")
+fi
+
+args=(--force --add shirudo --kver "$kver")
+if [ -n "$kmoddir" ]; then
+	[ -d "$kmoddir/$kver" ] || die "no kernel modules at $kmoddir/$kver"
+	args+=(--kmoddir "$kmoddir/$kver")
+fi
+[ "$no_kernel" = 0 ] || args+=(--no-kernel)
+args+=("${conf_args[@]}" "${dracut_args[@]}")
+out=${output:-$(default_output)}
+[ -z "$output" ] || args+=("$output")
+
+say "running dracut for $kver"
+dracut "${args[@]}"
+check_initrd "$out"
+
+if ! grep -q -w -- "$CMDLINE_PARAM" /proc/cmdline 2>/dev/null; then
+	say "the kernel command line must carry $CMDLINE_PARAM for the initrd to enrol the certificate; this boot does not"
+fi

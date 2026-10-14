@@ -126,7 +126,67 @@ not supported: without the phase measurements an initrd binding is no
 stronger than a late one.
 
 
-4) Checking a target
+4) Building the initrd
+----------------------
+
+``tools/gen-initrd`` holds three pieces; the target package installs
+the first two.
+
+The dracut module
+    ``module-setup.sh``, installed as
+    ``/usr/lib/dracut/modules.d/90shirudo``, copies the installed
+    binary at its own path, the certificate as ``/etc/shirudo/cert.der``,
+    ``shirudo.conf`` when there is one and ``shirudo-initrd.service``,
+    enables the unit in ``initrd.target`` and depends on dracut's
+    ``tpm2-tss`` and ``systemd-pcrphase`` modules.  It includes itself
+    whenever a certificate is installed, so once shirudo is set up
+    every initrd dracut builds, for a kernel update or by hand, carries
+    it.  A ``dracut.conf(5)`` file can point it at other files
+    (``shirudo_binary``, ``shirudo_binary_path``, ``shirudo_cert``,
+    ``shirudo_conf``, ``shirudo_unit``), which is how the test VM
+    builds an initrd from a bundle.
+
+The generator
+    ``shirudo-gen-initrd`` drives dracut for one kernel and checks the
+    result::
+
+        sudo shirudo-gen-initrd                    # the running kernel
+        sudo shirudo-gen-initrd --kver 7.4.0 --output /boot/initrd.img-7.4.0
+        shirudo-gen-initrd --check /boot/initrd.img-7.4.0
+        shirudo-gen-initrd --print-cmdline         # bpf.keyring_unsealed=1
+
+    Run from a checkout it installs the module into dracut's directory
+    first.  ``--binary``, ``--binary-path``, ``--cert`` and ``--unit``
+    build from files other than the installed ones; everything after
+    ``--`` goes to dracut.  The check reads the initrd with
+    ``lsinitrd`` and refuses one that lacks the binary, the
+    certificate, the unit, its enablement or the phase measurement.
+
+The installer
+    ``install.sh`` does the whole setup of a target in one go, as
+    ``curl ... | bash -s -- <options>``: it fetches the release package
+    for the host's package format and architecture from the GitHub
+    release assets, verifying ``SHA256SUMS`` when the release publishes
+    one, installs it, places the certificate given with ``--cert`` (a
+    file or a URL), adds ``bpf.keyring_unsealed=1`` to the boot
+    command line through ``grubby``, ``update-grub`` or
+    ``/etc/kernel/cmdline`` and the loader entries, and rebuilds the
+    initrd of the running kernel through the generator.  ``--now``
+    starts enforcement right away, staged until the reboot; ``--dry-run``
+    prints the plan; ``--package`` installs a local package instead of
+    downloading one.  On a system that builds its initrd with
+    initramfs-tools the installer stops before the initrd unless told
+    ``--switch-to-dracut``, because an initrd without systemd has no
+    phase measurements for the binding to lean on.
+
+Unified kernel images take the command line from their ``.cmdline``
+section and the initrd from their build; on such systems the module
+does its work when ``kernel-install`` or ``ukify`` runs dracut, and the
+parameter goes into ``/etc/kernel/cmdline`` before the image is
+rebuilt.
+
+
+5) Checking a target
 --------------------
 
 On the target::

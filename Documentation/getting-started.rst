@@ -113,7 +113,20 @@ load.
 4) Initialise a target
 ----------------------
 
-Install the target package, place ``cert.der``, then::
+On a target with network access the installer under
+``tools/gen-initrd`` does the whole setup in one go: it installs the
+release package, places the certificate, puts the kernel parameter the
+bpf keyring needs on the boot command line and rebuilds the initrd with
+shirudo inside, so that the next reboot comes up in the production
+configuration::
+
+    curl -fsSL https://raw.githubusercontent.com/shirudo-dev/shirudo/main/tools/gen-initrd/install.sh |
+        sudo bash -s -- --cert https://example.com/shirudo/cert.der --now
+
+``--now`` starts enforcement right away, staged until that reboot; the
+``initrd`` document describes the installer's parts and what it needs
+from the system.  By hand instead: install the target package, place
+``cert.der``, then::
 
     sudo shirudo init --check-only
     sudo shirudo init

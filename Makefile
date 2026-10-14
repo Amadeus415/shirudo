@@ -34,6 +34,7 @@ mandir      ?= $(sharedir)/man
 completionsdir ?= $(sharedir)/bash-completion/completions
 # Absolute by default (systemd does not scan /usr/local); packagers override.
 systemdunitdir ?= /usr/lib/systemd/system
+dracutmodulesdir ?= /usr/lib/dracut/modules.d
 
 # Local target dependency build defaults. make target-deps builds a static
 # OpenSSL (3.5+), an OpenSSL-backed static libcurl and TPM2-TSS under
@@ -46,7 +47,7 @@ SHIRUDO_TARGET_STATIC_LIBDIR ?= $(TARGET_DEPS_DIR)/lib
 SHIRUDO_TARGET_PKG_CONFIG_PATH ?= $(TARGET_DEPS_CURL_PREFIX)/lib/pkgconfig:$(TARGET_DEPS_OPENSSL_PREFIX)/lib/pkgconfig:$(SHIRUDO_TARGET_STATIC_LIBDIR)/pkgconfig
 
 export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdir \
-       systemdunitdir SHIRUDO_TARGET_PKG_CONFIG_PATH \
+       systemdunitdir dracutmodulesdir SHIRUDO_TARGET_PKG_CONFIG_PATH \
        SHIRUDO_TARGET_STATIC_LIBDIR
 export VM_SSH_COMMAND
 
