@@ -234,8 +234,8 @@ test_expect_success 'named VM console and SSH access helpers are wired up' '
 	grep -q "^vm-ssh:" ../testing/Makefile &&
 	grep -q "contrib/test-vm.sh --console" ../testing/Makefile &&
 	grep -q "contrib/test-vm.sh --ssh" ../testing/Makefile &&
-	grep -q "VM_SSH_COMMAND" ../testing/Makefile &&
-	grep -q "TEST_VM_SSH_PORT" ../testing/Makefile &&
+	grep -q "VM_SSH_COMMAND" ../contrib/test-vm.sh &&
+	grep -q "TEST_VM_SSH_PORT" ../contrib/test-vm.sh &&
 	grep -q "hostfwd=tcp:127.0.0.1" ../contrib/test-vm.sh &&
 	grep -q "socket,id=console" ../contrib/test-vm.sh &&
 	grep -q "logfile=.*console.log" ../contrib/test-vm.sh &&
