@@ -74,3 +74,4 @@ util/version_id.c
 
 # rendered documentation from make html-docs
 /Documentation/output/
+__pycache__/
