@@ -46,7 +46,10 @@ the ``bpf()`` commands the LSM allows from userspace (``OBJ_GET``,
 ``PROG_TEST_RUN``), decodes, and then prints, appends JSON lines to a
 file, or exports.  Decoders travel inside the signed ``.upatch``; the
 exporter is part of the ``shirudo`` binary.  A snapshot therefore has
-the same provenance as the program that produced it.
+the same provenance as the program that produced it.  Reading a serializer-backed map drains
+it, exactly as the timer does, because the serializer hands over what
+it collected since the previous read; ``upatch map --peek`` asks for
+the interval still being collected and leaves it for the exporter.
 
 
 2) From a map to a record

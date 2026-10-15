@@ -195,6 +195,7 @@ static const struct shirudo_help_item upatch_map_options[] = {
 	{ "--all", "export every map from every loaded upatch" },
 	{ "--json=<path>", "append the signed Lua decoder's NDJSON record to path" },
 	{ "--show-full",  "lift the per-map 256-entry truncation cap" },
+	{ "--peek", "read serializer-backed maps without draining them" },
 	{ "--otel", "export through OTLP using each decoder's signed signal" },
 	{ "--otel-endpoint=<url>", "OTLP base URL (signal path is appended)" },
 	{ "--tenant-id=<id>", "add X-Tenant-ID to OTLP requests" },
@@ -209,7 +210,7 @@ static const struct shirudo_help_section upatch_map_sections[] = {
 
 static const struct shirudo_help upatch_map_help = {
 	.usage      = "shirudo upatch map [--all] [<upatch>] [<map>] "
-		      "[--json=<path>] [--show-full]\n"
+		      "[--json=<path>] [--show-full] [--peek]\n"
 		      "                          [--otel] "
 		      "[--otel-endpoint=<url>]\n"
 		      "                          [--otel-insecure] "
@@ -3237,14 +3238,16 @@ static int append_one_map_json(const char *path,
 static int export_one_map(const char *upatch, const char *map,
 			  const char *json_path, bool otel,
 			  const struct shirudo_otel_opts *otel_opts,
-			  bool show_full, bool print_detail)
+			  bool show_full, bool peek, bool print_detail)
 {
 	struct shirudo_map_view v = {};
 	uint32_t cap = (show_full || json_path || otel) ? 0 :
 		SHIRUDO_MAP_ENTRIES_DEFAULT;
 	int rc, ret = 0;
 
-	rc = shirudo_upatch_maps_read(upatch, map, cap, &v);
+	rc = shirudo_upatch_maps_read_flags(upatch, map, cap,
+					    peek ? SHIRUDO_MAP_READ_PEEK : 0,
+					    &v);
 	if (rc) {
 		pr_err("upatch map: read %s/%s: %s", upatch, map,
 		       strerror(-rc));
@@ -3289,7 +3292,7 @@ static int cmd_upatch_map(int argc, const char **argv)
 		.retries = 3,
 	};
 	const char *upatch = NULL, *map = NULL, *json_path = NULL;
-	bool all = false, show_full = false, otel = false;
+	bool all = false, show_full = false, otel = false, peek = false;
 	bool insecure_set = false;
 	bool retries_set = false;
 	size_t n = 0;
@@ -3320,6 +3323,8 @@ static int cmd_upatch_map(int argc, const char **argv)
 			return 2;
 		} else if (strcmp(a, "--show-full") == 0) {
 			show_full = true;
+		} else if (strcmp(a, "--peek") == 0) {
+			peek = true;
 		} else if (strcmp(a, "--otel") == 0) {
 			if (otel) {
 				fprintf(stderr, "upatch map: duplicate --otel\n");
@@ -3453,7 +3458,7 @@ static int cmd_upatch_map(int argc, const char **argv)
 			return 2;
 		}
 		return export_one_map(upatch, map, json_path, otel,
-				      &otel_opts, show_full,
+				      &otel_opts, show_full, peek,
 				      !json_path && !otel);
 	}
 
@@ -3464,7 +3469,7 @@ static int cmd_upatch_map(int argc, const char **argv)
 		for (k = 0; k < n; k++) {
 			if (export_one_map(list[k].upatch, list[k].name,
 					   json_path, otel, &otel_opts,
-					   show_full, false) != 0)
+					   show_full, peek, false) != 0)
 				ret = 1;
 		}
 		shirudo_map_summary_free(list, n);

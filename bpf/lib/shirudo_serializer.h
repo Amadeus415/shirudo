@@ -17,6 +17,9 @@
 #define SHIRUDO_SERIAL_MAX_PAGES	256u
 #define SHIRUDO_SERIAL_F_DONE		(1u << 0)
 
+/* ctx->flags: read the live state without draining it. */
+#define SHIRUDO_SERIAL_CTX_F_PEEK	(1u << 0)
+
 /*
  * Keep the syscall test-run context within the older five-u64 argument
  * limit. Page result metadata lives in struct shirudo_serial_chunk.

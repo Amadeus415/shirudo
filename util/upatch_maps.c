@@ -911,7 +911,7 @@ out_chunk:
  * exists for this map, or -errno on serializer/output failure.
  */
 static int try_read_serialized(const char *upatch, const char *map,
-			       struct shirudo_map_view *out)
+			       uint32_t flags, struct shirudo_map_view *out)
 {
 	struct bpf_map_info serial_info = {};
 	uint64_t cursor = 0, bytes_total = 0, invocation_id;
@@ -960,6 +960,8 @@ static int try_read_serialized(const char *upatch, const char *map,
 
 		ctx.magic = SHIRUDO_SERIAL_MAGIC;
 		ctx.version = SHIRUDO_SERIAL_VERSION;
+		ctx.flags = (flags & SHIRUDO_MAP_READ_PEEK) ?
+			    SHIRUDO_SERIAL_CTX_F_PEEK : 0;
 		ctx.max_chunks = serial_info.max_entries;
 		ctx.chunk_payload_size = SHIRUDO_SERIAL_CHUNK_PAYLOAD;
 		ctx.page_index = page_index;
@@ -1199,6 +1201,14 @@ int shirudo_upatch_maps_read(const char *upatch, const char *map,
 			     uint32_t max_entries_cap,
 			     struct shirudo_map_view *out)
 {
+	return shirudo_upatch_maps_read_flags(upatch, map, max_entries_cap, 0,
+					      out);
+}
+
+int shirudo_upatch_maps_read_flags(const char *upatch, const char *map,
+				   uint32_t max_entries_cap, uint32_t flags,
+				   struct shirudo_map_view *out)
+{
 	struct bpf_map_info info = {};
 	char upatch_dir[PATH_MAX];
 	char bpffs_name[SHIRUDO_UPATCH_BPFFS_NAME_MAX + 1];
@@ -1230,7 +1240,7 @@ int shirudo_upatch_maps_read(const char *upatch, const char *map,
 			(uint64_t)upatch_st.st_ctim.tv_sec * 1000000000ULL +
 			(uint64_t)upatch_st.st_ctim.tv_nsec;
 
-	rc = try_read_serialized(upatch, map, out);
+	rc = try_read_serialized(upatch, map, flags, out);
 	if (rc < 0) {
 		close(fd);
 		return rc;

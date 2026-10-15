@@ -124,6 +124,17 @@ int  shirudo_upatch_maps_read(const char *upatch, const char *map,
 			      uint32_t max_entries_cap,
 			      struct shirudo_map_view *out);
 
+/*
+ * Serializer-backed maps are drained by a read, as the map-export timer
+ * expects. SHIRUDO_MAP_READ_PEEK asks the serializer for the interval
+ * being collected without taking it from the exporter.
+ */
+#define SHIRUDO_MAP_READ_PEEK	(1u << 0)
+
+int  shirudo_upatch_maps_read_flags(const char *upatch, const char *map,
+				    uint32_t max_entries_cap, uint32_t flags,
+				    struct shirudo_map_view *out);
+
 /* Human-readable describe-style render. */
 void shirudo_upatch_maps_print_summary(const struct shirudo_map_summary *list,
 				       size_t n);
