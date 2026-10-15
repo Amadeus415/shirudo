@@ -244,15 +244,36 @@ test_expect_success 'named VM console and SSH access helpers are wired up' '
 	grep -q "TEST_VM_SSH_PUBLIC_KEY" ../contrib/test-vm-guest.sh
 '
 
-test_expect_success 'VM console and SSH access require a named VM' '
+test_expect_success 'VM console requires a named VM and SSH reports empty state' '
 	! TEST_VM_WORK_DIR="$WORK/access-console" "$RUNNER" --console \
 		>"$WORK/access-console.out" 2>&1 &&
 	grep -q "VM_NAME is required for VM console/SSH access" \
 		"$WORK/access-console.out" &&
 	! TEST_VM_WORK_DIR="$WORK/access-ssh" "$RUNNER" --ssh \
 		>"$WORK/access-ssh.out" 2>&1 &&
-	grep -q "VM_NAME is required for VM console/SSH access" \
+	grep -q "no saved VM states found" \
 		"$WORK/access-ssh.out"
+'
+
+test_expect_success 'unnamed vm-ssh selects the newest saved VM state' '
+	root="$WORK/latest-ssh" &&
+	mkdir -p "$root/vms/older" "$root/vms/newer" &&
+	printf "1000000000000000000\n" >"$root/vms/older/created-at" &&
+	printf "2000000000000000000\n" >"$root/vms/newer/created-at" &&
+	touch -t 203001010000 "$root/vms/older" &&
+	! TEST_VM_WORK_DIR="$root" "$RUNNER" --ssh \
+		>"$WORK/latest-ssh.out" 2>&1 &&
+	grep -q "VM '\''newer'\'' is not running" "$WORK/latest-ssh.out"
+'
+
+test_expect_success 'explicit VM_NAME overrides unnamed vm-ssh selection' '
+	root="$WORK/named-ssh" &&
+	mkdir -p "$root/vms/older" "$root/vms/newer" &&
+	printf "1000000000000000000\n" >"$root/vms/older/created-at" &&
+	printf "2000000000000000000\n" >"$root/vms/newer/created-at" &&
+	! VM_NAME=older TEST_VM_WORK_DIR="$root" "$RUNNER" --ssh \
+		>"$WORK/named-ssh.out" 2>&1 &&
+	grep -q "VM '\''older'\'' is not running" "$WORK/named-ssh.out"
 '
 
 test_expect_success 'VM bundle installs target units and interactive mode activates timers' '

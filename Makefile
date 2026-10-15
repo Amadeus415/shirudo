@@ -193,7 +193,8 @@ shirudo make targets (run from the repo root):
     make vm                boot a uniquely named persistent vTPM VM, prepare
                            Shirudo, and return without running the test suite
     make vm-console        attach to the serial console of a named running VM
-    make vm-ssh             open an SSH shell to a named running VM
+    make vm-ssh             open an SSH shell to the latest saved VM, or a
+                           named running VM when VM_NAME is set
     make test-tgt          boot a uniquely named vTPM VM with QEMU + swtpm,
                            import the host payload and prebuilt fixtures, run
                            the target integration suite, and retain the

@@ -524,6 +524,34 @@ select_named_run_dir()
 	VM_NAME="$VM_NAME_REQUEST"
 }
 
+select_latest_run_dir()
+{
+	local vm_dir vm_name created_at latest_created_at latest_vm_name
+
+	[[ -d "$VMS_DIR" ]] || die "no saved VM states found under $VMS_DIR"
+	latest_created_at=""
+	latest_vm_name=""
+	for vm_dir in "$VMS_DIR"/*/; do
+		[[ -d "$vm_dir" ]] || continue
+		[[ -s "${vm_dir}created-at" ]] ||
+			die "VM state '$(basename "$vm_dir")' has no creation timestamp; run 'make vm-clean'"
+		created_at="$(<"${vm_dir}created-at")"
+		[[ "$created_at" =~ ^[0-9]{19}$ ]] ||
+			die "VM state '$(basename "$vm_dir")' has an invalid creation timestamp"
+		vm_name="$(basename "$vm_dir")"
+		if [[ -z "$latest_created_at" ||
+		      "$created_at" > "$latest_created_at" ||
+		      ( "$created_at" == "$latest_created_at" &&
+		        "$vm_name" > "$latest_vm_name" ) ]]; then
+			latest_created_at="$created_at"
+			latest_vm_name="$vm_name"
+		fi
+	done
+	[[ -n "$latest_vm_name" ]] || die "no saved VM states found under $VMS_DIR"
+	VM_NAME="$latest_vm_name"
+	RUN_DIR="${VMS_DIR}/${VM_NAME}"
+}
+
 require_running_vm()
 {
 	local pid cmdline
@@ -573,6 +601,10 @@ run_ssh()
 {
 	local ready=0
 
+	if [[ -z "$VM_NAME_REQUEST" ]]; then
+		select_latest_run_dir
+		VM_NAME_REQUEST="$VM_NAME"
+	fi
 	require_running_vm
 	check_access_dependency ssh
 	SSH_DIR="${RUN_DIR}/ssh"
@@ -1095,6 +1127,8 @@ allocate_run_dir()
 			die "could not allocate a unique VM state directory"
 		VM_NAME="$(basename "$RUN_DIR")"
 	fi
+	date +%s%N >"$RUN_DIR/created-at" ||
+		die "could not record VM creation time"
 	mkdir -p "$RUN_DIR/result" "$RUN_DIR/tpm"
 }
 
@@ -1559,7 +1593,7 @@ if [[ "$VM_MODE" == interactive ]]; then
 	print_memory_summary
 	log "console log: $RUN_DIR/console.log"
 	log "console: make vm-console VM_NAME=$VM_NAME"
-	log "ssh: make vm-ssh VM_NAME=$VM_NAME"
+	log "ssh: make vm-ssh"
 else
 	set +e
 	timeout --signal=TERM --kill-after=30 "$VM_TIMEOUT" \
