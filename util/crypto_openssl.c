@@ -292,6 +292,38 @@ done:
 	return rc;
 }
 
+int shirudo_cms_signed_by(const uint8_t *signature, size_t signature_len,
+			  const struct shirudo_cert *cert)
+{
+	STACK_OF(CMS_SignerInfo) *sis;
+	CMS_ContentInfo *cms = NULL;
+	BIO *sig = NULL;
+	int i, rc = -EINVAL;
+
+	if (!signature || !cert || !cert->impl || signature_len > INT_MAX)
+		return -EINVAL;
+	sig = BIO_new_mem_buf(signature, (int)signature_len);
+	if (!sig)
+		goto done;
+	cms = d2i_CMS_bio(sig, NULL);
+	if (!cms)
+		goto done;
+	sis = CMS_get0_SignerInfos(cms);
+	if (!sis)
+		goto done;
+	rc = 0;
+	for (i = 0; i < sk_CMS_SignerInfo_num(sis) && !rc; i++)
+		if (CMS_SignerInfo_cert_cmp(sk_CMS_SignerInfo_value(sis, i),
+					    cert->impl) == 0)
+			rc = 1;
+done:
+	if (rc < 0)
+		ERR_clear_error();
+	CMS_ContentInfo_free(cms);
+	BIO_free(sig);
+	return rc;
+}
+
 int shirudo_hmac_sha256(const uint8_t *key, size_t key_len,
 			const void *data, size_t len, uint8_t out[32])
 {

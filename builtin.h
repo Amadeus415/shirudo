@@ -36,6 +36,14 @@ int shirudo_upatch_apply(const char *path);
 int shirudo_upatch_install(const char *path);
 int shirudo_upatch_remove(const char *path);
 
+/*
+ * Target-side: detach, unpin and unarchive the upatch of that name
+ * without a directive, because the key that signed it was revoked.
+ * reason goes into the eventlog record. 1 when it was loaded and the
+ * unload was measured, 0 when only the archive went, -errno otherwise.
+ */
+int shirudo_upatch_purge(const char *name, const char *reason);
+
 /* Internal lifecycle result: the signed payload was valid, but its kprobe
  * target is unavailable because the backing module is not loaded. */
 #define SHIRUDO_UPATCH_INSTALL_TARGET_MISSING 2

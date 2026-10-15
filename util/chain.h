@@ -59,6 +59,9 @@ void shirudo_chain_init_event(const uint8_t cert_sha[32],
 			       struct shirudo_measured_upatch *set, size_t n,
 			       const uint8_t tree_root[32],
 			       uint8_t set_digest[32], uint8_t event[32]);
+/* SHA256(tag || NUL || cert_sha256), tag "shirudo-key-revoke". */
+void shirudo_chain_key_event(const char *tag, const uint8_t cert_sha[32],
+			     uint8_t event[32]);
 void shirudo_chain_upatch_event(const char *tag, const char *name,
 				 const uint8_t payload[32], uint8_t event[32]);
 void shirudo_chain_tree_event(int64_t seq, const uint8_t operation_digest[32],

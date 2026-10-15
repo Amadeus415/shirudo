@@ -434,6 +434,7 @@ struct parse {
 	char		tree_id[SHIRUDO_UPATCH_NAME_MAX + 1];
 	char		tree_op[16];
 	int64_t		tree_seq;
+	char		key_fingerprint[65];
 	/* results */
 	struct record	*recs;
 	size_t		n_recs;
@@ -514,6 +515,8 @@ static int on_record(void *ctx)
 	} else if (!strcmp(p->type, "tree_op")) {
 		snprintf(r->label, sizeof(r->label), "%s %s seq %lld",
 			 p->tree_op, p->tree_id, (long long)p->tree_seq);
+	} else if (!strncmp(p->type, "key_", 4)) {
+		snprintf(r->label, sizeof(r->label), "%s", p->key_fingerprint);
 	}
 	p->n_recs++;
 	/* Reset the per-element scratch the next element may not set. */
@@ -521,6 +524,7 @@ static int on_record(void *ctx)
 	p->upatch_name[0] = '\0';
 	p->tree_id[0] = '\0';
 	p->tree_op[0] = '\0';
+	p->key_fingerprint[0] = '\0';
 	p->anchor[0] = '\0';
 	p->bound_in[0] = '\0';
 	p->tree_seq = 0;
@@ -726,6 +730,11 @@ int shirudo_attest_verify(const char *evidence, size_t len,
 			{ "name", SHIRUDO_JSON_T_STRING, p->upatch_name,
 			  sizeof(p->upatch_name), 0, NULL, 0 },
 		};
+		struct shirudo_json_field key_sub[] = {
+			{ "fingerprint", SHIRUDO_JSON_T_STRING,
+			  p->key_fingerprint, sizeof(p->key_fingerprint), 0,
+			  NULL, 0 },
+		};
 		struct shirudo_json_field tree_sub[] = {
 			{ "seq", SHIRUDO_JSON_T_INT, &p->tree_seq, 0, 0, NULL,
 			  0 },
@@ -766,6 +775,8 @@ int shirudo_attest_verify(const char *evidence, size_t len,
 			  upatch_sub, ARRAY_SIZE(upatch_sub) },
 			{ "tree", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, tree_sub,
 			  ARRAY_SIZE(tree_sub) },
+			{ "key", SHIRUDO_JSON_T_OBJECT, NULL, 0, 0, key_sub,
+			  ARRAY_SIZE(key_sub) },
 		};
 		struct shirudo_json_field top[] = {
 			{ "nonce", SHIRUDO_JSON_T_STRING, p->nonce_hex,

@@ -217,6 +217,20 @@ static int select_der(const struct dirent *e)
 	return n > 4 && strcmp(e->d_name + n - 4, ".der") == 0;
 }
 
+static size_t count_der(const char *dir)
+{
+	struct dirent **names = NULL;
+	int n, i;
+
+	n = scandir(dir, &names, select_der, NULL);
+	if (n < 0)
+		return 0;
+	for (i = 0; i < n; i++)
+		shirudo_libc_free(names[i]);	/* scandir-owned */
+	shirudo_libc_free(names);		/* scandir-owned */
+	return (size_t)n;
+}
+
 /* <name>.der has its vouch at <name>.vouch. */
 static int vouch_path_for(const char *der_path, char *out, size_t cap)
 {
@@ -323,7 +337,6 @@ static int scan_trusted(const char *keys_dir, const char *revoked_dir,
 		if (rc)
 			break;
 		if (shirudo_keys_is_revoked(revoked_dir, c->fingerprint)) {
-			set->n_revoked++;
 			xfree(c->der, c->der_sz);
 			c->der = NULL;
 			continue;
@@ -359,10 +372,9 @@ int shirudo_keys_load(const char *keys_dir, const char *revoked_dir,
 	rc = shirudo_keys_digest_file(path, sha256, fingerprint);
 	if (rc)
 		return rc;
-	if (shirudo_keys_is_revoked(revoked_dir, fingerprint))
-		set->n_revoked++;
-	else
+	if (!shirudo_keys_is_revoked(revoked_dir, fingerprint))
 		set_add(set, path, sha256, fingerprint, NULL);
+	set->n_revoked = count_der(revoked_dir);
 	if (!with_trusted)
 		return 0;
 
@@ -417,15 +429,14 @@ void shirudo_keys_set_digest(const struct shirudo_trusted_set *set,
 }
 
 /* Write whole, then rename into place; a stale .tmp is overwritten. */
-static int write_into_place(const char *path, const void *data, size_t len,
-			    mode_t mode)
+int shirudo_keys_write_file(const char *path, const void *data, size_t len)
 {
 	char tmp[PATH_MAX];
 	int fd, rc;
 
 	if (snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= (int)sizeof(tmp))
 		return -ENAMETOOLONG;
-	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
+	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
 	if (fd < 0)
 		return -errno;
 	rc = shirudo_write_all(fd, data, len);
@@ -463,10 +474,10 @@ int shirudo_keys_install(const char *keys_dir, const unsigned char *der,
 					   sizeof(vouch));
 	if (rc)
 		return rc;
-	rc = write_into_place(vouch, sig, sig_sz, 0644);
+	rc = shirudo_keys_write_file(vouch, sig, sig_sz);
 	if (rc)
 		return rc;
-	rc = write_into_place(out, der, der_sz, 0644);
+	rc = shirudo_keys_write_file(out, der, der_sz);
 	if (rc)
 		unlink(vouch);
 	return rc;

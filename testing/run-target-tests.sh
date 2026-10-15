@@ -37,6 +37,7 @@ for t in \
 	t1123-keys.sh \
 	t1124-keys-add.sh \
 	t1125-key-permission.sh \
+	t1126-keys-revoke.sh \
 	t1106-keyring-swap.sh
 do
 	if sh "$t"; then

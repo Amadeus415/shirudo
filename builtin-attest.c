@@ -56,7 +56,7 @@ static const struct shirudo_help_item verify_options[] = {
 	{ "--tree-root=<hex>",     "the upatch tree projection root at boot" },
 	{ "--expect-chain=<hex>",  "the register value after the expected events" },
 	{ "--expect-pcr=<n>=<hex>", "a PCR value the quote must carry (repeatable)" },
-	{ "--allow-runtime-events", "accept loads and unloads after boot" },
+	{ "--allow-runtime-events", "accept loads, unloads and revocations after boot" },
 	{ "--strict-anchor",       "require the anchoring PCR to hold only the anchor" },
 	{ "--expect-credential=<hex>", "the credential the challenge given to the target carried" },
 	{ "--ek-name=<hex>",       "the endorsement key name pinned at enrollment" },
@@ -78,7 +78,7 @@ static const struct shirudo_help_item predict_options[] = {
 	{ "--upatch=<file>",       "an installed artifact (repeatable)" },
 	{ "--expect=<name>=<hex>", "an installed upatch by name and payload digest" },
 	{ "--tree-root=<hex>",     "the upatch tree projection root at boot" },
-	{ "--event=<kind>:<name>=<hex>", "a load, unload or tree:<seq> event after boot" },
+	{ "--event=<kind>:<name>=<hex>", "a load, unload, tree:<seq> or revoke:<fingerprint> event after boot" },
 	{ "--bind-pcr=<n>=<hex>",  "PCR 9 and 11 values at binding, for the register name" },
 };
 
@@ -261,6 +261,9 @@ static int apply_event(const char *spec, uint8_t chain[32])
 		if (end == name || *end || seq <= 0)
 			return -EINVAL;
 		shirudo_chain_tree_event(seq, digest, event);
+	} else if (kind_len == 6 && !strncmp(spec, "revoke", 6)) {
+		/* <name> is the fingerprint, <hex> the certificate digest. */
+		shirudo_chain_key_event("shirudo-key-revoke", digest, event);
 	} else {
 		return -EINVAL;
 	}

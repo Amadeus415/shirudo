@@ -60,6 +60,14 @@ int shirudo_keyring_seal(key_serial_t keyring);
 int shirudo_keyring_holds_cert(key_serial_t keyring,
 			       const unsigned char *der, size_t der_len);
 
+/* The serial of <keyring>'s key for the certificate, -ENOKEY, -errno. */
+key_serial_t shirudo_keyring_find_cert(key_serial_t keyring,
+				       const unsigned char *der,
+				       size_t der_len);
+
+/* Unlink <key> from <keyring>; sealing does not stop this, the LSM may. */
+int shirudo_keyring_unlink_key(key_serial_t keyring, key_serial_t key);
+
 /*
  * Iterate every key linked into <keyring>. Returns 0 / -errno.
  */

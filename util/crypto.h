@@ -59,6 +59,13 @@ int shirudo_cert_key_algorithm(const struct shirudo_cert *cert,
 int shirudo_verify_detached(const uint8_t *payload, size_t payload_len,
 			    const uint8_t *signature, size_t signature_len,
 			    const struct shirudo_cert *cert);
+/*
+ * Whether a signer of the CMS blob names this certificate, by key id
+ * or by issuer and serial: 1 when one does, 0 when none, -EINVAL when
+ * the blob does not parse. Says nothing about the signature's validity.
+ */
+int shirudo_cms_signed_by(const uint8_t *signature, size_t signature_len,
+			  const struct shirudo_cert *cert);
 
 struct shirudo_tls_ca {
 	const char *path;

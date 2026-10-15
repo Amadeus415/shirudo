@@ -2372,7 +2372,8 @@ static int version_gate(const char *expect_version_id, bool no_version_check,
 
 /* Eventlog entry ("upatch_load" / "upatch_unload") mirroring an extend. */
 static int append_upatch_event(const char *type, const char *name,
-			       const uint8_t payload[32], const uint8_t event[32])
+			       const uint8_t payload[32],
+			       const uint8_t event[32], const char *reason)
 {
 	char buf[4096];
 	struct shirudo_json_emit e = { .buf = buf, .cap = sizeof(buf) };
@@ -2396,6 +2397,8 @@ static int append_upatch_event(const char *type, const char *name,
 	shirudo_json_kv_string(&e, "name", name);
 	shirudo_json_kv_string(&e, "payload_sha256", payload_hex);
 	shirudo_json_obj_close(&e);
+	if (reason)
+		shirudo_json_kv_string(&e, "reason", reason);
 	shirudo_json_obj_close(&e);
 
 	if (e.err) {
@@ -2417,7 +2420,8 @@ static int append_upatch_event(const char *type, const char *name,
  */
 static int upatch_chain_event(const char *tag, const char *type,
 			      const char *op, const char *name,
-			      const uint8_t payload[32], char out_chain[65])
+			      const uint8_t payload[32], const char *reason,
+			      char out_chain[65])
 {
 	uint8_t event[32], chain[32];
 	char chain_hex[65];
@@ -2446,7 +2450,7 @@ static int upatch_chain_event(const char *tag, const char *type,
 		       "reconcile", op);
 		return rc;
 	}
-	rc = append_upatch_event(type, name, payload, event);
+	rc = append_upatch_event(type, name, payload, event, reason);
 	if (rc) {
 		pr_err("upatch %s: eventlog append failed after extend -- "
 		       "chain/log desync; operator must reconcile", op);
@@ -2827,7 +2831,7 @@ static int cmd_upatch_load(int argc, const char **argv)
 	}
 
 	if (upatch_chain_event("shirudo-upatch", "upatch_load", "load",
-			       name, payload, rep.chain_after) != 0) {
+			       name, payload, NULL, rep.chain_after) != 0) {
 		rep_fail(&rep, "tpm_extend", "tpm_error", EIO,
 			 "chain extend failed");
 		goto done;
@@ -3005,7 +3009,7 @@ static int cmd_upatch_unload(int argc, const char **argv)
 			persisted, strerror(errno));
 
 	if (upatch_chain_event("shirudo-unload", "upatch_unload", "unload",
-			       name, payload, rep.chain_after) != 0) {
+			       name, payload, NULL, rep.chain_after) != 0) {
 		rep_fail(&rep, "tpm_extend", "tpm_error", EIO,
 			 "chain extend failed");
 		goto done;
@@ -3028,6 +3032,46 @@ done:
 		shirudo_report_emit(report, &rep);
 	shirudo_report_free(&rep);
 	return ret;
+}
+
+int shirudo_upatch_purge(const char *name, const char *reason)
+{
+	uint8_t payload[SHIRUDO_UPATCH_PAYLOAD_HASH_LEN] = {};
+	char persisted[PATH_MAX];
+	struct shirudo_upatch u;
+	bool loaded;
+	int rc;
+
+	if (!safe_upatch_name(name))
+		return -EINVAL;
+	if (snprintf(persisted, sizeof(persisted), "%s/%s.upatch",
+		     SHIRUDO_UPATCHES_DIR, name) >= (int)sizeof(persisted))
+		return -ENAMETOOLONG;
+	rc = shirudo_upatch_open(persisted, &u);
+	if (rc)
+		return rc;
+	memcpy(payload, u.hdr.payload_sha256, sizeof(payload));
+	shirudo_upatch_close(&u);
+
+	rc = remove_pin_dir(name);
+	if (rc && rc != -ENOENT) {
+		pr_err("upatch purge: failed to remove pin for %s: %s", name,
+		       strerror(-rc));
+		return rc;
+	}
+	loaded = rc == 0;
+	if (unlink(persisted) != 0 && errno != ENOENT) {
+		pr_err("upatch purge: could not remove %s: %s", persisted,
+		       strerror(errno));
+		return -errno;
+	}
+	pr_audit("upatch purge: name=%s reason=%s %s", name, reason,
+		 loaded ? "detached" : "archive_only");
+	if (!loaded)
+		return 0;
+	rc = upatch_chain_event("shirudo-unload", "upatch_unload", "purge",
+				name, payload, reason, NULL);
+	return rc ? rc : 1;
 }
 
 /* Native BPM lifecycle hooks.  Keep package installation on the exact

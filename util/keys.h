@@ -35,8 +35,9 @@ struct shirudo_trusted_cert {
  * The set is sorted by DER digest and holds each public key once. A
  * trusted certificate is a member only with a vouch beside it that
  * verifies under the primary or under a member admitted before it;
- * one without is counted in n_unvouched, one whose fingerprint is in
- * the revoked directory in n_revoked, and neither is a member.
+ * one without is counted in n_unvouched and is not a member, nor is
+ * one whose fingerprint the revoked directory names. n_revoked counts
+ * that directory's certificates.
  */
 struct shirudo_trusted_set {
 	struct shirudo_trusted_cert	certs[SHIRUDO_KEYS_MAX];
@@ -94,6 +95,9 @@ int shirudo_keys_verify_vouch(const struct shirudo_trusted_set *set,
 			      const unsigned char *der, size_t der_sz,
 			      const unsigned char *sig, size_t sig_sz,
 			      uint8_t voucher[32]);
+
+/* Write a file whole and rename it into place, mode 0644. */
+int shirudo_keys_write_file(const char *path, const void *data, size_t len);
 
 /*
  * Write the certificate and its vouch under <keys_dir>/trusted, named

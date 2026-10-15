@@ -230,8 +230,9 @@ int shirudo_keyring_list(key_serial_t keyring,
 }
 
 struct holds_cert_ctx {
-	char	want[512];
-	bool	found;
+	char		want[512];
+	key_serial_t	serial;
+	bool		found;
 };
 
 static void holds_cert_cb(key_serial_t serial, const char *type,
@@ -239,10 +240,11 @@ static void holds_cert_cb(key_serial_t serial, const char *type,
 {
 	struct holds_cert_ctx *ctx = ud;
 
-	(void)serial;
 	if (strcmp(type, "asymmetric") == 0 &&
-	    strcmp(description, ctx->want) == 0)
+	    strcmp(description, ctx->want) == 0) {
+		ctx->serial = serial;
 		ctx->found = true;
+	}
 }
 
 int shirudo_keyring_holds_cert(key_serial_t keyring,
@@ -271,6 +273,41 @@ int shirudo_keyring_holds_cert(key_serial_t keyring,
 	if (rc)
 		return rc;
 	return ctx.found ? 1 : 0;
+}
+
+key_serial_t shirudo_keyring_find_cert(key_serial_t keyring,
+				       const unsigned char *der,
+				       size_t der_len)
+{
+	struct holds_cert_ctx ctx = {};
+	const char *type, *description;
+	char desc[512];
+	long probe;
+	int rc;
+
+	probe = sys_add_key("asymmetric", NULL, der, der_len,
+			    KEY_SPEC_THREAD_KEYRING);
+	if (probe < 0)
+		return -errno;
+	rc = describe_key((key_serial_t)probe, desc, sizeof(desc));
+	sys_keyctl(KEYCTL_UNLINK, probe, KEY_SPEC_THREAD_KEYRING, 0, 0);
+	if (rc)
+		return rc;
+	split_describe(desc, &type, &description);
+	if (strlen(description) >= sizeof(ctx.want))
+		return -ERANGE;
+	memcpy(ctx.want, description, strlen(description) + 1);
+	rc = shirudo_keyring_list(keyring, holds_cert_cb, &ctx);
+	if (rc)
+		return rc;
+	return ctx.found ? ctx.serial : -ENOKEY;
+}
+
+int shirudo_keyring_unlink_key(key_serial_t keyring, key_serial_t key)
+{
+	if (sys_keyctl(KEYCTL_UNLINK, key, keyring, 0, 0) < 0)
+		return -errno;
+	return 0;
 }
 
 key_serial_t shirudo_keyring_bpf_serial(void)

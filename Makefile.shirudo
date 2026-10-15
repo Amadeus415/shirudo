@@ -515,7 +515,8 @@ REGISTER_OBJS := util/chain.o util/tpm.o util/tpm_wire.o util/eventlog.o \
                  util/initrd.o $(VERSION_OBJ)
 REGISTER_LIBS := -lcrypto -lssl -ltss2-esys -ltss2-tctildr
 
-testing/helper/test-keys: testing/helper/test-keys.c util/keys.o $(REGISTER_OBJS)
+testing/helper/test-keys: testing/helper/test-keys.c util/keys.o \
+                          util/upatch.o $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 

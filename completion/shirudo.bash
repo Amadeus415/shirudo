@@ -151,6 +151,10 @@ _shirudo()
 				COMPREPLY=( $(compgen -W "-o --keys-dir= --key \
 					--cert" -- "$cur") )
 				;;
+			revoke)
+				COMPREPLY=( $(compgen -W "--promote= --force" \
+					-- "$cur") )
+				;;
 			esac
 		else
 			COMPREPLY=( $(compgen -f -- "$cur") )

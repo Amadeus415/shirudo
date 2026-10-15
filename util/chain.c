@@ -115,6 +115,12 @@ void shirudo_chain_upatch_event(const char *tag, const char *name,
 	shirudo_sha256(buf, off, event);
 }
 
+void shirudo_chain_key_event(const char *tag, const uint8_t cert_sha[32],
+			     uint8_t event[32])
+{
+	shirudo_sha256_2(tag, strlen(tag) + 1, cert_sha, 32, event);
+}
+
 void shirudo_chain_tree_event(int64_t seq, const uint8_t operation_digest[32],
 			       uint8_t event[32])
 {
