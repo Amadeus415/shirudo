@@ -793,6 +793,131 @@ static void lua_split_page_slots(lua_State *L, int slots_idx,
 			       data + i, slot_size);
 }
 
+static void lua_push_u64_string(lua_State *L, uint64_t value);
+
+/*
+ * Every slot of one serialized page in order, header first, honouring
+ * the per-chunk packing of records that do not divide the chunk payload.
+ */
+static int lua_shirudo_page_slots(lua_State *L)
+{
+	const char *hex;
+	unsigned char *data = NULL;
+	size_t hex_len, data_len = 0, off = 0, per_chunk;
+	uint64_t chunks;
+	int slot_size, n = 0, rc;
+
+	luaL_checktype(L, 1, LUA_TTABLE);
+	slot_size = lua_check_c_int(L, 2);
+	if (slot_size <= 0 || slot_size > (int)SHIRUDO_SERIAL_CHUNK_PAYLOAD)
+		return luaL_error(L, "invalid slot size");
+	chunks = lua_page_u64(L, 1, "chunks");
+	lua_getfield(L, 1, "data_hex");
+	hex = lua_tolstring(L, -1, &hex_len);
+	if (!hex) {
+		lua_pop(L, 1);
+		lua_newtable(L);
+		return 1;
+	}
+	rc = hex_decode_alloc(hex, hex_len, &data, &data_len);
+	lua_pop(L, 1);
+	if (rc)
+		return luaL_error(L, "invalid page data_hex");
+	per_chunk = SHIRUDO_SERIAL_CHUNK_PAYLOAD / (size_t)slot_size;
+	lua_newtable(L);
+	while (off < data_len) {
+		size_t chunk_bytes = data_len - off, local_slots, i;
+
+		if (chunks > 1 && chunk_bytes > SHIRUDO_SERIAL_CHUNK_PAYLOAD)
+			chunk_bytes = SHIRUDO_SERIAL_CHUNK_PAYLOAD;
+		local_slots = chunk_bytes / (size_t)slot_size;
+		if (chunks > 1 && local_slots > per_chunk)
+			local_slots = per_chunk;
+		for (i = 0; i < local_slots; i++) {
+			lua_push_slot(L, data + off + i * (size_t)slot_size,
+				      (size_t)slot_size);
+			lua_rawseti(L, -2, ++n);
+		}
+		if (local_slots == 0)
+			break;
+		off += chunk_bytes;
+	}
+	xfree(data, data_len);
+	return 1;
+}
+
+static int lua_check_u64_string(lua_State *L, int arg, uint64_t *out)
+{
+	const char *s = luaL_checkstring(L, arg);
+	uint64_t v = 0;
+	size_t i;
+
+	if (!s[0] || strlen(s) > 20)
+		return luaL_argerror(L, arg, "expected a decimal u64 string");
+	for (i = 0; s[i]; i++) {
+		unsigned digit;
+
+		if (s[i] < '0' || s[i] > '9')
+			return luaL_argerror(L, arg,
+					     "expected a decimal u64 string");
+		digit = (unsigned)(s[i] - '0');
+		if (v > (UINT64_MAX - digit) / 10)
+			return luaL_argerror(L, arg, "u64 string out of range");
+		v = v * 10 + digit;
+	}
+	*out = v;
+	return 0;
+}
+
+/* Exact 64-bit arithmetic on decimal strings; Lua numbers lose nanoseconds. */
+static int lua_shirudo_u64_add(lua_State *L)
+{
+	uint64_t a, b;
+
+	lua_check_u64_string(L, 1, &a);
+	lua_check_u64_string(L, 2, &b);
+	lua_push_u64_string(L, a > UINT64_MAX - b ? UINT64_MAX : a + b);
+	return 1;
+}
+
+static int lua_shirudo_u64_sub(lua_State *L)
+{
+	uint64_t a, b;
+
+	lua_check_u64_string(L, 1, &a);
+	lua_check_u64_string(L, 2, &b);
+	lua_push_u64_string(L, a < b ? 0 : a - b);
+	return 1;
+}
+
+/* Little-endian u64 at a byte offset of a hex string, as a decimal string. */
+static int lua_shirudo_hex_u64(lua_State *L)
+{
+	const char *hex;
+	size_t hex_len;
+	int off = lua_check_c_int(L, 2);
+	uint64_t v = 0;
+	int i;
+
+	hex = luaL_checklstring(L, 1, &hex_len);
+	if (off < 0 || (size_t)off * 2 + 16 > hex_len) {
+		lua_push_u64_string(L, 0);
+		return 1;
+	}
+	for (i = 7; i >= 0; i--) {
+		const char *p = hex + (size_t)off * 2 + (size_t)i * 2;
+		int hi = hex_nibble(p[0]), lo = hex_nibble(p[1]);
+
+		if (hi < 0 || lo < 0) {
+			lua_push_u64_string(L, 0);
+			return 1;
+		}
+		v = (v << 8) | (uint64_t)((hi << 4) | lo);
+	}
+	lua_push_u64_string(L, v);
+	return 1;
+}
+
 static int lua_shirudo_fixed_records(lua_State *L)
 {
 	int pages_idx, slots_idx;
@@ -866,6 +991,14 @@ static void lua_install_host_api(lua_State *L)
 	lua_newtable(L);
 	lua_pushcfunction(L, lua_shirudo_fixed_records);
 	lua_setfield(L, -2, "fixed_records");
+	lua_pushcfunction(L, lua_shirudo_page_slots);
+	lua_setfield(L, -2, "page_slots");
+	lua_pushcfunction(L, lua_shirudo_u64_add);
+	lua_setfield(L, -2, "u64_add");
+	lua_pushcfunction(L, lua_shirudo_u64_sub);
+	lua_setfield(L, -2, "u64_sub");
+	lua_pushcfunction(L, lua_shirudo_hex_u64);
+	lua_setfield(L, -2, "hex_u64");
 	lua_setglobal(L, "shirudo");
 }
 

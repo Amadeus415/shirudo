@@ -109,9 +109,23 @@ instruction budget.  Its entry point receives one table::
 
 and a host API for the common case of fixed-size records::
 
+    local slots = shirudo.page_slots(page, slot_size)
+    slots[1]:u32(0)             -- every slot of one page in order, the
+    slots[2]:u64(16)            -- page header first; u8, u16, u32, u64
+    slots[2]:cstring(96, 32)    -- and cstring read at an offset
     local records = shirudo.fixed_records(input.data.pages, slot_size)
-    records[2]:u64(0)           -- slot 1 is the page header; u8, u16,
-    records[2]:cstring(16)      -- u32, u64 and cstring read at an offset
+    records[2]:u64(0)           -- the older flat view across pages,
+                                -- indexed by page cursor plus slot
+    shirudo.u64_add(a, b)       -- exact arithmetic on the decimal u64
+    shirudo.u64_sub(a, b)       -- strings u64() returns; Lua numbers
+    shirudo.hex_u64(hex, off)   -- lose nanoseconds; little-endian u64
+                                -- at a byte offset of a hex string
+
+``u64()`` and the arithmetic helpers exchange decimal strings because a
+Lua number cannot hold a nanosecond timestamp.  A serializer stamps the
+page header with the boot-time clock at the moment it ran, so a decoder
+turns a record's boot-time timestamp ``ts`` into wall clock with
+``shirudo.u64_sub(input.timeUnixNano, shirudo.u64_sub(boot_now, ts))``.
 
 Return contract.  A log decoder returns a table; it becomes the
 ``body`` of the log record as an OTLP key-value list, nested tables
