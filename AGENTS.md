@@ -53,7 +53,7 @@ remote-management or transport layers.
 | `Documentation/tpm.rst` | The measurement register, its events and eventlog, `shirudo attest` and its verification, the relation to systemd's NvPCRs and the known limits. Read it with the threat model before touching the TPM paths. |
 | `Documentation/initrd.rst` | The production configuration: `init` run from the initrd and finished by the root file system, what survives switch-root, what the initrd needs, the dracut module, generator and installer under `tools/gen-initrd/`. |
 | `Documentation/upatch.rst` | Authoring and shipping upatches: the BPF side, build and sign, test, the Beefile, `bpm build`, `push`, `tree append`, and the target's `bpm` commands. |
-| `Documentation/key-lifecycle.rst` | The signing key and certificate: distribution to targets and initrds, rotation (its order and constraints), revocation, custody. |
+| `Documentation/key-lifecycle.rst` | The signing keys and certificates: the trusted set a target enrols, vouching for a new key (`keys vouch`, `keys add`), rotation, revocation (`keys revoke`), custody. |
 | `Documentation/operations.rst` | Day-two operation: units and timers, conditions, upgrades of shirudo and the kernel, decommissioning, backup, recovery, failure categories and exit status. |
 | `Documentation/upatch-spec.rst` | The `.upatch` container and signing scheme. |
 | `Documentation/requirements.rst` | Kernel options, operator toolchain, target runtime. |
@@ -159,16 +159,26 @@ one usually still compiles and passes tests.
 - **The operator never touches the kernel keyring or the TPM; the
   target never touches the private key.**
 - **The bpf keyring is the trust anchor; the user keyring is staging.**
-  `init` enrols the certificate in the kernel's `.bpf` keyring and
+  `init` enrols the trusted set in the kernel's `.bpf` keyring and
   seals it, which needs the kernel booted with `bpf.keyring_unsealed=1`
   and `init` run from the initrd; a kernel that sealed it empty at boot
-  makes `init` stage the certificate in a sealed `shirudo` user keyring
-  until the next reboot. The kind and serial of the keyring `init`
-  sealed live in the identity map it freezes and pins in the bpffs; a
-  load names the keyring that record says, and `lsm/bpf_prog_load`
-  admits only that kind, and for a staged user keyring only that
-  serial (the kernel records none for its own bpf keyring). There is
-  no file pin to forge or lose.
+  makes `init` stage the primary certificate alone in a sealed
+  `shirudo` user keyring until the next reboot. The set (`util/keys.c`)
+  is `cert.der` plus every `trusted/<fingerprint>.der` with a vouch
+  beside it that verifies under a member, less what `revoked/` names;
+  a file without a vouch is not a member, so the set extends itself
+  only on the word of a key already in it (`keys vouch` on the
+  operator, `keys add` on the target). The kind and serial of the
+  keyring `init` sealed, and the serials of its keys, live in the
+  identity map it freezes and pins in the bpffs; a load names the
+  keyring that record says, `lsm/bpf_prog_load` admits only that kind,
+  and for a staged user keyring only that serial (the kernel records
+  none for its own bpf keyring), and `lsm/key_permission` lets shirudo
+  alone write, unlink, revoke or invalidate the keyring and its keys.
+  `keys revoke` is the only way a key leaves during a boot: marker in
+  `revoked/` first, then the unlink, the measured `key_revoke` event
+  and the purge of everything the key signed. There is no file pin to
+  forge or lose.
 - **The operator is stateless.** It writes only the keypair (`genkey`)
   and the artifacts or reports the caller names. No hidden caches,
   state files, logs or staging directories; `--expect-chain` comes

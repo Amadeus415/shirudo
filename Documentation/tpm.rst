@@ -182,10 +182,13 @@ Every extension is a 32-byte digest with a domain-separating tag.
 
 init
     ``SHA256("shirudo-init\0" || cert_sha256 || set_digest ||
-    tree_root)``.  ``cert_sha256`` is the digest of
-    ``/var/lib/shirudo/keys/cert.der``, the file ``init`` loads into
-    the keyring.  ``set_digest`` is the SHA-256 of the listing of the
-    re-applied set, one line ``<payload_sha256 hex> <name>\n`` per
+    tree_root)``.  ``cert_sha256`` covers the certificates ``init``
+    enrolled: the digest of the one certificate's DER when the set has
+    one member, else the SHA-256 over the members' DER digests sorted,
+    which ``shirudo attest predict --cert=... --cert=...`` computes
+    from the same files in any order.  ``set_digest`` is the SHA-256 of
+    the listing of the re-applied set, one line ``<payload_sha256 hex>
+    <name>\n`` per
     upatch, sorted by name.  ``tree_root`` is the upatch tree's
     projection root at boot, or 32 zero bytes without a tree.
 
@@ -199,6 +202,12 @@ tree operation
     ``SHA256("shirudo-tree\0" || seq || operation_digest)`` with
     ``seq`` as eight big-endian bytes and ``operation_digest`` the
     publication's digest of the operation.
+
+key revocation
+    ``SHA256("shirudo-key-revoke\0" || cert_sha256)`` with the revoked
+    certificate's DER digest.  ``shirudo keys revoke`` extends it right
+    after unlinking the key and before purging what the key signed,
+    each loaded upatch of which then follows as its own unload event.
 
 The register after an event is ``SHA256(register || event)``, starting
 from zeros; ``shirudo_chain_fold()`` and the eventlog replay use the
@@ -217,7 +226,8 @@ extension, written with ``fsync`` and sealed like everything under
 ``boot_id``.  By type:
 
 ``init``
-    ``tpm_reset_count``, ``cert_sha256``, ``set_digest``,
+    ``tpm_reset_count``, ``cert_sha256``, ``certs`` (the enrolled
+    certificates' DER digests), ``set_digest``,
     ``tree_root``, ``set`` (the listing as ``name`` and
     ``payload_sha256`` pairs), ``pcr`` (9), ``pcr_before``,
     ``phase_pcr`` (11), ``phase_before``, ``bound_in`` (``initrd`` or
@@ -225,11 +235,16 @@ extension, written with ``fsync`` and sealed like everything under
     ``anchor_digest`` and ``chain`` (the register after the event).
 
 ``upatch_load`` and ``upatch_unload``
-    ``upatch`` with ``name`` and ``payload_sha256``.
+    ``upatch`` with ``name`` and ``payload_sha256``; an unload a
+    revocation caused carries ``reason`` (``key_revoke``).
 
 ``tree_op``
     ``tree`` with ``seq``, ``op``, ``id`` and ``operation_digest``,
     and ``chain``.
+
+``key_revoke``
+    ``key`` with ``fingerprint`` (of the public key) and
+    ``cert_sha256`` (of the DER, the value the event hashes).
 
 "This boot" is every line with the running ``boot_id`` from its last
 ``init`` record on.  Replaying those lines from zeros must reproduce

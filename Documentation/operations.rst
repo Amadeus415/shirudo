@@ -56,8 +56,10 @@ to receive it.  ``shirudo config`` prints every effective setting with
 a comment.
 
 State lives in two places.  ``/var/lib/shirudo`` is persistent:
-``keys/cert.der``, ``eventlog``, the ``upatches/`` archive ``init``
-restores at boot, ``bpm/`` (indexes, cached packages, tree state) and
+``keys/`` (the primary certificate, the trusted set with its vouches,
+the revoked certificates), ``eventlog``, the ``upatches/`` archive
+``init`` restores at boot, ``bpm/`` (indexes, cached packages, tree
+state) and
 ``locks/``, all labelled with the seal xattr so that only shirudo can
 change them.  ``/run/shirudo`` is per boot: the private bpffs with the
 LSM pins, the frozen identity map and the pending init record between
@@ -106,6 +108,16 @@ Conditions
 ``keyring_serial`` and ``keyring_serial_pinned``
     The live keyring and the one frozen at ``init``; they match on a
     healthy target.
+
+``certs``, ``certs_enrolled``, ``certs_unvouched``, ``certs_revoked``
+    The trusted set on disk (each member's digest, fingerprint and
+    whether it is the primary), how many keys the bpf keyring holds
+    right now, how many files under ``keys/trusted`` lack a valid
+    vouch and are therefore not members, and how many certificates are
+    revoked.  The set and the keyring part when a certificate was added
+    since the boot (the keyring learns of it at the next boot) or
+    revoked (the keyring lost it at once); the `key-lifecycle
+    <key-lifecycle.rst>`__ guide covers both.
 
 ``register_rebound``, ``init_records``
     Two init records for one TPM reset means the register was bound
@@ -220,8 +232,9 @@ measured, which keeps the last evidence of the node complete.
 
 Back up ``/var/lib/shirudo`` and ``/etc/shirudo``:
 
-* ``keys/cert.der`` is replaceable from the operator; the signing key
-  is never on a target.
+* ``keys/`` is replaceable from the operator: the primary, the
+  trusted set with its vouches and the revoked certificates.  The
+  signing keys are never on a target.
 * ``eventlog`` is the node's measurement history across boots, append
   only.  Evidence and verification work per boot, so losing it costs
   the history, not the security of the running boot; keep it where
@@ -287,10 +300,25 @@ The register is gone before the next reboot
     is up either way.
 
 The initrd copy differs
-    ``init`` warns when the root's binary or certificate differs from
-    the initrd's: the initrd was not rebuilt after an upgrade or a
-    certificate change.  Run ``shirudo-gen-initrd`` and reboot at the
-    next opportunity.
+    ``init`` warns when the root's binary or trusted set differs from
+    the initrd's: the initrd was not rebuilt after an upgrade, a
+    ``keys add`` or a ``keys revoke``.  Run ``shirudo-gen-initrd`` and
+    reboot at the next opportunity.
+
+``certs_unvouched`` is not zero
+    A file under ``keys/trusted`` has no vouch that verifies under a
+    member, so it is not enrolled: something other than ``shirudo keys
+    add`` put it there, or the key that vouched for it was revoked.
+    Remove it, or re-vouch it from an operator holding a remaining key
+    and run ``keys add`` again.
+
+A key is compromised
+    ``shirudo keys revoke <fingerprint>`` on every target the key is
+    enrolled on, then ``shirudo-gen-initrd``; the `key-lifecycle
+    <key-lifecycle.rst>`__ guide gives the order and what the command
+    does to the archive.  A target that cannot be reached keeps
+    trusting the key until it is; the evidence of the ones that have
+    revoked carries the ``key_revoke`` event.
 
 A pending record lingers
     ``/run/shirudo/eventlog.pending`` is the initrd run's record until

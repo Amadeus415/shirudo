@@ -75,7 +75,12 @@ keyring.
 Copy ``cert.der`` to the target through the organisation's normal
 provisioning path, into ``/var/lib/shirudo/keys/cert.der``.  Never
 copy ``signing_key.pem`` to a target; nothing on the target can use
-it, and the threat model assumes it is not there.
+it, and the threat model assumes it is not there.  A target can trust
+several keys: a further certificate joins the set with ``shirudo keys
+add <cert.der> --vouch <file>``, the vouch coming from ``shirudo keys
+vouch`` on an operator the target already trusts, and leaves it with
+``shirudo keys revoke <fingerprint>``.  The `key-lifecycle
+<key-lifecycle.rst>`__ guide covers both.
 
 
 3) Build a signed upatch

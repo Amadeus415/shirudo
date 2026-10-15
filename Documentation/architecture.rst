@@ -113,7 +113,8 @@ agent proposes, the key holder signs.
 The same ``shirudo`` executable runs on both sides.  Roles are decided
 by what is on disk, not by separate builds: the operator has the
 private key ``signing_key.pem`` under ``/var/lib/shirudo/keys/``, the
-target has ``cert.der`` and a kernel keyring.  ``shirudo status``
+target has the trusted set of certificates and a kernel keyring.
+``shirudo status``
 prints the roles it detects.  A development host may be both.
 
 The operator holds the private signing key and runs ``genkey``,
@@ -237,14 +238,23 @@ resolves itself and records without a serial, or in staging mode the
 user keyring whose serial was frozen alongside.  A certificate planted
 anywhere else in the caller's keyrings does not count.
 
-bpffs guards.  The identity map (the bpffs ``s_dev``, shirudo's
-executable ``(dev, ino)``, the keyring kind and serial) is written and
+bpffs and keyring guards.  The identity map (the bpffs ``s_dev``,
+shirudo's executable ``(dev, ino)``, the keyring kind and serial, and
+the serials of the keys the keyring holds) is written and
 ``BPF_MAP_FREEZE``'d before any link is created, so userspace cannot
 change it for the rest of the boot.  ``lsm/inode_unlink``,
 ``lsm/inode_setxattr`` and ``lsm/inode_removexattr`` on shirudo's bpffs
 allow the operation only when the calling task's ``mm->exe_file`` is
 shirudo's binary: root ``rm`` cannot drop a pin, and nobody else can
-forge the payload xattr.  ``lsm/sb_umount``, ``lsm/move_mount``,
+forge the payload xattr.  ``lsm/key_permission`` applies the same test
+to the trust anchor in the kernel's keyrings: write, setattr and unlink
+on the sealed keyring and on the keys it holds, and the unpossessed
+search ``keyctl invalidate`` uses to reach a key by serial, are denied
+to every task but shirudo, while viewing, listing and the possessed
+search the kernel verifies signatures with stay open.  Sealing stops
+keys from being added; this stops root from taking them away, so that
+unlinking a key is ``shirudo keys revoke`` and nothing else.
+``lsm/sb_umount``, ``lsm/move_mount``,
 ``lsm/sb_mount`` and ``lsm/sb_remount`` deny unconditionally, for every
 caller including shirudo, any unmount, relocation, mount-over or
 remount of that superblock.  This last set is load-bearing, not
@@ -297,20 +307,25 @@ instead, and the target stays in staging.  It does, in order:
    --check-only`` stops here.  In the initrd, told by
    ``/etc/initrd-release``, ``init`` also binds the root's
    ``/var/lib/shirudo`` read-only at its usual path and reads the
-   certificate from the initrd's own ``/etc/shirudo/keys/cert.der``;
+   trusted set from the initrd's own ``/etc/shirudo/keys``;
 2. mounts the private bpffs at ``/run/shirudo/bpffs`` with
    ``mode=0700,nosuid,nodev,noexec``;
 3. removes state left behind by features that no longer exist;
-4. enrols ``cert.der`` in the kernel's bpf keyring and seals it with
-   ``KEYCTL_RESTRICT_KEYRING`` so nothing can be linked into it for the
-   rest of the boot; a keyring found sealed is reused when it holds
-   this certificate, which ``init`` tells by the description the kernel
-   gives the certificate, and refused when it holds another.  That
-   needs the kernel booted with ``bpf.keyring_unsealed=1`` and ``init``
-   run from the initrd.  A kernel that sealed the bpf keyring empty at
-   boot makes ``init`` stage the certificate instead: a ``shirudo``
-   keyring in the user keyring, sealed with ``KEYCTL_SETPERM`` to view,
-   read and search only, until the next reboot;
+4. enrols the trusted set in the kernel's bpf keyring and seals it
+   with ``KEYCTL_RESTRICT_KEYRING`` so nothing can be linked into it
+   for the rest of the boot.  The set is ``cert.der`` plus every
+   ``trusted/<fingerprint>.der`` with a vouch beside it that verifies
+   under the primary or under a member admitted before it, less the
+   fingerprints the ``revoked/`` directory names (the `key-lifecycle
+   <key-lifecycle.rst>`__ guide).  A keyring found sealed is reused
+   when it holds exactly that set, which ``init`` tells by the
+   descriptions the kernel gives the certificates, and refused when it
+   holds anything else.  That needs the kernel booted with
+   ``bpf.keyring_unsealed=1`` and ``init`` run from the initrd.  A
+   kernel that sealed the bpf keyring empty at boot makes ``init``
+   stage the primary certificate alone instead: a ``shirudo`` keyring
+   in the user keyring, sealed with ``KEYCTL_SETPERM`` to view, read
+   and search only, until the next reboot;
 5. labels ``/var/lib/shirudo/`` with ``security.bpf.shirudo`` and
    appends the record an initrd run left under ``/run`` to the
    eventlog; the initrd run itself skips both, its root being
@@ -318,15 +333,18 @@ instead, and the target stays in staging.  It does, in order:
 6. loads bpf2 and, unless ``--no-seal``, seal through the signed path,
    freezes and pins the identity map (the bpffs, the executable that
    keeps running the target, from the initrd also the initrd's own
-   copy for that run, and the keyring kind and serial), creates the
-   links and pins each one before doing anything else fallible;
+   copy for that run, the keyring kind and serial, and the serials of
+   the keys it holds), creates the links and pins each one before
+   doing anything else fallible;
 7. re-applies every ``.upatch`` under ``/var/lib/shirudo/upatches/`` in
    sorted name order, all or nothing;
 8. binds this boot's measurement register and extends it once with
    ``SHA256("shirudo-init\0" || cert_sha256 || set_digest ||
-   tree_root)``, where ``set_digest`` is the SHA-256 of the sorted
-   listing of the restored set and ``tree_root`` the upatch tree's
-   projection root (zeros without a tree), and appends the event.
+   tree_root)``, where ``cert_sha256`` covers the enrolled
+   certificates (one digest, or the SHA-256 over the sorted digests of
+   several), ``set_digest`` is the SHA-256 of the sorted listing of the
+   restored set and ``tree_root`` the upatch tree's projection root
+   (zeros without a tree), and appends the event.
 
 Boot-restore extends the register by exactly one event however many
 upatches it restores.  The register starts from zero at every boot, so
@@ -405,7 +423,8 @@ those plus the events since boot.  ``attest`` touches only the
 target's TPM; ``verify`` and ``predict`` touch no TPM at all.
 
 Files.  Under ``/var/lib/shirudo/``: ``keys/cert.der`` (and
-``keys/signing_key.pem`` on an operator),
+``keys/signing_key.pem`` on an operator), ``keys/trusted/`` (the
+further certificates with their vouches), ``keys/revoked/``,
 ``eventlog``, ``upatches/`` (installed artifacts), ``incoming/``
 (staging), ``locks/`` and ``bpm/`` (registry indexes, packages, tree
 state).  Under ``/run/shirudo/``, per boot: the ``bpffs/`` mount with

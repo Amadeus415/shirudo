@@ -141,7 +141,10 @@ T3  Tampering with shirudo's files and process
     process drops dumpability, forbids new privileges and locks
     sensitive buffers. The bpf keyring is sealed with
     ``KEYCTL_RESTRICT_KEYRING`` so no key can be linked into it for the
-    rest of the boot, and the kernel then refuses every caller-supplied
+    rest of the boot, ``lsm/key_permission`` leaves writing, unlinking,
+    revoking, invalidating and re-permissioning it and the keys it
+    holds to shirudo's own executable, and the kernel then refuses
+    every caller-supplied
     keyring for signature verification; a staged ``shirudo`` keyring is
     sealed with ``KEYCTL_SETPERM``.  The kind and serial of the keyring
     ``init`` sealed are frozen into the identity map, pinned in the
@@ -345,16 +348,17 @@ Each of these is known, documented and bounded; none is silent.
     7, and the binding then carries a PCR 11 value the verifier can
     reject.
 
-13. Emptying the sealed bpf keyring.  Sealing stops keys from being
-    linked into the keyring, not from being unlinked, and the kernel
-    grants root write permission on it, so root can unlink the enrolled
-    certificate.  Every load then fails ``ENOKEY``, including the
-    operator's own; enforcement stays and nothing unsigned loads, so
-    this is denial of service, visible in ``shirudo keys`` and in every
-    report, and costs a reboot.  The same permission is what a per-key
-    revocation would use; a ``key_permission`` hook that leaves writes
-    to the bpf keyring to shirudo alone closes the one and keeps the
-    other.
+13. Revocation reaches a target only when run there.  ``shirudo keys
+    revoke`` unlinks the key from the running kernel and keeps it out
+    of every later boot, but a target the operator cannot reach keeps
+    verifying against the revoked key until it is reached; shirudo has
+    no push channel by design.  Evidence tells the two apart: a
+    revoked node's register carries the ``key_revoke`` event, and
+    ``attest predict --event=revoke:...`` names the value to expect.
+    The set itself is guarded: the ``key_permission`` hook denies root
+    the unlink, clear, revoke and invalidate that would otherwise empty
+    the sealed keyring, so what used to be a denial of service with
+    one keyctl is now shirudo's revocation primitive and nothing else.
 
 Deferred mitigations
 ~~~~~~~~~~~~~~~~~~~~
@@ -365,11 +369,8 @@ values of each boot and systemd-aware verifiers find it in PCR 9 before
 the separator, and measuring the anchor through ``systemd-pcrextend`` so
 systemd's measurement log explains it (residual risk 11); signed PCR
 policies for the kernel and initrd PCRs so a verifier needs no golden
-values; an in-kernel detach so the unload compare runs against
-signed ``.rodata`` (residual risk 1); and several operator certificates
-in the bpf keyring with a measured per-key revocation, guarded by a
-``key_permission`` hook (residual risk 13; the `key-lifecycle
-<key-lifecycle.rst>`__ guide describes it).
+values; and an in-kernel detach so the unload compare runs against
+signed ``.rodata`` (residual risk 1).
 
 
 6) Out of scope

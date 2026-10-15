@@ -88,11 +88,15 @@ installed binary.
 
 * The target binary at its installed path.  It is static apart from
   the C library.
-* ``/etc/shirudo/keys/cert.der``, a copy of ``/var/lib/shirudo/keys/cert.der``.
-  This copy is measured with the initrd, so a verifier that pins PCR 11
-  knows which certificate was enrolled.  ``init`` warns when the root's
-  copy differs, which means an initrd that was not regenerated after
-  the certificate changed; the initrd's copy is the anchor either way.
+* ``/etc/shirudo/keys/cert.der``, a copy of ``/var/lib/shirudo/keys/cert.der``,
+  and ``/etc/shirudo/keys/trusted/`` with the further certificates and
+  their vouches.  These copies are measured with the initrd, so a
+  verifier that pins PCR 11 knows which certificates were enrolled.
+  ``init`` warns when the root's set differs, which means an initrd
+  that was not regenerated after a certificate was added or revoked;
+  the initrd's copies are the anchor either way, less the certificates
+  the root's ``keys/revoked`` names, which ``init`` reads through its
+  bind.
 * ``/etc/shirudo/shirudo.conf`` when the TPM has an owner password
   (``tpm.owner_auth``).
 * ``shirudo-initrd.service``, enabled in ``initrd.target``.
@@ -135,7 +139,8 @@ the first two.
 The dracut module
     ``module-setup.sh``, installed as
     ``/usr/lib/dracut/modules.d/90shirudo``, copies the installed
-    binary at its own path, the certificate as ``/etc/shirudo/keys/cert.der``,
+    binary at its own path, the certificate as ``/etc/shirudo/keys/cert.der``
+    with the trusted set and its vouches beside it,
     ``shirudo.conf`` when there is one and ``shirudo-initrd.service``,
     enables the unit in ``initrd.target`` and depends on dracut's
     ``tpm2-tss`` and ``systemd-pcrphase`` modules.  It includes itself
@@ -143,7 +148,8 @@ The dracut module
     every initrd dracut builds, for a kernel update or by hand, carries
     it.  A ``dracut.conf(5)`` file can point it at other files
     (``shirudo_binary``, ``shirudo_binary_path``, ``shirudo_cert``,
-    ``shirudo_conf``, ``shirudo_unit``), which is how the test VM
+    ``shirudo_trusted_dir``, ``shirudo_conf``, ``shirudo_unit``), which
+    is how the test VM
     builds an initrd from a bundle.
 
 The generator
