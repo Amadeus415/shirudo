@@ -25,7 +25,7 @@ jobs:
           sudo apt-get -q install -y --no-install-recommends python3-docutils
 
       - name: Render the documentation
-        run: make html-docs
+        run: make -C Documentation html-docs
 
       - name: Upload the rendered documentation
         uses: actions/upload-artifact@v4

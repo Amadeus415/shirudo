@@ -243,7 +243,7 @@ configure_bpm_oci_repository
 configure_map_export
 
 [[ -s /etc/shirudo-test-vm-runtime ]] || {
-	log "prepared runtime image is missing; run make bundle"
+	log "prepared runtime image is missing; run make -C testing bundle"
 	exit 1
 }
 log "using prepared Ubuntu runtime image"

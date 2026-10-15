@@ -181,7 +181,7 @@ jobs:
             # Every package target starts from make clean, which also removes
             # the other families' outputs, so stash each result as it is built.
             mkdir -p /tmp/shirudo-packages
-            make bintar-pkg \
+            make -C packaging bintar-pkg \
               SHIRUDO_GIT_DESCRIBE='printenv SHIRUDO_CI_VERSION' \
               TARGET_DEPS_PREBUILT=1 \
               SHIRUDO_TARGET_PKG_CONFIG_PATH=/tmp/shirudo-curl/lib/pkgconfig:/tmp/shirudo-openssl/lib/pkgconfig \
@@ -203,7 +203,7 @@ jobs:
             done
             test -d /tmp/bintar/root/usr/local/lib/shirudo
 
-            make bindeb-pkg \
+            make -C packaging bindeb-pkg \
               DEB_RAW_VERSION="\$SHIRUDO_CI_VERSION" \
               DEB_VERSION="\$deb_version" \
               SHIRUDO_GIT_DESCRIBE='printenv SHIRUDO_CI_VERSION' \
@@ -220,7 +220,7 @@ jobs:
             # The target rpm is static apart from glibc and portable, so it is
             # built here; the operator rpm links the distribution's shared
             # libraries and is built natively in the Fedora job below.
-            make binrpm-pkg PKG_ROLES=target \
+            make -C packaging binrpm-pkg PKG_ROLES=target \
               PKG_RAW_VERSION="\$SHIRUDO_CI_VERSION" \
               SHIRUDO_GIT_DESCRIBE='printenv SHIRUDO_CI_VERSION' \
               TARGET_DEPS_PREBUILT=1 \
@@ -316,7 +316,7 @@ jobs:
             version=$(git describe --tags --always --dirty)
           fi
           export SHIRUDO_CI_VERSION="$version"
-          make binrpm-pkg PKG_ROLES=operator \
+          make -C packaging binrpm-pkg PKG_ROLES=operator \
             BPF_VMLINUX_H="$PWD/bpf-next/vmlinux.h" \
             PKG_RAW_VERSION="$SHIRUDO_CI_VERSION" \
             SHIRUDO_GIT_DESCRIBE='printenv SHIRUDO_CI_VERSION'

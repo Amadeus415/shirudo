@@ -85,5 +85,6 @@ jobs:
             export CC=${{ matrix.compiler }}
 
             make -j4 SANITIZE=address,undefined
-            make SANITIZE=address,undefined shirudo-build test-helpers
-            make SANITIZE=address,undefined test-op
+            make SANITIZE=address,undefined shirudo-build
+            make -C testing SANITIZE=address,undefined test-helpers
+            make -C testing SANITIZE=address,undefined test-op

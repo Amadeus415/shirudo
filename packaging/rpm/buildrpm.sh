@@ -8,7 +8,7 @@
 # staged file, add the systemd scriptlets for the target role, then run
 # rpmbuild -bb. Library dependencies come from rpm's ELF dependency
 # generator (sonames), so the package installs on any RPM distribution
-# that ships the same libraries. Driven by `make binrpm-pkg`.
+# that ships the same libraries. Driven by `make -C packaging binrpm-pkg`.
 #
 # usage: buildrpm.sh <target|operator> <stagedir> <version> <release> \
 #                    <arch> <maintainer> <output.rpm>

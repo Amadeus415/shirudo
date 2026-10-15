@@ -193,11 +193,11 @@ Before sending
 ==============
 
 * Build both profiles and the helper (``make``, ``make shirudo-build``)
-  and run ``make test-op``; run ``make test-tgt`` when the change
+  and run ``make -C testing test-op``; run ``make -C testing test-tgt`` when the change
   touches target-side behaviour.  Run the host-side suite once more
-  with ``make SANITIZE=address,undefined test-op`` when the change
+  with ``make -C testing SANITIZE=address,undefined test-op`` when the change
   touches memory handling or binary formats; CI runs the same sweep.
-* Run ``make html-docs`` when the change touches ``Documentation/``;
+* Run ``make -C Documentation html-docs`` when the change touches ``Documentation/``;
   every document must render clean under docutils' strict mode.
 * Keep each commit to one logical change that builds and passes on its
   own, so the history bisects.

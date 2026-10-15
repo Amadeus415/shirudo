@@ -281,7 +281,8 @@ if bundle_is_current; then
 fi
 
 log "building host Shirudo payload and test helpers"
-make -C "$REPO_ROOT" all shirudo-build test-helpers
+make -C "$REPO_ROOT" all shirudo-build
+make -C "$REPO_ROOT/testing" test-helpers
 
 TMP_DIR="$(mktemp -d "${BUNDLE_DIR}.tmp.XXXXXX")"
 FIXTURE_WORK="$(mktemp -d "${BUNDLE_DIR}.fixtures.XXXXXX")"

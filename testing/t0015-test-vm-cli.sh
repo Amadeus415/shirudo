@@ -71,10 +71,10 @@ test_expect_success 'test-vm guest uses prebuilt target fixtures' '
 '
 
 test_expect_success 'test-vm imports the host-built payload' '
-	grep -q "TEST_VM_BUNDLE_DIR" ../Makefile &&
-	grep -q "test-vm-bundle" ../Makefile &&
-	grep -q "build-test-vm-bundle.sh" ../Makefile &&
-	grep -q "prepare-test-vm-runtime.sh" ../Makefile &&
+	grep -q "TEST_VM_BUNDLE_DIR" ../testing/Makefile &&
+	grep -q "test-vm-bundle" ../testing/Makefile &&
+	grep -q "build-test-vm-bundle.sh" ../testing/Makefile &&
+	grep -q "prepare-test-vm-runtime.sh" ../testing/Makefile &&
 	grep -q "virt-customize" ../contrib/build-test-vm-bundle.sh &&
 	grep -q "mount_tag=shirudo-bundle" ../contrib/test-vm.sh &&
 	grep -q "importing host-built Shirudo payload" \
@@ -92,20 +92,20 @@ test_expect_success 'test-vm imports the host-built payload' '
 	! grep -q "shirudo-bpf-deps" ../contrib/build-kernel-package.sh
 '
 	test_expect_success 'test-vm bundle stamp controls incremental rebuilds' '
-	grep -q "TEST_VM_BUNDLE_STAMP" ../Makefile &&
-	grep -q "TEST_VM_BUNDLE_INPUTS" ../Makefile &&
+	grep -q "TEST_VM_BUNDLE_STAMP" ../testing/Makefile &&
+	grep -q "TEST_VM_BUNDLE_INPUTS" ../testing/Makefile &&
 	grep -q "bundle_is_current" ../contrib/build-test-vm-bundle.sh &&
-	grep -q "flock 9" ../Makefile &&
-	grep -q "bundle_dir.lock" ../Makefile &&
-	! grep -Fq "rm -rf \"\$\$bundle_dir.lock\"" ../Makefile &&
-	grep -Fq "\$\$bundle_dir" ../Makefile
+	grep -q "flock 9" ../testing/Makefile &&
+	grep -q "bundle_dir.lock" ../testing/Makefile &&
+	! grep -Fq "rm -rf \"\$\$bundle_dir.lock\"" ../testing/Makefile &&
+	grep -Fq "\$\$bundle_dir" ../testing/Makefile
 '
 
 	test_expect_success 'test-vm summary records failed test names' '
 	grep -q "print_test_summary" ../contrib/test-vm.sh &&
 	grep -q "exit \"\$FINAL_STATUS\"" ../contrib/test-vm.sh &&
 	grep -q "failed tests:" ../contrib/test-vm.sh &&
-	grep -q "VM_VERBOSE" ../Makefile &&
+	grep -q "VM_VERBOSE" ../testing/Makefile &&
 	grep -q "summary_log" ../contrib/test-vm.sh &&
 	grep -q "print_quiet_progress" ../contrib/test-vm.sh &&
 	grep -q "stream_verbose_console" ../contrib/test-vm.sh &&
@@ -128,37 +128,37 @@ test_expect_success 'test harness records a failed test title' '
 		"$WORK/failed-tests"
 '
 
-test_expect_success 'make vm and test-vm share named mode support' '
-	grep -q "^[[:space:]]*vm:" ../Makefile &&
-	grep -q "VM_MODE=interactive" ../Makefile &&
-	grep -q "VM_MODE=test" ../Makefile &&
+test_expect_success 'make -C testing vm and test-vm share named mode support' '
+	grep -q "^[[:space:]]*vm:" ../testing/Makefile &&
+	grep -q "VM_MODE=interactive" ../testing/Makefile &&
+	grep -q "VM_MODE=test" ../testing/Makefile &&
 	grep -Fq "VMS_DIR=\"\${VM_ROOT}/vms\"" ../contrib/test-vm.sh &&
 	grep -Fq "mktemp -d \"\${VMS_DIR}/\${VM_MODE}-XXXXXX\"" \
 		../contrib/test-vm.sh &&
 	grep -q "VM_TENANT" ../contrib/test-vm.sh &&
 	grep -q "while :; do sleep 3600; done" ../contrib/test-vm.sh
 '
-test_expect_success 'make vm selects supported stable kernel artifacts' '
-	grep -q "VM_KERNEL_STABLE_VERSIONS := 7.2 6.18 6.12 6.6 6.1" ../Makefile &&
-	grep -q "make vm KERNEL=6.18" ../Makefile &&
-	grep -q "VM_KERNEL_ARTIFACT_DIR := artifacts/linux-\$(VM_KERNEL_TAG)\$(KERNEL_COMMIT_SUFFIX)-kernel-debs" ../Makefile &&
-	grep -q "TEST_VM_KERNEL=\"\$(abspath \$(VM_KERNEL_IMAGE))\"" ../Makefile &&
-	make -n -C .. vm KERNEL=6.18 TEST_VM_WORK_DIR="$WORK/stable-vm" \
+test_expect_success 'make -C testing vm selects supported stable kernel artifacts' '
+	grep -q "VM_KERNEL_STABLE_VERSIONS := 7.2 6.18 6.12 6.6 6.1" ../testing/Makefile &&
+	grep -q "make -C testing vm KERNEL=6.18" ../testing/Makefile &&
+	grep -Fq "VM_KERNEL_ARTIFACT_DIR := \$(ROOT)/artifacts/linux-\$(VM_KERNEL_TAG)\$(KERNEL_COMMIT_SUFFIX)-kernel-debs" ../testing/Makefile &&
+	grep -q "TEST_VM_KERNEL=\"\$(abspath \$(VM_KERNEL_IMAGE))\"" ../testing/Makefile &&
+	make -n -C .. -f testing/Makefile vm KERNEL=6.18 TEST_VM_WORK_DIR="$WORK/stable-vm" \
 		>"$WORK/stable-vm-make.out" 2>&1 &&
 	grep -q "artifacts/linux-v6.18-kernel-debs/bzImage" \
 		"$WORK/stable-vm-make.out"
 '
 
 test_expect_success 'all kernel and VM builds use the slim profile' '
-	! grep -Eq "^(kernel-small|vm-small|test-vm-small-bundle):" ../Makefile &&
-	! grep -q "KERNEL_PROFILE" ../Makefile ../contrib/build-kernel-package.sh &&
+	! grep -Eq "^(kernel-small|vm-small|test-vm-small-bundle):" ../testing/Makefile &&
+	! grep -q "KERNEL_PROFILE" ../testing/Makefile ../contrib/build-kernel-package.sh &&
 	! test -e ../contrib/kernel-small.config &&
 	! test -e ../contrib/kernel-observability-configs.txt &&
 	grep -q "kernel-slim.config" ../contrib/build-kernel-package.sh &&
 	grep -q "config_profile=slim" ../contrib/build-kernel-package.sh &&
 	grep -q "CONFIG_CC_OPTIMIZE_FOR_SIZE=y" ../contrib/build-kernel-package.sh &&
-	grep -q "make vm KERNEL=6.18" ../Makefile &&
-	make -n -C .. vm VM_NAME=slim-cli-vm \
+	grep -q "make -C testing vm KERNEL=6.18" ../testing/Makefile &&
+	make -n -C .. -f testing/Makefile vm VM_NAME=slim-cli-vm \
 		TEST_VM_WORK_DIR="$WORK/slim-vm" >"$WORK/slim-vm-make.out" 2>&1 &&
 	grep -q "artifacts/bpf-next-kernel-debs/bzImage" \
 		"$WORK/slim-vm-make.out" &&
@@ -177,27 +177,27 @@ test_expect_success 'VM reports guest and host memory usage' '
 	grep -q "print_memory_summary" ../contrib/test-vm.sh
 '
 
-test_expect_success 'make kernel builds a tagged third-party Linux source' '
-	grep -q "^kernel: \$(KERNEL_BUILD_STAMP)" ../Makefile &&
+test_expect_success 'make -C testing kernel builds a tagged third-party Linux source' '
+	grep -q "^kernel: \$(KERNEL_BUILD_STAMP)" ../testing/Makefile &&
 	grep -q "KERNEL_TAG=\"\${KERNEL_TAG:-bpf-next}\"" \
 		../contrib/build-kernel-package.sh &&
 	grep -q "KERNEL_REPOSITORY=\"\${KERNEL_REPOSITORY:-https://git.kernel.org" \
 		../contrib/build-kernel-package.sh &&
 	grep -q "git clone --depth 1 --branch" ../contrib/build-kernel-package.sh &&
-	grep -q "make kernel KERNEL_TAG=v6.18" ../Makefile &&
+	grep -q "make -C testing kernel KERNEL_TAG=v6.18" ../testing/Makefile &&
 	! KERNEL_TAG=not-a-kernel-tag ../contrib/build-kernel-package.sh \
 		>"$WORK/invalid-kernel-tag.out" 2>&1 &&
 	grep -q "KERNEL_TAG must be bpf-next or a Linux release tag" \
 		"$WORK/invalid-kernel-tag.out"
 '
-test_expect_success 'make vm and kernel select an exact stable commit' '
-	make -n -C .. vm KERNEL=6.18 KERNEL_COMMIT=abcdef1234567 \
+test_expect_success 'make -C testing vm and kernel select an exact stable commit' '
+	make -n -C .. -f testing/Makefile vm KERNEL=6.18 KERNEL_COMMIT=abcdef1234567 \
 		TEST_VM_WORK_DIR="$WORK/commit-vm" >"$WORK/commit-vm-make.out" 2>&1 &&
 	grep -q "artifacts/linux-v6.18-abcdef1234567-kernel-debs/bzImage" \
 		"$WORK/commit-vm-make.out" &&
 	grep -q "KERNEL_COMMIT=" "$WORK/commit-vm-make.out" &&
-	grep -q "KERNEL_COMMIT (optional 7-40 hex stable-kernel commit)" ../Makefile &&
-	! make -n -C .. vm KERNEL=bpf-next KERNEL_COMMIT=abcdef1234567 \
+	grep -q "KERNEL_COMMIT is supported only for stable/LTS VM kernels" ../testing/Makefile &&
+	! make -n -C .. -f testing/Makefile vm KERNEL=bpf-next KERNEL_COMMIT=abcdef1234567 \
 		>"$WORK/commit-bpf-next.out" 2>&1 &&
 	grep -q "KERNEL_COMMIT is supported only for stable/LTS VM kernels" \
 		"$WORK/commit-bpf-next.out" &&
@@ -217,7 +217,7 @@ test_expect_success 'kernel VM artifacts provide networking modules' '
 	grep -q "require_config CONFIG_VETH m" ../contrib/build-kernel-package.sh &&
 	grep -q "dpkg-deb -x" ../contrib/build-kernel-package.sh &&
 	grep -q "depmod -b" ../contrib/build-kernel-package.sh &&
-	grep -q "TEST_VM_KERNEL_ARTIFACT_DIR" ../Makefile &&
+	grep -q "TEST_VM_KERNEL_ARTIFACT_DIR" ../testing/Makefile &&
 	grep -q "mount_tag=shirudo-kernel" ../contrib/test-vm.sh &&
 	grep -q "TEST_VM_KERNEL_MODULES" ../contrib/test-vm.sh &&
 	grep -q "install_kernel_modules" ../contrib/test-vm-guest.sh &&
@@ -230,12 +230,12 @@ test_expect_success 'prepared VM runtime includes ripgrep' '
 '
 
 test_expect_success 'named VM console and SSH access helpers are wired up' '
-	grep -q "^vm-console:" ../Makefile &&
-	grep -q "^vm-ssh:" ../Makefile &&
-	grep -q "contrib/test-vm.sh --console" ../Makefile &&
-	grep -q "contrib/test-vm.sh --ssh" ../Makefile &&
-	grep -q "VM_SSH_COMMAND" ../Makefile &&
-	grep -q "TEST_VM_SSH_PORT" ../Makefile &&
+	grep -q "^vm-console:" ../testing/Makefile &&
+	grep -q "^vm-ssh:" ../testing/Makefile &&
+	grep -q "contrib/test-vm.sh --console" ../testing/Makefile &&
+	grep -q "contrib/test-vm.sh --ssh" ../testing/Makefile &&
+	grep -q "VM_SSH_COMMAND" ../testing/Makefile &&
+	grep -q "TEST_VM_SSH_PORT" ../testing/Makefile &&
 	grep -q "hostfwd=tcp:127.0.0.1" ../contrib/test-vm.sh &&
 	grep -q "socket,id=console" ../contrib/test-vm.sh &&
 	grep -q "logfile=.*console.log" ../contrib/test-vm.sh &&
@@ -279,7 +279,7 @@ test_expect_success 'explicit VM_NAME overrides unnamed vm-ssh selection' '
 test_expect_success 'VM bundle installs target units and interactive mode activates timers' '
 	grep -q "DESTDIR=\"\$TMP_DIR/root\" install-target" \
 		../contrib/build-test-vm-bundle.sh &&
-	grep -q "systemd/\\*.timer" ../Makefile &&
+	grep -q "systemd/\\*.timer" ../testing/Makefile &&
 	grep -q "shirudo-map-export.timer" ../contrib/test-vm-guest.sh &&
 	grep -q "shirudo-keepalive.timer" ../contrib/test-vm-guest.sh &&
 	grep -q "shirudo-bpm-repo-update.service" ../contrib/test-vm-guest.sh &&
@@ -302,12 +302,12 @@ test_expect_success 'VM bundle installs target units and interactive mode activa
 '
 
 test_expect_success 'VM stop and cleanup use the VM runner paths' '
-	grep -q "^vm-stop:" ../Makefile &&
-	grep -q "contrib/test-vm.sh --stop" ../Makefile &&
-	grep -q "^vm-clean:" ../Makefile &&
-	grep -q "contrib/test-vm.sh --clean" ../Makefile &&
-	grep -q "^test-vm-clean: vm-clean" ../Makefile &&
-	grep -q "VM_NAME=\"\$(VM_NAME)\"" ../Makefile &&
+	grep -q "^vm-stop:" ../testing/Makefile &&
+	grep -q "contrib/test-vm.sh --stop" ../testing/Makefile &&
+	grep -q "^vm-clean:" ../testing/Makefile &&
+	grep -q "contrib/test-vm.sh --clean" ../testing/Makefile &&
+	grep -q "^test-vm-clean: vm-clean" ../testing/Makefile &&
+	grep -q "VM_NAME=\"\$(VM_NAME)\"" ../testing/Makefile &&
 	grep -q "stop_pid_file" ../contrib/test-vm.sh &&
 	grep -q "removed VM state and logs" ../contrib/test-vm.sh
 '
@@ -358,7 +358,7 @@ test_expect_success 'test-vm supports secure and explicit insecure map-export mo
 	grep -q "MAP_EXPORT_INSECURE=false" "$RUNNER" &&
 	grep -q "HTTPS map-export endpoints require TEST_VM_MAP_EXPORT_INSECURE=false" "$RUNNER" &&
 	grep -q "HTTP map-export endpoints require TEST_VM_MAP_EXPORT_INSECURE=true" "$RUNNER" &&
-	grep -q "TEST_VM_MAP_EXPORT_CA=\"\$(TEST_VM_MAP_EXPORT_CA)\"" ../Makefile &&
+	grep -q "TEST_VM_MAP_EXPORT_CA=\"\$(TEST_VM_MAP_EXPORT_CA)\"" ../testing/Makefile &&
 	grep -q "export TEST_VM_MAP_EXPORT_ENDPOINT" "$RUNNER" &&
 	grep -q "export TEST_VM_MAP_EXPORT_CA=/mnt/shirudo-otel/ca.pem" "$RUNNER" &&
 	grep -q "mount_tag=shirudo-otel" "$RUNNER" &&
@@ -412,7 +412,7 @@ test_expect_success 'test-vm validates a custom OTEL CA file before boot' '
 '
 
 test_expect_success 'test-vm passes an OCI CA into the guest trust store' '
-	grep -q "TEST_VM_OCI_CA" ../Makefile &&
+	grep -q "TEST_VM_OCI_CA" ../testing/Makefile &&
 	grep -q "OCI_CA=\"\${TEST_VM_OCI_CA:-}\"" "$RUNNER" &&
 	grep -q "shirudo-oci" "$RUNNER" &&
 	grep -q "export TEST_VM_OCI_CA=/mnt/shirudo-oci/ca.crt" "$RUNNER" &&
@@ -430,8 +430,8 @@ test_expect_success 'test-vm validates a custom OCI CA file before boot' '
 '
 
 test_expect_success 'test-vm hands off an interactive BPM tree configuration' '
-	grep -q "TEST_VM_BPM_TREE_CONFIG" ../Makefile &&
-	grep -q "TEST_VM_BPM_TREE_CONFIG=\"\$(TEST_VM_BPM_TREE_CONFIG)\"" ../Makefile &&
+	grep -q "TEST_VM_BPM_TREE_CONFIG" ../testing/Makefile &&
+	grep -q "TEST_VM_BPM_TREE_CONFIG=\"\$(TEST_VM_BPM_TREE_CONFIG)\"" ../testing/Makefile &&
 	grep -q "BPM_TREE_CONFIG=\"\${TEST_VM_BPM_TREE_CONFIG:-}\"" "$RUNNER" &&
 	grep -q "validate_bpm_tree_config" "$RUNNER" &&
 	grep -q "BPM_TREE_DIR=\"\${RUN_DIR}/bpm-tree\"" "$RUNNER" &&
@@ -473,19 +473,19 @@ test_expect_success 'test-vm validates BPM tree configuration mode and contents'
 		VM_MODE=test TEST_VM_KERNEL="$WORK/bpm-tree-kernel" \
 		TEST_VM_BPM_TREE_CONFIG="$WORK/bpm-tree.conf" "$RUNNER" \
 		>"$WORK/test-bpm-tree.out" 2>&1 &&
-	grep -q "TEST_VM_BPM_TREE_CONFIG is supported only for interactive make vm" \
+	grep -q "TEST_VM_BPM_TREE_CONFIG is supported only for interactive make -C testing vm" \
 		"$WORK/test-bpm-tree.out"
 '
 
 	test_expect_success 'test-vm passes a public package certificate into the guest' '
-	grep -q "TEST_VM_PACKAGE_CERT" ../Makefile &&
-	grep -q "TEST_VM_BUNDLE_INPUTS" ../Makefile &&
+	grep -q "TEST_VM_PACKAGE_CERT" ../testing/Makefile &&
+	grep -q "TEST_VM_BUNDLE_INPUTS" ../testing/Makefile &&
 	grep -q "PACKAGE_CERT=\"\${TEST_VM_PACKAGE_CERT:-}\"" \
 		../contrib/build-test-vm-bundle.sh &&
 	grep -q "package-cert.der" ../contrib/build-test-vm-bundle.sh &&
 	grep -q "export TEST_VM_PACKAGE_CERT=/mnt/shirudo-package-cert/package-cert.der" \
 		"$RUNNER" &&
-	grep -q "supported only for interactive make vm" "$RUNNER" &&
+	grep -q "supported only for interactive make -C testing vm" "$RUNNER" &&
 	grep -q "TEST_VM_PACKAGE_CERT" ../contrib/test-vm-guest.sh &&
 	grep -q "install -m 0644 \"\$package_cert\"" \
 		../contrib/test-vm-guest.sh
@@ -503,8 +503,8 @@ test_expect_success 'test-vm validates a custom package certificate before boot'
 '
 
 test_expect_success 'test-vm bootstraps a BPM OCI repository from the host' '
-	grep -q "TEST_VM_BPM_OCI_REPOSITORY" ../Makefile &&
-	grep -q "TEST_VM_BPM_OCI_INDEX_CERT" ../Makefile &&
+	grep -q "TEST_VM_BPM_OCI_REPOSITORY" ../testing/Makefile &&
+	grep -q "TEST_VM_BPM_OCI_INDEX_CERT" ../testing/Makefile &&
 	grep -q "BPM_OCI_REPOSITORY_RAW=\"\${TEST_VM_BPM_OCI_REPOSITORY:-}\"" \
 		"$RUNNER" &&
 	grep -q "export TEST_VM_BPM_OCI_SOURCE" "$RUNNER" &&
@@ -536,14 +536,14 @@ test_expect_success 'test-vm validates BPM OCI repository handoff as a pair' '
 		"$WORK/missing-bpm-oci-repository.out"
 '
 
-test_expect_success 'make test runs the complete pipeline in order' '
-	grep -q "^test-op: all shirudo-build test-helpers" ../Makefile &&
-	! grep -Eq "^(check:|.*\bcheck\b.*\.PHONY)" ../Makefile &&
-	grep -q "^bundle: test-vm-bundle" ../Makefile &&
-	grep -A5 "^test:$" ../Makefile | grep -q "\$(MAKE) bundle" &&
-	grep -A5 "^test:$" ../Makefile | grep -q "\$(MAKE) test-op" &&
-	grep -A5 "^test:$" ../Makefile | grep -q "\$(MAKE) test-tgt" &&
-	! grep -A5 "^test:$" ../Makefile | grep -q "\$(MAKE) bpf-next"
+test_expect_success 'make -C testing test runs the complete pipeline in order' '
+	grep -q "^test-op:" ../testing/Makefile &&
+	! grep -Eq "^(check:|.*\bcheck\b.*\.PHONY)" ../testing/Makefile &&
+	grep -q "^bundle: test-vm-bundle" ../testing/Makefile &&
+	grep -A5 "^test:$" ../testing/Makefile | grep -q "\$(MAKE) -C \$(ROOT) -f testing/Makefile bundle" &&
+	grep -A5 "^test:$" ../testing/Makefile | grep -q "\$(MAKE) -C \$(ROOT) -f testing/Makefile test-op" &&
+	grep -A5 "^test:$" ../testing/Makefile | grep -q "\$(MAKE) -C \$(ROOT) -f testing/Makefile test-tgt" &&
+	! grep -A5 "^test:$" ../testing/Makefile | grep -q "\$(MAKE) bpf-next"
 '
 
 test_expect_success 'operator and target runners have disjoint explicit scopes' '
@@ -562,7 +562,7 @@ test_expect_success 'operator and target runners have disjoint explicit scopes' 
 		grep -q "$test_name" ../testing/run-target-tests.sh || return 1
 	done &&
 	forbidden=$(printf '%s%s' SHIRUDO_ INTEGRATION) &&
-	! grep -R -q "$forbidden" ../Makefile ../contrib ../testing
+	! grep -R -q "$forbidden" ../testing/Makefile ../contrib ../testing
 '
 
 test_done

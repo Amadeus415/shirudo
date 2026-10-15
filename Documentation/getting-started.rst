@@ -23,8 +23,8 @@ From the checkout::
     make                  # the operator-profile shirudo binary
     make shirudo-build    # the operator-only build and publish helper
     make target           # the target binary, shirudo-target
-    make test-op          # host-side TAP suite; no root, LSM or TPM
-    make SANITIZE=address,undefined test-op
+    make -C testing test-op          # host-side TAP suite; no root, LSM or TPM
+    make -C testing SANITIZE=address,undefined test-op
                           # the same suite under ASan and UBSan
 
 ``make`` probes the toolchain and libraries and refuses an OpenSSL
@@ -33,13 +33,14 @@ builds a static OpenSSL, libcurl and tpm2-tss from source; the build
 host must also provide static ``libelf``, ``zlib``, ``zstd`` and
 LuaJIT archives, with
 ``SHIRUDO_TARGET_STATIC_LIBDIR`` naming their directory when it is not
-the system one.  ``make help`` lists every target.
+the system one.  ``make help`` summarizes shared targets; the package and
+test Makefiles have their own help targets.
 
 Installable packages::
 
-    make bintar-pkg       # tarballs with an install.sh
-    make bindeb-pkg       # shirudo-target and shirudo-operator .deb
-    make binrpm-pkg       # the same two packages as RPMs
+    make -C packaging bintar-pkg       # tarballs with an install.sh
+    make -C packaging bindeb-pkg       # shirudo-target and shirudo-operator .deb
+    make -C packaging binrpm-pkg       # the same two packages as RPMs
 
 ``PKG_ROLES=target`` or ``PKG_ROLES=operator`` builds one of them; the
 operator package links the host's shared libcurl and must be built on

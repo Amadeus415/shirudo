@@ -594,5 +594,5 @@ exercises binding, extending, replay, recreation, a TPM reset and
 ``attest`` evidence and verification through ``SHIRUDO_TPM_TCTI``,
 ``SHIRUDO_EVENTLOG_PATH`` and ``SHIRUDO_KEYS_DIR``.  Deleting the
 simulator's ``volatile`` state file is a TPM reset.  The target suite
-runs the same path against swtpm in the QEMU VM (``make test-tgt``);
+runs the same path against swtpm in the QEMU VM (``make -C testing test-tgt``);
 ``contrib/swtpm.sh`` starts a software TPM for a development target.

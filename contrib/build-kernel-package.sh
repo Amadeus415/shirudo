@@ -231,7 +231,7 @@ if [[ -n "$KERNEL_COMMIT" && -z "$KERNEL_SOURCE_DIR_INPUT" ]]; then
 fi
 if [[ -n "$(git -C "$KERNEL_SOURCE_DIR" status --porcelain)" ]]; then
   echo "kernel source checkout is dirty: ${KERNEL_SOURCE_DIR}" >&2
-  echo "commit or stash its changes before running make kernel" >&2
+  echo "commit or stash its changes before running make -C testing kernel" >&2
   exit 1
 fi
 

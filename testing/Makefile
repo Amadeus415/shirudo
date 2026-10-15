@@ -1,0 +1,302 @@
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Authors of shirudo
+#
+# Host, VM, and kernel test targets. Run with make -C testing <target>.
+
+ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
+MAKEFLAGS += -rR --no-print-directory
+
+ifeq ($(V),1)
+  Q =
+else
+  Q = @
+endif
+export Q V
+
+root-path = $(if $(filter /%,$(1)),$(1),$(ROOT)/$(1))
+.DEFAULT_GOAL := help
+.PHONY: help clean test-helpers test-op test test-installer bundle test-vm-bundle kernel \
+	bpf-next vm vm-console vm-ssh vm-stop vm-clean test-tgt test-tgt-obs \
+	test-tgt-obs-fuzz test-vm test-vm-clean
+
+KERNEL_PATCHES ?= $(if $(wildcard $(ROOT)/kernel/*.patch),$(ROOT)/kernel/,)
+override KERNEL_PATCHES := $(if $(strip $(KERNEL_PATCHES)),$(call root-path,$(KERNEL_PATCHES)),)
+PACKAGE_FORMAT ?= deb
+
+TEST_VM_WORK_DIR ?= build/test-vm
+override TEST_VM_WORK_DIR := $(call root-path,$(TEST_VM_WORK_DIR))
+TEST_VM_BUNDLE_DIR ?= $(TEST_VM_WORK_DIR)/host-bundle-$(VM_KERNEL_TAG)$(KERNEL_COMMIT_SUFFIX)
+override TEST_VM_BUNDLE_DIR := $(call root-path,$(TEST_VM_BUNDLE_DIR))
+TEST_VM_RUNTIME_CACHE_DIR ?= $(TEST_VM_WORK_DIR)/cache/runtime
+override TEST_VM_RUNTIME_CACHE_DIR := $(call root-path,$(TEST_VM_RUNTIME_CACHE_DIR))
+TEST_VM_MAP_EXPORT_CA ?=
+override TEST_VM_MAP_EXPORT_CA := $(if $(strip $(TEST_VM_MAP_EXPORT_CA)),$(call root-path,$(TEST_VM_MAP_EXPORT_CA)),)
+TEST_VM_OCI_CA ?=
+override TEST_VM_OCI_CA := $(if $(strip $(TEST_VM_OCI_CA)),$(call root-path,$(TEST_VM_OCI_CA)),)
+TEST_VM_BPM_TREE_CONFIG ?=
+override TEST_VM_BPM_TREE_CONFIG := $(if $(strip $(TEST_VM_BPM_TREE_CONFIG)),$(call root-path,$(TEST_VM_BPM_TREE_CONFIG)),)
+TEST_VM_PACKAGE_CERT ?=
+override TEST_VM_PACKAGE_CERT := $(if $(strip $(TEST_VM_PACKAGE_CERT)),$(call root-path,$(TEST_VM_PACKAGE_CERT)),)
+TEST_VM_BPM_OCI_INDEX_CERT ?=
+override TEST_VM_BPM_OCI_INDEX_CERT := $(if $(strip $(TEST_VM_BPM_OCI_INDEX_CERT)),$(call root-path,$(TEST_VM_BPM_OCI_INDEX_CERT)),)
+TEST_VM_CPUS ?= 4
+TEST_VM_MEMORY ?= 4G
+TEST_VM_DISK_SIZE ?= 30G
+TEST_VM_UBUNTU_CODENAME ?= resolute
+TEST_VM_VERBOSE ?= 0
+DNS_OBS_FUZZ_SEED ?= 0x53484952
+DNS_OBS_FUZZ_CASES ?= 5000
+# `make -C testing vm` keeps bpf-next as its default, but can select a stable kernel
+# built from an upstream Linux tag. The stable list is intentionally explicit
+# so a typo cannot silently create a new VM kernel artifact directory.
+VM_KERNEL ?= $(if $(strip $(KERNEL)),$(KERNEL),bpf-next)
+VM_KERNEL_VERSION := $(patsubst v%,%,$(VM_KERNEL))
+VM_KERNEL_STABLE_VERSIONS := 7.2 6.18 6.12 6.6 6.1
+KERNEL_COMMIT ?=
+KERNEL_COMMIT_SUFFIX := $(if $(strip $(KERNEL_COMMIT)),-$(KERNEL_COMMIT),)
+ifeq ($(VM_KERNEL),bpf-next)
+ifneq ($(strip $(KERNEL_COMMIT)),)
+  $(error KERNEL_COMMIT is supported only for stable/LTS VM kernels)
+endif
+  VM_KERNEL_TAG := bpf-next
+  VM_KERNEL_ARTIFACT_DIR := $(ROOT)/artifacts/bpf-next-kernel-debs
+else ifneq ($(filter $(VM_KERNEL_VERSION),$(VM_KERNEL_STABLE_VERSIONS)),)
+  VM_KERNEL_TAG := v$(VM_KERNEL_VERSION)
+  VM_KERNEL_ARTIFACT_DIR := $(ROOT)/artifacts/linux-$(VM_KERNEL_TAG)$(KERNEL_COMMIT_SUFFIX)-kernel-debs
+else
+  $(error unsupported VM KERNEL '$(VM_KERNEL)'; choose bpf-next, 7.2, 6.18, 6.12, 6.6, or 6.1)
+endif
+VM_KERNEL_IMAGE := $(VM_KERNEL_ARTIFACT_DIR)/bzImage
+VM_KERNEL_STAMP := $(VM_KERNEL_ARTIFACT_DIR)/bzImage.sha256sum
+VM_KERNEL_DEP := $(VM_KERNEL_STAMP)
+
+KERNEL_TAG ?= $(if $(strip $(TAG)),$(TAG),bpf-next)
+KERNEL_TAG_VERSION := $(patsubst v%,%,$(KERNEL_TAG))
+KERNEL_REPOSITORY ?= https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+KERNEL_SOURCE_DIR ?=
+override KERNEL_SOURCE_DIR := $(if $(strip $(KERNEL_SOURCE_DIR)),$(call root-path,$(KERNEL_SOURCE_DIR)),)
+KERNEL_CONFIG ?=
+override KERNEL_CONFIG := $(if $(strip $(KERNEL_CONFIG)),$(call root-path,$(KERNEL_CONFIG)),)
+KERNEL_BUILD_JOBS ?= $(shell nproc)
+ifeq ($(KERNEL_TAG),bpf-next)
+ifneq ($(filter kernel bpf-next,$(MAKECMDGOALS)),)
+ifneq ($(strip $(KERNEL_COMMIT)),)
+  $(error KERNEL_COMMIT is supported only for stable/LTS kernel tags)
+endif
+endif
+  KERNEL_TAG_NORMALIZED := bpf-next
+  KERNEL_BUILD_ARTIFACT_DIR := $(ROOT)/artifacts/bpf-next-kernel-debs
+else
+  KERNEL_TAG_NORMALIZED := v$(KERNEL_TAG_VERSION)
+  KERNEL_BUILD_ARTIFACT_DIR := $(ROOT)/artifacts/linux-$(KERNEL_TAG_NORMALIZED)$(KERNEL_COMMIT_SUFFIX)-kernel-debs
+endif
+KERNEL_BUILD_STAMP := $(KERNEL_BUILD_ARTIFACT_DIR)/bzImage.sha256sum
+
+TEST_VM_BUNDLE_STAMP := $(TEST_VM_BUNDLE_DIR)/.stamp
+TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
+	$(ROOT)/*.c $(ROOT)/*.h $(ROOT)/include/*.h $(ROOT)/util/*.c $(ROOT)/util/*.h \
+	$(ROOT)/bpf/*.c $(ROOT)/bpf/lib/*.h \
+	$(ROOT)/tools/shirudo-build/*.c $(ROOT)/tools/shirudo-build/*.h \
+	$(ROOT)/testing/helper/*.c $(ROOT)/testing/helper/*.py $(ROOT)/completion/* $(ROOT)/systemd/*.in \
+	$(ROOT)/systemd/*.timer $(ROOT)/testing/fixtures/*.c $(ROOT)/testing/fixtures/*.lua \
+	$(ROOT)/testing/fixtures/decoders/* \
+	$(ROOT)/upatches/linux_obs/*.c $(ROOT)/upatches/linux_obs/*.h $(ROOT)/upatches/linux_obs/*.list \
+		$(ROOT)/upatches/linux_obs/*.py $(ROOT)/upatches/linux_obs/Beefile \
+	$(ROOT)/upatches/linux_obs/decoders/*))
+TEST_VM_BUNDLE_ARTIFACTS := $(sort $(wildcard \
+	$(VM_KERNEL_ARTIFACT_DIR) $(VM_KERNEL_ARTIFACT_DIR)/*))
+TEST_VM_BUNDLE_INPUTS := $(sort \
+	$(ROOT)/Makefile $(ROOT)/Makefile.config $(ROOT)/Makefile.shirudo $(ROOT)/Makefile.version $(ROOT)/config.mk \
+	$(ROOT)/testing/Makefile $(ROOT)/packaging/Makefile \
+	$(ROOT)/Documentation/Makefile $(ROOT)/upatches/linux_obs/Makefile \
+	$(ROOT)/contrib/build-test-vm-bundle.sh $(ROOT)/contrib/test-vm-guest.sh \
+	$(ROOT)/contrib/prepare-test-vm-runtime.sh $(ROOT)/contrib/test-vm-runtime-packages \
+	$(TEST_VM_BUNDLE_SOURCES) $(TEST_VM_BUNDLE_ARTIFACTS) \
+	$(if $(strip $(TEST_VM_PACKAGE_CERT)),$(TEST_VM_PACKAGE_CERT)))
+
+$(ROOT)/config.mk: $(ROOT)/Makefile.config
+	+$(Q)$(MAKE) -C $(ROOT) config
+
+test-vm-bundle: $(VM_KERNEL_DEP) $(TEST_VM_BUNDLE_STAMP)
+
+$(TEST_VM_BUNDLE_STAMP): $(TEST_VM_BUNDLE_INPUTS)
+	$(Q)TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
+		TEST_VM_WORK_DIR="$(abspath $(TEST_VM_WORK_DIR))" \
+		TEST_VM_RUNTIME_CACHE_DIR="$(abspath $(TEST_VM_RUNTIME_CACHE_DIR))" \
+		TEST_VM_UBUNTU_CODENAME="$(TEST_VM_UBUNTU_CODENAME)" \
+		TEST_VM_ROOTFS_URL="$(TEST_VM_ROOTFS_URL)" \
+		TEST_VM_ROOTFS_SHA256="$(TEST_VM_ROOTFS_SHA256)" \
+		TEST_VM_PACKAGE_CERT="$(TEST_VM_PACKAGE_CERT)" \
+		TEST_VM_BUNDLE_STAMP="$(abspath $(TEST_VM_BUNDLE_STAMP))" \
+		TEST_VM_BUNDLE_INPUTS="$(abspath $(TEST_VM_BUNDLE_INPUTS))" \
+		BPF_VMLINUX_BTF="$(abspath $(VM_KERNEL_ARTIFACT_DIR)/vmlinux.btf)" \
+		$(ROOT)/contrib/build-test-vm-bundle.sh
+
+kernel: $(KERNEL_BUILD_STAMP)
+
+bpf-next:
+	$(Q)PACKAGE_FORMAT='$(PACKAGE_FORMAT)' \
+		KERNEL_PATCHES='$(KERNEL_PATCHES)' \
+		KERNEL_CONFIG='$(KERNEL_CONFIG)' \
+		KERNEL_BUILD_JOBS='$(KERNEL_BUILD_JOBS)' \
+		$(ROOT)/contrib/build-kernel-package.sh
+
+$(KERNEL_BUILD_STAMP): $(ROOT)/contrib/build-kernel-package.sh
+	$(Q)KERNEL_TAG='$(KERNEL_TAG_NORMALIZED)' \
+		KERNEL_COMMIT='$(KERNEL_COMMIT)' \
+		KERNEL_PATCHES='$(KERNEL_PATCHES)' \
+		KERNEL_REPOSITORY='$(KERNEL_REPOSITORY)' \
+		KERNEL_SOURCE_DIR='$(KERNEL_SOURCE_DIR)' \
+		KERNEL_CONFIG='$(KERNEL_CONFIG)' \
+		PACKAGE_FORMAT='$(PACKAGE_FORMAT)' \
+		KERNEL_BUILD_JOBS='$(KERNEL_BUILD_JOBS)' \
+		OUTPUT_DIR="$(abspath $(KERNEL_BUILD_ARTIFACT_DIR))" \
+		$(ROOT)/contrib/build-kernel-package.sh
+
+# A VM selection owns its kernel artifact independently of the generic
+# KERNEL_TAG selection used by `make -C testing kernel`.
+ifneq ($(VM_KERNEL_DEP),)
+ifneq ($(VM_KERNEL_TAG),$(KERNEL_TAG_NORMALIZED))
+$(VM_KERNEL_STAMP):
+	+$(Q)$(MAKE) -C $(ROOT) -f testing/Makefile kernel KERNEL_TAG='$(VM_KERNEL_TAG)' KERNEL_COMMIT='$(KERNEL_COMMIT)' KERNEL_CONFIG='$(KERNEL_CONFIG)'
+endif
+endif
+
+vm: $(VM_KERNEL_DEP) test-vm-bundle
+	$(Q)VM_MODE=interactive VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
+		TEST_VM_KERNEL_ARTIFACT_DIR="$(abspath $(VM_KERNEL_ARTIFACT_DIR))" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
+		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
+		TEST_VM_CPUS="$(TEST_VM_CPUS)" \
+		TEST_VM_MEMORY="$(TEST_VM_MEMORY)" \
+		TEST_VM_DISK_SIZE="$(TEST_VM_DISK_SIZE)" \
+		TEST_VM_SSH_PORT="$(TEST_VM_SSH_PORT)" \
+		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
+		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
+		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
+		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
+		TEST_VM_OCI_CA="$(TEST_VM_OCI_CA)" \
+		TEST_VM_BPM_TREE_CONFIG="$(TEST_VM_BPM_TREE_CONFIG)" \
+		TEST_VM_PACKAGE_CERT="$(TEST_VM_PACKAGE_CERT)" \
+		TEST_VM_BPM_OCI_REPOSITORY="$(TEST_VM_BPM_OCI_REPOSITORY)" \
+		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
+		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
+		$(ROOT)/contrib/test-vm.sh
+vm-console:
+	$(Q)VM_NAME="$(VM_NAME)" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" $(ROOT)/contrib/test-vm.sh --console
+
+vm-ssh:
+	$(Q)VM_NAME="$(VM_NAME)" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" $(ROOT)/contrib/test-vm.sh --ssh
+
+test-tgt: $(VM_KERNEL_DEP) test-vm-bundle
+	$(Q)VM_MODE=test TEST_VM_SUITE="$(TEST_VM_SUITE)" VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
+		TEST_VM_KERNEL_ARTIFACT_DIR="$(abspath $(VM_KERNEL_ARTIFACT_DIR))" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
+		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
+		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
+		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
+		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
+		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
+		TEST_VM_OCI_CA="$(TEST_VM_OCI_CA)" \
+		TEST_VM_BPM_OCI_REPOSITORY="$(TEST_VM_BPM_OCI_REPOSITORY)" \
+		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
+		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
+		$(ROOT)/contrib/test-vm.sh
+
+test-tgt-obs: $(VM_KERNEL_DEP) test-vm-bundle
+	$(Q)VM_MODE=test TEST_VM_SUITE=obs TEST_VM_DNS_FUZZ=0 VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
+		TEST_VM_KERNEL_ARTIFACT_DIR="$(abspath $(VM_KERNEL_ARTIFACT_DIR))" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
+		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
+		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
+		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
+		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
+		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
+		TEST_VM_OCI_CA="$(TEST_VM_OCI_CA)" \
+		TEST_VM_BPM_OCI_REPOSITORY="$(TEST_VM_BPM_OCI_REPOSITORY)" \
+		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
+		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
+		$(ROOT)/contrib/test-vm.sh
+
+test-tgt-obs-fuzz: $(VM_KERNEL_DEP) test-vm-bundle
+	$(Q)VM_MODE=test TEST_VM_SUITE=obs TEST_VM_DNS_FUZZ=1 \
+		TEST_VM_DNS_FUZZ_SEED="$(DNS_OBS_FUZZ_SEED)" \
+		TEST_VM_DNS_FUZZ_CASES="$(DNS_OBS_FUZZ_CASES)" \
+		VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
+		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
+		TEST_VM_KERNEL_ARTIFACT_DIR="$(abspath $(VM_KERNEL_ARTIFACT_DIR))" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
+		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
+		TEST_VM_MAP_EXPORT_ENDPOINT="$(TEST_VM_MAP_EXPORT_ENDPOINT)" \
+		TEST_VM_MAP_EXPORT_TENANT_ID="$(TEST_VM_MAP_EXPORT_TENANT_ID)" \
+		TEST_VM_MAP_EXPORT_INSECURE="$(TEST_VM_MAP_EXPORT_INSECURE)" \
+		TEST_VM_MAP_EXPORT_CA="$(TEST_VM_MAP_EXPORT_CA)" \
+		TEST_VM_OCI_CA="$(TEST_VM_OCI_CA)" \
+		TEST_VM_PACKAGE_CERT="$(TEST_VM_PACKAGE_CERT)" \
+		TEST_VM_BPM_OCI_REPOSITORY="$(TEST_VM_BPM_OCI_REPOSITORY)" \
+		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
+		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
+		$(ROOT)/contrib/test-vm.sh
+
+vm-stop:
+	$(Q)VM_NAME="$(VM_NAME)" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" $(ROOT)/contrib/test-vm.sh --stop
+
+vm-clean:
+	$(Q)VM_NAME="$(VM_NAME)" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" $(ROOT)/contrib/test-vm.sh --clean
+
+test-vm-clean: vm-clean
+
+test-op:
+	+$(Q)$(MAKE) -C $(ROOT) all
+	+$(Q)$(MAKE) -C $(ROOT) shirudo-build
+	+$(Q)$(MAKE) -C $(ROOT) -f testing/Makefile test-helpers
+	+$(Q)$(MAKE) -C $(ROOT) -f Makefile.shirudo check
+
+test-helpers:
+	+$(Q)$(MAKE) -C $(ROOT) config
+	+$(Q)$(MAKE) -C $(ROOT) -f Makefile.shirudo test-helpers
+
+# The installer end to end: a stock cloud image in QEMU with a vTPM, the
+# bpf-next kernel packages, tools/gen-initrd/install.sh with a local
+# target package, two reboots and the production configuration.
+test-installer:
+	$(Q)cd $(ROOT) && bash testing/t1300-installer-e2e.sh
+
+bundle: test-vm-bundle
+
+test-vm: test-tgt
+
+test:
+	+$(Q)$(MAKE) -C $(ROOT) -f testing/Makefile bundle
+	+$(Q)$(MAKE) -C $(ROOT) -f testing/Makefile test-op
+	+$(Q)$(MAKE) -C $(ROOT) -f testing/Makefile test-tgt
+
+help:
+	@printf '%s\n' \
+	  'Testing targets:' \
+	  '  make -C testing test' \
+	  '  make -C testing test-op' \
+	  '  make -C testing test-helpers' \
+	  '  make -C testing test-tgt [TEST_VM_INITRD=1]' \
+	  '  make -C testing test-tgt-obs or test-tgt-obs-fuzz' \
+	  '  make -C testing test-installer' \
+	  '  make -C testing vm, vm-console, vm-ssh, vm-stop, or vm-clean' \
+	  '  make -C testing vm KERNEL=6.18' \
+	  '  make -C testing kernel KERNEL_TAG=v6.18' \
+	  '  make -C testing bpf-next or test-vm-bundle' \
+	  '  make -C testing clean'
+
+clean:
+	+$(Q)set -eu; \
+		bundle_dir="$(abspath $(TEST_VM_BUNDLE_DIR))"; \
+		mkdir -p "$$(dirname "$$bundle_dir")"; \
+		exec 9>"$$bundle_dir.lock"; \
+		flock 9; \
+		rm -rf "$$bundle_dir"

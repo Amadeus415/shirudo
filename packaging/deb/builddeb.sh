@@ -5,7 +5,7 @@
 # Assemble one .deb from an already-staged install tree (built by
 # `make install-target` / `install-operator` into a DESTDIR): write
 # DEBIAN/control plus, for the target role, the systemd maintainer
-# scripts, then invoke dpkg-deb. Driven by `make bindeb-pkg`.
+# scripts, then invoke dpkg-deb. Driven by `make -C packaging bindeb-pkg`.
 #
 # usage: builddeb.sh <target|operator> <stagedir> <version> <arch> \
 #                    <maintainer> <output.deb>

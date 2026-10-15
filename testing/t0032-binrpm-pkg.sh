@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Authors of shirudo
 #
 # t0032 -- packaging/rpm/buildrpm.sh assembles the two binary RPMs from a
-# staged install tree the way `make binrpm-pkg` does, without rebuilding
+# staged install tree the way `make -C packaging binrpm-pkg` does, without rebuilding
 # the tree: stage a stand-in binary and the real systemd units, build the
 # target and operator packages, and check their metadata, file lists,
 # automatic soname requires and systemd scriptlets with rpm itself.
@@ -131,8 +131,8 @@ test_expect_success 'buildrpm.sh rejects a dash in version or release and an unk
 	! test -e "$WORK/bad.rpm"
 '
 
-test_expect_success 'make binrpm-pkg stages both roles and runs buildrpm.sh for each' '
-	(cd .. && make -n binrpm-pkg TARGET_DEPS_PREBUILT=1 \
+test_expect_success 'make -C packaging binrpm-pkg stages both roles and runs buildrpm.sh for each' '
+	(cd .. && make -n -C packaging binrpm-pkg TARGET_DEPS_PREBUILT=1 \
 		RPM_RAW_VERSION=v1.2.3-5-gabc123 >"$WORK/plan" 2>&1) &&
 	grep -q "install-target" "$WORK/plan" &&
 	grep -q "install-operator" "$WORK/plan" &&
@@ -144,12 +144,12 @@ test_expect_success 'make binrpm-pkg stages both roles and runs buildrpm.sh for 
 '
 
 test_expect_success 'PKG_ROLES=operator leaves the target package and its static build out' '
-	(cd .. && make -n binrpm-pkg PKG_ROLES=operator RPM_RAW_VERSION=v1.0.0 >"$WORK/plan-op" 2>&1) &&
+	(cd .. && make -n -C packaging binrpm-pkg PKG_ROLES=operator RPM_RAW_VERSION=v1.0.0 >"$WORK/plan-op" 2>&1) &&
 	! grep -q "install-target" "$WORK/plan-op" &&
 	! grep -q "buildrpm.sh target" "$WORK/plan-op" &&
 	grep -q "buildrpm.sh operator" "$WORK/plan-op" &&
 	grep -q "shirudo-build" "$WORK/plan-op" &&
-	(cd .. && make -n bindeb-pkg PKG_ROLES=target TARGET_DEPS_PREBUILT=1 \
+	(cd .. && make -n -C packaging bindeb-pkg PKG_ROLES=target TARGET_DEPS_PREBUILT=1 \
 		>"$WORK/plan-deb" 2>&1) &&
 	grep -q "install-target" "$WORK/plan-deb" &&
 	! grep -q "install-operator" "$WORK/plan-deb" &&

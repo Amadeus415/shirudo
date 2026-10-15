@@ -250,7 +250,7 @@ validate_package_cert()
 {
 	[[ -z "$PACKAGE_CERT" ]] && return 0
 	[[ "$VM_MODE" == interactive ]] ||
-		die "TEST_VM_PACKAGE_CERT is supported only for interactive make vm"
+		die "TEST_VM_PACKAGE_CERT is supported only for interactive make -C testing vm"
 	[[ -f "$PACKAGE_CERT" && -r "$PACKAGE_CERT" && -s "$PACKAGE_CERT" ]] ||
 		die "TEST_VM_PACKAGE_CERT is not a readable, non-empty regular file: $PACKAGE_CERT"
 }
@@ -259,7 +259,7 @@ validate_bpm_tree_config()
 {
 	[[ -z "$BPM_TREE_CONFIG" ]] && return 0
 	[[ "$VM_MODE" == interactive ]] ||
-		die "TEST_VM_BPM_TREE_CONFIG is supported only for interactive make vm"
+		die "TEST_VM_BPM_TREE_CONFIG is supported only for interactive make -C testing vm"
 	[[ -f "$BPM_TREE_CONFIG" && -r "$BPM_TREE_CONFIG" && -s "$BPM_TREE_CONFIG" ]] ||
 		die "TEST_VM_BPM_TREE_CONFIG is not a readable, non-empty regular file: $BPM_TREE_CONFIG"
 }
@@ -347,7 +347,7 @@ validate_kernel_selection()
 			die "kernel image not found: $KERNEL_OVERRIDE"
 	else
 		[[ -s "$DEFAULT_KERNEL" ]] ||
-			die "kernel image not found: $DEFAULT_KERNEL; run 'make bpf-next' first"
+			die "kernel image not found: $DEFAULT_KERNEL; run 'make -C testing bpf-next' first"
 	fi
 }
 
@@ -362,7 +362,7 @@ validate_host_bundle()
 {
 	local runtime_key runtime_image
 	[[ -x "$TEST_VM_HOST_BUNDLE/root/usr/local/bin/shirudo" ]] ||
-		die "host VM bundle is missing; run 'make test-vm-bundle' first: $TEST_VM_HOST_BUNDLE"
+		die "host VM bundle is missing; run 'make -C testing test-vm-bundle' first: $TEST_VM_HOST_BUNDLE"
 	[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/cert.der" ]] ||
 		die "host VM bundle has no target-test certificate: $TEST_VM_HOST_BUNDLE"
 	[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/shirudo-test-basic.upatch" ]] ||
@@ -377,13 +377,13 @@ validate_host_bundle()
 			die "host VM bundle has no BPM tree fixtures: $TEST_VM_HOST_BUNDLE"
 	fi
 	[[ -s "$TEST_VM_HOST_BUNDLE/runtime-image-key" ]] ||
-		die "host VM bundle has no prepared runtime image; run 'make bundle'"
+		die "host VM bundle has no prepared runtime image; run 'make -C testing bundle'"
 	runtime_key="$(<"$TEST_VM_HOST_BUNDLE/runtime-image-key")"
 	[[ "$runtime_key" =~ ^rootfs-[0-9a-f]{64}-packages-[0-9a-f]{64}(-disk-[A-Za-z0-9_]+)?-v[0-9]+$ ]] ||
 		die "host VM bundle has an invalid prepared runtime image key"
 	runtime_image="$RUNTIME_CACHE_DIR/$runtime_key.qcow2"
 	[[ -s "$runtime_image" ]] ||
-		die "prepared runtime image is missing: $runtime_image; run 'make bundle'"
+		die "prepared runtime image is missing: $runtime_image; run 'make -C testing bundle'"
 }
 
 stop_swtpm()
@@ -534,7 +534,7 @@ select_latest_run_dir()
 	for vm_dir in "$VMS_DIR"/*/; do
 		[[ -d "$vm_dir" ]] || continue
 		[[ -s "${vm_dir}created-at" ]] ||
-			die "VM state '$(basename "$vm_dir")' has no creation timestamp; run 'make vm-clean'"
+			die "VM state '$(basename "$vm_dir")' has no creation timestamp; run 'make -C testing vm-clean'"
 		created_at="$(<"${vm_dir}created-at")"
 		[[ "$created_at" =~ ^[0-9]{19}$ ]] ||
 			die "VM state '$(basename "$vm_dir")' has an invalid creation timestamp"
@@ -558,12 +558,12 @@ require_running_vm()
 
 	select_named_run_dir
 	[[ -s "$RUN_DIR/qemu.pid" ]] ||
-		die "VM '$VM_NAME' is not running; start it with 'make vm VM_NAME=$VM_NAME'"
+		die "VM '$VM_NAME' is not running; start it with 'make -C testing vm VM_NAME=$VM_NAME'"
 	pid="$(<"$RUN_DIR/qemu.pid")"
 	[[ "$pid" =~ ^[0-9]+$ ]] ||
 		die "VM '$VM_NAME' has an invalid QEMU PID file"
 	if ! kill -0 "$pid" 2>/dev/null; then
-		die "VM '$VM_NAME' is not running; start it with 'make vm VM_NAME=$VM_NAME'"
+		die "VM '$VM_NAME' is not running; start it with 'make -C testing vm VM_NAME=$VM_NAME'"
 	fi
 	cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
 	[[ "$cmdline" == *qemu-system-x86_64* &&
@@ -1004,12 +1004,12 @@ resolve_kernel()
 	fi
 
 	[[ -s "$DEFAULT_KERNEL" ]] ||
-		die "kernel image not found: $DEFAULT_KERNEL; run 'make bpf-next' first"
+		die "kernel image not found: $DEFAULT_KERNEL; run 'make -C testing bpf-next' first"
 	if [[ -s "${DEFAULT_KERNEL}.sha256sum" ]]; then
 		(cd "$(dirname "$DEFAULT_KERNEL")" &&
 			sha256sum -c bzImage.sha256sum >/dev/null)
 	else
-		die "kernel checksum not found: ${DEFAULT_KERNEL}.sha256sum; run 'make bpf-next'"
+		die "kernel checksum not found: ${DEFAULT_KERNEL}.sha256sum; run 'make -C testing bpf-next'"
 	fi
 	printf '%s\n' "$DEFAULT_KERNEL"
 }
@@ -1592,8 +1592,8 @@ if [[ "$VM_MODE" == interactive ]]; then
 	log "VM ready: name=$VM_NAME state=$RUN_DIR qemu_pid=$QEMU_PID swtpm_pid=$(<"$SWTPM_PIDFILE")"
 	print_memory_summary
 	log "console log: $RUN_DIR/console.log"
-	log "console: make vm-console VM_NAME=$VM_NAME"
-	log "ssh: make vm-ssh"
+	log "console: make -C testing vm-console VM_NAME=$VM_NAME"
+	log "ssh: make -C testing vm-ssh"
 else
 	set +e
 	timeout --signal=TERM --kill-after=30 "$VM_TIMEOUT" \

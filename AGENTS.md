@@ -272,18 +272,18 @@ one usually still compiles and passes tests.
 - `make` builds the operator binary; `make shirudo-build` the helper;
   `make target` the static-OpenSSL target profile (`make target-deps`
   builds OpenSSL, libcurl and tpm2-tss from source first).
-- `make test-op` runs the host-side suite (`testing/t0*`), no root needed;
-  `make SANITIZE=address,undefined test-op` runs it under ASan and
-  UBSan (CI does too); `make test-tgt` runs the target suite in the
-  QEMU/swtpm VM (`make help` lists the VM targets and variables).
-- `make test-tgt TEST_VM_INITRD=1` boots the guest from a dracut initrd
-  that runs `shirudo-initrd.service`; `make test-installer` runs
+- `make -C testing test-op` runs the host-side suite (`testing/t0*`), no root needed;
+  `make -C testing SANITIZE=address,undefined test-op` runs it under ASan and
+  UBSan (CI does too); `make -C testing test-tgt` runs the target suite in the
+  QEMU/swtpm VM (`make -C testing help` lists the VM target groups).
+- `make -C testing test-tgt TEST_VM_INITRD=1` boots the guest from a dracut initrd
+  that runs `shirudo-initrd.service`; `make -C testing test-installer` runs
   `testing/t1300-installer-e2e.sh`, the installer end to end in a QEMU
   guest with a vTPM, two reboots included.
-- `make html-docs` renders `Documentation/*.rst` with docutils in strict
+- `make -C Documentation html-docs` renders `Documentation/*.rst` with docutils in strict
   mode into `Documentation/output/`; CI runs it on every push, so run it
   after touching any document (python3-docutils provides `rst2html`).
-- `make bindeb-pkg`, `make binrpm-pkg` and `make bintar-pkg` build the
+- `make -C packaging bindeb-pkg`, `make -C packaging binrpm-pkg` and `make -C packaging bintar-pkg` build the
   distribution packages. The target package is static apart from glibc
   and portable; the operator package links the host's shared libraries
   and is built on the distribution it is for (`PKG_ROLES=operator`),

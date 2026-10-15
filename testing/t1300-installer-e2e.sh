@@ -7,10 +7,10 @@
 # that kernel, run tools/gen-initrd/install.sh the way a user would with
 # a local target package and the operator's certificate, reboot again
 # and check that shirudo came up in the production configuration, bound
-# from the initrd. Driven from the host (`make test-installer`); it
+# from the initrd. Driven from the host (`make -C testing test-installer`); it
 # needs KVM, qemu, swtpm, cloud-localds, the full kernel packages
-# (`make bpf-next`), a target package (`make bindeb-pkg
-# PKG_ROLES=target`) and a bundle certificate (`make test-vm-bundle`).
+# (`make -C testing bpf-next`), a target package (`make -C packaging bindeb-pkg
+# PKG_ROLES=target`) and a bundle certificate (`make -C testing test-vm-bundle`).
 #
 #   TEST_INSTALLER_KERNEL_DEBS   directory with linux-image-*.deb
 #   TEST_INSTALLER_PACKAGE       the shirudo-target .deb to install
@@ -51,8 +51,8 @@ for f in "$KERNEL_DEBS"/linux-image-[0-9]*.deb; do
 	case "$f" in *-dbg*) continue ;; esac
 	[ -e "$f" ] && { image_deb=$f; break; }
 done
-[ -n "$image_deb" ] || test_skip_all "no linux-image package in $KERNEL_DEBS (make bpf-next)"
-[ -s "$PACKAGE" ] || test_skip_all "no shirudo-target package (make bindeb-pkg PKG_ROLES=target)"
+[ -n "$image_deb" ] || test_skip_all "no linux-image package in $KERNEL_DEBS (make -C testing bpf-next)"
+[ -s "$PACKAGE" ] || test_skip_all "no shirudo-target package (make -C packaging bindeb-pkg PKG_ROLES=target)"
 [ -s "$CERT" ] || test_skip_all "no certificate to install (TEST_INSTALLER_CERT)"
 KREL=$(basename "$image_deb" | sed -n 's/^linux-image-\([^_]*\)_.*/\1/p')
 [ -n "$KREL" ] || test_skip_all "cannot tell the kernel release from $image_deb"

@@ -192,11 +192,11 @@ loop the architecture describes (ingest the fix, reproduce it, derive a
 shield, load it, run the reproducer against it) needs a kernel that
 behaves like the fleet's: the same release and configuration, the same
 BTF, the attach points the shield will use.  Run that loop in a VM
-booting the target kernel rather than on the operator host.  ``make
+booting the target kernel rather than on the operator host.  ``make -C testing
 kernel KERNEL_TAG=<tag> KERNEL_CONFIG=<the fleet's .config>`` builds
-such a kernel with its BTF, ``make vm KERNEL=<version>`` boots a
+such a kernel with its BTF, ``make -C testing vm KERNEL=<version>`` boots a
 supported selection with a software TPM and a prepared shirudo, and
-``make test-tgt`` runs the target suite in it; any VM of the operator's
+``make -C testing test-tgt`` runs the target suite in it; any VM of the operator's
 own serves the same purpose.  A mitigation that loads and passes its
 reproducer on a kernel unlike the fleet's proves nothing about the
 fleet.
