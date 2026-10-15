@@ -548,7 +548,13 @@ package_version="1+$(date -u +%Y%m%d%H%M%S)+g${kernel_commit:0:12}"
 # bundled host-side libbpf, so keep that compatibility warning in host tools.
 kernel_cc="${CC:-cc} -std=gnu11"
 kernel_hostcflags="${HOSTCFLAGS:-} -std=gnu11 -Wno-error=discarded-qualifiers"
-kernel_kcflags="${KCFLAGS:-} -Wno-error=unterminated-string-initialization -std=gnu11"
+kernel_kcflags="${KCFLAGS:-} -std=gnu11"
+# GCC rejects -Wno-error= for a warning it does not know, so only add the
+# GCC 15 one where the compiler has it.
+if ${CC:-cc} -Werror -Wunterminated-string-initialization -x c -c /dev/null \
+    -o /dev/null >/dev/null 2>&1; then
+  kernel_kcflags="$kernel_kcflags -Wno-error=unterminated-string-initialization"
+fi
 if [[ "$PACKAGE_FORMAT" == deb ]]; then
   make -j "$KERNEL_BUILD_JOBS" bindeb-pkg KDEB_PKGVERSION="$package_version" \
     CC="$kernel_cc" \
