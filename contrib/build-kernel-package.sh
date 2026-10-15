@@ -549,22 +549,30 @@ if [[ "$PACKAGE_FORMAT" == deb ]]; then
     HOSTCFLAGS="$kernel_hostcflags" \
     KCFLAGS="$kernel_kcflags"
 
-  find "$WORK_DIR" -maxdepth 1 -type f -name '*.deb' ! -name '*-dbg*.deb' -exec cp {} "$OUTPUT_DIR/" \;
-
-  if ! find "$OUTPUT_DIR" -type f -name 'linux-image-[0-9]*.deb' ! -name '*-dbg*' | grep -q .; then
-    echo "kernel image deb was not produced" >&2
+  IMAGE_DEB="$(find "$WORK_DIR" -maxdepth 1 -type f \
+    -name "linux-image-[0-9]*_${package_version}_*.deb" \
+    ! -name '*-dbg*.deb' -print -quit)"
+  if [[ -z "$IMAGE_DEB" ]]; then
+    echo "kernel image deb for package version ${package_version} was not produced" >&2
     exit 1
   fi
+  find "$WORK_DIR" -maxdepth 1 -type f \
+    -name "*_${package_version}_*.deb" ! -name '*-dbg*.deb' \
+    -exec cp {} "$OUTPUT_DIR/" \;
 else
+  rm -rf "$SOURCE_DIR/rpmbuild/RPMS"
   make -j "$KERNEL_BUILD_JOBS" binrpm-pkg
 
-  find "$SOURCE_DIR/rpmbuild/RPMS" -type f -name '*.rpm' \
-    ! -name '*debug*' ! -name '*debuginfo*' -exec cp {} "$OUTPUT_DIR/" \;
-
-  if ! find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*.rpm' | grep -q .; then
+  IMAGE_RPM="$(find "$SOURCE_DIR/rpmbuild/RPMS" -type f \
+    -name 'kernel-[0-9]*.rpm' \
+    ! -name '*debug*' ! -name '*debuginfo*' \
+    ! -name '*headers*' ! -name '*devel*' -print -quit)"
+  if [[ -z "$IMAGE_RPM" ]]; then
     echo "kernel RPM was not produced" >&2
     exit 1
   fi
+  find "$SOURCE_DIR/rpmbuild/RPMS" -type f -name '*.rpm' \
+    ! -name '*debug*' ! -name '*debuginfo*' -exec cp {} "$OUTPUT_DIR/" \;
 fi
 
 # The VM boots bzImage directly, so carry the matching module tree alongside
@@ -573,14 +581,8 @@ MODULES_STAGE_DIR="${WORK_DIR}/modules"
 rm -rf "$MODULES_STAGE_DIR"
 mkdir -p "$MODULES_STAGE_DIR"
 if [[ "$PACKAGE_FORMAT" == deb ]]; then
-  IMAGE_DEB="$(find "$OUTPUT_DIR" -maxdepth 1 -type f \
-    -name 'linux-image-[0-9]*.deb' ! -name '*-dbg*.deb' -print -quit)"
   dpkg-deb -x "$IMAGE_DEB" "$MODULES_STAGE_DIR"
 else
-  IMAGE_RPM="$(find "$OUTPUT_DIR" -maxdepth 1 -type f \
-    -name 'kernel-[0-9]*.rpm' \
-    ! -name '*debug*' ! -name '*debuginfo*' \
-    ! -name '*headers*' ! -name '*devel*' -print -quit)"
   rpm2cpio "$IMAGE_RPM" |
     (cd "$MODULES_STAGE_DIR" && cpio -idm --quiet)
 fi
@@ -598,6 +600,7 @@ if [[ -z "$MODULES_SOURCE_DIR" ]]; then
   exit 1
 else
   mkdir -p "$OUTPUT_DIR/lib/modules"
+  rm -rf "$OUTPUT_DIR/lib/modules/$kernel_release"
   cp -a "$MODULES_SOURCE_DIR" "$OUTPUT_DIR/lib/modules/"
   depmod -b "$OUTPUT_DIR" "$kernel_release"
 fi
