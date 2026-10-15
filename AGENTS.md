@@ -53,6 +53,7 @@ remote-management or transport layers.
 | `Documentation/tpm.rst` | The measurement register, its events and eventlog, `shirudo attest` and its verification, the relation to systemd's NvPCRs and the known limits. Read it with the threat model before touching the TPM paths. |
 | `Documentation/initrd.rst` | The production configuration: `init` run from the initrd and finished by the root file system, what survives switch-root, what the initrd needs, the dracut module, generator and installer under `tools/gen-initrd/`. |
 | `Documentation/upatch.rst` | Authoring and shipping upatches: the BPF side, build and sign, test, the Beefile, `bpm build`, `push`, `tree append`, and the target's `bpm` commands. |
+| `Documentation/features.rst` | Every attachment kind a upatch can have (fentry/fexit/fmod_ret, lsm, tp_btf, kprobe/kretprobe, uprobe.multi, cgroup_skb, netfilter), how the loader attaches each, what the target needs, and the serializer and test-run roles. |
 | `Documentation/key-lifecycle.rst` | The signing keys and certificates: the trusted set a target enrols, vouching for a new key (`keys vouch`, `keys add`), rotation, revocation (`keys revoke`), custody. |
 | `Documentation/operations.rst` | Day-two operation: units and timers, conditions, upgrades of shirudo and the kernel, decommissioning, backup, recovery, failure categories and exit status. |
 | `Documentation/upatch-spec.rst` | The `.upatch` container and signing scheme. |

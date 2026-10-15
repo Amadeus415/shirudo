@@ -69,6 +69,8 @@ development both roles can live on the same node.
 
 * [Getting started](Documentation/getting-started.rst): build, sign,
   initialise a target, load and unload, publish and install packages.
+* [Features](Documentation/features.rst): every attachment kind a
+  upatch can have and how each one works.
 * [Upatches](Documentation/upatch.rst): writing the BPF side, building
   and signing, packaging, publishing to a registry and the signed tree.
 * [Key lifecycle](Documentation/key-lifecycle.rst): the signing key and

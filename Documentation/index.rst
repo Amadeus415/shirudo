@@ -48,10 +48,15 @@ Writing and shipping upatches
     the Beefile and ``bpm build``, publishing to a registry and to the
     signed upatch tree, and what a target does with both.
 
+    `features <features.rst>`__ lists every attachment kind a upatch
+    can have, what the kernel does at that point, how the loader
+    attaches there and what the target needs for it.
+
 Keys
-    `key-lifecycle <key-lifecycle.rst>`__ covers the signing key and
-    its certificate from creation to retirement: where the certificate
-    goes, how targets trust it, rotation, revocation and custody.
+    `key-lifecycle <key-lifecycle.rst>`__ covers the signing keys and
+    their certificates from creation to retirement: the trusted set a
+    target enrols, vouching for a new key, rotation, revocation and
+    custody.
 
 Running targets
     `operations <operations.rst>`__ is the day-two guide: the units
