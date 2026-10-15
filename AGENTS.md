@@ -232,6 +232,16 @@ one usually still compiles and passes tests.
   architectures.
 - **BPF is CO-RE.** Hard-coded struct offsets sign fine and fail on the
   wrong kernel as `btf_mismatch`.
+- **Upatch state lives in BPF arenas where possible.** A upatch that
+  accumulates records keeps them in its one `BPF_MAP_TYPE_ARENA` map and
+  ships a `shirudo_serialize__<map>` program that walks them; hash and
+  array maps are for what cannot live in an arena: task, socket and
+  per-CPU scratch state, lookup keys the kernel owns, and the serializer
+  output. An arena gives one consistent snapshot, memory the serializer
+  can reset between exports, and an overflow count the record carries,
+  where an element-by-element read of a plain map gives a torn view and
+  a table that silently fills up. `upatches/kernel-obs/obs_table.h` is
+  the template to instantiate.
 
 ## Memory, JSON and logging
 
