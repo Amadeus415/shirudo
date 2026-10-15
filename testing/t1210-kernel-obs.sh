@@ -152,11 +152,16 @@ cat >"$WORK/check_drained.py" <<'PY'
 import json
 import sys
 
-records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-for record in records:
-    if isinstance(record, dict) and record["map"] in ("dns", "listen",
-                                                      "watch", "file"):
-        assert not record["records"], record
+documents = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+tables = {record["map"]: record["records"] for record in documents
+          if isinstance(record, dict)}
+for name in ("listen", "watch", "file"):
+    assert not tables[name], (name, tables[name])
+# The guest's own resolver traffic may land in the window; the test's
+# names must be gone.
+test_names = {"example.com", "many.example", ".".join(["a"] * 127)}
+assert not any(n["name"] in test_names
+               for r in tables["dns"] for n in r["names"]), tables["dns"]
 PY
 
 cat >"$WORK/check_exec_only.py" <<'PY'
@@ -167,8 +172,11 @@ documents = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 tables = {record["map"]: record["records"] for record in documents
           if isinstance(record, dict)}
 assert tables["exec"], tables
-for name in ("dns", "listen", "watch", "file"):
+for name in ("listen", "watch", "file"):
     assert not tables[name], (name, tables)
+test_names = {"example.com", "many.example", ".".join(["a"] * 127)}
+assert not any(n["name"] in test_names
+               for r in tables["dns"] for n in r["names"]), tables["dns"]
 assert not any(r["kind"] in ("userns_create", "mount")
                for r in tables["priv"]), tables["priv"]
 PY
