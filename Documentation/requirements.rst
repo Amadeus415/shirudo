@@ -95,6 +95,10 @@ observability fixture.
      - The measurement register and the attestation key.  A TPM 2.0 is
        mandatory; there is no unmeasured mode.  ``contrib/swtpm.sh``
        provides a software TPM for machines without one.
+   * - ``CONFIG_EXT4_FS_SECURITY`` (when ``/var/lib/shirudo`` is on ext4)
+     - Allows ``init`` to store the ``security.bpf.shirudo`` label used by
+       the filesystem seal.  Other filesystems hosting this state must
+       support security xattrs.
 
 ``CONFIG_PKCS7_WAIVE_AUTHATTRS_REJECTION_FOR_MLDSA`` is not required: it
 only relaxes module-signature checks, and BPF signature verification
