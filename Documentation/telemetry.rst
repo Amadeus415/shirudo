@@ -138,8 +138,8 @@ the ``metrics`` array of a ``scopeMetrics`` entry, so the decoder
 decides the name, unit, description, aggregation and data points.  An
 error raised in the decoder drops that snapshot with a diagnostic; it
 never produces a partial record.  The shipped
-``upatches/linux_obs/decoders/ipv4_shields.lua`` turns a 32-byte
-counter record into one monotonic sum with two labelled points::
+``upatches/kernel-obs/decoders/watch_stat.lua`` turns a per-CPU
+counter pair into one monotonic sum with two labelled points::
 
     local function metric_point(input, value, outcome)
         return {
@@ -153,30 +153,37 @@ counter record into one monotonic sum with two labelled points::
     end
 
     function decode(input)
-        if not input.data.serialized or input.data.serialized_bytes ~= 32 then
-            error("unexpected IPv4 shields counter payload")
+        local data = input.data
+        local entry = data.entries and data.entries[1]
+        if not entry then
+            error("missing watch counter entry")
         end
-        local records = shirudo.fixed_records(input.data.pages, 16)
-        local record = records[2]
-        if not record then
-            error("missing IPv4 shields counter record")
+        local stride = math.ceil((data.value_size or 16) / 8) * 8
+        local checked, matched = "0", "0"
+        for cpu = 0, (data.n_cpus or 1) - 1 do
+            local base = cpu * stride
+            checked = shirudo.u64_add(checked,
+                shirudo.hex_u64(entry.value_hex, base))
+            matched = shirudo.u64_add(matched,
+                shirudo.hex_u64(entry.value_hex, base + 8))
         end
         return {
-            {name = "enforcement.ipv4_shields_metric", unit = "1",
-             description = "IPv4 TCP connect and UDP send decisions",
+            {name = "kernel_obs.watch_attempts", unit = "1",
+             description = "socket-level destination checks against the watch list",
              sum = {
                  aggregationTemporality = 2,
                  isMonotonic = true,
                  dataPoints = {
-                     metric_point(input, record:u64(0), "allowed"),
-                     metric_point(input, record:u64(8), "denied"),
+                     metric_point(input, checked, "checked"),
+                     metric_point(input, matched, "matched"),
                  },
              }},
         }
     end
 
-The ``linux_obs`` package also carries decoders for exec, TCP, UDP and
-DNS events; they are the reference for writing new ones.
+The ``kernel-obs`` package carries decoders for its exec, net, listen,
+watch, dns, priv and file tables; they are the reference for writing new
+ones, the timestamp conversion included.
 
 
 4) The documents on the wire
@@ -380,8 +387,8 @@ its ``Body``, ``SeverityNumber``, ``ResourceAttributes`` and
 
     -- the latest snapshot of one map on one host
     SELECT Body FROM shirudo.upatch_logs
-    WHERE LogAttributes['shirudo.upatch.name'] = 'linux-observability'
-      AND LogAttributes['shirudo.map.name'] = 'exec_events'
+    WHERE LogAttributes['shirudo.upatch.name'] = 'kernel-obs'
+      AND LogAttributes['shirudo.map.name'] = 'exec'
       AND ResourceAttributes['host.name'] = 'node-17'
     ORDER BY Timestamp DESC LIMIT 1;
 

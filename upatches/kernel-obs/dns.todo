@@ -1,10 +1,12 @@
 # DNS observability follow-up
 
-The UDP DNS parser currently correlates requests with a canonical key made
-from the network-namespace cookie, address family, client/resolver addresses
-and ports, and transaction ID. The items below are the remaining parser and
-correlation gaps. Each behavior change should promote its corresponding case
-in `t/dns_obs_matrix.py` from a known-gap probe to a gating test.
+The UDP DNS parser correlates requests with a canonical key made from
+the network-namespace cookie, address family, client/resolver addresses
+and ports, and transaction ID, and attributes the answer to the querying
+socket's owner. The items below are the remaining parser and
+correlation gaps. Each behavior change should promote its corresponding
+case in `testing/dns_obs_matrix.py` from a known-gap probe to a gating
+test.
 
 ## Matching and response integrity
 
@@ -52,8 +54,9 @@ in `t/dns_obs_matrix.py` from a known-gap probe to a gating test.
 
 ## Capacity and observability
 
+- [x] Table overflow and lost records are reported in every export header.
 - [ ] Add counters for request-map update failure, LRU displacement, stale
-      response rejection, tuple mismatch, and answer-cap truncation.
+      response rejection and tuple mismatch.
 - [ ] Stress the 1024-entry pending-request LRU and document expected loss
       behavior under sustained concurrent DNS traffic.
 - [ ] Add namespace-isolation coverage proving identical tuples and IDs in two
@@ -61,6 +64,7 @@ in `t/dns_obs_matrix.py` from a known-gap probe to a gating test.
 
 ## Out of scope unless requirements change
 
-- DNS over TCP, TLS, or HTTPS.
+- DNS over TCP, TLS, or HTTPS; the public DoH resolvers are on the
+  destination watch list instead.
 - DNS traffic on ports other than 53, including mDNS and LLMNR.
 - Full recursive DNS interpretation beyond correlating A/AAAA responses.

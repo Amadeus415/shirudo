@@ -499,32 +499,33 @@ PY
 build_obs_fixture()
 {
 	local keys_dir="$1"
-	local source_dir="$FIXTURE_WORK/linux_obs"
+	local source_dir="$FIXTURE_WORK/kernel-obs"
 
-	# Keep the production blocklist out of the integration fixture. The
-	# fixture is deliberately built from a reserved address so TCP and UDP
-	# denial can be tested without external network state.
+	# The fixture watches reserved addresses so attempts against the
+	# watch list can be exercised without external network state.
 	mkdir -p "$source_dir/decoders"
 	for source in \
-		linux-observability.bpf.c exec_uid_arena.bpf.c exec_uid_common.h \
-		tcp_connect_arena.bpf.c udp_arena.bpf.c dns_arena.bpf.c \
-		ipv4_shields_arena.bpf.c gen_ipv4_shields.py; do
-		cp "$REPO_ROOT/upatches/linux_obs/$source" "$source_dir/$source"
+		kernel-obs.bpf.c obs_common.h obs_table.h obs_priv.bpf.c \
+		obs_exec.bpf.c obs_net.bpf.c obs_dns.bpf.c obs_file.bpf.c \
+		gen_watch.py gen_file_watch.py file-watch.list; do
+		cp "$REPO_ROOT/upatches/kernel-obs/$source" "$source_dir/$source"
 	done
-	cp "$REPO_ROOT/upatches/linux_obs/decoders/"*.lua "$source_dir/decoders/"
-	cat >"$source_dir/ipv4.list" <<'EOF'
-127.0.0.2/32
+	cp "$REPO_ROOT/upatches/kernel-obs/decoders/"*.lua "$source_dir/decoders/"
+	cat >"$source_dir/watch.list" <<'EOF'
 203.0.113.10/32
+2001:db8::10/128
 EOF
-	python3 "$source_dir/gen_ipv4_shields.py" \
-		"$source_dir/ipv4.list" "$source_dir/ipv4_shields_generated.h"
+	python3 "$source_dir/gen_watch.py" \
+		"$source_dir/watch.list" "$source_dir/watch_generated.h"
+	python3 "$source_dir/gen_file_watch.py" \
+		"$source_dir/file-watch.list" "$source_dir/file_watch_generated.h"
 
 	(
 		cd "$REPO_ROOT"
 		"$REPO_ROOT/tools/shirudo-build/shirudo-build" \
-			"$source_dir/linux-observability.bpf.c" \
-			-o "$TMP_DIR/fixtures/linux-observability.upatch" \
-			--name linux-observability --vmlinux "$REPO_ROOT/vendor/linux/vmlinux.h" \
+			"$source_dir/kernel-obs.bpf.c" \
+			-o "$TMP_DIR/fixtures/kernel-obs.upatch" \
+			--name kernel-obs --vmlinux "$REPO_ROOT/vendor/linux/vmlinux.h" \
 		--key "$keys_dir/signing_key.pem" \
 		--cert "$keys_dir/cert.der"
 	)
@@ -585,7 +586,7 @@ serialized_metric_payload="$($REPO_ROOT/shirudo upatch info \
 	"$TMP_DIR/fixtures/shirudo-test-serialized-metric.upatch" --json |
 	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
 observability_payload="$($REPO_ROOT/shirudo upatch info \
-	"$TMP_DIR/fixtures/linux-observability.upatch" --json |
+	"$TMP_DIR/fixtures/kernel-obs.upatch" --json |
 	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
 "$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
 	shirudo-test-basic --payload-sha256 "$basic_payload" \
@@ -637,8 +638,8 @@ build_tree_test_registry
 	--key "$FIXTURE_WORK/trusted/signing_key.pem" \
 	--cert "$FIXTURE_WORK/trusted/cert.der"
 "$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
-	linux-observability --payload-sha256 "$observability_payload" \
-	-o "$TMP_DIR/fixtures/linux-observability.unload.upatch" \
+	kernel-obs --payload-sha256 "$observability_payload" \
+	-o "$TMP_DIR/fixtures/kernel-obs.unload.upatch" \
 	--key "$FIXTURE_WORK/trusted/signing_key.pem" \
 	--cert "$FIXTURE_WORK/trusted/cert.der"
 "$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \

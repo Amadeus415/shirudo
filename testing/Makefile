@@ -100,15 +100,15 @@ TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
 	$(ROOT)/testing/helper/*.c $(ROOT)/testing/helper/*.py $(ROOT)/completion/* $(ROOT)/systemd/*.in \
 	$(ROOT)/systemd/*.timer $(ROOT)/testing/fixtures/*.c $(ROOT)/testing/fixtures/*.lua \
 	$(ROOT)/testing/fixtures/decoders/* \
-	$(ROOT)/upatches/linux_obs/*.c $(ROOT)/upatches/linux_obs/*.h $(ROOT)/upatches/linux_obs/*.list \
-		$(ROOT)/upatches/linux_obs/*.py $(ROOT)/upatches/linux_obs/Beefile \
-	$(ROOT)/upatches/linux_obs/decoders/*))
+	$(ROOT)/upatches/kernel-obs/*.c $(ROOT)/upatches/kernel-obs/*.h $(ROOT)/upatches/kernel-obs/*.list \
+		$(ROOT)/upatches/kernel-obs/*.py $(ROOT)/upatches/kernel-obs/Beefile \
+	$(ROOT)/upatches/kernel-obs/decoders/*))
 TEST_VM_BUNDLE_ARTIFACTS := $(sort $(wildcard \
 	$(VM_KERNEL_ARTIFACT_DIR) $(VM_KERNEL_ARTIFACT_DIR)/*))
 TEST_VM_BUNDLE_INPUTS := $(sort \
 	$(ROOT)/Makefile $(ROOT)/Makefile.config $(ROOT)/Makefile.shirudo $(ROOT)/Makefile.version $(ROOT)/config.mk \
 	$(ROOT)/testing/Makefile $(ROOT)/packaging/Makefile \
-	$(ROOT)/Documentation/Makefile $(ROOT)/upatches/linux_obs/Makefile \
+	$(ROOT)/Documentation/Makefile $(ROOT)/upatches/kernel-obs/Makefile \
 	$(ROOT)/contrib/build-test-vm-bundle.sh $(ROOT)/contrib/test-vm-guest.sh \
 	$(ROOT)/contrib/prepare-test-vm-runtime.sh $(ROOT)/contrib/test-vm-runtime-packages \
 	$(TEST_VM_BUNDLE_SOURCES) $(TEST_VM_BUNDLE_ARTIFACTS) \

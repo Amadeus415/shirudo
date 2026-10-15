@@ -8,10 +8,11 @@ target_guard
 command -v python3 >/dev/null 2>&1 || test_skip_all "no python3"
 
 FIXTURES=${SHIRUDO_TEST_FIXTURES_DIR:?target fixture directory is not set}
-NAME=linux-observability
+NAME=kernel-obs
 LOAD="$FIXTURES/$NAME.upatch"
 UNLOAD="$FIXTURES/$NAME.unload.upatch"
 PIN="/run/shirudo/bpffs/upatches/$NAME/link_0"
+TABLES="exec net listen watch dns priv file"
 WORK=$(mktemp -d)
 
 cleanup()
@@ -25,13 +26,13 @@ cleanup()
 }
 trap cleanup EXIT
 
-[ -s "$LOAD" ] || test_skip_all "missing Linux observability fixture"
-[ -s "$UNLOAD" ] || test_skip_all "missing Linux observability unload fixture"
+[ -s "$LOAD" ] || test_skip_all "missing kernel-obs fixture"
+[ -s "$UNLOAD" ] || test_skip_all "missing kernel-obs unload fixture"
 
 export_maps()
 {
 	output="$1"
-	for map in exec_arena tcp_arena udp_arena dns_arena ipv4_shields; do
+	for map in $TABLES watch_stat; do
 		"$SHIRUDO_BIN" upatch map "$NAME" "$map" \
 			--json="$output" >/dev/null
 	done
@@ -45,7 +46,7 @@ load_observability()
 	fi
 	cat "$WORK/load.log" >&2
 	if [ -d /mnt/shirudo-out ]; then
-		cp "$WORK/load.log" /mnt/shirudo-out/observability-load.log
+		cp "$WORK/load.log" /mnt/shirudo-out/kernel-obs-load.log
 	fi
 	return 1
 }
@@ -58,63 +59,103 @@ documents = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 records = [document for document in documents
            if isinstance(document, dict) and "map" in document]
 metrics = [document for document in documents if isinstance(document, list)]
-expected = {"exec_arena", "tcp_arena", "udp_arena", "dns_arena"}
+expected = {"exec", "net", "listen", "watch", "dns", "priv", "file"}
 assert {record["map"] for record in records} == expected, documents
 assert len(metrics) == 1, documents
-assert metrics[0][0]["name"] == "enforcement.ipv4_shields_metric", metrics
+assert metrics[0][0]["name"] == "kernel_obs.watch_attempts", metrics
 for record in records:
-    assert record["schema"] == 1, record
-    assert record["upatch"] == "linux-observability", record
+    assert record["schema"] == 2, record
+    assert record["upatch"] == "kernel-obs", record
     assert isinstance(record["records"], list), record
+    interval = record["interval"]
+    assert isinstance(interval, dict), record
+    for key in ("used", "overflow", "lost"):
+        assert isinstance(interval[key], int), record
+    assert interval["overflow"] == 0, record
+    assert interval["lost"] == 0, record
+    for item in record["records"]:
+        assert isinstance(item["first_seen_unix_nano"], str), item
+        assert isinstance(item["last_seen_unix_nano"], str), item
+        assert int(item["first_seen_unix_nano"]) > 0, item
 PY
 
-cat >"$WORK/check_initial.py" <<'PY'
+cat >"$WORK/check_events.py" <<'PY'
 import json
 import sys
 
 documents = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-records = {record["map"]: record for record in documents
-           if isinstance(record, dict)}
-assert all(records[name]["records"] for name in records), records
+tables = {record["map"]: record["records"] for record in documents
+          if isinstance(record, dict)}
 exec_ids = {(r["executable"]["dev"], r["executable"]["ino"])
-            for r in records["exec_arena"]["records"]}
-for name in ("tcp_arena", "udp_arena", "dns_arena"):
+            for r in tables["exec"]}
+assert any(r["name"] == "true" and r["path"].endswith("/true")
+           for r in tables["exec"]), tables["exec"]
+assert any("caller" in r for r in tables["exec"]), tables["exec"]
+for name in ("net", "dns"):
     assert any((r["executable"]["dev"], r["executable"]["ino"]) in exec_ids
-               for r in records[name]["records"]), (name, records)
-assert any(r["address"] == "127.0.0.1" for r in records["tcp_arena"]["records"])
-assert any(r["address"] == "127.0.0.1" for r in records["udp_arena"]["records"])
+               for r in tables[name]), (name, tables[name])
+assert any(r["address"] == "127.0.0.1" and r["proto"] == "tcp" and
+           r["role"] == "initiator" and int(r["count"]) >= 1 and
+           int(r["tx_packets"]) >= 1 and int(r["rx_packets"]) >= 1
+           for r in tables["net"]), tables["net"]
+assert any(r["address"] == "127.0.0.1" and r["proto"] == "tcp" and
+           r["role"] == "acceptor" for r in tables["net"]), tables["net"]
+assert any(r["address"] == "127.0.0.1" and r["proto"] == "udp" and
+           int(r["count"]) >= 1 for r in tables["net"]), tables["net"]
+assert any(r["kind"] == "listen" and r["proto"] == "tcp" and
+           r["address"] == "127.0.0.1" and r["port"] > 0
+           for r in tables["listen"]), tables["listen"]
+assert any(r["kind"] == "bind" and r["proto"] == "udp" and
+           r["port"] == 35353 for r in tables["listen"]), tables["listen"]
 assert any(n["name"] == "example.com"
-           for r in records["dns_arena"]["records"] for n in r["names"])
+           for r in tables["dns"] for n in r["names"]), tables["dns"]
 long_name = ".".join(["a"] * 127)
 assert any(n["name"] == long_name
-           for r in records["dns_arena"]["records"] for n in r["names"])
+           for r in tables["dns"] for n in r["names"]), tables["dns"]
 assert any(r["address"] == "203.0.113.75" and
            any(n["name"] == "many.example" for n in r["names"])
-           for r in records["dns_arena"]["records"])
+           for r in tables["dns"]), tables["dns"]
+assert any(r["kind"] == "userns_create"
+           for r in tables["priv"]), tables["priv"]
+assert any(r["kind"] == "mount" and r["name"] == "tmpfs"
+           for r in tables["priv"]), tables["priv"]
+assert any(r["path"] == "/etc/shadow" and r["mode"] == "r"
+           for r in tables["file"]), tables["file"]
+assert any(r["path"].endswith("/environ")
+           for r in tables["file"]), tables["file"]
 PY
 
-cat >"$WORK/check_metric.py" <<'PY'
+cat >"$WORK/check_watch.py" <<'PY'
 import json
 import sys
 
 documents = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+tables = {record["map"]: record["records"] for record in documents
+          if isinstance(record, dict)}
 metrics = [document for document in documents if isinstance(document, list)]
-assert len(metrics) == 1, documents
+assert any(r["address"] == "203.0.113.10" and r["proto"] == "tcp" and
+           r["port"] == 80 and int(r["attempts"]) >= 1
+           for r in tables["watch"]), tables["watch"]
+assert any(r["address"] == "2001:0db8:0000:0000:0000:0000:0000:0010" and
+           r["proto"] == "udp" for r in tables["watch"]), tables["watch"]
+assert any(r["address"] == "203.0.113.10" and r["role"] == "initiator"
+           for r in tables["net"]), tables["net"]
 metric = metrics[0][0]
-assert metric["name"] == "enforcement.ipv4_shields_metric", metric
-points = metric["sum"]["dataPoints"]
+assert metric["name"] == "kernel_obs.watch_attempts", metric
 values = {point["attributes"][0]["value"]["stringValue"]: int(point["asInt"])
-          for point in points}
-assert values == {"allowed": 2, "denied": 3}, values
+          for point in metric["sum"]["dataPoints"]}
+assert values["matched"] >= 2, values
+assert values["checked"] >= values["matched"], values
 PY
 
-cat >"$WORK/check_empty.py" <<'PY'
+cat >"$WORK/check_drained.py" <<'PY'
 import json
 import sys
 
 records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 for record in records:
-    if isinstance(record, dict) and record["map"] != "exec_arena":
+    if isinstance(record, dict) and record["map"] in ("dns", "listen",
+                                                      "watch", "file"):
         assert not record["records"], record
 PY
 
@@ -123,48 +164,45 @@ import json
 import sys
 
 documents = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-records = {record["map"]: record for record in documents
-           if isinstance(record, dict)}
-assert records["exec_arena"]["records"], records
-for name in ("tcp_arena", "udp_arena", "dns_arena"):
-    assert not records[name]["records"], (name, records)
+tables = {record["map"]: record["records"] for record in documents
+          if isinstance(record, dict)}
+assert tables["exec"], tables
+for name in ("dns", "listen", "watch", "file"):
+    assert not tables[name], (name, tables)
+assert not any(r["kind"] in ("userns_create", "mount")
+               for r in tables["priv"]), tables["priv"]
 PY
 
-test_expect_success 'combined observability upatch loads with five serializers' '
+test_expect_success 'kernel-obs upatch loads with seven serializers' '
 	load_observability &&
-	[ -e "/run/shirudo/bpffs/upatches/$NAME/serializers/exec_arena" ] &&
-	[ -e "/run/shirudo/bpffs/upatches/$NAME/serializers/tcp_arena" ] &&
-	[ -e "/run/shirudo/bpffs/upatches/$NAME/serializers/udp_arena" ] &&
-	[ -e "/run/shirudo/bpffs/upatches/$NAME/serializers/dns_arena" ] &&
-	[ -e "/run/shirudo/bpffs/upatches/$NAME/serializers/ipv4_shields" ]
+	for map in $TABLES; do
+		[ -e "/run/shirudo/bpffs/upatches/$NAME/serializers/$map" ] ||
+			exit 1
+	done
 '
 
-test_expect_success 'IPv4 shields enforce TCP and UDP and export counters' '
-	python3 linux_obs_events.py ipv4-firewall >"$WORK/firewall-events.log" 2>&1 &&
-	export_maps "$WORK/firewall.ndjson" >"$WORK/firewall-export.log" 2>&1 &&
-	python3 "$WORK/check_metric.py" "$WORK/firewall.ndjson" >"$WORK/firewall-check.log" 2>&1 || {
-		cp -a "$WORK" /mnt/shirudo-out/t1210-firewall-work 2>/dev/null || true
-		false
-	}
+test_expect_success 'exec, net, listen, DNS, privilege and file events produce records' '
+	python3 kernel_obs_events.py all &&
+	python3 kernel_obs_events.py dns-long &&
+	python3 kernel_obs_events.py dns-many &&
+	export_maps "$WORK/events.ndjson" &&
+	python3 "$WORK/check.py" "$WORK/events.ndjson" &&
+	python3 "$WORK/check_events.py" "$WORK/events.ndjson"
 '
 
-test_expect_success 'exec, TCP, UDP, and DNS produce structured batches' '
-	python3 linux_obs_events.py all &&
-	python3 linux_obs_events.py dns-long &&
-	python3 linux_obs_events.py dns-many &&
-	export_maps "$WORK/initial.ndjson" &&
-	python3 "$WORK/check.py" "$WORK/initial.ndjson" &&
-	python3 "$WORK/check_initial.py" "$WORK/initial.ndjson"
+test_expect_success 'watched destinations are recorded with the metric' '
+	python3 kernel_obs_events.py watch &&
+	export_maps "$WORK/watch.ndjson" &&
+	python3 "$WORK/check_watch.py" "$WORK/watch.ndjson"
 '
 
-test_expect_success 'serializer clears pending entries after export' '
-	export_maps "$WORK/empty.ndjson" &&
-	python3 "$WORK/check.py" "$WORK/empty.ndjson" &&
-	python3 "$WORK/check_empty.py" "$WORK/empty.ndjson"
+test_expect_success 'an export drains the tables' '
+	export_maps "$WORK/drained.ndjson" &&
+	python3 "$WORK/check_drained.py" "$WORK/drained.ndjson"
 '
 
-test_expect_success 'only the touched exec map is exported' '
-	python3 linux_obs_events.py exec &&
+test_expect_success 'only the touched tables carry records' '
+	python3 kernel_obs_events.py exec &&
 	export_maps "$WORK/exec-only.ndjson" &&
 	python3 "$WORK/check_exec_only.py" "$WORK/exec-only.ndjson"
 '

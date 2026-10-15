@@ -308,7 +308,7 @@ A package is a directory with a ``Beefile`` next to the sources::
     applies everywhere.
 
 ``upatches/kernel-cve/Beefile`` in the tree is a worked example with
-one entry per CVE shield, and ``upatches/linux_obs/Beefile`` one with
+one entry per CVE shield, and ``upatches/kernel-obs/Beefile`` one with
 decoders and shared headers.  Build and inspect::
 
     shirudo bpm build ./example-shields --version 1.0.0 \

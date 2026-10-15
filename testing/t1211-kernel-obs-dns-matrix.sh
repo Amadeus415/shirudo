@@ -8,7 +8,7 @@ target_guard
 command -v python3 >/dev/null 2>&1 || test_skip_all "no python3"
 
 FIXTURES=${SHIRUDO_TEST_FIXTURES_DIR:?target fixture directory is not set}
-NAME=linux-observability
+NAME=kernel-obs
 LOAD="$FIXTURES/$NAME.upatch"
 UNLOAD="$FIXTURES/$NAME.unload.upatch"
 PIN="/run/shirudo/bpffs/upatches/$NAME/link_0"
@@ -49,17 +49,17 @@ load_observability()
 	return 1
 }
 
-[ -s "$LOAD" ] || test_skip_all "missing Linux observability fixture"
-[ -s "$UNLOAD" ] || test_skip_all "missing Linux observability unload fixture"
+[ -s "$LOAD" ] || test_skip_all "missing kernel-obs fixture"
+[ -s "$UNLOAD" ] || test_skip_all "missing kernel-obs unload fixture"
 
 test_expect_success 'DNS matrix helper and generator are available' '
 	[ -x "$RUNNER" ] &&
 	python3 dns_obs_matrix.py --self-test >"$WORK/self-test.log" 2>&1
 '
 
-test_expect_success 'Linux observability DNS programs load for packet tests' '
+test_expect_success 'kernel-obs DNS programs load for packet tests' '
 	load_observability &&
-	[ -e "/run/shirudo/bpffs/upatches/$NAME/serializers/dns_arena" ]
+	[ -e "/run/shirudo/bpffs/upatches/$NAME/serializers/dns" ]
 '
 
 test_expect_success 'DNS UDP deterministic packet matrix passes' '

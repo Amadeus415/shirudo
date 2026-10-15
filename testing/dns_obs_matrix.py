@@ -782,14 +782,14 @@ def assert_results(cases: list[Case], results: list[dict]) -> set[str]:
 
 def export_dns(shirudo: Path, upatch: str, output: Path) -> dict:
     process = subprocess.run(
-        [str(shirudo), "upatch", "map", upatch, "dns_arena",
+        [str(shirudo), "upatch", "map", upatch, "dns",
          f"--json={output}"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         check=False, text=True)
     if process.returncode:
         raise RuntimeError(
             f"DNS export exited {process.returncode}: {process.stderr.strip()}")
     records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
-    if len(records) != 1 or records[0].get("map") != "dns_arena":
+    if len(records) != 1 or records[0].get("map") != "dns":
         raise AssertionError(f"unexpected DNS export: {records!r}")
     return records[0]
 
@@ -1075,7 +1075,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runner", type=Path, default=Path("helper/test-dns-prog-run"))
     parser.add_argument("--shirudo", type=Path, default=Path("/usr/local/bin/shirudo"))
-    parser.add_argument("--upatch", default="linux-observability")
+    parser.add_argument("--upatch", default="kernel-obs")
     parser.add_argument("--work", type=Path, default=Path("."))
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--deterministic", action="store_true")

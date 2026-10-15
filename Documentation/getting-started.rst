@@ -237,8 +237,8 @@ and extends nothing.
 A package is a directory with a ``Beefile`` next to the BPF sources::
 
     [package]
-    name = "bpf-observability"
-    description = "shirudo observability BPF upatches"
+    name = "kernel-obs"
+    description = "shirudo kernel observability"
     license = "GPL-2.0 OR BSD-2-Clause"
     authors = ["Example Org"]
 
@@ -246,16 +246,16 @@ A package is a directory with a ``Beefile`` next to the BPF sources::
     source = "decoders/exec.lua"
 
     [[upatches]]
-    source = "linux-observability.bpf.c"
+    source = "kernel-obs.bpf.c"
 
 ``[[files]]`` entries are copied into the package (headers, decoders,
 reproducers); each ``[[upatches]]`` entry is built and signed, with its
 unload directive, through ``shirudo-build``.  On the operator::
 
     shirudo bpm build ./pkg --version 1.0.0 --keys-dir /var/lib/shirudo/keys
-    shirudo bpm info ./bpf-observability-1.0.0.bee
-    shirudo bpm push ./bpf-observability-1.0.0.bee \
-        oci://quay.io/example/bpf-observability --keys-dir /var/lib/shirudo/keys
+    shirudo bpm info ./kernel-obs-1.0.0.bee
+    shirudo bpm push ./kernel-obs-1.0.0.bee \
+        oci://quay.io/example/kernel-obs --keys-dir /var/lib/shirudo/keys
 
 ``push`` uploads the package and its certificate and, given the signing
 material, adds the version to the registry's signed index at
@@ -271,12 +271,12 @@ upgrade::
     sudo shirudo bpm config register add example oci://quay.io \
         --key-file cert.der
     sudo shirudo bpm repo update
-    sudo shirudo bpm install example/bpf-observability
+    sudo shirudo bpm install example/kernel-obs
     sudo shirudo bpm list
     sudo shirudo bpm upgrade
-    sudo shirudo bpm uninstall bpf-observability
+    sudo shirudo bpm uninstall kernel-obs
 
-``shirudo bpm install oci://quay.io/example/bpf-observability:1.0.0``
+``shirudo bpm install oci://quay.io/example/kernel-obs:1.0.0``
 installs a reference directly; the `upatch <upatch.rst>`__ guide has
 the Beefile reference and the tree workflow in full.  ``bpm info`` prints a package's README
 before installing it, from a local ``.bee`` or a reference.  ``bpm
@@ -286,9 +286,9 @@ Packages whose ``Beefile`` entries carry an ``[upatches.tree]`` table
 can also be appended to a signed, append-only upatch tree with
 selectors, so a fleet of mixed kernels pulls only what applies::
 
-    shirudo bpm tree append ./bpf-observability-1.0.0.bee \
+    shirudo bpm tree append ./kernel-obs-1.0.0.bee \
         oci://quay.io/example/tree --keys-dir /var/lib/shirudo/keys
-    shirudo bpm tree append ./bpf-observability-1.0.0.bee \
+    shirudo bpm tree append ./kernel-obs-1.0.0.bee \
         oci://quay.io/example/tree --keys-dir /var/lib/shirudo/keys --op delete
 
 A target follows a tree when ``/etc/shirudo/bpm/upatch-tree.conf``

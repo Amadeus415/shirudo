@@ -91,7 +91,7 @@ help:
 	  '  Package: make -C packaging help' \
 	  '  Tests and VMs: make -C testing help' \
 	  '  Documentation: make -C Documentation html-docs' \
-	  '  IPv4 shields: make -C upatches/linux_obs ipv4-shields'
+	  '  Watch lists: make -C upatches/kernel-obs lists'
 
 shirudo-build:
 	+$(Q)$(MAKE) -C tools/shirudo-build

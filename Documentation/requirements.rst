@@ -27,8 +27,8 @@ The table below is what shirudo itself needs; without any of it,
 ``shirudo init`` does not complete. The test VM kernel uses the slim
 configuration embedded in ``contrib/build-kernel-package.sh``. It also
 builds the networking modules used by the VM test setup: veth, bridge,
-802.1Q, and the netfilter flow table. It also enables IPv6 for the UDP
-observability fixture.
+802.1Q, and the netfilter flow table. It also enables IPv6 for the kernel-obs
+fixture.
 
 .. list-table::
    :header-rows: 1

@@ -70,9 +70,11 @@ struct dns_exec_uid {
 
 struct dns_request {
 	struct dns_exec_uid uid;
+	uint64_t cgroup;
 	char name[DNS_NAME_BYTES];
 	uint16_t qtype;
 	uint16_t pad;
+	uint32_t pad2;
 };
 
 struct dns_request_key {

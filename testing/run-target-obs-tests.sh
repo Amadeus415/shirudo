@@ -9,8 +9,8 @@ cd "$(dirname "$0")"
 fail=0
 : "${SHIRUDO_TEST_SUITE_FAILURES_FILE:=}"
 for test_script in \
-	t1210-linux-observability.sh \
-	t1211-linux-observability-dns-matrix.sh
+	t1210-kernel-obs.sh \
+	t1211-kernel-obs-dns-matrix.sh
 do
 	if sh "$test_script"; then
 		:

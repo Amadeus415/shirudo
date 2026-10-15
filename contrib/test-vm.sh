@@ -368,8 +368,8 @@ validate_host_bundle()
 	[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/shirudo-test-basic.upatch" ]] ||
 		die "host VM bundle has no target-test fixtures: $TEST_VM_HOST_BUNDLE"
 	if [[ "$VM_SUITE" == obs ]]; then
-		[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/linux-observability.upatch" ]] ||
-			die "host VM bundle has no Linux observability fixture: $TEST_VM_HOST_BUNDLE"
+		[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/kernel-obs.upatch" ]] ||
+			die "host VM bundle has no kernel-obs fixture: $TEST_VM_HOST_BUNDLE"
 	elif [[ "$VM_SUITE" == tree ]]; then
 		[[ -s "$TEST_VM_HOST_BUNDLE/fixtures/tree-oci/shirudo/upatch-tree/manifests/stable" &&
 		   -s "$TEST_VM_HOST_BUNDLE/fixtures/shirudo-test-tree-match.upatch" &&

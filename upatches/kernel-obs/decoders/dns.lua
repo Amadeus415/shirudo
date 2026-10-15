@@ -1,3 +1,11 @@
+-- SPDX-License-Identifier: (GPL-2.0 OR BSD-2-Clause)
+-- Copyright (c) 2026 Authors of shirudo
+
+local RECORD = 1168
+local NAME_SLOTS = 4
+local NAME_SIZE = 272
+local NAMES_OFFSET = 80
+
 local function ipv4(value)
 	local n = tonumber(value) or 0
 	return string.format("%d.%d.%d.%d", n % 256,
@@ -18,63 +26,90 @@ local function ipv6(a, b, c, d)
 	return table.concat(words, ":")
 end
 
-local function address(record)
-	if record:u8(7) == 2 then
-		return ipv4(record:u32(8))
+local function address(slot, family)
+	if family == 2 then
+		return ipv4(slot:u32(40))
+	elseif family == 10 then
+		return ipv6(slot:u32(40), slot:u32(44), slot:u32(48), slot:u32(52))
 	end
-	return ipv6(record:u32(12), record:u32(16), record:u32(20),
-		record:u32(24))
+	return nil
 end
 
-local name_bytes = 256
-local name_size = 16 + name_bytes
-local name_slots = 4
-local names_offset = 48
-local uid_offset = names_offset + name_slots * name_size
-local record_size = uid_offset + 16
+local function header(slot)
+	return {
+		boot_now_ns = slot:u64(32),
+		since_ns = slot:u64(40),
+		used = slot:u32(48),
+		overflow = slot:u32(52),
+		lost = slot:u32(56),
+		peek = slot:u32(28) % 2 == 1,
+	}
+end
 
-local function dirty_records(input, slot_size)
-	local slots = shirudo.fixed_records(input.data.pages, slot_size)
-	local records = {}
-	for _, page in ipairs(input.data.pages) do
-		local count = math.floor(page.bytes / slot_size)
-		for i = 1, count - 1 do
-			local record = slots[page.cursor + i + 1]
-			if record and record:u8(6) ~= 0 then
-				local names = {}
-				for name_index = 0, name_slots - 1 do
-					local base = names_offset + name_index * name_size
-					if tonumber(record:u64(base)) > 0 then
-						names[#names + 1] = {
-							name = record:cstring(base + 16, name_bytes),
-							seen_count = record:u64(base),
-							last_seen_ns = record:u64(base + 8),
-						}
-					end
-				end
-				records[#records + 1] = {
-					entry_index = record:u32(0),
-					executable = {
-						dev = record:u32(uid_offset),
-						ino = record:u64(uid_offset + 8),
-					},
-					family = record:u8(7),
-					address = address(record),
-					names = names,
-					total_seen = record:u64(32),
-					last_seen_ns = record:u64(40),
-				}
-			end
+local function unix_nano(input, hdr, ts)
+	if ts == "0" then
+		return nil
+	end
+	return shirudo.u64_sub(input.timeUnixNano,
+		shirudo.u64_sub(hdr.boot_now_ns, ts))
+end
+
+local function interval(input, hdr)
+	return {
+		since_unix_nano = unix_nano(input, hdr, hdr.since_ns),
+		used = hdr.used,
+		overflow = hdr.overflow,
+		lost = hdr.lost,
+		peek = hdr.peek,
+	}
+end
+
+local function record(input, hdr, slot)
+	local family = slot:u8(32)
+	local names = {}
+	for i = 0, NAME_SLOTS - 1 do
+		local base = NAMES_OFFSET + i * NAME_SIZE
+		local seen = slot:u64(base)
+		if seen ~= "0" then
+			names[#names + 1] = {
+				name = slot:cstring(base + 16, 256),
+				seen_count = seen,
+				last_seen_unix_nano = unix_nano(input, hdr, slot:u64(base + 8)),
+			}
 		end
 	end
-	return records
+	return {
+		entry_index = slot:u32(0),
+		executable = { dev = slot:u32(8), ino = slot:u64(16) },
+		cgroup_id = slot:u64(24),
+		family = family,
+		address = address(slot, family),
+		answer_count = slot:u64(56),
+		first_seen_unix_nano = unix_nano(input, hdr, slot:u64(64)),
+		last_seen_unix_nano = unix_nano(input, hdr, slot:u64(72)),
+		names = names,
+	}
 end
 
 function decode(input)
+	local records, summary = {}, nil
+	for _, page in ipairs(input.data.pages) do
+		local slots = shirudo.page_slots(page, RECORD)
+		local hdr = slots[1] and header(slots[1])
+		if hdr then
+			summary = summary or interval(input, hdr)
+			for i = 2, #slots do
+				if slots[i]:u32(4) % 2 == 1 then
+					records[#records + 1] = record(input, hdr, slots[i])
+				end
+			end
+		end
+	end
 	return {
-		schema = 1,
+		schema = 2,
 		upatch = input.upatch,
 		map = input.map,
-		records = dirty_records(input, record_size),
+		interval = summary,
+		records = records,
 	}
 end
