@@ -52,7 +52,7 @@ jobs:
             artifacts/bpf-next-kernel-debs/bpf-next-kernel-build
 
   build-amazon-linux-rpm:
-    runs-on: ubuntu-latest-4cores-16gb
+    runs-on: ubuntu-latest
     container: amazonlinux:2023
     timeout-minutes: 120
 
