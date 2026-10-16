@@ -14,7 +14,7 @@
 #include <stdbool.h>
 
 /* Keep enough room for verbose accepted-program verifier traces. */
-#define SHIRUDO_VERIFIER_LOG_MAX	(4 * 1024 * 1024)
+#define SHIRUDO_VERIFIER_LOG_MAX	(16 * 1024 * 1024)
 
 /*
  * Phase strings (failure-report ordering):
