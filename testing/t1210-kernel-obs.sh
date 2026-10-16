@@ -99,7 +99,7 @@ assert any(r["address"] == "127.0.0.1" and r["proto"] == "tcp" and
            int(r["tx_packets"]) >= 1 and int(r["rx_packets"]) >= 1
            for r in tables["net"]), tables["net"]
 assert any(r["address"] == "127.0.0.1" and r["proto"] == "tcp" and
-           r["role"] == "acceptor" for r in tables["net"]), tables["net"]
+           r.get("role") == "acceptor" for r in tables["net"]), tables["net"]
 assert any(r["address"] == "127.0.0.1" and r["proto"] == "udp" and
            int(r["count"]) >= 1 for r in tables["net"]), tables["net"]
 assert any(r["kind"] == "listen" and r["proto"] == "tcp" and
@@ -138,8 +138,8 @@ assert any(r["address"] == "203.0.113.10" and r["proto"] == "tcp" and
            for r in tables["watch"]), tables["watch"]
 assert any(r["address"] == "2001:0db8:0000:0000:0000:0000:0000:0010" and
            r["proto"] == "udp" for r in tables["watch"]), tables["watch"]
-assert any(r["address"] == "203.0.113.10" and r["role"] == "initiator"
-           for r in tables["net"]), tables["net"]
+assert any(r["address"] == "203.0.113.10" and
+           r.get("role") == "initiator" for r in tables["net"]), tables["net"]
 metric = metrics[0][0]
 assert metric["name"] == "kernel_obs.watch_attempts", metric
 values = {point["attributes"][0]["value"]["stringValue"]: int(point["asInt"])
