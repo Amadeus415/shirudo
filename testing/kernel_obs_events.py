@@ -5,6 +5,7 @@ import argparse
 import errno
 import os
 import random
+import shutil
 import socket
 import struct
 import subprocess
@@ -17,7 +18,11 @@ BIND_PORT = 35353
 
 
 def exec_event():
-    subprocess.run(["/bin/true"], check=True)
+    with tempfile.TemporaryDirectory() as directory:
+        executable = os.path.join(directory, "true")
+        shutil.copyfile("/bin/true", executable)
+        os.chmod(executable, 0o755)
+        subprocess.run([executable], check=True)
 
 
 def tcp_event():
@@ -68,12 +73,10 @@ def listen_event():
 def priv_event():
     pid = os.fork()
     if pid == 0:
-        try:
-            os.unshare(os.CLONE_NEWUSER)
-        finally:
-            os._exit(0)
+        os.unshare(os.CLONE_NEWUSER)
+        os._exit(0)
     _, status = os.waitpid(pid, 0)
-    if status != 0:
+    if os.waitstatus_to_exitcode(status) != 0:
         raise RuntimeError("user namespace creation failed")
     with tempfile.TemporaryDirectory() as mountpoint:
         subprocess.run(["mount", "-t", "tmpfs", "none", mountpoint], check=True)
