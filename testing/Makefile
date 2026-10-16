@@ -97,6 +97,10 @@ TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
 	$(ROOT)/*.c $(ROOT)/*.h $(ROOT)/include/*.h $(ROOT)/util/*.c $(ROOT)/util/*.h \
 	$(ROOT)/bpf/*.c $(ROOT)/bpf/lib/*.h \
 	$(ROOT)/tools/shirudo-build/*.c $(ROOT)/tools/shirudo-build/*.h \
+	$(ROOT)/vendor/libbpf/bpf/*.c $(ROOT)/vendor/libbpf/bpf/*.h \
+	$(ROOT)/vendor/libbpf/include/linux/*.h \
+	$(ROOT)/vendor/libbpf/include/uapi/linux/*.h \
+	$(ROOT)/vendor/libbpf/include/asm/*.h \
 	$(ROOT)/testing/helper/*.c $(ROOT)/testing/helper/*.py $(ROOT)/completion/* $(ROOT)/systemd/*.in \
 	$(ROOT)/systemd/*.timer $(ROOT)/testing/fixtures/*.c $(ROOT)/testing/fixtures/*.lua \
 	$(ROOT)/testing/fixtures/decoders/* \
@@ -108,6 +112,7 @@ TEST_VM_BUNDLE_ARTIFACTS := $(sort $(wildcard \
 TEST_VM_BUNDLE_INPUTS := $(sort \
 	$(ROOT)/Makefile $(ROOT)/Makefile.config $(ROOT)/Makefile.shirudo $(ROOT)/Makefile.version $(ROOT)/config.mk \
 	$(ROOT)/testing/Makefile $(ROOT)/packaging/Makefile \
+	$(ROOT)/vendor/libbpf/Makefile $(ROOT)/vendor/libbpf/COMMIT \
 	$(ROOT)/Documentation/Makefile $(ROOT)/upatches/kernel-obs/Makefile \
 	$(ROOT)/contrib/build-test-vm-bundle.sh $(ROOT)/contrib/test-vm-guest.sh \
 	$(ROOT)/contrib/prepare-test-vm-runtime.sh $(ROOT)/contrib/test-vm-runtime-packages \
