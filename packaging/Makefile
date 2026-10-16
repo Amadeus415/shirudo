@@ -20,7 +20,13 @@ include $(ROOT)/Makefile.version
 prefix      ?= /usr/local
 exec_prefix ?= $(prefix)
 bindir      ?= $(exec_prefix)/bin
+libexecdir  ?= $(exec_prefix)/libexec
+sharedir    ?= $(prefix)/share
 libdir      ?= $(exec_prefix)/lib
+mandir      ?= $(sharedir)/man
+completionsdir ?= $(sharedir)/bash-completion/completions
+systemdunitdir ?= /usr/lib/systemd/system
+dracutmodulesdir ?= /usr/lib/dracut/modules.d
 
 .PHONY: help clean config bintar-pkg bindeb-pkg binrpm-pkg
 
@@ -28,6 +34,13 @@ INSTALLER_TARBALL    ?= shirudo.tar.gz
 INSTALLER_STAGE      ?= build/shirudo-installer
 INSTALLER_ROOT       := $(INSTALLER_STAGE)/root
 INSTALLER_PRIVATE_LIBDIR ?= $(libdir)/shirudo
+
+INSTALL_PATHS := prefix=$(prefix) exec_prefix=$(exec_prefix) \
+                 bindir=$(bindir) libexecdir=$(libexecdir) \
+                 sharedir=$(sharedir) libdir=$(libdir) mandir=$(mandir) \
+                 completionsdir=$(completionsdir) \
+                 systemdunitdir=$(systemdunitdir) \
+                 dracutmodulesdir=$(dracutmodulesdir)
 
 STATIC_IMAGE_TARBALL ?= shirudo-static.tar.gz
 STATIC_IMAGE_STAGE   ?= build/shirudo-static-image
@@ -107,6 +120,7 @@ bintar-pkg: config $(ROOT)/packaging/tar/install.sh $(ROOT)/packaging/tar/bundle
 	+$(Q)$(MAKE) -C $(ROOT) target-deps
 	+$(Q)$(MAKE) -C $(ROOT) target-config
 	+$(Q)$(MAKE) -C $(ROOT) -f Makefile.shirudo PROFILE=target CONFIG_MK=config-target.mk \
+	    $(INSTALL_PATHS) \
 	    LDFLAGS='$(LDFLAGS)' \
 	    SHIRUDO_BUNDLE_RPATH=0 \
 	    DESTDIR=$(INSTALLER_ROOT_PATH) \
@@ -123,6 +137,7 @@ bintar-pkg: config $(ROOT)/packaging/tar/install.sh $(ROOT)/packaging/tar/bundle
 	+$(Q)$(MAKE) -C $(ROOT) target-deps
 	+$(Q)$(MAKE) -C $(ROOT) target-config
 	+$(Q)$(MAKE) -C $(ROOT) -f Makefile.shirudo PROFILE=target CONFIG_MK=config-target.mk \
+	    $(INSTALL_PATHS) \
 	    LDFLAGS='$(LDFLAGS)' \
 	    SHIRUDO_BUNDLE_RPATH=1 \
 	    DESTDIR=$(STATIC_IMAGE_ROOT_PATH) \

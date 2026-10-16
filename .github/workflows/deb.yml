@@ -194,11 +194,11 @@ jobs:
             # Both installers relocate under DESTDIR; the static image also
             # carries its remaining shared libraries next to the binary.
             for tarball in shirudo.tar.gz shirudo-static.tar.gz; do
-              rm -rf /tmp/bintar && mkdir -p /tmp/bintar/root
-              tar -C /tmp/bintar -xzf "\$tarball"
-              DESTDIR=/tmp/bintar/root "/tmp/bintar/\${tarball%.tar.gz}/install.sh"
+              rm -rf /tmp/bintar && mkdir -p /tmp/bintar/archive /tmp/bintar/root
+              tar -C /tmp/bintar/archive -xzf "\$tarball" --strip-components=1
+              DESTDIR=/tmp/bintar/root /tmp/bintar/archive/install.sh
               test -x /tmp/bintar/root/usr/local/bin/shirudo
-              test -f /tmp/bintar/root/usr/local/lib/systemd/system/shirudo.service
+              test -f /tmp/bintar/root/usr/lib/systemd/system/shirudo.service
               /tmp/bintar/root/usr/local/bin/shirudo version
             done
             test -d /tmp/bintar/root/usr/local/lib/shirudo
