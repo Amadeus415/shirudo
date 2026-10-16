@@ -53,6 +53,7 @@ jobs:
               build-essential \
               ca-certificates \
               clang \
+              libclang-rt-21-dev \
               llvm \
               curl \
               git \
