@@ -61,6 +61,7 @@ int shirudo_cms_signed_by(const uint8_t *signature, size_t signature_len,
 			  const struct shirudo_cert *cert);
 
 struct shirudo_tls_ca {
+	const char *compat_hosts;
 	const char *path;
 	void *impl;
 };
@@ -69,11 +70,12 @@ void shirudo_tls_ca_cleanup(struct shirudo_tls_ca *ca);
 
 /*
  * shirudo's TLS policy for every libcurl handle it opens: TLS 1.3 only
- * and hybrid ML-KEM key exchange only (X25519MLKEM768, with the P-256
- * hybrid as fallback), so neither a version downgrade nor a classical
- * group can be negotiated. ca may be NULL; otherwise it is the extra
- * trust anchor fed to the SSL_CTX callback. Returns 0 or a negative
- * errno; callers must not connect when it fails.
+ * and hybrid ML-KEM key exchange by default. ca may supply an extra
+ * trust anchor and a comma-separated compat_hosts allowlist of exact
+ * host[:port] authorities (default port 443). Listed hosts may also use
+ * classical X25519 or P-256; certificate and hostname checks stay on.
+ * ca may be NULL. Returns 0 or a negative errno; callers must not
+ * connect when it fails.
  */
 int shirudo_tls_curl_policy(CURL *curl, struct shirudo_tls_ca *ca);
 

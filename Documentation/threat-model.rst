@@ -240,9 +240,13 @@ T7  The delivery path
     a package installed from a repository is checked against the digests
     in that signed index; a tree publication is signed, carries
     per-operation digests and sequence continuity, and a ``delete`` is
-    accepted only for an id loaded from the same tree.  TLS is 1.3 with
-    hybrid ML-KEM only, so the transport is not the weak link even
-    though it is not the trust anchor.
+    accepted only for an id loaded from the same tree. TLS is 1.3 with
+    hybrid ML-KEM by default. Operators may explicitly list registry
+    hosts in ``BPM_OCI_TLS_COMPAT`` to permit classical key exchange;
+    their transport confidentiality then lacks the hybrid protection,
+    but certificate checks and ML-DSA-87 artifact authentication stay
+    unchanged. Authentication and redirect hosts need their own entry
+    to permit classical key exchange.
 
 T8  Quantum-capable adversaries against the trust anchor
     Signing is ML-DSA-87 (FIPS 204) only: ``genkey`` makes nothing else,

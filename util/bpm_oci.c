@@ -319,7 +319,25 @@ int bpm_oci_parse_endpoint(const char *endpoint, struct bpm_oci_client *c)
 		}
 	}
 	c->tls_ca.path = c->ca_file;
+	c->tls_ca.compat_hosts = getenv("BPM_OCI_TLS_COMPAT");
 	return load_registry_auth(c->registry, c);
+}
+
+static int curl_errno(CURLcode cc)
+{
+	switch (cc) {
+	case CURLE_OK:
+		return 0;
+	case CURLE_SSL_CONNECT_ERROR:
+	case CURLE_SSL_CIPHER:
+		return -EPROTO;
+	case CURLE_PEER_FAILED_VERIFICATION:
+	case CURLE_SSL_CACERT_BADFILE:
+	case CURLE_SSL_ISSUER_ERROR:
+		return -EACCES;
+	default:
+		return -EHOSTUNREACH;
+	}
 }
 
 static int curl_once_ex(struct bpm_oci_client *c, const char *method,
@@ -383,7 +401,7 @@ static int curl_once_ex(struct bpm_oci_client *c, const char *method,
 		pr_err("bpm OCI request %s: cannot apply TLS policy", url);
 		curl_slist_free_all(headers);
 		curl_easy_cleanup(curl);
-		return -EHOSTUNREACH;
+		return -EPROTO;
 	}
 	if (body) {
 		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
@@ -404,14 +422,12 @@ static int curl_once_ex(struct bpm_oci_client *c, const char *method,
 	cc = curl_easy_perform(curl);
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
 	r->status = status;
-	if (cc != CURLE_OK) {
+	if (cc != CURLE_OK)
 		pr_err("bpm OCI request %s: %s", url, errbuf[0] ? errbuf : curl_easy_strerror(cc));
-		status = -1;
-	}
 	curl_slist_free_all(headers);
 	curl_easy_cleanup(curl);
 	shirudo_tls_ca_cleanup(&c->tls_ca);
-	return status < 0 ? -EHOSTUNREACH : 0;
+	return curl_errno(cc);
 }
 
 static int curl_once(struct bpm_oci_client *c, const char *method,
@@ -516,7 +532,7 @@ static int get_bearer_token(struct bpm_oci_client *c, const char *challenge)
 	cc = curl_easy_perform(curl);
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &r.status);
 	if (cc != CURLE_OK) {
-		rc = -EHOSTUNREACH;
+		rc = curl_errno(cc);
 		goto out;
 	}
 	if (r.status >= 300) {

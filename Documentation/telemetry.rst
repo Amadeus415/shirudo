@@ -269,10 +269,11 @@ collector.  ``--tenant-id`` or ``map_export.tenant_id`` sets
 ``.``, ``_`` and ``-``.  ``OTEL_EXPORTER_OTLP_COMPRESSION=gzip``
 compresses the body.
 
-TLS.  Like every libcurl client in shirudo, the exporter speaks TLS 1.3
+TLS.  The exporter speaks TLS 1.3
 with a hybrid ML-KEM key exchange only (X25519MLKEM768,
 SecP256r1MLKEM768); a collector that offers only classical groups is
-refused.  ``OTEL_EXPORTER_OTLP_CERTIFICATE`` names a CA bundle,
+refused. The registry-specific ``BPM_OCI_TLS_COMPAT`` setting does not
+apply to telemetry. ``OTEL_EXPORTER_OTLP_CERTIFICATE`` names a CA bundle,
 ``OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`` and
 ``OTEL_EXPORTER_OTLP_CLIENT_KEY`` a client certificate for mutual TLS.
 Cleartext ``http://`` is allowed only to loopback.  ``--otel-insecure``

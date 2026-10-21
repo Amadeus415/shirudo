@@ -252,11 +252,12 @@ since the libguestfs appliance resolves names through DNS alone.
      - ECDSA P-256 (the attestation key); TPMs sign with nothing
        post-quantum today, so the evidence is classical.
    * - TLS (registries, OTLP and S3 export)
-     - TLS 1.3 only with hybrid ML-KEM key exchange only
+     - TLS 1.3 only with hybrid ML-KEM key exchange by default
        (X25519MLKEM768, SecP256r1MLKEM768), on every libcurl client in
-       both profiles.  A server that offers only classical groups is
-       refused; there is no fallback.  Server certificates are whatever
-       the registry or collector presents.
+       both profiles. Registry hosts explicitly listed in
+       ``BPM_OCI_TLS_COMPAT`` may also negotiate X25519 or P-256.
+       Other hosts and telemetry refuse classical-only servers.
+       Certificate and hostname verification remain enabled.
 
 
 4) Operator host

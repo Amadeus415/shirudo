@@ -348,7 +348,27 @@ cannot be replaced.  Credentials and transport come from
 ``BPM_OCI_USERNAME`` and ``BPM_OCI_PASSWORD``, ``REGISTRY_AUTH_FILE``
 or ``DOCKER_CONFIG``, ``BPM_OCI_CA_FILE`` for a private CA and
 ``BPM_OCI_SCHEME=http`` for a cleartext local registry; TLS is 1.3 with
-hybrid ML-KEM key exchange only.
+hybrid ML-KEM key exchange by default.
+
+For registries without hybrid TLS support, explicitly allow classical
+TLS 1.3 key exchange for their exact host names::
+
+    BPM_OCI_TLS_COMPAT=quay.io shirudo bpm push ./kernel-obs-1.0.0.bee \
+        oci://quay.io/shirudo-dev/kernel-obs
+
+``BPM_OCI_TLS_COMPAT`` is a comma-separated list of ``host[:port]``
+authorities, not URLs or wildcard patterns. A bare host means port 443;
+other ports must be listed explicitly. Listed hosts may negotiate
+X25519 or P-256 as well as the preferred hybrid groups. TLS 1.3,
+certificate and hostname verification, and ML-DSA-87 artifact signatures
+remain required. Redirect and authentication hosts are matched
+independently; list those separately if they also need compatibility.
+Unlisted hosts and telemetry clients retain the hybrid-only policy.
+
+Set the same variable for target-side pulls. For the repository and
+tree timers, put this line in ``/etc/shirudo/bpm/environment``::
+
+    BPM_OCI_TLS_COMPAT=quay.io
 
 The upatch tree
 ~~~~~~~~~~~~~~~

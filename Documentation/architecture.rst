@@ -533,8 +533,13 @@ format specification's companion section below.
 Registry access honours ``BPM_OCI_SCHEME``, ``BPM_OCI_CA_FILE``,
 ``BPM_OCI_USERNAME``/``BPM_OCI_PASSWORD``, ``REGISTRY_AUTH_FILE`` and
 ``DOCKER_CONFIG``.  Every libcurl client in shirudo speaks TLS 1.3 with
-a hybrid ML-KEM key exchange only (X25519MLKEM768, SecP256r1MLKEM768);
-there is no classical fallback.  The registry is untrusted: it can
+a hybrid ML-KEM key exchange by default (X25519MLKEM768,
+SecP256r1MLKEM768). Registry clients accept an explicit
+``BPM_OCI_TLS_COMPAT`` list of exact ``host[:port]`` authorities that
+may also negotiate classical X25519 or P-256, with certificate and
+hostname verification unchanged. Authentication and redirect hosts are
+matched independently. Other hosts and telemetry retain the strict
+policy. The registry is untrusted: it can
 withhold or replay a signed publication, it cannot forge one.
 
 Tree publication format.  The ``stable`` manifest has two layers, the

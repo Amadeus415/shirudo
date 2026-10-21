@@ -85,8 +85,9 @@ void bpm_buffer_free(struct bpm_buffer *b);
 
 /*
  * Registry access. Endpoints are oci://host[:port]; BPM_OCI_SCHEME,
- * BPM_OCI_CA_FILE, BPM_OCI_USERNAME/PASSWORD, REGISTRY_AUTH_FILE and
- * DOCKER_CONFIG are honoured. Every request enforces the TLS policy.
+ * BPM_OCI_CA_FILE, BPM_OCI_TLS_COMPAT, BPM_OCI_USERNAME/PASSWORD,
+ * REGISTRY_AUTH_FILE and DOCKER_CONFIG are honoured. Every request
+ * enforces the TLS policy for its current host, including redirects.
  */
 int bpm_oci_parse_endpoint(const char *endpoint, struct bpm_oci_client *c);
 int bpm_oci_parse_pull_ref(const char *raw, struct bpm_oci_client *c,

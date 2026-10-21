@@ -263,6 +263,12 @@ material, adds the version to the registry's signed index at
 ``BPM_OCI_USERNAME`` and ``BPM_OCI_PASSWORD``, ``REGISTRY_AUTH_FILE``
 or ``DOCKER_CONFIG``; ``BPM_OCI_CA_FILE`` adds a CA and
 ``BPM_OCI_SCHEME=http`` allows a cleartext local registry.
+For a registry without hybrid TLS support, set
+``BPM_OCI_TLS_COMPAT=quay.io`` (or a comma-separated list of exact
+``host[:port]`` authorities) on both publisher and targets. This allows
+classical TLS 1.3 key exchange for listed hosts only, without changing
+certificate checks or artifact signatures. Target timers read it from
+``/etc/shirudo/bpm/environment``.
 
 On the target, register the repository once with the operator's
 certificate, then install by hand or let the timer refresh and
@@ -446,8 +452,10 @@ the initrd and the anchor.  Neither command needs the other machine.
 Registry fetch failures
     Check the ``oci://`` endpoint, the ``BPM_OCI_*`` environment, the
     certificate registered under ``/etc/shirudo/bpm``, and that the
-    registry offers TLS 1.3 with a hybrid ML-KEM group; shirudo never
-    falls back to classical TLS.
+    registry offers TLS 1.3 with a hybrid ML-KEM group. For a registry
+    without hybrid support, explicitly list its host in
+    ``BPM_OCI_TLS_COMPAT`` to allow classical TLS 1.3 key exchange.
+    Certificate verification remains required.
 
 The `operations <operations.rst>`__ guide has the full table of
 categories with the action for each, and the recovery procedures.
