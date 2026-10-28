@@ -1259,8 +1259,10 @@ static int validate_endpoint_security(struct otel_state *st)
 	if (!url)
 		return -ENOMEM;
 	uc = curl_url_set(url, CURLUPART_URL, st->endpoint, 0);
-	if (uc)
+	if (uc) {
+		pr_err("otel: the collector endpoint is not a valid URL");
 		return curl_url_cleanup(url), -EINVAL;
+	}
 	if (curl_url_get(url, CURLUPART_SCHEME, &scheme, 0) ||
 	    curl_url_get(url, CURLUPART_HOST, &host, 0)) {
 		rc = -EINVAL;
@@ -1269,6 +1271,8 @@ static int validate_endpoint_security(struct otel_state *st)
 	(void)curl_url_get(url, CURLUPART_USER, &user, 0);
 	(void)curl_url_get(url, CURLUPART_PASSWORD, &password, 0);
 	if ((user && user[0]) || (password && password[0])) {
+		pr_err("otel: credentials in the collector endpoint URL are refused");
+		pr_hint("send them as headers through `OTEL_EXPORTER_OTLP_HEADERS` (the export units read /etc/shirudo/map-export.env)");
 		rc = -EINVAL;
 		goto out;
 	}
@@ -1278,20 +1282,25 @@ static int validate_endpoint_security(struct otel_state *st)
 	}
 	if (strcmp(scheme, "http") == 0) {
 		if (!loopback_host(host) && !st->opts.allow_insecure) {
+			pr_err("otel: cleartext http:// to %s is refused; only a loopback collector may use http://",
+			       host);
+			pr_hint("use an https:// collector endpoint");
 			rc = -EPERM;
 			goto out;
 		}
 		if (st->opts.allow_insecure)
-			fprintf(stderr, "WARNING: --otel-insecure sends OTLP data to "
-				"http://%s without encryption; data and credentials "
-				"may be intercepted or modified\n", host);
+			fprintf(stderr,
+				"WARNING: --otel-insecure sends OTLP data to http://%s without encryption; data and credentials may be intercepted or modified\n",
+				host);
 	} else if (strcmp(scheme, "https") == 0) {
 		st->insecure_tls = st->opts.allow_insecure;
 		if (st->insecure_tls)
-			fprintf(stderr, "WARNING: --otel-insecure disables TLS certificate "
-				"and hostname verification for %s; the Collector's "
-				"identity is not verified\n", host);
+			fprintf(stderr,
+				"WARNING: --otel-insecure disables TLS certificate and hostname verification for %s; the Collector's identity is not verified\n",
+				host);
 	} else {
+		pr_err("otel: collector endpoint scheme %s is not supported; use https:// or, to loopback, http://",
+		       scheme);
 		rc = -EPROTONOSUPPORT;
 	}
 out:
@@ -1457,21 +1466,36 @@ static int configure_state(struct otel_state *st, const char *spec,
 	const char *headers = otel_env(st->signal, "HEADERS");
 	int rc;
 
-	if (protocol && strcmp(protocol, "http/json") != 0)
+	if (protocol && strcmp(protocol, "http/json") != 0) {
+		pr_err("otel: OTLP protocol %s is not supported; shirudo speaks only http/json",
+		       protocol);
+		pr_hint("set `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` or leave it unset");
 		return -EPROTONOSUPPORT;
+	}
 	if (compression && strcmp(compression, "none") != 0 &&
-	    strcmp(compression, "gzip") != 0)
+	    strcmp(compression, "gzip") != 0) {
+		pr_err("otel: OTLP compression %s is not supported; use gzip or none",
+		       compression);
 		return -EINVAL;
+	}
 	st->gzip = compression && strcmp(compression, "gzip") == 0;
 	st->ca_file = otel_env(st->signal, "CERTIFICATE");
 	st->client_cert = otel_env(st->signal, "CLIENT_CERTIFICATE");
 	st->client_key = otel_env(st->signal, "CLIENT_KEY");
-	if (!!st->client_cert != !!st->client_key)
+	if (!!st->client_cert != !!st->client_key) {
+		pr_err("otel: OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE and OTEL_EXPORTER_OTLP_CLIENT_KEY must be set together");
 		return -EINVAL;
+	}
 	rc = parse_timeout(otel_env(st->signal, "TIMEOUT"), &st->timeout_ms);
-	if (rc)
+	if (rc) {
+		pr_err("otel: OTEL_EXPORTER_OTLP_TIMEOUT must be 1 to %ld milliseconds",
+		       OTEL_MAX_TIMEOUT_MS);
 		return rc;
+	}
 	rc = resolve_endpoint(st, spec, spec_is_base);
+	if (rc == -ENAMETOOLONG)
+		pr_err("otel: the collector endpoint is longer than %d bytes",
+		       OTEL_ENDPOINT_MAX - 1);
 	if (rc)
 		return rc;
 	rc = validate_endpoint_security(st);
@@ -1486,10 +1510,15 @@ static int configure_state(struct otel_state *st, const char *spec,
 			return rc;
 	}
 	rc = add_configured_headers(st, headers);
+	if (rc == -EINVAL || rc == -E2BIG)
+		pr_err("otel: OTEL_EXPORTER_OTLP_HEADERS must be at most %u bytes of comma-separated key=value pairs, without Content-Type, Content-Encoding, Content-Length, Host or User-Agent",
+		       OTEL_MAX_HEADER_BYTES);
 	if (rc || !st->opts.tenant_id)
 		return rc;
-	if (!tenant_id_valid(st->opts.tenant_id))
+	if (!tenant_id_valid(st->opts.tenant_id)) {
+		pr_err("otel: a tenant id is 1 to 128 characters from A-Z, a-z, 0-9, '.', '_' and '-'");
 		return -EINVAL;
+	}
 	{
 		char line[sizeof("X-Tenant-ID: ") + SHIRUDO_TENANT_ID_MAX];
 
@@ -1746,17 +1775,83 @@ static void retry_wait(__u32 retry, __u64 retry_after,
 		;
 }
 
+static void otel_curl_hint(CURLcode cc)
+{
+	switch (cc) {
+	case CURLE_COULDNT_RESOLVE_PROXY:
+		pr_hint("check the proxy named by `https_proxy` or `HTTPS_PROXY` in the environment (the export units read /etc/shirudo/map-export.env)");
+		break;
+	case CURLE_COULDNT_RESOLVE_HOST:
+		pr_hint("check the collector host name in `map_export.otel_endpoint`, `--otel-endpoint` or `OTEL_EXPORTER_OTLP_ENDPOINT`, and this node's DNS resolver");
+		break;
+	case CURLE_COULDNT_CONNECT:
+		pr_hint("nothing accepted the connection: check that the collector listens on the endpoint's port and that no firewall blocks it; without a configured endpoint shirudo exports to http://localhost:4318");
+		break;
+	case CURLE_OPERATION_TIMEDOUT:
+		pr_hint("the collector did not answer within `OTEL_EXPORTER_OTLP_TIMEOUT` (10000 ms unless set); check its load and the network path");
+		break;
+	case CURLE_SSL_CONNECT_ERROR:
+		pr_hint("shirudo requires TLS 1.3 and, unless the exact host name is listed in `tls.classical_hosts` of the runtime image's etc/shirudo/shirudo.conf, a hybrid ML-KEM key exchange (X25519MLKEM768 or SecP256r1MLKEM768)");
+		break;
+	case CURLE_PEER_FAILED_VERIFICATION:
+		pr_hint("the collector certificate does not verify; set `OTEL_EXPORTER_OTLP_CERTIFICATE` to the CA bundle that issued it");
+		break;
+	case CURLE_SSL_CACERT_BADFILE:
+		pr_hint("`OTEL_EXPORTER_OTLP_CERTIFICATE` must name a readable PEM CA bundle");
+		break;
+	case CURLE_SSL_CERTPROBLEM:
+		pr_hint("`OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` and `OTEL_EXPORTER_OTLP_CLIENT_KEY` must name a readable PEM certificate and its private key");
+		break;
+	case CURLE_SSL_CIPHER:
+		pr_hint("the OpenSSL shirudo runs with cannot offer the hybrid ML-KEM groups; it needs OpenSSL 3.5 or newer");
+		break;
+	default:
+		break;
+	}
+}
+
+static void otel_http_hint(long status)
+{
+	if (status == 401 || status == 403)
+		pr_hint("the collector refused the request's credentials; check the token in `OTEL_EXPORTER_OTLP_HEADERS` (the export units read /etc/shirudo/map-export.env)");
+	else if (status == 404)
+		pr_hint("no OTLP/HTTP receiver at the endpoint path: a base endpoint gets /v1/logs or /v1/metrics appended, while `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` and `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` are used verbatim");
+	else if (status == 413)
+		pr_hint("the request exceeds the collector's size limit; set `OTEL_EXPORTER_OTLP_COMPRESSION=gzip` or lower `map_export.otlp_max_bytes` below that limit");
+	else if (status == 415)
+		pr_hint("the collector must accept OTLP/HTTP JSON (`http/json`) at this endpoint");
+	else if (status == 429 || status == 502 || status == 503 || status == 504)
+		pr_hint("the collector is overloaded or unavailable; shirudo retried with backoff up to `map_export.otel_retries` times");
+	else if (status >= 500)
+		pr_hint("the collector reported an internal error; check its logs");
+}
+
+static void otel_tls_policy_error(void)
+{
+	pr_err("otel: cannot apply TLS policy");
+	pr_hint("shirudo's TLS policy needs a libcurl built with the OpenSSL TLS backend");
+}
+
 static int otel_post(struct otel_state *st, const char *json, size_t json_len)
 {
 	__u8 *compressed = NULL;
 	const void *body = json;
 	size_t body_len = json_len, compressed_cap = 0;
 	__u32 attempt, max_attempts = st->opts.retries + 1;
+	CURLcode failed_cc = CURLE_OK;
+	long failed_status = 0;
 	int rc = -EIO;
 
 	if (!st->s3_reference && st->opts.otlp_max_bytes &&
-	    json_len > st->opts.otlp_max_bytes)
+	    json_len > st->opts.otlp_max_bytes) {
+		/* With an S3 URI the caller may send the snapshot there. */
+		if (!st->opts.s3_uri) {
+			pr_err("otel: request of %zu bytes exceeds map_export.otlp_max_bytes (%u)",
+			       json_len, st->opts.otlp_max_bytes);
+			pr_hint("raise `map_export.otlp_max_bytes` (at most 8388608) in shirudo.conf, the config image's etc/shirudo/shirudo.conf on a target, or set `map_export.s3_uri` for snapshots this large");
+		}
 		return -E2BIG;
+	}
 	if (st->gzip) {
 		rc = gzip_data(json, json_len, &compressed, &body_len);
 		if (rc)
@@ -1794,6 +1889,7 @@ static int otel_post(struct otel_state *st, const char *json, size_t json_len)
 		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST,
 				 st->insecure_tls ? 0L : 2L);
 		if (tls_curl_policy(curl, NULL)) {
+			otel_tls_policy_error();
 			curl_easy_cleanup(curl);
 			rc = -EINVAL;
 			break;
@@ -1810,6 +1906,8 @@ static int otel_post(struct otel_state *st, const char *json, size_t json_len)
 		if (cc == CURLE_OK && status == 200) {
 			rc = check_partial_success(st->signal, response.buf,
 						   response.len);
+			failed_cc = CURLE_OK;
+			failed_status = 0;
 			curl_easy_cleanup(curl);
 			break;
 		}
@@ -1823,11 +1921,22 @@ static int otel_post(struct otel_state *st, const char *json, size_t json_len)
 				attempt + 1, max_attempts, status);
 		rc = cc == CURLE_OPERATION_TIMEDOUT ? -ETIMEDOUT :
 		     cc != CURLE_OK ? -EHOSTUNREACH : -EREMOTEIO;
+		failed_cc = cc;
+		failed_status = cc == CURLE_OK ? status : 0;
 		curl_easy_cleanup(curl);
 		if (!retry || attempt + 1 == max_attempts)
 			break;
 		retry_wait(attempt, response.retry_after,
 			   response.retry_after_valid);
+	}
+	if (failed_cc != CURLE_OK) {
+		pr_err("otel: export to %s failed after %u attempt(s): %s",
+		       st->host, attempt + 1, curl_easy_strerror(failed_cc));
+		otel_curl_hint(failed_cc);
+	} else if (failed_status) {
+		pr_err("otel: export to %s failed after %u attempt(s): HTTP %ld",
+		       st->host, attempt + 1, failed_status);
+		otel_http_hint(failed_status);
 	}
 	if (compressed)
 		xfree(compressed, compressed_cap);
@@ -1931,8 +2040,9 @@ static int otel_emit(void *state, const struct shirudo_map_view *v)
 	if (rc)
 		return rc;
 	if (!payload) {
-		fprintf(stderr, "otel: metric map %s has no data points; "
-			"nothing exported\n", v->name);
+		fprintf(stderr,
+			"otel: metric map %s has no data points; nothing exported\n",
+			v->name);
 		return 0;
 	}
 	rc = otel_post(st, payload, len);
@@ -2404,8 +2514,8 @@ static int validate_s3_endpoint(struct otel_s3_state *st)
 	if (!st->custom_endpoint) {
 		if (st->opts.allow_insecure) {
 			st->insecure_tls = true;
-			fprintf(stderr, "WARNING: --otel-insecure disables TLS certificate "
-				"and hostname verification for Amazon S3\n");
+			fprintf(stderr,
+				"WARNING: --otel-insecure disables TLS certificate and hostname verification for Amazon S3\n");
 		}
 		return 0;
 	}
@@ -2435,17 +2545,21 @@ static int validate_s3_endpoint(struct otel_s3_state *st)
 	}
 	if (strcmp(scheme, "http") == 0) {
 		if (!loopback_host(host) && !st->opts.allow_insecure) {
+			pr_err("otel.s3: cleartext http:// to %s is refused; only a loopback S3 endpoint may use http://",
+			       host);
 			rc = -EPERM;
 			goto out;
 		}
 		if (st->opts.allow_insecure)
-			fprintf(stderr, "WARNING: --otel-insecure sends S3 snapshots and "
-				"credentials to http://%s without encryption\n", host);
+			fprintf(stderr,
+				"WARNING: --otel-insecure sends S3 snapshots and credentials to http://%s without encryption\n",
+				host);
 	} else if (strcmp(scheme, "https") == 0) {
 		st->insecure_tls = st->opts.allow_insecure;
 		if (st->insecure_tls)
-			fprintf(stderr, "WARNING: --otel-insecure disables TLS certificate "
-				"and hostname verification for S3 endpoint %s\n", host);
+			fprintf(stderr,
+				"WARNING: --otel-insecure disables TLS certificate and hostname verification for S3 endpoint %s\n",
+				host);
 	} else {
 		rc = -EPROTONOSUPPORT;
 	}

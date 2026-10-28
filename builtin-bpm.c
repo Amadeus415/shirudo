@@ -90,6 +90,9 @@ static int prepare_direct_install(const char *raw, struct bpm_source *source,
 	rc = bpm_oci_get_memory(&c, url,
 				"application/vnd.oci.image.manifest.v1+json",
 				&manifest);
+	if (rc == -ENOENT)
+		pr_err("bpm: %s is not on the registry: no such repository or tag",
+		       raw);
 	if (rc)
 		goto out;
 	rc = bpm_oci_parse_manifest(manifest.data, manifest.len, layers,
@@ -153,6 +156,9 @@ static int download_package(const char *raw, const char *destination, int fd)
 	rc = bpm_oci_get_memory(&c, url,
 				"application/vnd.oci.image.manifest.v1+json",
 				&manifest);
+	if (rc == -ENOENT)
+		pr_err("bpm: %s is not on the registry: no such repository or tag",
+		       raw);
 	if (rc)
 		goto out;
 	rc = bpm_oci_parse_manifest(manifest.data, manifest.len, layers,
@@ -370,15 +376,21 @@ static int load_source(const char *name, struct bpm_source *s)
 	fclose(fp);
 	if (rc)
 		return rc;
-	if (!s->endpoint[0] || !s->key_file[0])
+	if (!s->endpoint[0] || !s->key_file[0]) {
+		pr_err("bpm: %s needs both an `endpoint` and a `key_file` line",
+		       path);
 		return -EINVAL;
+	}
 	/* With a config image the key file is the image's, named from its root. */
 	if (shirudo_image_config_active()) {
 		if (!strncmp(s->key_file, "/etc/shirudo/bpm/keys/", 22))
 			memmove(s->key_file, s->key_file + 1,
 				strlen(s->key_file));
-		if (s->key_file[0] == '/' || strstr(s->key_file, ".."))
+		if (s->key_file[0] == '/' || strstr(s->key_file, "..")) {
+			pr_err("bpm: %s: key_file %s must name a file inside the config image, relative to its root or under /etc/shirudo/bpm/keys/",
+			       path, s->key_file);
 			return -EINVAL;
+		}
 	}
 	return 0;
 }
@@ -397,6 +409,25 @@ static int verify_with_source_key(const struct bpm_source *s,
 	rc = bpm_verify_cms_fd(data, len, sig, sig_len, fd);
 	close(fd);
 	return rc;
+}
+
+/* Tells a certificate that cannot be read from a signature that fails. */
+static bool source_key_readable(const struct bpm_source *s)
+{
+	struct shirudo_cert cert = {};
+	int fd, rc;
+
+	if (!shirudo_image_config_active()) {
+		rc = cert_read_file(s->key_file, &cert);
+	} else {
+		fd = shirudo_image_open_relative(s->key_file, O_RDONLY);
+		if (fd < 0)
+			return false;
+		rc = cert_read_fd(fd, &cert);
+		close(fd);
+	}
+	cert_free(&cert);
+	return !rc;
 }
 
 static int save_source(const struct bpm_source *s)
@@ -436,6 +467,8 @@ static int bpm_fail(const char *action, int rc)
 		pr_err("bpm %s: %s", action, strerror(-rc));
 	else
 		pr_err("bpm %s failed", action);
+	if (rc == -ENOSPC || rc == -EDQUOT)
+		pr_hint("free space on the file system bpm writes to (/var/lib/shirudo, or the current directory for `bpm pull`), then retry");
 	return 1;
 }
 
@@ -1019,6 +1052,18 @@ static int load_cached_index(const char *source, struct bpm_index_entry *entries
 	return rc;
 }
 
+static void source_missing(const char *action, const char *name)
+{
+	pr_err("bpm %s: repository %s is not registered", action, name);
+	pr_hint("`shirudo bpm config register list` lists the registered repositories");
+}
+
+static void repo_index_untrusted(const char *name, const char *why)
+{
+	pr_err("bpm repo update: index of repository %s %s", name, why);
+	pr_hint("shirudo treats this index as untrusted and left the cached index unchanged; keep the eventlog and journal as evidence and handle it as an incident");
+}
+
 static int repo_update_one(const char *name)
 {
 	struct bpm_source s;
@@ -1030,6 +1075,8 @@ static int repo_update_one(const char *name)
 	int rc;
 
 	rc = load_source(name, &s);
+	if (rc == -ENOENT)
+		source_missing("repo update", name);
 	if (rc)
 		return rc;
 	rc = bpm_oci_parse_endpoint(s.endpoint, &c);
@@ -1039,6 +1086,12 @@ static int repo_update_one(const char *name)
 	if (rc)
 		return rc;
 	rc = bpm_oci_get_memory(&c, url, "application/vnd.oci.image.manifest.v1+json", &manifest);
+	if (rc == -ENOENT) {
+		pr_err("bpm repo update: %s has no %s:%s for repository %s",
+		       s.endpoint, BPM_INDEX_REPOSITORY, BPM_INDEX_TAG, name);
+		pr_hint("check the `endpoint` of repository %s; the operator's `shirudo bpm push` publishes the index there",
+			name);
+	}
 	if (rc)
 		goto out;
 	rc = bpm_oci_parse_manifest(manifest.data, manifest.len, layers,
@@ -1065,6 +1118,8 @@ static int repo_update_one(const char *name)
 			break;
 		}
 	}
+	if (rc == -EKEYREJECTED)
+		repo_index_untrusted(name, "does not match the digest its manifest names");
 	if (rc)
 		goto out;
 	for (int i = 0; i < nl; i++) {
@@ -1082,12 +1137,25 @@ static int repo_update_one(const char *name)
 			break;
 		}
 	}
-	if (!rc && !sig.data)
+	if (rc == -EKEYREJECTED)
+		repo_index_untrusted(name, "signature does not match the digest its manifest names");
+	if (!rc && !sig.data) {
+		pr_err("bpm repo update: index manifest of repository %s has no signature layer",
+		       name);
 		rc = -EINVAL;
+	}
 	if (rc)
 		goto out;
 	if (verify_with_source_key(&s, index.data, index.len, sig.data,
 				   sig.len)) {
+		if (!index.data)
+			pr_err("bpm repo update: index manifest of repository %s has no index layer",
+			       name);
+		else if (!source_key_readable(&s))
+			pr_err("bpm repo update: cannot read the certificate %s of repository %s",
+			       s.key_file, name);
+		else
+			repo_index_untrusted(name, "is not signed by the key of its registered certificate");
 		rc = -EKEYREJECTED;
 		goto out;
 	}
@@ -1096,6 +1164,8 @@ static int repo_update_one(const char *name)
 		int checked_n = 0;
 
 		if (bpm_index_parse(index.data, index.len, checked, &checked_n)) {
+			pr_err("bpm repo update: signed index of repository %s cannot be parsed",
+			       name);
 			rc = -EINVAL;
 			goto out;
 		}
@@ -1166,6 +1236,13 @@ static void sort_old_pairs(char (*unloads)[PATH_MAX], char (*loads)[PATH_MAX],
 	}
 }
 
+static void package_untrusted(const struct bpm_index_entry *entry,
+			      const char *why)
+{
+	pr_err("bpm: %s@%s: %s", entry->name, entry->version, why);
+	pr_hint("shirudo treats this package as untrusted and installed nothing from it; keep the eventlog and journal as evidence and handle it as an incident");
+}
+
 static int package_install(const struct bpm_source *s, const struct bpm_index_entry *entry,
 			   const char *old_path, const char *old_version)
 {
@@ -1192,6 +1269,9 @@ static int package_install(const struct bpm_source *s, const struct bpm_index_en
 	if (rc)
 		return rc;
 	rc = bpm_oci_get_memory(&c, url, "application/vnd.oci.image.manifest.v1+json", &manifest);
+	if (rc == -ENOENT)
+		pr_err("bpm: the registry has no manifest %s for %s@%s",
+		       entry->manifest_digest, entry->name, entry->version);
 	if (rc)
 		goto out;
 	/*
@@ -1204,6 +1284,7 @@ static int package_install(const struct bpm_source *s, const struct bpm_index_en
 		if (bpm_sha256_hex(manifest.data, manifest.len, manifest_hex,
 				   sizeof(manifest_hex)) ||
 		    !bpm_digest_matches(entry->manifest_digest, manifest_hex)) {
+			package_untrusted(entry, "manifest does not match the digest in the signed index");
 			rc = -EKEYREJECTED;
 			goto out;
 		}
@@ -1217,10 +1298,12 @@ static int package_install(const struct bpm_source *s, const struct bpm_index_en
 			continue;
 		found_package = true;
 		if (entry->package_digest[0] && strcmp(entry->package_digest, layers[i].digest)) {
+			package_untrusted(entry, "package layer does not match the digest in the signed index");
 			rc = -EKEYREJECTED;
 			goto out;
 		}
 		if (entry->package_size > 0 && entry->package_size != layers[i].size) {
+			package_untrusted(entry, "package layer does not match the size in the signed index");
 			rc = -EKEYREJECTED;
 			goto out;
 		}
@@ -1265,10 +1348,12 @@ static int package_install(const struct bpm_source *s, const struct bpm_index_en
 		}
 		if (sha256_file_hex(archive, digest, sizeof(digest)) ||
 		    !bpm_digest_matches(layers[i].digest, digest)) {
+			package_untrusted(entry, "download does not match its layer digest");
 			rc = -EKEYREJECTED;
 			goto out;
 		}
 		if (access(package_dir, F_OK) == 0) {
+			pr_err("bpm: %s already exists", package_dir);
 			rc = -EEXIST;
 			goto out;
 		}
@@ -1285,6 +1370,9 @@ static int package_install(const struct bpm_source *s, const struct bpm_index_en
 				goto out;
 			}
 			if (cert_matches_active(cert)) {
+				pr_err("bpm: %s@%s: its cert.der does not match the key of %s",
+				       entry->name, entry->version,
+				       SHIRUDO_CERT_PATH);
 				rc = -EKEYREJECTED;
 				goto out;
 			}
@@ -1327,8 +1415,11 @@ static int package_install(const struct bpm_source *s, const struct bpm_index_en
 		}
 		closedir(d);
 		if (rc || !nloaded) {
-			if (!rc)
+			if (!rc) {
+				pr_err("bpm: %s@%s contains no upatch to load",
+				       entry->name, entry->version);
 				rc = -EINVAL;
+			}
 			goto out;
 		}
 		/* Measured in name order, not in the file system's. */
@@ -1376,6 +1467,9 @@ static int package_install(const struct bpm_source *s, const struct bpm_index_en
 			sort_old_pairs(old_unloads, old_loads, nold);
 			for (int old_i = 0; old_i < nold; old_i++) {
 				if (shirudo_upatch_remove(old_unloads[old_i])) {
+					pr_err("bpm: unloading %s of %s %s failed; restoring the installed version",
+					       old_unloads[old_i], entry->name,
+					       old_version ? old_version : "");
 					rc = -EIO;
 					for (int restore_i = nold_removed - 1;
 					     restore_i >= 0; restore_i--)
@@ -1387,6 +1481,9 @@ static int package_install(const struct bpm_source *s, const struct bpm_index_en
 		}
 		for (int loaded_i = 0; loaded_i < nloaded; loaded_i++) {
 			if (shirudo_upatch_install(loaded[loaded_i])) {
+				pr_err("bpm: loading %s of %s@%s failed; rolling the package back",
+				       loaded[loaded_i], entry->name,
+				       entry->version);
 				rc = -EIO;
 				goto rollback;
 			}
@@ -1405,8 +1502,11 @@ static int package_install(const struct bpm_source *s, const struct bpm_index_en
 		}
 		break;
 	}
-	if (!rc && !found_package)
+	if (!rc && !found_package) {
+		pr_err("bpm: manifest of %s@%s has no package layer",
+		       entry->name, entry->version);
 		rc = -EINVAL;
+	}
 	goto out;
 rollback:
 	for (int active_i = nactive - 1; active_i >= 0; active_i--) {
@@ -1482,9 +1582,7 @@ static int cmd_bpm_config(int argc, const char **argv)
 	if (!op || is_help(op)) {
 		fprintf(stderr,
 			"usage: shirudo bpm config register {add|list|remove} ...\n"
-			"       shirudo bpm config update --base-package "
-			"<package.bee|oci://host/repo:tag> --version <version> "
-			"[-f <name>.bee] [options]\n");
+			"       shirudo bpm config update --base-package <package.bee|oci://host/repo:tag> --version <version> [-f <name>.bee] [options]\n");
 		return op ? 0 : 2;
 	}
 	if (strcmp(op, "register"))
@@ -1509,8 +1607,7 @@ static int cmd_bpm_config(int argc, const char **argv)
 	if (shirudo_image_config_active() &&
 	    (!strcmp(argv[2], "add") || !strcmp(argv[2], "remove") ||
 	     !strcmp(argv[2], "rm"))) {
-		pr_err("image mode: change repository definitions and keys in "
-		       "a signed config image, then run `shirudo image update`");
+		pr_err("image mode: change repository definitions and keys in a signed config image, then run `shirudo image update`");
 		return 1;
 	}
 	if ((!strcmp(argv[2], "remove") || !strcmp(argv[2], "rm")) && argc == 4) {
@@ -1600,6 +1697,9 @@ static int load_tree_config(struct bpm_tree_config *cfg)
 	}
 	libc_free(line);
 	fclose(fp);
+	if (rc || !cfg->endpoint[0] || !cfg->reference[0])
+		pr_err("bpm tree sync: %s needs one `endpoint = oci://<registry>/<repository>` and one `reference = <tag>` line",
+		       SHIRUDO_BPM_TREE_ETC_PATH);
 	if (rc)
 		return rc;
 	if (!cfg->endpoint[0] || !cfg->reference[0])
@@ -2015,6 +2115,19 @@ static int tree_validate_operation(const struct shirudo_tree_operation *op)
 	return 0;
 }
 
+static void tree_sync_untrusted(void)
+{
+	pr_hint("shirudo treats the tree publication or this node's tree state as untrusted and applied no further operation; keep the eventlog and journal as evidence and handle it as an incident");
+}
+
+static void tree_sync_hint(int rc)
+{
+	if (rc == -EKEYREJECTED || rc == -ERANGE)
+		tree_sync_untrusted();
+	else if (rc == -ENOSPC || rc == -EDQUOT)
+		pr_hint("free space on the file system that holds /var/lib/shirudo; the next tree sync continues from the recorded state");
+}
+
 static void tree_sync_report_error(const char *phase,
 				   const struct shirudo_tree_operation *op, int rc)
 {
@@ -2022,9 +2135,8 @@ static void tree_sync_report_error(const char *phase,
 
 	if (rc > 0) {
 		if (op)
-			pr_err("bpm tree sync: phase=%s seq=%lld id=%s rc=%d "
-			       "(command status)", phase, (__s64)op->seq,
-			       op->id, rc);
+			pr_err("bpm tree sync: phase=%s seq=%lld id=%s rc=%d (command status)",
+			       phase, (__s64)op->seq, op->id, rc);
 		else
 			pr_err("bpm tree sync: phase=%s rc=%d (command status)",
 			       phase, rc);
@@ -2039,6 +2151,7 @@ static void tree_sync_report_error(const char *phase,
 	else
 		pr_err("bpm tree sync: phase=%s rc=%d (%s)", phase, rc,
 		       err ? strerror(err) : "success");
+	tree_sync_hint(rc);
 }
 
 static int cmd_bpm_tree_sync(int argc, const char **argv)
@@ -2094,28 +2207,38 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 		goto out;
 	rc = tree_fetch_publication(&cfg, &pub, manifest_digest,
 				    sizeof(manifest_digest));
-	if (rc)
+	if (rc) {
+		tree_sync_report_error("publication_fetch", NULL, rc);
+		if (rc == -ENOENT)
+			pr_hint("no publication at %s:%s; check `endpoint` and `reference` in %s",
+				cfg.endpoint, cfg.reference, SHIRUDO_BPM_TREE_ETC_PATH);
 		goto out;
+	}
 	if (pub.parent_manifest_digest[0] &&
 	    !tree_digest_valid(pub.parent_manifest_digest)) {
 		rc = -EINVAL;
+		tree_sync_report_error("publication_validate", NULL, rc);
 		goto out;
 	}
 	/* Snapshot compaction belongs to a later schema. */
 	if (pub.base_seq != 0) {
 		rc = -ENOTSUP;
+		tree_sync_report_error("publication_validate", NULL, rc);
 		goto out;
 	}
 	if (pub.n_operations && pub.operations[0].seq != pub.base_seq + 1) {
 		rc = -EINVAL;
+		tree_sync_report_error("publication_validate", NULL, rc);
 		goto out;
 	}
 	if (pub.n_operations && pub.head_seq != pub.operations[pub.n_operations - 1].seq) {
 		rc = -EINVAL;
+		tree_sync_report_error("publication_validate", NULL, rc);
 		goto out;
 	}
 	if (!pub.n_operations && pub.head_seq != pub.base_seq) {
 		rc = -EINVAL;
+		tree_sync_report_error("publication_validate", NULL, rc);
 		goto out;
 	}
 	for (int i = 0; i < pub.n_operations; i++) {
@@ -2127,10 +2250,16 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 	}
 	same_manifest = have_state && !strcmp(state.manifest_digest, manifest_digest);
 	if (have_state && strcmp(state.tree_id, pub.tree_id)) {
+		pr_err("bpm tree sync: the publication is tree %s, this node follows tree %s",
+		       pub.tree_id, state.tree_id);
+		tree_sync_untrusted();
 		rc = -EINVAL;
 		goto out;
 	}
 	if (have_state && !same_manifest && pub.generation <= state.generation) {
+		pr_err("bpm tree sync: publication generation %lld is not newer than generation %lld applied here",
+		       pub.generation, state.generation);
+		tree_sync_untrusted();
 		rc = -ERANGE;
 		goto out;
 	}
@@ -2142,19 +2271,31 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 	    pub.generation == state.generation + 1 &&
 	    pub.parent_manifest_digest[0] &&
 	    strcmp(pub.parent_manifest_digest, state.manifest_digest)) {
+		pr_err("bpm tree sync: publication generation %lld does not name the manifest %s applied here as its parent",
+		       pub.generation, state.manifest_digest);
+		tree_sync_untrusted();
 		rc = -ERANGE;
 		goto out;
 	}
 	if (have_state && pub.head_seq < state.last_seq) {
+		pr_err("bpm tree sync: publication ends at seq %lld, before seq %lld applied here",
+		       pub.head_seq, state.last_seq);
+		tree_sync_untrusted();
 		rc = -ERANGE;
 		goto out;
 	}
 	/* The publication must contain the cursor base. */
 	if (have_state && pub.base_seq > state.last_seq) {
+		pr_err("bpm tree sync: publication starts after seq %lld, past seq %lld applied here",
+		       pub.base_seq, state.last_seq);
+		tree_sync_untrusted();
 		rc = -ERANGE;
 		goto out;
 	}
 	if (!have_state && pub.base_seq != 0) {
+		pr_err("bpm tree sync: publication starts after seq %lld and this node has no tree state",
+		       pub.base_seq);
+		tree_sync_untrusted();
 		rc = -ERANGE;
 		goto out;
 	}
@@ -2553,8 +2694,7 @@ static int cmd_bpm_key(int argc, const char **argv)
 		return 2;
 	}
 	if (!strcmp(sub, "add") && shirudo_image_config_active()) {
-		pr_err("image mode: add vouched BPF signers to the signed "
-		       "config selected for boot and reboot to enroll them");
+		pr_err("image mode: add vouched BPF signers to the signed config selected for boot and reboot to enroll them");
 		return 1;
 	}
 	if (!strcmp(sub, "list")) {
@@ -2709,8 +2849,11 @@ int cmd_bpm(int argc, const char **argv)
 					rc = -ENAMETOOLONG;
 					continue;
 				}
-				if (repo_update_one(source))
+				if (repo_update_one(source)) {
+					pr_err("bpm repo update: repository %s was not refreshed",
+					       source);
 					rc = -EIO;
+				}
 			}
 			if (d)
 				closedir(d);
@@ -2764,6 +2907,9 @@ int cmd_bpm(int argc, const char **argv)
 		} else {
 			rc = parse_package_ref(argv[2], source, sizeof(source), name,
 					       sizeof(name), version, sizeof(version));
+			if (rc)
+				pr_err("bpm install: %s is not <repository>/<package>[@<version>] or an oci:// reference",
+				       argv[2]);
 		}
 		if (!rc)
 			rc = state_read(state, &n_state);
@@ -2781,11 +2927,28 @@ int cmd_bpm(int argc, const char **argv)
 		}
 		if (!direct) {
 			rc = load_source(source, &source_cfg);
-			if (!rc)
+			if (rc == -ENOENT)
+				source_missing("install", source);
+			if (!rc) {
 				rc = load_cached_index(source, entries, &n_entries);
-			if (!rc)
+				if (rc == -ENOENT) {
+					pr_err("bpm install: no index of repository %s is cached",
+					       source);
+					pr_hint("run `shirudo bpm repo update %s` to fetch its signed index, then retry",
+						source);
+				}
+			}
+			if (!rc) {
 				rc = find_entry(entries, n_entries, name,
 						version[0] ? version : NULL, &selected);
+				if (rc == -ENOENT) {
+					pr_err("bpm install: %s%s%s is not in the cached index of repository %s",
+					       name, version[0] ? "@" : "", version,
+					       source);
+					pr_hint("run `shirudo bpm repo update %s` to refresh the signed index, then retry",
+						source);
+				}
+			}
 		}
 		if (rc)
 			return bpm_finish(lock, rc, "install");
@@ -2809,11 +2972,10 @@ int cmd_bpm(int argc, const char **argv)
 		if (rc) {
 			/* Unlisted, the package could never be removed. */
 			if (package_uninstall(&state[n_state]))
-				pr_err("bpm install: %s stays installed but "
-				       "unlisted", state[n_state].name);
+				pr_err("bpm install: %s stays installed but unlisted",
+				       state[n_state].name);
 			else
-				pr_err("bpm install: %s removed again, the "
-				       "state could not be written",
+				pr_err("bpm install: %s removed again, the state could not be written",
 				       state[n_state].name);
 		}
 		return bpm_finish(lock, rc, "write state");

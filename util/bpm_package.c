@@ -798,8 +798,7 @@ int bpm_pkg_load_info(const char *archive, struct bpm_package_info *info)
 	}
 	hex_encode(digest, sizeof(digest), hex);
 	if (parsed.signer[0] && strcasecmp(parsed.signer, hex)) {
-		pr_err("bpm: package signer fingerprint mismatch: "
-		       "certificate=%s build-environment.json=%s",
+		pr_err("bpm: package signer fingerprint mismatch: certificate=%s build-environment.json=%s",
 		       hex, parsed.signer);
 		rc = -EKEYREJECTED;
 		goto out;
@@ -885,15 +884,21 @@ int bpm_tree_fetch_publication(struct bpm_oci_client *c,
 		if ((layers[i].size >= 0 && (__s64)dst->len != layers[i].size) ||
 		    bpm_sha256_hex(dst->data, dst->len, hex, sizeof(hex)) ||
 		    !bpm_digest_matches(layers[i].digest, hex)) {
+			pr_err("bpm tree: publication %s:%s does not match the digests its manifest names",
+			       repository, reference);
 			rc = -EKEYREJECTED;
 			goto out;
 		}
 	}
 	if (payload_layers != 1 || sig_layers != 1 || !payload.data || !sig.data) {
+		pr_err("bpm tree: %s:%s is not a signed tree publication",
+		       repository, reference);
 		rc = -EINVAL;
 		goto out;
 	}
 	if (bpm_verify_cms(payload.data, payload.len, sig.data, sig.len, cert_path)) {
+		pr_err("bpm tree: publication %s:%s is not signed by the key of %s",
+		       repository, reference, cert_path);
 		rc = -EKEYREJECTED;
 		goto out;
 	}

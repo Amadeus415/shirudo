@@ -57,9 +57,11 @@ int cmd_image(int argc, const char **argv)
 		image_help();
 		return 2;
 	}
-	if (rc == -EINPROGRESS)
+	if (rc == -EINPROGRESS) {
 		pr_err("image: activation is pending; further changes are blocked");
-	else if (rc)
+		pr_hint("shirudo never reboots the node itself: reboot it when convenient, and trusted startup verifies the pending config and records a fresh BOOT event");
+	} else if (rc) {
 		pr_err("image %s: %s", argv[1], strerror(-rc));
+	}
 	return rc ? 1 : 0;
 }

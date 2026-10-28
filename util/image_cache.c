@@ -47,9 +47,54 @@ static size_t download_write(char *data, size_t size, size_t count, void *ctx)
 	return bytes;
 }
 
+static void download_error(const char *source, CURLcode result, long status)
+{
+	const char *name = strrchr(source, '/');
+
+	name = name ? name + 1 : source;
+	if (result == CURLE_HTTP_RETURNED_ERROR)
+		pr_err("image: download of %s failed: HTTP %ld", name, status);
+	else
+		pr_err("image: download of %s failed: %s", name,
+		       curl_easy_strerror(result));
+	switch (result) {
+	case CURLE_HTTP_RETURNED_ERROR:
+		if (status == 404)
+			pr_hint("the server has no %s; an HTTPS bundle prefix must serve <prefix>.roothash, .p7s, .img and .verity",
+				name);
+		else if (status == 401 || status == 403)
+			pr_hint("the server refused this node access to %s",
+				name);
+		else if (status >= 500)
+			pr_hint("the server reported an error; check its health and retry later");
+		break;
+	case CURLE_COULDNT_RESOLVE_HOST:
+	case CURLE_COULDNT_CONNECT:
+	case CURLE_OPERATION_TIMEDOUT:
+		pr_hint("check that the bundle's HTTPS host is reachable from this node: DNS, routing, firewall and proxy");
+		break;
+	case CURLE_SSL_CONNECT_ERROR:
+		pr_hint("shirudo requires TLS 1.3 and, unless the exact host name is listed in `tls.classical_hosts` of the runtime image's etc/shirudo/shirudo.conf, a hybrid ML-KEM key exchange (X25519MLKEM768 or SecP256r1MLKEM768)");
+		break;
+	case CURLE_PEER_FAILED_VERIFICATION:
+		pr_hint("the server certificate does not verify against this node's system CA store");
+		break;
+	case CURLE_UNSUPPORTED_PROTOCOL:
+		pr_hint("bundle downloads and their redirects must use https://");
+		break;
+	case CURLE_WRITE_ERROR:
+		pr_hint("%s exceeds its size limit, or %s could not be written (check free space)",
+			name, SHIRUDO_IMAGE_CACHE_DIR);
+		break;
+	default:
+		break;
+	}
+}
+
 static int download_https(const char *source, struct image_download *download)
 {
 	CURLcode result;
+	long status = 0;
 	CURL *curl;
 	int rc;
 
@@ -57,8 +102,11 @@ static int download_https(const char *source, struct image_download *download)
 	if (!curl)
 		return -ENOMEM;
 	rc = tls_curl_policy(curl, NULL);
-	if (rc)
+	if (rc) {
+		pr_err("image: cannot apply TLS policy to the download");
+		pr_hint("shirudo's TLS policy needs a libcurl built with the OpenSSL TLS backend");
 		goto out;
+	}
 	curl_easy_setopt(curl, CURLOPT_URL, source);
 	curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
 	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
@@ -71,8 +119,11 @@ static int download_https(const char *source, struct image_download *download)
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, download_write);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, download);
 	result = curl_easy_perform(curl);
-	if (result != CURLE_OK)
+	if (result != CURLE_OK) {
+		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+		download_error(source, result, status);
 		rc = -EIO;
+	}
 out:
 	curl_easy_cleanup(curl);
 	return rc;
@@ -161,6 +212,24 @@ static int verify_incoming(const struct shirudo_config_image_open *opened,
 	return rc ? rc : cleanup;
 }
 
+static void incoming_error(int rc)
+{
+	if (rc == -ENOPKG) {
+		pr_err("image: the kernel cannot verify the bundle's ML-DSA-87 root hash signature");
+		pr_hint("the kernel needs CONFIG_CRYPTO_MLDSA and CONFIG_CRYPTO_SHA512 to verify config signatures");
+		return;
+	}
+	if (rc == -ENOKEY)
+		pr_err("image: no key in the .dm-verity keyring or the kernel's built-in trusted keys verifies the bundle's .p7s");
+	else if (rc == -EKEYREJECTED)
+		pr_err("image: the kernel rejected the bundle's root hash signature, or its dm-verity mapping does not match its .roothash");
+	else if (rc == -EIO)
+		pr_err("image: reading the bundle through dm-verity failed: its data does not match the hash tree, or the storage failed");
+	else
+		return;
+	pr_hint("shirudo treats this bundle as untrusted and did not cache or activate it; keep the eventlog and journal as evidence and handle it as an incident");
+}
+
 int shirudo_image_cache_fetch(const char *source,
 			      struct shirudo_config_update_target *target)
 {
@@ -196,13 +265,30 @@ int shirudo_image_cache_fetch(const char *source,
 			goto out;
 		}
 		rc = fetch_file(from, to, files[i].max_bytes);
+		if (rc && strncmp(source, "https://", 8)) {
+			pr_err("image: cannot copy %s: %s", from, strerror(-rc));
+			if (rc == -ENOENT)
+				pr_hint("a config bundle is the four files <prefix>.img, .verity, .roothash and .p7s");
+			else if (rc == -EINVAL)
+				pr_hint("%s must be a regular file of at most %llu bytes",
+					from, files[i].max_bytes);
+			else if (rc == -EFBIG)
+				pr_hint("writing into %s failed or the file grew past %llu bytes while copied; check free space",
+					SHIRUDO_IMAGE_CACHE_DIR, files[i].max_bytes);
+		}
 		if (rc)
 			goto out;
 	}
 	rc = shirudo_config_image_open(incoming, &opened);
-	if (rc)
+	if (rc) {
+		pr_err("image: the bundle is not a standard dm-verity image: %s",
+		       strerror(-rc));
+		pr_hint("`shirudo image verify <prefix> --cert <certificate>` checks a bundle offline on the operator");
 		goto out;
+	}
 	rc = verify_incoming(&opened, staging);
+	if (rc)
+		incoming_error(rc);
 	if (!rc) {
 		memcpy(target->root_hash, opened.image.root_hash, 32);
 		hex_encode(target->root_hash, 32, hex);

@@ -171,6 +171,33 @@ static int mapping_name(const __u8 root[32], char out[128])
 	return strsprintf(out, 128, "shirudo-config-%s", hex) < 0 ? -ENAMETOOLONG : 0;
 }
 
+static void image_untrusted_hint(void)
+{
+	pr_hint("shirudo treats this image as untrusted and did not use it; keep the eventlog and journal as evidence and handle it as an incident");
+}
+
+static void config_verity_error(const char *prefix, int rc)
+{
+	if (rc == -ENOPKG) {
+		pr_err("image: config %s: the kernel cannot verify the ML-DSA-87 signature %s.p7s",
+		       prefix, prefix);
+		pr_hint("the kernel needs CONFIG_CRYPTO_MLDSA and CONFIG_CRYPTO_SHA512 to verify config signatures");
+		return;
+	}
+	if (rc == -ENOKEY)
+		pr_err("image: config %s: no key in the .dm-verity keyring or the kernel's built-in trusted keys verifies %s.p7s",
+		       prefix, prefix);
+	else if (rc == -EKEYREJECTED)
+		pr_err("image: config %s: the kernel rejected its root hash signature, or its dm-verity mapping does not match %s.roothash",
+		       prefix, prefix);
+	else if (rc == -EIO)
+		pr_err("image: config %s: reading it through dm-verity failed: its data does not match the hash tree, or the storage failed",
+		       prefix);
+	else
+		return;
+	image_untrusted_hint();
+}
+
 static int device_observed(dev_t device, const __u8 root[32], __u32 kind)
 {
 	struct shirudo_device_authority entry;
@@ -373,8 +400,22 @@ static int mount_runtime(bool trusted_boot)
 			pr_warn("image: cannot unmount the runtime: %s",
 				strerror(errno));
 	}
-	if (rc)
+	if (rc) {
 		pr_err("image: %s: %s", step, strerror(-rc));
+		if (rc == -EKEYREJECTED &&
+		    strcmp(step, "load runtime config")) {
+			pr_err("image: runtime %s.roothash or its dm-verity mapping does not match `runtime.root_hash` of the boot configuration",
+			       image.bootstrap.runtime);
+			image_untrusted_hint();
+		} else if (rc == -EIO && !strcmp(step, "verify runtime image")) {
+			pr_err("image: runtime %s: its data does not match the dm-verity hash tree, or the storage failed",
+			       image.bootstrap.runtime);
+			image_untrusted_hint();
+		} else if (rc == -ENOENT && !strcmp(step, "open runtime image")) {
+			pr_hint("the runtime bundle %s.img, .verity and .roothash must exist on a file system that is mounted before `shirudo init` runs",
+				image.bootstrap.runtime);
+		}
+	}
 	return rc;
 }
 
@@ -486,9 +527,10 @@ static int candidate_keys(int fd)
 	int rc;
 
 	rc = shirudo_keys_validate_image(fd);
-	if (rc == -ENOKEY)
-		pr_err("image: BPF signer was not enrolled at boot; "
-		       "reboot with the new trusted key set required");
+	if (rc == -ENOKEY) {
+		pr_err("image: BPF signer was not enrolled at boot; reboot with the new trusted key set required");
+		pr_hint("this config was not activated: BPF signers are enrolled into the sealed .bpf keyring only at boot, from the config selected then, and `shirudo image update` cannot select one for a later boot");
+	}
 	return rc;
 }
 
@@ -535,10 +577,20 @@ static int prepare_config(struct image_context *current,
 	    !shirudo_image_path_valid(target->prefix))
 		return -EPERM;
 	rc = shirudo_config_image_open(target->prefix, &current->candidate);
-	if (rc)
+	if (rc) {
+		pr_err("image: cannot open config bundle %s: %s",
+		       target->prefix, strerror(-rc));
+		if (rc == -ENOENT)
+			pr_hint("a config bundle is the four files %s.img, .verity, .roothash and .p7s",
+				target->prefix);
 		return rc;
-	if (memcmp(target->root_hash, current->candidate.image.root_hash, 32))
+	}
+	if (memcmp(target->root_hash, current->candidate.image.root_hash, 32)) {
+		pr_err("image: config %s.roothash no longer matches the root selected for it",
+		       target->prefix);
+		image_untrusted_hint();
 		return -EKEYREJECTED;
+	}
 	rc = mapping_name(target->root_hash, name);
 	if (rc)
 		return rc;
@@ -551,10 +603,18 @@ static int prepare_config(struct image_context *current,
 	}
 	if (!rc)
 		rc = shirudo_dm_verity_verify(device, &current->candidate);
-	if (!rc && !trusted_boot)
+	if (rc)
+		config_verity_error(target->prefix, rc);
+	if (!rc && !trusted_boot) {
 		rc = device_observed(current->candidate_device.device,
 				     current->candidate.image.root_hash,
 				     SHIRUDO_DEVICE_CONFIG);
+		if (rc == -EACCES) {
+			pr_err("image: the enforcement hooks did not record the dm-verity mapping of config %s with its root",
+			       target->prefix);
+			image_untrusted_hint();
+		}
+	}
 	if (rc)
 		goto out;
 	rc = mount_candidate(current);
@@ -680,13 +740,26 @@ static int boot_target(struct shirudo_config_update_target *target)
 	rc = shirudo_config_update_read(&image.update, &previous);
 	selected = !rc;
 	prefix = selected ? previous.target.prefix : image.bootstrap.config;
-	if (rc && rc != -ENOENT)
+	if (rc && rc != -ENOENT) {
+		pr_err("image: cannot read the activation record %s/state: %s",
+		       SHIRUDO_CONFIG_UPDATE_DIR, strerror(-rc));
 		return rc;
+	}
 	rc = shirudo_config_image_open(prefix, &opened);
-	if (rc)
+	if (rc) {
+		pr_err("image: cannot open config bundle %s selected by %s: %s",
+		       prefix, selected ? "the activation record" : "config.image",
+		       strerror(-rc));
+		if (rc == -ENOENT)
+			pr_hint("a config bundle is the four files %s.img, .verity, .roothash and .p7s",
+				prefix);
 		return rc;
+	}
 	if (selected && memcmp(previous.target.root_hash,
 			       opened.image.root_hash, 32)) {
+		pr_err("image: config %s.roothash no longer matches the root its activation record selected",
+		       prefix);
+		image_untrusted_hint();
 		rc = -EKEYREJECTED;
 	} else {
 		strscpy(target->prefix, prefix, sizeof(target->prefix));
@@ -717,24 +790,31 @@ static int seal_config_key(key_serial_t ring, const __u8 *der, size_t size)
 	if (key < 0 && key != -EPERM && key != -EACCES)
 		return boot_keys_error("add config verification certificate",
 				       (int)key);
-	if (key < 0 && keyring_holds_exactly(ring, NULL, 0) == 1)
-		return boot_keys_error("dm-verity keyring sealed empty at boot; "
-				       "boot with dm_verity.keyring_unsealed=1",
-				       -ENOKEY);
+	if (key < 0 && keyring_holds_exactly(ring, NULL, 0) == 1) {
+		rc = boot_keys_error("dm-verity keyring sealed empty at boot; boot with dm_verity.keyring_unsealed=1",
+				     -ENOKEY);
+		pr_hint("the UKI's kernel command line must carry `bpf.keyring_unsealed=1 dm_verity.keyring_unsealed=1` so that init can enrol and seal both keyrings");
+		return rc;
+	}
 	if (key >= 0) {
 		rc = shirudo_keyring_dm_verity_seal();
-		if (rc == -EEXIST)
-			return boot_keys_error("seal dm-verity keyring restricted "
-					       "by another task (tampered)",
-					       -EKEYREJECTED);
+		if (rc == -EEXIST) {
+			rc = boot_keys_error("seal dm-verity keyring restricted by another task (tampered)",
+					     -EKEYREJECTED);
+			pr_hint("shirudo treats this boot as untrusted; keep the eventlog and journal as evidence and handle it as an incident");
+			return rc;
+		}
 		if (rc)
 			return boot_keys_error("seal dm-verity keyring", rc);
 	}
 	rc = keyring_holds_exactly(ring, &cert, 1);
-	if (rc <= 0)
-		return boot_keys_error("check dm-verity keyring holds only the "
-				       "config certificate",
-				       rc ? rc : -EKEYREJECTED);
+	if (rc <= 0) {
+		rc = boot_keys_error("check dm-verity keyring holds only the config certificate",
+				     rc ? rc : -EKEYREJECTED);
+		if (rc == -EKEYREJECTED)
+			pr_hint("the .dm-verity keyring does not hold exactly the config certificate; shirudo treats this boot as untrusted, so keep the eventlog and journal as evidence and handle it as an incident");
+		return rc;
+	}
 	return 0;
 }
 
@@ -799,8 +879,8 @@ int shirudo_image_boot_keys(struct shirudo_trusted_set *set)
 			break;
 	if (i == set->n) {
 		if (set->n == SHIRUDO_KEYS_MAX)
-			return boot_keys_error("add runtime certificate to "
-					       "trusted set", -E2BIG);
+			return boot_keys_error("add runtime certificate to trusted set",
+					       -E2BIG);
 		set->certs[set->n++] = primary;
 	}
 	image.boot_target_valid = true;
@@ -921,6 +1001,31 @@ int shirudo_image_boot_complete(void)
 	return rc;
 }
 
+static void config_state_error(int rc)
+{
+	switch (rc) {
+	case -EINPROGRESS:
+		pr_err("image: a config activation is pending; state changes and config attestation are refused");
+		pr_hint("shirudo never reboots the node itself: reboot it when convenient, and trusted startup verifies the pending config and records a fresh BOOT event");
+		break;
+	case -EUCLEAN:
+		pr_err("image: config PCR %u, the activation records under %s and the mounted config disagree",
+		       image.bootstrap.pcr, SHIRUDO_CONFIG_UPDATE_DIR);
+		pr_hint("shirudo treats this node as untrusted; keep the eventlog and journal as evidence and handle it as an incident");
+		break;
+	case -ESTALE:
+		pr_err("image: the config activation record does not belong to this TPM boot (reset or restart count differs)");
+		pr_hint("shirudo treats this boot's config measurement as untrusted; keep the eventlog and journal as evidence and handle it as an incident");
+		break;
+	case -EKEYREJECTED:
+		pr_err("image: the mounted config or its cached bundle does not match the selected root");
+		pr_hint("shirudo treats this node as untrusted; keep the eventlog and journal as evidence and handle it as an incident");
+		break;
+	default:
+		break;
+	}
+}
+
 static int current_config(void)
 {
 	struct shirudo_config_update_record record;
@@ -965,12 +1070,22 @@ int shirudo_image_enter(const char *command, int argc, const char **argv)
 	for (int i = 1; i < argc; i++) {
 		if (!strncmp(argv[i], "--keys-dir", 10) ||
 		    !strncmp(argv[i], "--cert", 6) ||
-		    !strncmp(argv[i], "--tcti", 6))
+		    !strncmp(argv[i], "--tcti", 6)) {
+			pr_err("image: %s is refused: keys, certificates and the TPM connection come from the runtime image",
+			       argv[i]);
 			return -EPERM;
+		}
 	}
 	if (!strcmp(command, "image"))
 		return open_update();
-	return current_config();
+	rc = current_config();
+	config_state_error(rc);
+	return rc;
+}
+
+static void image_not_open(void)
+{
+	pr_err("image: no config activation state is open: shirudo init has not completed this boot, or the caller is not root");
 }
 
 int shirudo_image_status(void)
@@ -983,13 +1098,17 @@ int shirudo_image_status(void)
 	};
 	int rc;
 
-	if (image.update.lock_fd < 0)
+	if (image.update.lock_fd < 0) {
+		image_not_open();
 		return -ENODEV;
+	}
 	rc = shirudo_config_update_read(&image.update, &record);
 	if (rc)
 		return rc;
 	hex_encode(record.target.root_hash, 32, root);
 	rc = record.pending ? -EINPROGRESS : current_config();
+	if (rc != -EINPROGRESS)
+		config_state_error(rc);
 	json_obj_open(&emit);
 	json_kv_string(&emit, "root_hash", root);
 	json_kv_int(&emit, "pcr", record.pcr);
@@ -1024,17 +1143,30 @@ void shirudo_image_leave(void)
 int shirudo_image_update(const char *prefix)
 {
 	struct shirudo_config_update_target target = {};
+	struct shirudo_config_update_record record;
 	int rc;
 
-	if (image.update.lock_fd < 0)
+	if (image.update.lock_fd < 0) {
+		image_not_open();
 		return -ENODEV;
+	}
 	rc = current_config();
+	if (rc != -EINPROGRESS)
+		config_state_error(rc);
 	if (!rc)
 		rc = mkdir_owned(SHIRUDO_IMAGE_CACHE_DIR);
 	if (!rc)
 		rc = shirudo_image_cache_fetch(prefix, &target);
-	if (!rc)
+	if (!rc) {
 		rc = shirudo_config_update_begin(&image.update, &target,
 						 image.bootstrap.pcr);
+		if (rc && rc != -EINPROGRESS &&
+		    !shirudo_config_update_read(&image.update, &record) &&
+		    record.pending) {
+			pr_err("image: activation of %s was interrupted and is now pending",
+			       target.prefix);
+			pr_hint("shirudo never reboots the node itself: reboot it when convenient, and trusted startup verifies the pending config and records a fresh BOOT event");
+		}
+	}
 	return rc;
 }

@@ -262,6 +262,8 @@ static int guard_map_ids(__u32 ids[SHIRUDO_GUARD_MAP_COUNT])
 		if (rc) {
 			pr_err("image: invalid guard map %s: %s", expected->pin,
 			       strerror(-rc));
+			if (rc == -EPROTO)
+				pr_hint("the pinned map is not the one shirudo init created; shirudo treats this node as untrusted, so keep the eventlog and journal as evidence and handle it as an incident");
 			return rc;
 		}
 		ids[i] = info.id;

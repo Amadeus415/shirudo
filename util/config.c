@@ -171,8 +171,7 @@ static void set_owner_auth(struct shirudo_config *cfg, const char *val)
 		size_t hl = strlen(h), i;
 
 		if (hl % 2 || hl / 2 > sizeof(cfg->tpm_owner_auth)) {
-			pr_warn("config: tpm.owner_auth: bad hex length "
-				"(ignored)");
+			pr_warn("config: tpm.owner_auth: bad hex length (ignored)");
 			return;
 		}
 		/* An ignored value must leave the one set before intact. */
@@ -181,8 +180,7 @@ static void set_owner_auth(struct shirudo_config *cfg, const char *val)
 			int lo = hex_nibble(h[2 * i + 1]);
 
 			if (hi < 0 || lo < 0) {
-				pr_warn("config: tpm.owner_auth: bad hex "
-					"(ignored)");
+				pr_warn("config: tpm.owner_auth: bad hex (ignored)");
 				explicit_bzero(auth, sizeof(auth));
 				return;
 			}
@@ -243,16 +241,15 @@ static int config_parse(struct shirudo_config *cfg, FILE *f,
 			__u64 v;
 
 			if (parse_u64(val, strlen(val), UINT64_MAX, &v))
-				pr_warn("config: eventlog.max_bytes: "
-					"bad value '%s' (ignored)", val);
+				pr_warn("config: eventlog.max_bytes: bad value '%s' (ignored)",
+					val);
 			else
 				cfg->eventlog_max_bytes = v;
 		} else if (strcmp(key, "tpm.owner_auth") == 0) {
 			set_owner_auth(cfg, val);
 		} else if (strcmp(key, "tpm.tcti") == 0) {
 			if (strlen(val) >= sizeof(cfg->tpm_tcti))
-				pr_warn("config: tpm.tcti too long "
-					"(ignored)");
+				pr_warn("config: tpm.tcti too long (ignored)");
 			else
 				strscpy(cfg->tpm_tcti, val,
 					sizeof(cfg->tpm_tcti));
@@ -261,8 +258,8 @@ static int config_parse(struct shirudo_config *cfg, FILE *f,
 					sizeof(cfg->tls_classical_hosts), val) ||
 			    !tls_classical_hosts_valid(val)) {
 				cfg->tls_classical_hosts_valid = false;
-				pr_warn("config: tls.classical_hosts: invalid exact "
-					"DNS host list");
+				pr_warn("config: tls.classical_hosts: invalid exact DNS host list");
+				pr_hint("list exact DNS host names separated by commas, such as `tls.classical_hosts = ghcr.io,quay.io`; wildcards and IP addresses are refused");
 			}
 		} else if (strcmp(key, "map_export.json_path") == 0) {
 			if (!set_string(cfg->map_export_json_path,
@@ -278,8 +275,7 @@ static int config_parse(struct shirudo_config *cfg, FILE *f,
 		} else if (strcmp(key, "map_export.tenant_id") == 0) {
 			if (val[0] && !tenant_id_valid(val))
 				map_export_bad(cfg, key, val,
-					       "expected 1..128 characters from "
-					       "A-Z, a-z, 0-9, '.', '_', '-'");
+					       "expected 1..128 characters from A-Z, a-z, 0-9, '.', '_', '-'");
 			else
 				(void)set_string(cfg->map_export_tenant_id,
 						 sizeof(cfg->map_export_tenant_id),

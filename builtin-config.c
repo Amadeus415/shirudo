@@ -23,9 +23,9 @@
 
 static const struct shirudo_help config_help = {
 	.usage   = "shirudo config",
-	.summary = "Print the effective shirudo configuration in shirudo.conf "
-		   "syntax.\nWhen " SHIRUDO_CONF_PATH " is absent, prints "
-		   "the defaults.\nLocal-only.",
+	.summary = "Print the effective shirudo configuration in shirudo.conf syntax.\n"
+		   "When " SHIRUDO_CONF_PATH " is absent, prints the defaults.\n"
+		   "Local-only.",
 	.footer  = "Starting point for a new config file:\n"
 		   "  shirudo config > " SHIRUDO_CONF_PATH,
 };
@@ -62,8 +62,7 @@ int cmd_config(int argc, const char **argv)
 	}
 
 	if (image_mode)
-		printf("# shirudo config (authenticated config image; "
-		       "TPM settings from runtime image)\n\n");
+		printf("# shirudo config (authenticated config image; TPM settings from runtime image)\n\n");
 	else if (file_present)
 		printf("# shirudo config (effective, loaded from %s)\n\n",
 		       SHIRUDO_CONF_PATH);
@@ -97,11 +96,10 @@ int cmd_config(int argc, const char **argv)
 	printf("# TCTI override for the TPM library connection. Empty (default)\n"
 	       "# means the kernel resource manager at `device:/dev/tpmrm0`.\n"
 	       "# Set to `swtpm:host=<addr>,port=<port>` for a software TPM\n"
-	       "# emulator (dev/CI without real hardware); see\n"
-	       "# Documentation/getting-started.rst \"TPM in development\"\n"
-	       "# for a worked recipe. Pre-flight skips the /dev/tpmrm0 check\n"
-	       "# when this is set. The SHIRUDO_TPM_TCTI env var overrides\n"
-	       "# this in turn.\n");
+	       "# emulator (dev/CI without real hardware), such as the one\n"
+	       "# contrib/swtpm.sh in the source tree starts on port 2321.\n"
+	       "# Pre-flight skips the /dev/tpmrm0 check when this is set.\n"
+	       "# The SHIRUDO_TPM_TCTI env var overrides this in turn.\n");
 	if (cfg.tpm_tcti[0]) {
 		const char *env = image_mode ? NULL :
 			getenv("SHIRUDO_TPM_TCTI");

@@ -18,6 +18,7 @@
 #include "image_config.h"
 #include "keyring.h"
 #include "keys.h"
+#include "log.h"
 #include "malloc.h"
 #include "paths.h"
 
@@ -57,6 +58,8 @@ static int revocations(int root_fd, bool apply, bool boot)
 			continue;
 		if (strlen(entry->d_name) != 68 ||
 		    strcmp(entry->d_name + 64, ".der")) {
+			pr_err("image: config keys/revoked/%s: a revocation record is named <64 lowercase hex digits of its public-key fingerprint>.der",
+			       entry->d_name);
 			rc = -EINVAL;
 			break;
 		}
@@ -68,6 +71,8 @@ static int revocations(int root_fd, bool apply, bool boot)
 		hex_encode(expected, 32, canonical);
 		memcpy(canonical + 64, ".der", 5);
 		if (strcmp(canonical, entry->d_name)) {
+			pr_err("image: config keys/revoked/%s: a revocation record is named <64 lowercase hex digits of its public-key fingerprint>.der",
+			       entry->d_name);
 			rc = -EINVAL;
 			break;
 		}
@@ -88,8 +93,11 @@ static int revocations(int root_fd, bool apply, bool boot)
 		if (!rc)
 			rc = keys_digest_der(der, size, digest,
 					     fingerprint);
-		if (!rc && memcmp(expected, fingerprint, 32))
+		if (!rc && memcmp(expected, fingerprint, 32)) {
+			pr_err("image: config keys/revoked/%s holds a certificate with another fingerprint",
+			       entry->d_name);
 			rc = -EKEYREJECTED;
+		}
 		if (!rc && apply)
 			rc = shirudo_keys_revoke_image(der, size, boot);
 		xfree(der, size);
@@ -114,6 +122,11 @@ int shirudo_keys_validate_image_set(const char *primary, int root_fd,
 	if (rc)
 		return rc;
 	rc = shirudo_keys_load_image_root(primary, root_fd, true, set);
+	if (!rc && !set->n)
+		pr_err("image: config trust set leaves no authorized BPF signer");
+	else if (!rc && set->n_unvouched)
+		pr_err("image: config trust set has %zu certificate(s) under keys/trusted without a valid vouch",
+		       set->n_unvouched);
 	if (!rc && (!set->n || set->n_unvouched))
 		rc = -EKEYREJECTED;
 	return rc;

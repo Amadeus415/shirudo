@@ -17,6 +17,7 @@
 #include "config.h"
 #include "image_config.h"
 #include "io.h"
+#include "log.h"
 #include "malloc.h"
 
 static const char *const relative[SHIRUDO_IMAGE_PATH_COUNT] = {
@@ -116,6 +117,8 @@ static int validate_tree(int root_fd, dev_t device, __u32 depth,
 		}
 		if (st.st_dev != device ||
 		    (!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode))) {
+			pr_err("image: config image entry %s is not a regular file or directory of the image",
+			       entry->d_name);
 			rc = -EPERM;
 			break;
 		}
@@ -151,8 +154,12 @@ static int validate_settings(int root_fd)
 
 	fd = openat(root_fd, "etc/shirudo/shirudo.conf",
 		    O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-	if (fd < 0)
-		return -errno;
+	if (fd < 0) {
+		rc = -errno;
+		pr_err("image: config image etc/shirudo/shirudo.conf: %s",
+		       strerror(-rc));
+		return rc;
+	}
 	file = fdopen(fd, "r");
 	if (!file) {
 		rc = -errno;
@@ -195,6 +202,9 @@ static int validate_settings(int root_fd)
 				break;
 			}
 		} else if (strncmp(p, "map_export.", 11)) {
+			pr_err("image: config image etc/shirudo/shirudo.conf sets %s, which only the runtime image may set",
+			       p);
+			pr_hint("a config image's shirudo.conf may set only `eventlog.max_bytes` and `map_export.*` keys");
 			rc = -EPERM;
 			break;
 		}

@@ -187,6 +187,11 @@ int shirudo_config_update_open(const char *directory,
 		goto fail;
 	if (flock(out->lock_fd, LOCK_EX | LOCK_NB)) {
 		rc = -errno;
+		if (rc == -EWOULDBLOCK) {
+			pr_err("image: another shirudo command holds the config operation lock %s/lock",
+			       directory);
+			pr_hint("retry when it has finished; shirudo-keepalive.timer and shirudo-map-export.timer each start a shirudo command every 5 seconds");
+		}
 		goto fail;
 	}
 	rc = ops->seal(ctx, out->lock_fd);

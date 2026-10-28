@@ -404,6 +404,74 @@ static void bpm_curl_deadlines(CURL *curl)
 	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L);
 }
 
+static void oci_curl_hint(CURLcode cc, const char *host)
+{
+	switch (cc) {
+	case CURLE_COULDNT_RESOLVE_PROXY:
+		pr_hint("check the proxy named by `https_proxy` or `HTTPS_PROXY` in the environment (the bpm units read /etc/shirudo/bpm/environment)");
+		break;
+	case CURLE_COULDNT_RESOLVE_HOST:
+		pr_hint("check that %s is the right name and that this node's DNS resolver can resolve it",
+			host);
+		break;
+	case CURLE_COULDNT_CONNECT:
+	case CURLE_OPERATION_TIMEDOUT:
+		pr_hint("check that %s is reachable from this node: routing, firewall, proxy and port",
+			host);
+		break;
+	case CURLE_SSL_CONNECT_ERROR:
+		pr_hint("shirudo requires TLS 1.3 and, unless the exact host name is listed in `tls.classical_hosts`, a hybrid ML-KEM key exchange (X25519MLKEM768 or SecP256r1MLKEM768)");
+		pr_hint("a target reads `tls.classical_hosts` only from etc/shirudo/shirudo.conf in its runtime image, the operator from /etc/shirudo/shirudo.conf");
+		break;
+	case CURLE_PEER_FAILED_VERIFICATION:
+		pr_hint("the server certificate of %s does not verify against the system CA store; for a private CA set `BPM_OCI_CA_FILE` to its PEM certificate",
+			host);
+		break;
+	case CURLE_SSL_CACERT_BADFILE:
+		pr_hint("`BPM_OCI_CA_FILE` must name a PEM certificate file and directories that only root can change");
+		break;
+	case CURLE_SSL_CIPHER:
+		pr_hint("the OpenSSL shirudo runs with cannot offer the hybrid ML-KEM groups; it needs OpenSSL 3.5 or newer");
+		break;
+	case CURLE_UNSUPPORTED_PROTOCOL:
+		pr_hint("a redirect named a scheme shirudo refuses: an HTTPS registry may redirect only to HTTPS");
+		break;
+	default:
+		break;
+	}
+}
+
+static void oci_http_hint(const struct bpm_oci_client *c, long status)
+{
+	if (status == 401)
+		pr_hint("%s did not accept the credentials or none were sent: set `BPM_OCI_USERNAME` and `BPM_OCI_PASSWORD`, or an entry in `REGISTRY_AUTH_FILE` or `$DOCKER_CONFIG/config.json` (the bpm units read /etc/shirudo/bpm/environment)",
+			c->registry);
+	else if (status == 403)
+		pr_hint("the credentials used for %s lack access to this repository",
+			c->registry);
+	else if (status == 429)
+		pr_hint("%s is rate-limiting this node; retry later",
+			c->registry);
+	else if (status >= 500)
+		pr_hint("%s reported a server-side error; check the registry's health and retry later",
+			c->registry);
+	else if (status >= 300 && status < 400)
+		pr_hint("shirudo follows redirects only for blobs; check that the `oci://` endpoint names the registry host itself");
+}
+
+static void oci_http_error(const struct bpm_oci_client *c, const char *url,
+			   long status)
+{
+	pr_err("bpm OCI request %s: HTTP %ld", url, status);
+	oci_http_hint(c, status);
+}
+
+static void oci_tls_policy_error(const char *url)
+{
+	pr_err("bpm OCI request %s: cannot apply TLS policy", url);
+	pr_hint("shirudo's TLS policy needs a libcurl built with the OpenSSL TLS backend");
+}
+
 static int curl_once_ex(struct bpm_oci_client *c, const char *method,
 			const char *url, const char *accept,
 			const char *content_type, const void *body, size_t body_len,
@@ -483,7 +551,7 @@ static int curl_once_ex(struct bpm_oci_client *c, const char *method,
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
 	if (tls_curl_policy(curl, &c->tls_ca)) {
-		pr_err("bpm OCI request %s: cannot apply TLS policy", url);
+		oci_tls_policy_error(url);
 		curl_slist_free_all(headers);
 		curl_easy_cleanup(curl);
 		return -EHOSTUNREACH;
@@ -509,9 +577,18 @@ static int curl_once_ex(struct bpm_oci_client *c, const char *method,
 	if (cc != CURLE_OK) {
 		pr_err("bpm OCI request %s: %s", url, errbuf[0] ? errbuf : curl_easy_strerror(cc));
 		status = -1;
+		oci_curl_hint(cc, c->registry);
 	}
 	if (file && cc == CURLE_FILESIZE_EXCEEDED)
 		file->overflow = true;
+	if (file && cc != CURLE_OK && file->overflow)
+		pr_hint("the registry sent more bytes than the manifest declares; shirudo treats the blob as untrusted and discarded it");
+	if (file && cc != CURLE_OK && file->err) {
+		pr_err("bpm OCI request %s: cannot write the download: %s",
+		       url, strerror(-file->err));
+		if (file->err == -ENOSPC || file->err == -EDQUOT)
+			pr_hint("free space on the file system the download is written to, then retry");
+	}
 	curl_slist_free_all(headers);
 	curl_easy_cleanup(curl);
 	tls_ca_cleanup(&c->tls_ca);
@@ -635,8 +712,11 @@ static int get_bearer_token(struct bpm_oci_client *c, const char *challenge)
 		return 0;
 	}
 	if (parse_challenge(challenge, realm, sizeof(realm), service,
-			    sizeof(service), scope, sizeof(scope)))
+			    sizeof(service), scope, sizeof(scope))) {
+		pr_err("bpm OCI: cannot parse the Bearer challenge of %s",
+		       c->registry);
 		return -EINVAL;
+	}
 	curl = curl_easy_init();
 	if (!curl)
 		return -ENOMEM;
@@ -681,23 +761,32 @@ static int get_bearer_token(struct bpm_oci_client *c, const char *challenge)
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
 	if (tls_curl_policy(curl, &c->tls_ca)) {
+		oci_tls_policy_error(realm);
 		rc = -EINVAL;
 		goto out;
 	}
 	cc = curl_easy_perform(curl);
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &r.status);
 	if (cc != CURLE_OK) {
+		pr_err("bpm OCI token request %s: %s", realm,
+		       curl_easy_strerror(cc));
+		oci_curl_hint(cc, realm);
 		rc = -EHOSTUNREACH;
 		goto out;
 	}
 	if (r.status >= 300) {
+		pr_err("bpm OCI token request %s: HTTP %ld", realm, r.status);
+		oci_http_hint(c, r.status);
 		rc = -EACCES;
 		goto out;
 	}
 	/* curl never calls the write callback for an empty body. */
-	if (!r.body.data)
-		goto out;
-	rc = token_from_body((char *)r.body.data, c->token, sizeof(c->token));
+	if (r.body.data)
+		rc = token_from_body((char *)r.body.data, c->token,
+				     sizeof(c->token));
+	if (rc)
+		pr_err("bpm OCI token request %s: the answer carries no usable token",
+		       realm);
 out:
 	curl_free(esc_service);
 	curl_free(esc_scope);
@@ -740,6 +829,7 @@ static int get_memory(struct bpm_oci_client *c, const char *url,
 				goto out;
 			}
 		} else {
+			oci_http_error(c, url, r.status);
 			rc = -EACCES;
 			goto out;
 		}
@@ -747,8 +837,12 @@ static int get_memory(struct bpm_oci_client *c, const char *url,
 		r = (struct bpm_http_response){};
 		rc = curl_once(c, "GET", url, accept, auth, &r, NULL, follow);
 	}
-	if (!rc && (r.status < 200 || r.status >= 300))
+	if (!rc && (r.status < 200 || r.status >= 300)) {
 		rc = r.status == 404 ? -ENOENT : -EACCES;
+		/* Some callers expect a 404: an index or tree not yet published. */
+		if (r.status != 404)
+			oci_http_error(c, url, r.status);
+	}
 	if (!rc) {
 		*out = r.body;
 		r.body.data = NULL;
@@ -780,8 +874,11 @@ int bpm_oci_get_file(struct bpm_oci_client *c, const char *url,
 
 	if (size < 0 || fd < 0)
 		return -EINVAL;
-	if ((__u64)size > BPM_MAX_PACKAGE_BYTES)
+	if ((__u64)size > BPM_MAX_PACKAGE_BYTES) {
+		pr_err("bpm OCI request %s: the manifest declares %lld bytes, above the %u-byte package limit",
+		       url, size, BPM_MAX_PACKAGE_BYTES);
 		return -EFBIG;
+	}
 	rc = sink_restart(&sink, fd, (__u64)size);
 	if (rc)
 		return rc;
@@ -819,8 +916,10 @@ int bpm_oci_get_file(struct bpm_oci_client *c, const char *url,
 		rc = -EFBIG;
 	if (!rc && sink.err)
 		rc = sink.err;
-	if (!rc && (r.status < 200 || r.status >= 300))
+	if (!rc && (r.status < 200 || r.status >= 300)) {
 		rc = r.status == 404 ? -ENOENT : -EACCES;
+		oci_http_error(c, url, r.status);
+	}
 	bpm_buffer_free(&r.body);
 	return rc;
 }
@@ -862,6 +961,7 @@ static int bpm_oci_request(struct bpm_oci_client *c, const char *method,
 				       encoded) < 0)
 				return -E2BIG;
 		} else {
+			oci_http_error(c, url, r->status);
 			return -EACCES;
 		}
 		bpm_buffer_free(&r->body);
@@ -881,6 +981,7 @@ static int bpm_oci_request(struct bpm_oci_client *c, const char *method,
 			} else {
 				pr_err("bpm OCI request %s: HTTP %ld", url, r->status);
 			}
+			oci_http_hint(c, r->status);
 		}
 		return r->status == 404 ? -ENOENT : -EACCES;
 	}
