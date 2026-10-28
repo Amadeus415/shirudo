@@ -528,8 +528,8 @@ static int candidate_keys(int fd)
 
 	rc = shirudo_keys_validate_image(fd);
 	if (rc == -ENOKEY) {
-		pr_err("image: BPF signer was not enrolled at boot; reboot with the new trusted key set required");
-		pr_hint("this config was not activated: BPF signers are enrolled into the sealed .bpf keyring only at boot, from the config selected then, and `shirudo image update` cannot select one for a later boot");
+		pr_err("image: this config trusts a BPF signer that was not enrolled at boot, and a live update cannot enroll one; it was not activated");
+		pr_hint("a reboot keeps booting the config selected now: a new signer has to be provisioned into the config the target boots with, which `shirudo image update` cannot select for a later boot");
 	}
 	return rc;
 }

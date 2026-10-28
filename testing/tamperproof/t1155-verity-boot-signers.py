@@ -227,8 +227,8 @@ def main():
                    success=mode == "repeat")
         if mode == "new-signer":
             error = (config.RESULTS / (mode + "-update.stderr")).read_text()
-            require("BPF signer was not enrolled at boot" in error and
-                    "reboot with the new trusted key set required" in error,
+            require("BPF signer that was not enrolled at boot" in error and
+                    "a live update cannot enroll one" in error,
                     "update failed for a reason other than boot-only enrollment")
         after = snapshot(mode + "-after")
         differences = [key for key in before if before[key] != after[key]]
