@@ -21,4 +21,11 @@ void pr_info(const char *fmt, ...)
 void pr_audit(const char *fmt, ...)
 	__attribute__((format(printf, 1, 2)));
 
+/*
+ * What to check or run next, after the pr_err() or pr_warn() it follows.
+ * Keep the literal on one line so `git grep pr_hint` lists every hint.
+ */
+void pr_hint(const char *fmt, ...)
+	__attribute__((format(printf, 1, 2)));
+
 #endif /* SHIRUDO_LOG_H */

@@ -49,27 +49,29 @@ static void escape(char *dst, size_t cap, const char *src)
 	dst[n] = '\0';
 }
 
-static void emit(int priority, const char *fmt, va_list ap)
+static void emit(int priority, const char *prefix, const char *fmt,
+		 va_list ap)
 {
 	char msg[LOG_MSG_MAX], out[4 * LOG_MSG_MAX + 1];
 
 	if (vstrsprintf(msg, sizeof(msg), fmt, ap) < 0)
 		strscpy(msg, fmt, sizeof(msg));
 	escape(out, sizeof(out), msg);
-	syslog(priority, "%s", out);
-	fprintf(stderr, "%s\n", out);
+	syslog(priority, "%s%s", prefix, out);
+	fprintf(stderr, "%s%s\n", prefix, out);
 }
 
-#define PR_DEFINE(name, prio)					\
+#define PR_DEFINE(name, prio, prefix)				\
 	void name(const char *fmt, ...)				\
 	{							\
 		va_list ap;					\
 		va_start(ap, fmt);				\
-		emit((prio), fmt, ap);				\
+		emit((prio), (prefix), fmt, ap);		\
 		va_end(ap);					\
 	}
 
-PR_DEFINE(pr_err,   LOG_ERR)
-PR_DEFINE(pr_warn,  LOG_WARNING)
-PR_DEFINE(pr_info,  LOG_INFO)
-PR_DEFINE(pr_audit, LOG_NOTICE)
+PR_DEFINE(pr_err,   LOG_ERR,     "")
+PR_DEFINE(pr_warn,  LOG_WARNING, "")
+PR_DEFINE(pr_info,  LOG_INFO,    "")
+PR_DEFINE(pr_audit, LOG_NOTICE,  "")
+PR_DEFINE(pr_hint,  LOG_INFO,    "hint: ")
