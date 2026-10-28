@@ -83,6 +83,8 @@ int shirudo_build_compile(const char *source, const char *output,
 	if (access(SHIRUDO_CLANG_PATH, X_OK) != 0) {
 		pr_err("clang not at hardcoded path %s: %s",
 		       SHIRUDO_CLANG_PATH, strerror(errno));
+		pr_hint("install a current clang with the BPF target at %s; shirudo-build does not search PATH for it",
+			SHIRUDO_CLANG_PATH);
 		return -ENOENT;
 	}
 
@@ -185,7 +187,11 @@ int shirudo_build_compile(const char *source, const char *output,
 		if (es == 0) {
 			rc = 0;
 		} else {
-			pr_err("clang exited with status %d", es);
+			pr_err("clang exited with status %d compiling %s against %s",
+			       es, source, vmlinux_h);
+			if (es != 127)
+				pr_hint("fix the errors clang printed above; kernel types and members come from %s, which must be the target kernel's vmlinux.h",
+					vmlinux_h);
 			rc = -EIO;
 		}
 	} else if (WIFSIGNALED(status)) {

@@ -55,8 +55,12 @@ static int ensure_keys_dir(const char *keys_dir)
 		return -EINVAL;
 	}
 	rc = seal_mkdir_p(keys_dir, 0700);
-	if (rc)
+	if (rc) {
 		pr_err("mkdir %s: %s", keys_dir, strerror(-rc));
+		if (rc == -EACCES)
+			pr_hint("pass --keys-dir <dir> with a directory you can write, or run as root for %s",
+				keys_dir);
+	}
 	return rc;
 }
 
@@ -131,10 +135,11 @@ static EVP_PKEY *gen_keypair(void)
 		openssl_complain("EVP_PKEY_Q_keygen");
 		if (OPENSSL_version_major() < 3 ||
 		    (OPENSSL_version_major() == 3 &&
-		     OPENSSL_version_minor() < 5))
-			pr_err("genkey: %s needs OpenSSL 3.5 or newer "
-			       "(running %s); upgrade libcrypto",
+		     OPENSSL_version_minor() < 5)) {
+			pr_err("genkey: %s needs OpenSSL 3.5 or newer (running %s)",
 			       GENKEY_ALG, OpenSSL_version(OPENSSL_VERSION));
+			pr_hint("upgrade libcrypto to OpenSSL 3.5 or newer on the operator");
+		}
 	}
 	return k;
 }
@@ -315,8 +320,8 @@ out:
 
 static const struct shirudo_help_item genkey_options[] = {
 	{ "--force, -f",      "overwrite an existing key/cert (refused otherwise)" },
-	{ "--keys-dir <dir>", "write signing_key.pem + cert.der under <dir> "
-			      "instead of the default" },
+	{ "--keys-dir <dir>",
+	  "write signing_key.pem + cert.der under <dir> instead of the default" },
 };
 
 static const struct shirudo_help_section genkey_help_sections[] = {
@@ -326,9 +331,8 @@ static const struct shirudo_help_section genkey_help_sections[] = {
 
 static const struct shirudo_help genkey_help = {
 	.usage   = "shirudo genkey [--force] [--keys-dir <dir>]",
-	.summary = "Generate a self-signed X.509 cert + ML-DSA-87 (FIPS 204) "
-		   "private key\nfor signing .upatch loader bytes. "
-		   "Operator-only; needs OpenSSL >= 3.5.",
+	.summary = "Generate a self-signed X.509 cert + ML-DSA-87 (FIPS 204) private key\n"
+		   "for signing .upatch loader bytes. Operator-only; needs OpenSSL >= 3.5.",
 	.sections   = genkey_help_sections,
 	.n_sections = ARRAY_SIZE(genkey_help_sections),
 	.footer  = "Default output paths:\n"
@@ -388,12 +392,10 @@ int cmd_genkey(int argc, const char **argv)
 	if (geteuid() != 0 && strcmp(keys_dir, SHIRUDO_KEYS_DIR) == 0) {
 		rc = check_user_keys_dir(keys_dir);
 		if (rc) {
-			pr_err("genkey: default keys dir %s is not safe for user key "
-			       "generation: %s", SHIRUDO_KEYS_DIR,
-			       strerror(-rc));
-			pr_err("it must be owned by the current user and not writable "
-			       "by group or others");
-			pr_err("rerun with sudo or pass --keys-dir <dir>");
+			pr_err("genkey: default keys dir %s is not safe for user key generation: %s",
+			       SHIRUDO_KEYS_DIR, strerror(-rc));
+			pr_err("it must be owned by the current user and not writable by group or others");
+			pr_hint("rerun with sudo or pass --keys-dir <dir>");
 			return 1;
 		}
 	}
@@ -401,8 +403,8 @@ int cmd_genkey(int argc, const char **argv)
 
 	if (!force && (path_exists(pkey_path) ||
 		       path_exists(cert_path))) {
-		pr_err("genkey: %s or %s already exists; pass --force",
-		       pkey_path, cert_path);
+		pr_err("genkey: %s or %s already exists", pkey_path, cert_path);
+		pr_hint("choose another --keys-dir, or pass --force to replace the pair: targets that enrolled the old cert.der reject what the new key signs");
 		return 1;
 	}
 

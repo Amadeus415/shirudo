@@ -215,6 +215,8 @@ int shirudo_attest_evidence_config(const __u8 *nonce, size_t nonce_len,
 	}
 	if (attempt == QUOTE_ATTEMPTS) {
 		pr_err("attest: PCRs kept changing while quoting");
+		pr_hint("something kept extending the quoted PCRs during %d attempts; run `shirudo attest` again once it has stopped",
+			QUOTE_ATTEMPTS);
 		rc = -EAGAIN;
 		goto out;
 	}
@@ -260,8 +262,7 @@ int shirudo_attest_evidence_config(const __u8 *nonce, size_t nonce_len,
 	if (challenge) {
 		if (ak.name_len != SHIRUDO_TPM_NAME_LEN ||
 		    memcmp(challenge->ak_name, ak.name, SHIRUDO_TPM_NAME_LEN)) {
-			pr_err("attest: the challenge was made for another "
-			       "attestation key");
+			pr_err("attest: the challenge was made for another attestation key");
 			rc = -EKEYREJECTED;
 			goto out;
 		}
@@ -273,9 +274,7 @@ int shirudo_attest_evidence_config(const __u8 *nonce, size_t nonce_len,
 					     cred, sizeof(cred),
 					     &cred_len);
 		if (rc) {
-			pr_err("attest: the TPM refused the challenge: not "
-			       "made for this attestation key under this "
-			       "endorsement key");
+			pr_err("attest: the TPM refused the challenge: not made for this attestation key under this endorsement key");
 			goto out;
 		}
 	}
@@ -923,8 +922,7 @@ int attest_verify(const char *evidence, size_t len,
 		goto out;
 	}
 	if (tpm_ecc_public_parse(ak_public, ak_public_len, &ak_pub)) {
-		say(&rep, false, "attestation key: public area is not a "
-		    "P-256 ECDSA key");
+		say(&rep, false, "attestation key: public area is not a P-256 ECDSA key");
 		rc = -EKEYREJECTED;
 		goto out;
 	}
@@ -968,8 +966,7 @@ int attest_verify(const char *evidence, size_t len,
 		say(&rep, parsed && ek_pub.attrs == SHIRUDO_TPM_EK_ATTRS &&
 		    ek_pub.policy_len == 32 &&
 		    ct_eq(ek_pub.policy, shirudo_tpm_ek_policy, 32),
-		    "endorsement key: TCG default template under the "
-		    "endorsement policy");
+		    "endorsement key: TCG default template under the endorsement policy");
 	} else {
 		note(&rep, "no endorsement key in the evidence");
 	}
@@ -991,11 +988,9 @@ int attest_verify(const char *evidence, size_t len,
 		say(&rep, have_cred && cred_len == SHIRUDO_TPM_CREDENTIAL_LEN &&
 		    ct_eq(cred, expect->credential,
 			  SHIRUDO_TPM_CREDENTIAL_LEN),
-		    "attestation key: activated the credential made for it "
-		    "under the endorsement key");
+		    "attestation key: activated the credential made for it under the endorsement key");
 	else if (have_cred)
-		note(&rep, "a credential was activated but none is expected "
-		     "(--expect-credential)");
+		note(&rep, "a credential was activated but none is expected (--expect-credential)");
 
 	rc = check_signed(&rep, "quote", p->quote_attest_hex, p->quote_sig_hex,
 			  &ak_pub, ak_name, nonce, nonce_len, attest,
@@ -1081,11 +1076,9 @@ int attest_verify(const char *evidence, size_t len,
 						    &reason);
 		say(&rep, !rc, "config: %s", reason);
 		if (config.present && !expect->have_config_root)
-			note(&rep, "config root has no operator approval; use "
-			     "--expect-config-root with --expect-config-pcr");
+			note(&rep, "config root has no operator approval; use --expect-config-root with --expect-config-pcr");
 		if (config.present)
-			note(&rep, "config records a selection; "
-			     "direct TPM writer protection is deferred");
+			note(&rep, "config records a selection; direct TPM writer protection is deferred");
 	}
 
 	/*
@@ -1153,8 +1146,7 @@ int attest_verify(const char *evidence, size_t len,
 	if (crc == 0)
 		say(&rep, p->init.have_reset_count &&
 		    p->init.reset_count == certify.reset_count,
-		    "register: init record is of the TPM's current reset "
-		    "count");
+		    "register: init record is of the TPM's current reset count");
 
 	for (i = 0; i < p->n_recs; i++) {
 		chain_fold(chain, p->recs[i].digest);
@@ -1171,9 +1163,8 @@ int attest_verify(const char *evidence, size_t len,
 	 */
 	for (i = 1; i < p->n_recs; i++) {
 		if (!p->recs[i].derived)
-			say(&rep, false, "eventlog: event %zu (%s %s) digest "
-			    "does not derive from its fields", i,
-			    p->recs[i].type, p->recs[i].label);
+			say(&rep, false, "eventlog: event %zu (%s %s) digest does not derive from its fields",
+			    i, p->recs[i].type, p->recs[i].label);
 	}
 
 	{
@@ -1192,13 +1183,10 @@ int attest_verify(const char *evidence, size_t len,
 					   p->pcrs[SHIRUDO_CHAIN_PCR], 32);
 
 			if (exact || expect->strict_anchor)
-				say(&rep, exact, "anchor: PCR %u equals the "
-				    "recorded value extended by the anchor",
+				say(&rep, exact, "anchor: PCR %u equals the recorded value extended by the anchor",
 				    SHIRUDO_CHAIN_PCR);
 			else
-				note(&rep, "anchor: PCR %u carries further "
-				     "measurements after the anchor; replay "
-				     "the logs to confirm it",
+				note(&rep, "anchor: PCR %u carries further measurements after the anchor; replay the logs to confirm it",
 				     SHIRUDO_CHAIN_PCR);
 		} else {
 			say(&rep, false, "anchor: PCR %u is not in the quote",
@@ -1208,8 +1196,7 @@ int attest_verify(const char *evidence, size_t len,
 
 	if (expect->have_init)
 		say(&rep, ct_eq(p->init.digest, expect->init_event, 32),
-		    "state: init event covers the expected certificate, set "
-		    "and tree root");
+		    "state: init event covers the expected certificate, set and tree root");
 	if (expect->have_chain) {
 		say(&rep, ct_eq(reg_value, expect->chain, 32),
 		    "state: register equals the expected value");
@@ -1219,15 +1206,14 @@ int attest_verify(const char *evidence, size_t len,
 		chain_fold(predicted, expect->init_event);
 		if (runtime == 0)
 			say(&rep, ct_eq(reg_value, predicted, 32),
-			    "state: register equals the value predicted for "
-			    "the set at boot");
+			    "state: register equals the value predicted for the set at boot");
 		else
 			say(&rep, expect->allow_runtime_events,
 			    "state: %zu event%s after boot change the register",
 			    runtime, runtime == 1 ? "" : "s");
 	} else {
-		note(&rep, "no expected state given; the register value is "
-		     "%s", p->reg_value_hex);
+		note(&rep, "no expected state given; the register value is %s",
+		     p->reg_value_hex);
 	}
 	for (i = 1; i < p->n_recs; i++)
 		note(&rep, "event after boot: %s %s", p->recs[i].type,
@@ -1411,8 +1397,7 @@ int attest_challenge_make(const char *evidence, size_t len,
 	    "endorsement key: name matches its public area");
 	say(&rep, pub.attrs == SHIRUDO_TPM_EK_ATTRS && pub.policy_len == 32 &&
 	    ct_eq(pub.policy, shirudo_tpm_ek_policy, 32),
-	    "endorsement key: TCG default template under the endorsement "
-	    "policy");
+	    "endorsement key: TCG default template under the endorsement policy");
 	if (top[2].seen) {
 		der = xmalloc(EK_CERT_MAX);
 		if (!der) {
@@ -1423,43 +1408,31 @@ int attest_challenge_make(const char *evidence, size_t len,
 				  EK_CERT_MAX, &der_len) ||
 		    cert_read_der(der, der_len, &cert) ||
 		    cert_pubkey(&cert, &cert_key)) {
-			say(&rep, false, "endorsement certificate: parseable "
-			    "with a P-256 or RSA-2048 key");
+			say(&rep, false, "endorsement certificate: parseable with a P-256 or RSA-2048 key");
 		} else {
 			say(&rep, cert_describes(&cert_key, &pub),
-			    "endorsement certificate: describes the "
-			    "endorsement key");
+			    "endorsement certificate: describes the endorsement key");
 			if (ek_ca) {
 				int vrc = cert_verify_chain(&cert, ek_ca,
 							    &reason);
 
 				if (vrc == -EINVAL)
-					say(&rep, false, "endorsement "
-					    "certificate: issuer bundle %s "
-					    "unreadable", ek_ca);
+					say(&rep, false, "endorsement certificate: issuer bundle %s unreadable",
+					    ek_ca);
 				else
-					say(&rep, vrc == 0, "endorsement "
-					    "certificate: chains to %s%s%s",
+					say(&rep, vrc == 0, "endorsement certificate: chains to %s%s%s",
 					    ek_ca, vrc ? ": " : "",
 					    vrc ? reason : "");
 			} else if (vouched) {
-				note(&rep, "endorsement certificate: not "
-				     "checked against an issuer bundle "
-				     "(--ek-ca)");
+				note(&rep, "endorsement certificate: not checked against an issuer bundle (--ek-ca)");
 			} else {
-				say(&rep, false, "endorsement certificate: "
-				    "not checked against an issuer bundle; "
-				    "pass --ek-ca, pin the key with "
-				    "--ek-name or waive with "
-				    "--trust-presented-ek");
+				say(&rep, false, "endorsement certificate: not checked against an issuer bundle; pass --ek-ca or pin the key with --ek-name (--trust-presented-ek skips this and proves only that the same TPM answers each time)");
 			}
 		}
 	} else if (vouched) {
-		note(&rep, "no endorsement certificate: the endorsement key "
-		     "is trusted as presented");
+		note(&rep, "no endorsement certificate: the endorsement key is trusted as presented");
 	} else {
-		say(&rep, false, "no endorsement certificate: pin the key "
-		    "with --ek-name or waive with --trust-presented-ek");
+		say(&rep, false, "no endorsement certificate: pin the key with --ek-name (--trust-presented-ek skips this and proves only that the same TPM answers each time)");
 	}
 	if (rep.failed) {
 		rc = -EKEYREJECTED;

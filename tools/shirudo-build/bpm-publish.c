@@ -152,6 +152,9 @@ static int fetch_index(struct bpm_oci_client *c, const char *cert,
 		if ((layers[i].size >= 0 && (__s64)dst->len != layers[i].size) ||
 		    bpm_sha256_hex(dst->data, dst->len, hex, sizeof(hex)) ||
 		    !bpm_digest_matches(layers[i].digest, hex)) {
+			pr_err("bpm push: a blob of the published repository index does not match its digest %s",
+			       layers[i].digest);
+			pr_hint("treat the registry's index as untrusted: keep it and handle it as an incident");
 			rc = -EKEYREJECTED;
 			goto out;
 		}
@@ -163,6 +166,7 @@ static int fetch_index(struct bpm_oci_client *c, const char *cert,
 	if (bpm_verify_cms(payload.data, payload.len, sig.data, sig.len, cert)) {
 		pr_err("bpm push: the published repository index is not signed by %s",
 		       cert);
+		pr_hint("treat the registry's index as untrusted: keep it and handle it as an incident");
 		rc = -EKEYREJECTED;
 		goto out;
 	}
@@ -211,8 +215,9 @@ static int push_index(struct bpm_oci_client *c, const char *repository,
 			continue;
 		if (strcmp(entries[i].manifest_digest, manifest_digest) ||
 		    strcmp(entries[i].package_digest, layer->digest)) {
-			pr_err("bpm push: the repository index already lists %s %s "
-			       "with different content", info->name, info->version);
+			pr_err("bpm push: the repository index already lists %s %s with different content",
+			       info->name, info->version);
+			pr_hint("published versions are immutable: rebuild the package with `shirudo bpm build --version <newer version>` and push that");
 			rc = -EEXIST;
 			goto out;
 		}
@@ -341,10 +346,16 @@ static int push_package(const char *package_path, const char *raw_repository,
 
 	if (!package_path || !*package_path)
 		return -EINVAL;
-	if (stat(package_path, &st))
-		return -errno;
-	if (!S_ISREG(st.st_mode))
+	if (stat(package_path, &st)) {
+		rc = -errno;
+		pr_err("bpm push: package %s: %s", package_path, strerror(-rc));
+		return rc;
+	}
+	if (!S_ISREG(st.st_mode)) {
+		pr_err("bpm push: package %s is not a regular file",
+		       package_path);
 		return -EINVAL;
+	}
 	rc = read_file(package_path, BPM_MAX_HTTP_BODY, &archive,
 		       &archive_len);
 	if (rc)
@@ -354,8 +365,12 @@ static int push_package(const char *package_path, const char *raw_repository,
 		goto out;
 	rc = bpm_oci_parse_push_repo(raw_repository, &c, repository,
 				     sizeof(repository));
-	if (rc)
+	if (rc) {
+		pr_err("bpm push: %s is not oci://<registry>/<repository>",
+		       raw_repository);
+		pr_hint("name the repository without a tag or digest, e.g. oci://quay.io/namespace/package; the package version becomes the tag");
 		goto out;
+	}
 	base = strrchr(package_path, '/');
 	base = base ? base + 1 : package_path;
 	if (!*base || strlen(base) >= sizeof(package_title)) {
@@ -540,6 +555,7 @@ static int tree_push_artifact(struct bpm_oci_client *c, const char *repository,
 	struct shirudo_json_emit e;
 	struct shirudo_upatch u;
 	char hex[65], tag[160];
+	bool is_unload;
 	char *manifest;
 	int fd, rc;
 
@@ -558,13 +574,19 @@ static int tree_push_artifact(struct bpm_oci_client *c, const char *repository,
 	memcpy(name, u.hdr.name, SHIRUDO_UPATCH_NAME_MAX);
 	name[SHIRUDO_UPATCH_NAME_MAX] = '\0';
 	hex_encode(u.hdr.payload_sha256, 32, hex);
-	if (strcmp(name, id) || upatch_is_unload(&u) != unload)
+	is_unload = upatch_is_unload(&u);
+	if (strcmp(name, id) || is_unload != unload)
 		rc = -EKEYREJECTED;
 	upatch_close(&u);
 	if (rc) {
 		pr_err("bpm tree append: the %s artifact for %s is a %s directive named %s",
 		       unload ? "unload" : "load", id,
-		       unload ? "load" : "unload", name);
+		       is_unload ? "unload" : "load", name);
+		if (strcmp(name, id))
+			pr_hint("the [upatches.tree] id must be the name of the upatch it publishes, here %s",
+				name);
+		else
+			pr_hint("load_artifact names the load upatch and unload_artifact its .unload.upatch in the [upatches.tree] table");
 		return rc;
 	}
 	if (strsprintf(tag, sizeof(tag), "upatch-%s-%.16s", id, hex) < 0 || strlen(tag) > 128)
@@ -717,6 +739,7 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 				    4u * 1024u * 1024u);
 	if (rc) {
 		pr_err("bpm tree append: package %s does not include Beefile", package);
+		pr_hint("append a package `shirudo bpm build` made; it carries its Beefile");
 		goto out;
 	}
 	spec = xmalloc(sizeof(*spec));
@@ -742,6 +765,11 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 		parent[0] = '\0';
 		if (tree_id)
 			bpm_copy_string(pub.tree_id, sizeof(pub.tree_id), tree_id);
+	} else if (rc == -EKEYREJECTED) {
+		pr_err("bpm tree append: the publication at %s:%s does not verify under %s",
+		       repo_ref, reference, cert);
+		pr_hint("treat that publication as untrusted: keep it and handle it as an incident");
+		goto out;
 	} else if (rc) {
 		pr_err("bpm tree append: cannot read the publication at %s:%s",
 		       repo_ref, reference);
@@ -750,6 +778,8 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 		if (tree_id && strcmp(pub.tree_id, tree_id)) {
 			pr_err("bpm tree append: tree id mismatch: existing %s, requested %s",
 			       pub.tree_id, tree_id);
+			pr_hint("omit --tree-id to append to tree %s, or publish the other tree under another --reference",
+				pub.tree_id);
 			rc = -EINVAL;
 			goto out;
 		}
@@ -779,6 +809,7 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 					    &body, &body_len, BPM_MAX_HTTP_BODY);
 		if (rc) {
 			pr_err("bpm tree append: package entry %s not found", member);
+			pr_hint("load_artifact and unload_artifact in [upatches.tree] must name upatch files inside the package");
 			goto out;
 		}
 		*op = (struct shirudo_tree_operation){ .seq = pub.head_seq + 1 };
@@ -802,6 +833,7 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 	}
 	if (!appended) {
 		pr_err("bpm tree append: %s has no [upatches.tree] entries", package);
+		pr_hint("add an [upatches.tree] table with an id after the [[upatches]] entry in the Beefile and rebuild the package");
 		rc = -ENOENT;
 		goto out;
 	}

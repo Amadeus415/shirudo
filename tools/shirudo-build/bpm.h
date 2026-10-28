@@ -75,6 +75,7 @@ struct bpm_build_spec {
 	char stage[PATH_MAX];
 	__u8 *build_file;
 	size_t build_file_len;
+	size_t error_offset;	/* 1 + offset of the line parsing stopped at */
 	struct bpm_build_file files[BPM_BUILD_MAX_ENTRIES];
 	size_t n_files;
 	struct bpm_build_upatch upatches[BPM_BUILD_MAX_ENTRIES];
@@ -89,6 +90,8 @@ struct bpm_build_spec {
 int bpm_build_parse_beefile(const __u8 *body, size_t len,
 			    struct bpm_build_spec *spec);
 void bpm_build_spec_free(struct bpm_build_spec *spec);
+void bpm_build_beefile_error(const char *what, const char *path,
+			     const struct bpm_build_spec *spec, int rc);
 
 int shirudo_build_bpm(int argc, char **argv);
 int shirudo_build_bpm_config_update(int argc, char **argv);

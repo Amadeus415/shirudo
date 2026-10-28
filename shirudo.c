@@ -98,7 +98,7 @@ static int cmd_help(int argc, const char **argv)
 		    "target commands (run locally on the target):");
 	print_group(GROUP_LOCAL, "local commands (operator or target):");
 	print_group(GROUP_GENERAL, "other:");
-	fprintf(stderr, "See Documentation/ for the design.\n");
+	fprintf(stderr, "Run 'shirudo <command> --help' for its options.\n");
 	return 0;
 }
 

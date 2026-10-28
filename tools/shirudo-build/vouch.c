@@ -57,6 +57,7 @@ static int cert_algorithm_ok(const __u8 *der, size_t der_sz,
 	if (rc || strcmp(name, "ML-DSA-87")) {
 		pr_err("%s is %s; shirudo accepts only ML-DSA-87", what,
 		       rc ? "of an unknown algorithm" : name);
+		pr_hint("vouch only for a cert.der `shirudo genkey` wrote on the new signer's operator");
 		return -EKEYREJECTED;
 	}
 	return 0;
@@ -182,8 +183,9 @@ int shirudo_build_keys_vouch(int argc, char **argv)
 	hex_encode(fp, 32, fp_hex);
 	hex_encode(own_fp, 32, own_hex);
 	if (!memcmp(fp, own_fp, 32)) {
-		pr_err("keys vouch: %s holds the signing key itself; a key "
-		       "cannot vouch for its own certificate", input);
+		pr_err("keys vouch: %s holds the signing key itself; a key cannot vouch for its own certificate",
+		       input);
+		pr_hint("pass the new signer's cert.der, and the already trusted key with --keys-dir <dir>");
 		rc = -EINVAL;
 		goto out;
 	}

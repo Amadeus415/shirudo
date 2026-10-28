@@ -106,21 +106,15 @@ static const struct shirudo_help_section attest_help_sections[] = {
 };
 
 static const struct shirudo_help attest_help = {
-	.usage      = "shirudo attest [--nonce=<hex>] [--pcrs=<list>] "
-		      "[--challenge=<path>] [--out=<path>]\n"
-		      "       shirudo attest verify --evidence=<path> --nonce=<hex> "
-		      "--ak-name=<hex> [options]\n"
+	.usage      = "shirudo attest [--nonce=<hex>] [--pcrs=<list>] [--challenge=<path>] [--out=<path>]\n"
+		      "       shirudo attest verify --evidence=<path> --nonce=<hex> --ak-name=<hex> [options]\n"
 		      "       shirudo attest predict --cert=<cert.der> [options]\n"
-		      "       shirudo attest challenge --evidence=<path> "
-		      "--out=<path> --ek-ca=<bundle>|--ek-name=<hex>|"
-		      "--trust-presented-ek [options]",
-	.summary    = "Without a subcommand: emit a TPM-signed evidence document "
-		      "for this\ntarget (quote over the PCRs, certification of "
-		      "the measurement register,\nthis boot's eventlog, the "
-		      "firmware and systemd measurement logs), activating\n"
+		      "       shirudo attest challenge --evidence=<path> --out=<path> --ek-ca=<bundle>|--ek-name=<hex>|--trust-presented-ek [options]",
+	.summary    = "Without a subcommand: emit a TPM-signed evidence document for this\n"
+		      "target (quote over the PCRs, certification of the measurement register,\n"
+		      "this boot's eventlog, the firmware and systemd measurement logs), activating\n"
 		      "the verifier's challenge when given one.\n"
-		      "verify, predict and challenge run on the operator and "
-		      "touch no TPM.",
+		      "verify, predict and challenge run on the operator and touch no TPM.",
 	.sections   = attest_help_sections,
 	.n_sections = ARRAY_SIZE(attest_help_sections),
 };
@@ -353,9 +347,8 @@ static int cmd_attest_predict(int argc, const char **argv)
 				       n == SHIRUDO_CHAIN_PHASE_PCR ? 1 : -1;
 			if (slot < 0 ||
 			    parse_hex32("--bind-pcr value", value, bind[slot])) {
-				pr_err("attest predict: --bind-pcr takes "
-				       "%u=<hex> or %u=<hex>", SHIRUDO_CHAIN_PCR,
-				       SHIRUDO_CHAIN_PHASE_PCR);
+				pr_err("attest predict: --bind-pcr takes %u=<hex> or %u=<hex>",
+				       SHIRUDO_CHAIN_PCR, SHIRUDO_CHAIN_PHASE_PCR);
 				goto out;
 			}
 			have_bind[slot] = true;
@@ -501,8 +494,7 @@ static int cmd_attest_verify(int argc, const char **argv)
 		} else if (!strncmp(a, "--nonce=", 8)) {
 			if (parse_hex(a + 8, nonce, sizeof(nonce),
 				      &nonce_len)) {
-				pr_err("attest verify: --nonce must be hex of "
-				       "up to %d bytes",
+				pr_err("attest verify: --nonce must be hex of up to %d bytes",
 				       SHIRUDO_ATTEST_NONCE_MAX);
 				goto out;
 			}
@@ -512,8 +504,7 @@ static int cmd_attest_verify(int argc, const char **argv)
 
 			if (parse_hex(a + 10, x.ak_name, sizeof(x.ak_name),
 				      &n) || n != SHIRUDO_TPM_NAME_LEN) {
-				pr_err("attest verify: --ak-name must be %d "
-				       "hex characters",
+				pr_err("attest verify: --ak-name must be %d hex characters",
 				       2 * SHIRUDO_TPM_NAME_LEN);
 				goto out;
 			}
@@ -582,8 +573,7 @@ static int cmd_attest_verify(int argc, const char **argv)
 
 			if (parse_hex(a + 10, x.ek_name, sizeof(x.ek_name),
 				      &n) || n != SHIRUDO_TPM_NAME_LEN) {
-				pr_err("attest verify: --ek-name must be %d "
-				       "hex characters",
+				pr_err("attest verify: --ek-name must be %d hex characters",
 				       2 * SHIRUDO_TPM_NAME_LEN);
 				goto out;
 			}
@@ -609,8 +599,7 @@ static int cmd_attest_verify(int argc, const char **argv)
 		}
 	}
 	if (x.have_config_root && !x.have_config_pcr) {
-		pr_err("attest verify: --expect-config-root requires "
-		       "--expect-config-pcr");
+		pr_err("attest verify: --expect-config-root requires --expect-config-pcr");
 		goto out;
 	}
 	if (!evidence_path || !have_nonce) {
@@ -618,8 +607,7 @@ static int cmd_attest_verify(int argc, const char **argv)
 		goto out;
 	}
 	if (!have_cert && (m.n || have_tree_root)) {
-		pr_err("attest verify: --upatch, --expect and --tree-root "
-		       "describe the init event and need --cert");
+		pr_err("attest verify: --upatch, --expect and --tree-root describe the init event and need --cert");
 		goto out;
 	}
 	/*
@@ -628,13 +616,13 @@ static int cmd_attest_verify(int argc, const char **argv)
 	 * nothing about which key signed the evidence.
 	 */
 	if (x.have_credential && !x.have_ak_name) {
-		pr_err("attest verify: --expect-credential needs the key the "
-		       "challenge was made for; give --ak-name");
+		pr_err("attest verify: --expect-credential needs the key the challenge was made for; give --ak-name");
 		goto out;
 	}
-	if (!x.have_ak_name)
-		pr_warn("attest verify: no --ak-name; the signer is not "
-			"pinned");
+	if (!x.have_ak_name) {
+		pr_warn("attest verify: no --ak-name; the signer is not pinned");
+		pr_hint("pass --ak-name=<hex> with the attestation key name recorded when the target was enrolled");
+	}
 	x.nonce = nonce;
 	x.nonce_len = nonce_len;
 	if (have_cert) {
@@ -652,11 +640,24 @@ static int cmd_attest_verify(int argc, const char **argv)
 			   SHIRUDO_ATTEST_REPORT_MAX);
 	fputs(report, stdout);
 	if (rc == -EINVAL) {
+		fflush(stdout);
 		pr_err("attest verify: %s is not a shirudo evidence document",
 		       evidence_path);
+		pr_hint("--evidence takes the file `shirudo attest --nonce=<hex> --out=<path>` wrote on the target; if %s is that file, keep it and handle it as an incident",
+			evidence_path);
 		ret = 2;
 	} else if (rc) {
 		printf("verdict: FAIL\n");
+		fflush(stdout);
+		if (rc == -EKEYREJECTED) {
+			pr_err("attest verify: %s failed verification; the FAIL lines name the checks",
+			       evidence_path);
+			pr_hint("the evidence shows the target as untrusted: keep %s and handle it as an incident",
+				evidence_path);
+		} else {
+			pr_err("attest verify: cannot check %s: %s",
+			       evidence_path, strerror(-rc));
+		}
 		ret = 1;
 	} else {
 		printf("verdict: ok\n");
@@ -693,16 +694,16 @@ static int cmd_attest_challenge(int argc, const char **argv)
 		} else if (!strncmp(a, "--ak-name=", 10)) {
 			if (parse_hex(a + 10, ak_name, sizeof(ak_name), &n) ||
 			    n != SHIRUDO_TPM_NAME_LEN) {
-				pr_err("attest challenge: --ak-name must be %d "
-				       "hex characters", 2 * SHIRUDO_TPM_NAME_LEN);
+				pr_err("attest challenge: --ak-name must be %d hex characters",
+				       2 * SHIRUDO_TPM_NAME_LEN);
 				goto out;
 			}
 			pol.ak_name = ak_name;
 		} else if (!strncmp(a, "--ek-name=", 10)) {
 			if (parse_hex(a + 10, ek_name, sizeof(ek_name), &n) ||
 			    n != SHIRUDO_TPM_NAME_LEN) {
-				pr_err("attest challenge: --ek-name must be %d "
-				       "hex characters", 2 * SHIRUDO_TPM_NAME_LEN);
+				pr_err("attest challenge: --ek-name must be %d hex characters",
+				       2 * SHIRUDO_TPM_NAME_LEN);
 				goto out;
 			}
 			pol.ek_name = ek_name;
@@ -730,12 +731,28 @@ static int cmd_attest_challenge(int argc, const char **argv)
 				   SHIRUDO_ATTEST_REPORT_MAX);
 	fputs(report, stdout);
 	if (rc == -EINVAL) {
-		pr_err("attest challenge: %s carries no endorsement key",
+		fflush(stdout);
+		pr_err("attest challenge: %s is not shirudo evidence carrying an endorsement key",
 		       evidence_path);
+		pr_hint("--evidence takes the file `shirudo attest --nonce=<hex> --out=<path>` wrote on the target");
 		goto out;
 	}
 	if (rc) {
 		printf("verdict: FAIL\n");
+		fflush(stdout);
+		if (rc != -EKEYREJECTED) {
+			pr_err("attest challenge: cannot make the credential: %s",
+			       strerror(-rc));
+		} else if (!pol.ek_ca && !pol.ek_name && !pol.trust_presented) {
+			pr_err("attest challenge: nothing vouches for the endorsement key in %s",
+			       evidence_path);
+			pr_hint("pass --ek-ca=<bundle> with the TPM manufacturer's issuer certificates, or --ek-name=<hex> recorded for this TPM in your inventory");
+		} else {
+			pr_err("attest challenge: %s failed the checks marked FAIL; no challenge was written",
+			       evidence_path);
+			pr_hint("the evidence shows the target as untrusted: keep %s and handle it as an incident",
+				evidence_path);
+		}
 		ret = 1;
 		goto out;
 	}
@@ -790,14 +807,13 @@ static int cmd_attest_evidence(int argc, const char **argv)
 		} else if (!strncmp(a, "--nonce=", 8)) {
 			if (parse_hex(a + 8, nonce, sizeof(nonce),
 				      &nonce_len)) {
-				pr_err("attest: --nonce must be hex of up to "
-				       "%d bytes", SHIRUDO_ATTEST_NONCE_MAX);
+				pr_err("attest: --nonce must be hex of up to %d bytes",
+				       SHIRUDO_ATTEST_NONCE_MAX);
 				return 2;
 			}
 		} else if (!strncmp(a, "--pcrs=", 7)) {
 			if (parse_pcrs(a + 7, &mask)) {
-				pr_err("attest: --pcrs takes a comma separated "
-				       "list of 0..23");
+				pr_err("attest: --pcrs takes a comma separated list of 0..23");
 				return 2;
 			}
 		} else if (!strncmp(a, "--out=", 6)) {
@@ -816,6 +832,7 @@ static int cmd_attest_evidence(int argc, const char **argv)
 	    attest_challenge_read(challenge_path, &challenge)) {
 		pr_err("attest: %s is not a shirudo credential challenge",
 		       challenge_path);
+		pr_hint("--challenge takes the file `shirudo attest challenge --out=<path>` wrote on the operator");
 		return 2;
 	}
 
@@ -825,20 +842,25 @@ static int cmd_attest_evidence(int argc, const char **argv)
 					    &doc, &len, &cap);
 	if (rc == -ENXIO) {
 		pr_err("attest: no TPM answered (tpm_error)");
+		pr_hint("check that /dev/tpmrm0 exists, or name the TPM with SHIRUDO_TPM_TCTI or tpm.tcti in /etc/shirudo/shirudo.conf");
 		return 1;
 	}
 	if (rc == -ENODEV) {
-		pr_err("attest: register 0x%08X is not bound this boot "
-		       "(tpm_error); run shirudo init first",
+		pr_err("attest: register 0x%08X is not bound this boot (tpm_error); run shirudo init first",
 		       SHIRUDO_NV_INDEX);
 		return 1;
 	}
 	if (rc == -EKEYREJECTED) {
 		pr_err("attest: the challenge was refused (tampered?)");
+		pr_hint("a challenge answers only for the TPM whose evidence it was made from; if that is this target, keep this output and handle it as an incident");
 		return 1;
 	}
 	if (rc) {
 		pr_err("attest: evidence failed: %s", strerror(-rc));
+		if (rc == -EINPROGRESS)
+			pr_hint("a config image activation is pending (`shirudo image status`); evidence is available again after this target reboots");
+		else if (rc == -EUCLEAN)
+			pr_hint("the config PCR does not match the recorded config history: keep this target's state and handle it as an incident");
 		return 1;
 	}
 	if (out_path) {

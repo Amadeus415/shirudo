@@ -28,13 +28,10 @@
 
 static void image_usage(FILE *fp)
 {
-	fprintf(fp, "usage: shirudo-build image build <filesystem.img> -o "
-		    "<prefix>\n"
+	fprintf(fp, "usage: shirudo-build image build <filesystem.img> -o <prefix>\n"
 		    "       [--kind config|runtime] [--keys-dir <dir>]\n"
-		    "       [--key <private.pem>] [--cert <cert.der>] [--salt "
-		    "<64-hex>]\n"
-		    "Writes <prefix>.img/.verity/.roothash/.p7s; existing files "
-		    "are refused.\n"
+		    "       [--key <private.pem>] [--cert <cert.der>] [--salt <64-hex>]\n"
+		    "Writes <prefix>.img/.verity/.roothash/.p7s; existing files are refused.\n"
 		    "Input is a 4096-byte-aligned ext4 filesystem image.\n"
 		    "       shirudo-build image verify <prefix> --cert <cert.der>\n"
 		    "Build and offline verification require veritysetup.\n");
@@ -74,6 +71,7 @@ static int build_image(int argc, char **argv)
 		command[i + 1] = argv[i];
 	execv(script, command);
 	pr_err("image build: cannot run %s: %s", script, strerror(errno));
+	pr_hint("shirudo-build runs gen-image/shirudo-gen-verity from its own directory or the one above it; reinstall the operator package or use a built checkout");
 	xfree(command, ((size_t)argc + 2) * sizeof(*command));
 	return 1;
 }
@@ -98,8 +96,8 @@ static int verify_verity(int data_fd, int hash_fd, const char *root)
 			_exit(126);
 		execlp("veritysetup", "veritysetup", "verify", "--hash-offset=0",
 		       data_path, hash_path, root, NULL);
-		pr_err("veritysetup: %s; install the operator veritysetup tool",
-		       strerror(errno));
+		pr_err("veritysetup: %s", strerror(errno));
+		pr_hint("install veritysetup (from cryptsetup) on the operator and put it on PATH");
 		_exit(127);
 	}
 	while (waitpid(pid, &status, 0) < 0)
@@ -109,6 +107,11 @@ static int verify_verity(int data_fd, int hash_fd, const char *root)
 		return -EIO;
 	if (WEXITSTATUS(status) == 127)
 		return -ENOENT;
+	if (WEXITSTATUS(status)) {
+		pr_err("image: veritysetup verify against the signed root hash exited with status %d",
+		       WEXITSTATUS(status));
+		pr_hint("if veritysetup reported a verification failure above, treat this image as untrusted: keep it and handle it as an incident");
+	}
 	return WEXITSTATUS(status) ? -EIO : 0;
 }
 
@@ -120,16 +123,32 @@ static int verify_root_signature(const char root[65], const __u8 *signature,
 	int rc;
 
 	rc = cert_read_file(path, &cert);
+	if (rc)
+		pr_err("image: %s is not a readable X.509 certificate", path);
 	if (!rc)
 		rc = cert_key_algorithm(&cert, algorithm,
 					sizeof(algorithm));
-	if (!rc && strcmp(algorithm, "ML-DSA-87"))
+	if (!rc && strcmp(algorithm, "ML-DSA-87")) {
+		pr_err("image: %s holds a %s key, not ML-DSA-87", path,
+		       algorithm);
+		pr_hint("pass the ML-DSA-87 cert.der of the key that signs config images");
 		rc = -EKEYREJECTED;
-	if (!rc && cms_signed_by(signature, size, &cert) != 1)
+	}
+	if (!rc && cms_signed_by(signature, size, &cert) != 1) {
+		pr_err("image: the root hash signature is not by the key of %s",
+		       path);
+		pr_hint("treat this image as untrusted: keep it and handle it as an incident");
 		rc = -EKEYREJECTED;
-	if (!rc)
+	}
+	if (!rc) {
 		rc = verify_detached((const __u8 *)root, 64,
 				     signature, size, &cert);
+		if (rc) {
+			pr_err("image: the root hash signature does not verify under %s",
+			       path);
+			pr_hint("treat this image as untrusted: keep it and handle it as an incident");
+		}
+	}
 	cert_free(&cert);
 	return rc;
 }
@@ -146,8 +165,13 @@ static int verify_image(const char *prefix, const char *cert)
 	int rc;
 
 	rc = shirudo_config_image_open(prefix, &image);
-	if (rc)
+	if (rc) {
+		pr_err("image verify: cannot open the image files at %s: %s",
+		       prefix, strerror(-rc));
+		if (rc == -ENOENT)
+			pr_hint("pass the -o <prefix> given to `shirudo image build`: it wrote <prefix>.img, .verity, .roothash and .p7s");
 		return rc;
+	}
 	while (size < sizeof(signature)) {
 		n = pread(image.signature_fd, signature + size,
 			  sizeof(signature) - size, size);

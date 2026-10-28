@@ -507,10 +507,7 @@ int shirudo_build_upatch_cli(int argc, char **argv)
 
 	if (argc < 2 || strcmp(argv[1], "rewrite-rodata")) {
 		fprintf(stderr,
-			"usage: shirudo-build upatch rewrite-rodata "
-			"<original.upatch> <modified.upatch> -o <output.upatch> "
-			"--data-range <offset:length>... [--keys-dir <dir>] "
-			"[--key <signing_key.pem>] [--cert <cert.der>]\n");
+			"usage: shirudo-build upatch rewrite-rodata <original.upatch> <modified.upatch> -o <output.upatch> --data-range <offset:length>... [--keys-dir <dir>] [--key <signing_key.pem>] [--cert <cert.der>]\n");
 		return 2;
 	}
 	for (i = 2; i < argc; i++) {
@@ -1767,8 +1764,7 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 		goto out;
 	}
 
-	pr_info("wrote %s (insns=%u sig=%zu data=%u sections=%u maps=%u "
-		"progs=%u decoders=%u name=%s%s)",
+	pr_info("wrote %s (insns=%u sig=%zu data=%u sections=%u maps=%u progs=%u decoders=%u name=%s%s)",
 		out_path, opts.insns_sz, sio.signature_sz, data_len,
 		nr_sections, nr_maps, nr_progs, nr_decoders,
 		upatch_name,
@@ -1796,9 +1792,8 @@ static int check_upatch_name(const char *name)
 	if (name && upatch_name_valid(name) &&
 	    strlen(name) < SHIRUDO_UPATCH_NAME_MAX)
 		return 0;
-	pr_err("upatch name '%s' is not 1 to %d characters of [A-Za-z0-9._-] "
-	       "not starting with '.'", name ? name : "",
-	       SHIRUDO_UPATCH_NAME_MAX - 1);
+	pr_err("upatch name '%s' is not 1 to %d characters of [A-Za-z0-9._-] not starting with '.'",
+	       name ? name : "", SHIRUDO_UPATCH_NAME_MAX - 1);
 	return -EINVAL;
 }
 

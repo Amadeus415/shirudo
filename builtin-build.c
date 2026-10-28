@@ -26,12 +26,10 @@
 static const struct shirudo_help build_help = {
 	.usage   = "shirudo build <input.bpf.c|.bpf.o> [-o <output.upatch>] [options]\n"
 		   "       shirudo build --unload <upatch-name> [-o <output.upatch>] [options]",
-	.summary = "Build a signed BPF .upatch artifact ready\nfor target-side loading. "
-		   "Operator-only: "
-		   "dispatches to the separate\nshirudo-build binary. The "
-		   "helper is resolved in this order:\n"
-		   "SHIRUDO_BUILD, " SHIRUDO_LIBEXEC_DIR "/shirudo-build, "
-		   "then shirudo-build on PATH.\n"
+	.summary = "Build a signed BPF .upatch artifact ready\n"
+		   "for target-side loading. Operator-only: dispatches to the separate\n"
+		   "shirudo-build binary. The helper is resolved in this order:\n"
+		   "SHIRUDO_BUILD, " SHIRUDO_LIBEXEC_DIR "/shirudo-build, then shirudo-build on PATH.\n"
 		   "Run the selected helper with --help for the full option list.",
 };
 
@@ -92,16 +90,17 @@ int shirudo_build_exec(const char *label, char **argv)
 {
 	bool use_path;
 	const char *path = resolve_helper(&use_path);
+	int err;
 
 	if (!*path) {
 		pr_err("'%s' cannot use empty SHIRUDO_BUILD", label);
+		pr_hint("unset SHIRUDO_BUILD, or set it to the path of the shirudo-build helper");
 		return 127;
 	}
 	if (!use_path && access(path, X_OK) != 0) {
-		pr_err("'%s' is an operator-only subcommand; "
-		       "shirudo-build helper '%s' is not executable. Set "
-		       "SHIRUDO_BUILD to a helper path or put shirudo-build on "
-		       "PATH.", label, path);
+		pr_err("'%s' is an operator-only subcommand; shirudo-build helper '%s' is not executable: %s",
+		       label, path, strerror(errno));
+		pr_hint("set SHIRUDO_BUILD to an executable shirudo-build, e.g. tools/shirudo-build/shirudo-build of a built checkout, or unset it");
 		return 127;
 	}
 	argv[0] = (char *)path;
@@ -109,7 +108,11 @@ int shirudo_build_exec(const char *label, char **argv)
 		execvp(path, argv);
 	else
 		execv(path, argv);
-	pr_err("exec %s: %s", path, strerror(errno));
+	err = errno;
+	pr_err("exec %s: %s", path, strerror(err));
+	if (use_path && err == ENOENT)
+		pr_hint("'%s' is operator-only: install the operator package (it puts shirudo-build in %s), or set SHIRUDO_BUILD=<path> or put shirudo-build on PATH",
+			label, SHIRUDO_LIBEXEC_DIR);
 	return 127;
 }
 

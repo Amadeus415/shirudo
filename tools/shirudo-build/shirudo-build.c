@@ -162,16 +162,17 @@ int shirudo_build_check_keys(const char *pkey, const char *cert)
 {
 	int fd = open_signing_key(pkey);
 
-	if (fd < 0) {
-		if (fd != -EPERM)
-			pr_err("run `shirudo genkey` on the operator (or pass --key).");
+	if (fd < 0)
 		return 1;
-	}
 	close(fd);
 	if (access(cert, R_OK) != 0) {
-		pr_err("cert not readable: %s: %s",
-		       cert, strerror(errno));
-		pr_err("run `shirudo genkey` on the operator (or pass --cert).");
+		int err = errno;
+
+		pr_err("cert not readable: %s: %s", cert, strerror(err));
+		if (err == ENOENT)
+			pr_hint("the cert.der `shirudo genkey` wrote with this key belongs beside signing_key.pem in the --keys-dir directory");
+		else if (err == EACCES)
+			pr_hint("run as a user that can read %s", cert);
 		return 1;
 	}
 	return 0;
@@ -328,11 +329,9 @@ int main(int argc, char **argv)
 				pr_info("--payload-sha256 derived from archive %s",
 					archive);
 			} else {
-				pr_warn("--payload-sha256 omitted and no archive "
-					"entry at %s; the directive will carry no "
-					"expected payload and the target will skip "
-					"the payload_mismatch check. Pass "
-					"--payload-sha256 to bind it.", archive);
+				pr_warn("--payload-sha256 omitted and no archive entry at %s; the directive will carry no expected payload and the target will skip the payload_mismatch check",
+					archive);
+				pr_hint("pass --payload-sha256 <64-hex> with the Payload SHA256 that `shirudo upatch info <file.upatch>` prints for the loaded artifact");
 			}
 		}
 
@@ -352,8 +351,7 @@ int main(int argc, char **argv)
 		if (rc == 0 && emit_artifacts) {
 			printf("emitted:\n");
 			printf("  upatch: %s\n", output);
-			printf("  bpf.o:  (none; --unload embeds the prebuilt "
-			       "unload program)\n");
+			printf("  bpf.o:  (none; --unload embeds the prebuilt unload program)\n");
 		}
 		return rc ? 1 : 0;
 	}
@@ -383,10 +381,10 @@ int main(int argc, char **argv)
 		const char *vmlinux_h =
 			shirudo_build_locate_vmlinux(vmlinux_override);
 		if (!vmlinux_h) {
-			pr_err("vmlinux.h not found (tried %s, ./vmlinux.h, "
-			       "./vendor/linux/vmlinux.h, %s)",
+			pr_err("vmlinux.h not found (tried %s, ./vmlinux.h, ./vendor/linux/vmlinux.h, %s)",
 			       vmlinux_override ? vmlinux_override
 						 : "(none)", SHIRUDO_VMLINUX_PATH);
+			pr_hint("generate it from the target kernel's BTF (/sys/kernel/btf/vmlinux there) with `tools/gen-vmlinux-h/gen-vmlinux-h <BTF file> > vmlinux.h` from the source tree, and pass --vmlinux <path>");
 			return 1;
 		}
 		if (emit_artifacts) {
@@ -400,7 +398,7 @@ int main(int argc, char **argv)
 			rc = shirudo_build_compile(input, artifact_buf,
 						   vmlinux_h, extra_cflags, NULL);
 			if (rc) {
-				pr_err("compile %s: %d", input, rc);
+				pr_err("compile %s: %s", input, strerror(-rc));
 				return 1;
 			}
 			bpf_o = artifact_buf;
@@ -409,7 +407,7 @@ int main(int argc, char **argv)
 			rc = compile_to_temp(input, vmlinux_h, extra_cflags,
 					     &temp_bpf_o);
 			if (rc) {
-				pr_err("compile %s: %d", input, rc);
+				pr_err("compile %s: %s", input, strerror(-rc));
 				return 1;
 			}
 			bpf_o = temp_bpf_o;
@@ -439,8 +437,7 @@ int main(int argc, char **argv)
 		if (emitted_o)
 			printf("  bpf.o:  %s\n", emitted_o);
 		else
-			printf("  bpf.o:  (none; input was a pre-compiled "
-			       "object, not recompiled)\n");
+			printf("  bpf.o:  (none; input was a pre-compiled object, not recompiled)\n");
 	}
 	return rc ? 1 : 0;
 }

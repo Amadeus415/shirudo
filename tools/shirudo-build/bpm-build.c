@@ -372,6 +372,7 @@ static int build_parse_spec(struct bpm_build_spec *spec, char *body)
 	     line = strtok_r(NULL, "\n", &save)) {
 		char *s, *eq, *key, *value;
 
+		spec->error_offset = (size_t)(line - body) + 1;
 		build_strip_comment(line);
 		s = build_trim(line);
 		if (!*s)
@@ -573,6 +574,7 @@ static int build_parse_spec(struct bpm_build_spec *spec, char *body)
 				return -EINVAL;
 		}
 	}
+	spec->error_offset = 0;
 	if (!build_name_ok(spec->name))
 		return -EINVAL;
 	for (size_t i = 0; i < spec->n_files; i++) {
@@ -628,6 +630,7 @@ int bpm_build_parse_beefile(const __u8 *body, size_t len,
 
 	if (!body || !spec || memchr(body, '\0', len))
 		return -EINVAL;
+	spec->error_offset = 0;
 	spec->build_file = xmalloc(len + 1);
 	scratch = xmalloc(len + 1);
 	if (!spec->build_file || !scratch) {
@@ -646,6 +649,40 @@ int bpm_build_parse_beefile(const __u8 *body, size_t len,
 	rc = build_parse_spec(spec, (char *)scratch);
 	xfree(scratch, len + 1);
 	return rc;
+}
+
+/*
+ * The parser stays silent, as the fuzzer and `bpm tree append` run it
+ * too; the commands report the line it stopped at.
+ */
+void bpm_build_beefile_error(const char *what, const char *path,
+			     const struct bpm_build_spec *spec, int rc)
+{
+	const char *text = (const char *)spec->build_file;
+	size_t off = spec->error_offset, line = 1, len, i;
+	const char *end;
+
+	if (rc != -EINVAL && rc != -E2BIG && rc != -ENAMETOOLONG) {
+		pr_err("%s: cannot parse %s: %s", what, path, strerror(-rc));
+		return;
+	}
+	if (!text || !off || off > spec->build_file_len) {
+		pr_err("%s: %s is not a valid Beefile", what, path);
+		pr_hint("[package] needs a name, every [[files]] and [[upatches]] entry a source, and every [[upatches.rodata]] a symbol, a relative input, a generator and an update");
+		return;
+	}
+	off--;
+	for (i = 0; i < off; i++)
+		line += text[i] == '\n';
+	end = memchr(text + off, '\n', spec->build_file_len - off);
+	len = end ? (size_t)(end - text - off) : spec->build_file_len - off;
+	pr_err("%s: %s:%zu: cannot parse '%.*s'", what, path, line,
+	       (int)(len > 120 ? 120 : len), text + off);
+	if (rc == -E2BIG)
+		pr_hint("a [[upatches.rodata]] table follows its [[upatches]] entry, and a Beefile holds at most %d [[files]] and %d [[upatches]] entries, %d [[upatches.rodata]] each",
+			BPM_BUILD_MAX_ENTRIES, BPM_BUILD_MAX_ENTRIES, BPM_BUILD_MAX_RODATA);
+	else
+		pr_hint("each line is a [table] or a key that table knows, as key = \"string\" or key = [\"string\", ...]");
 }
 
 void bpm_build_spec_free(struct bpm_build_spec *spec)
@@ -801,6 +838,8 @@ static int build_rodata_apply(const struct bpm_build_spec *spec,
 		if (rc) {
 			pr_err("bpm %s: converter failed for .rodata symbol %s",
 			       update ? "config update" : "build", rodata->symbol);
+			pr_hint("it runs in the Beefile's directory as its %s command plus --input <file> --symbol %s --output <file>; run that by hand to see why it fails",
+				update ? "update" : "generator", rodata->symbol);
 			goto out;
 		}
 		rc = build_read_file(generated, &value, &value_len,
@@ -966,6 +1005,19 @@ static int build_validate(struct bpm_build_spec *spec,
 		}
 	}
 	return 0;
+}
+
+static void build_validate_error(const char *what, const char *path, int rc)
+{
+	if (rc == -EEXIST) {
+		pr_err("%s: %s: two [[upatches.rodata]] inputs at different paths share a file name stem",
+		       what, path);
+		pr_hint("--rodata-input selects an input by that stem, so give each input file a distinct name");
+		return;
+	}
+	pr_err("%s: %s: a source, .rodata input or converter is missing, or a target is invalid, reserved or used twice",
+	       what, path);
+	pr_hint("sources are regular files given relative to the Beefile's directory and inside it; targets are relative, unique and none of Beefile, README.md, cert.der or build-environment.json");
 }
 
 static int build_join(char *out, size_t cap, const char *dir, const char *name)
@@ -1150,9 +1202,9 @@ static int build_upatches(struct bpm_build_spec *spec, const char *pkey,
 			if (!vmlinux_h) {
 				vmlinux_h = shirudo_build_locate_vmlinux(NULL);
 				if (!vmlinux_h) {
-					pr_err("bpm build: vmlinux.h not found (tried "
-					       "./vmlinux.h, ./vendor/linux/vmlinux.h, %s)",
+					pr_err("bpm build: vmlinux.h not found (tried ./vmlinux.h, ./vendor/linux/vmlinux.h, %s)",
 					       SHIRUDO_VMLINUX_PATH);
+					pr_hint("generate it from the target kernel's BTF (/sys/kernel/btf/vmlinux there) with `tools/gen-vmlinux-h/gen-vmlinux-h <BTF file> > vmlinux.h` from the source tree, and pass --vmlinux <path>");
 					return -ENOENT;
 				}
 			}
@@ -1555,12 +1607,17 @@ static int shirudo_build_bpm_build(int argc, char **argv)
 		}
 	}
 	if (!version || !build_version_ok(version)) {
-		pr_err("bpm build: --version <version> is required");
+		if (version)
+			pr_err("bpm build: --version %s is not 1 to 127 characters of [A-Za-z0-9._+-] starting with a letter or digit",
+			       version);
+		else
+			pr_err("bpm build: --version <version> is required");
 		goto usage;
 	}
 	if (!build_resolve_keys_dir(keys_arg, keys_dir, sizeof(keys_dir)) ||
 	    !realpath(keys_dir, keys_abs)) {
 		pr_err("bpm build: keys directory %s is not usable", keys_dir);
+		pr_hint("run `shirudo genkey --keys-dir <dir>` on the operator, or pass --keys-dir with the directory holding signing_key.pem and cert.der");
 		return -ENOENT;
 	}
 	rc = key_paths(keys_abs, pkey, sizeof(pkey), cert_path,
@@ -1589,8 +1646,13 @@ static int shirudo_build_bpm_build(int argc, char **argv)
 			      "Beefile")) {
 		return -ENAMETOOLONG;
 	}
-	if (!realpath(build_file, resolved_file))
-		return -errno;
+	if (!realpath(build_file, resolved_file)) {
+		rc = -errno;
+		pr_err("bpm build: no Beefile at %s: %s", build_file,
+		       strerror(-rc));
+		pr_hint("run it in the package directory, pass that directory as [context], or name the file with -f <name>.bee");
+		return rc;
+	}
 	spec = xmalloc(sizeof(*spec));
 	if (!spec)
 		return -ENOMEM;
@@ -1608,10 +1670,13 @@ static int shirudo_build_bpm_build(int argc, char **argv)
 	if (rc)
 		goto out;
 	rc = bpm_build_parse_beefile(body, body_len, spec);
-	if (!rc)
-		rc = build_validate(spec, false);
 	if (rc) {
-		pr_err("bpm build: %s is not a valid Beefile", resolved_file);
+		bpm_build_beefile_error("bpm build", resolved_file, spec, rc);
+		goto out;
+	}
+	rc = build_validate(spec, false);
+	if (rc) {
+		build_validate_error("bpm build", resolved_file, rc);
 		goto out;
 	}
 	rc = build_rodata_overrides_known(spec, overrides, n_overrides);
@@ -1808,12 +1873,8 @@ int shirudo_build_bpm_config_update(int argc, char **argv)
 	for (int i = 1; i < argc; i++) {
 		if (shirudo_build_is_help(argv[i])) {
 			fprintf(stdout,
-				"usage: shirudo bpm config update "
-				"--base-package <package.bee|oci://host/repo:tag> "
-				"--version <version> "
-				"[-f <name>.bee] [--rodata-input <name>=<path>]...\n"
-				"Without -f, the Beefile and updater inputs come from "
-				"--base-package and are trusted as operator-side code.\n");
+				"usage: shirudo bpm config update --base-package <package.bee|oci://host/repo:tag> --version <version> [-f <name>.bee] [--rodata-input <name>=<path>]...\n"
+				"Without -f, the Beefile and updater inputs come from --base-package and are trusted as operator-side code.\n");
 			return 0;
 		} else if (!strcmp(argv[i], "-f") ||
 			   !strcmp(argv[i], "--file")) {
@@ -1884,6 +1945,8 @@ int shirudo_build_bpm_config_update(int argc, char **argv)
 	if (rc)
 		goto out_base;
 	if (bpm_semver_compare(version, base_info.version) <= 0) {
+		pr_err("bpm config update: --version %s is not newer than the base package's %s",
+		       version, base_info.version);
 		rc = -EINVAL;
 		goto out_base;
 	}
@@ -1893,6 +1956,9 @@ int shirudo_build_bpm_config_update(int argc, char **argv)
 	}
 	if (!build_resolve_keys_dir(keys_arg, keys_dir, sizeof(keys_dir)) ||
 	    !realpath(keys_dir, keys_abs)) {
+		pr_err("bpm config update: keys directory %s is not usable",
+		       keys_dir);
+		pr_hint("pass --keys-dir with the directory holding the signing_key.pem and cert.der that built the base package");
 		rc = -ENOENT;
 		goto out_base;
 	}
@@ -1927,9 +1993,9 @@ int shirudo_build_bpm_config_update(int argc, char **argv)
 		}
 		rc = build_copy_package_member(base_package, "Beefile", build_file);
 		if (rc == -ENOENT) {
-			pr_err("bpm config update: base package %s has no Beefile; "
-			       "rebuild it with a Beefile or pass -f <name>.bee",
+			pr_err("bpm config update: base package %s has no Beefile",
 			       base_package);
+			pr_hint("pass the package's Beefile with -f <name>.bee, or rebuild the base package from a Beefile");
 			rc = -EINVAL;
 		}
 		if (rc)
@@ -1957,6 +2023,9 @@ int shirudo_build_bpm_config_update(int argc, char **argv)
 	if (rc)
 		goto out;
 	rc = bpm_build_parse_beefile(body, body_len, spec);
+	if (rc)
+		bpm_build_beefile_error("bpm config update", resolved_file,
+					spec, rc);
 	if (!rc && package_source) {
 		for (size_t i = 0; i < spec->n_files && !rc; i++) {
 			char output[PATH_MAX];
@@ -1989,17 +2058,31 @@ int shirudo_build_bpm_config_update(int argc, char **argv)
 			}
 		}
 	}
-	if (!rc)
+	if (!rc) {
 		rc = build_validate(spec, package_source);
-	if (!rc)
+		if (rc)
+			build_validate_error("bpm config update", resolved_file,
+					     rc);
+	}
+	if (!rc) {
 		rc = build_rodata_overrides_known(spec, overrides, n_overrides);
-	if (!rc && strcmp(spec->name, base_info.name))
+		if (rc)
+			pr_err("bpm config update: a --rodata-input names no [[upatches.rodata]] input of %s",
+			       resolved_file);
+	}
+	if (!rc && strcmp(spec->name, base_info.name)) {
+		pr_err("bpm config update: %s names package %s, the base package is %s",
+		       resolved_file, spec->name, base_info.name);
 		rc = -EINVAL;
+	}
 	for (size_t i = 0; !rc && i < spec->n_upatches; i++)
 		if (spec->upatches[i].n_rodata)
 			has_rodata = true;
-	if (!rc && !has_rodata)
+	if (!rc && !has_rodata) {
+		pr_err("bpm config update: %s has no [[upatches.rodata]] entry to update",
+		       resolved_file);
 		rc = -EINVAL;
+	}
 	if (rc)
 		goto out;
 	if (cert_read_file(cert_path, &cert)) {
@@ -2011,6 +2094,9 @@ int shirudo_build_bpm_config_update(int argc, char **argv)
 		goto out_cert;
 	hex_encode(digest, sizeof(digest), fingerprint);
 	if (strcmp(fingerprint, base_info.signer)) {
+		pr_err("bpm config update: the base package's signer %s is not the key of %s",
+		       base_info.signer, cert_path);
+		pr_hint("pass --keys-dir with the signing key that built the base package");
 		rc = -EKEYREJECTED;
 		goto out_cert;
 	}
@@ -2043,8 +2129,15 @@ int shirudo_build_bpm_config_update(int argc, char **argv)
 		if (rc)
 			break;
 		rc = shirudo_build_package_verify(load, cert_path);
-		if (rc)
+		if (rc) {
+			pr_err("bpm config update: %s of %s is not a load upatch that verifies under %s: %s",
+			       upatch->load_target, base_package, cert_path,
+			       strerror(-rc));
+			if (rc == -EINVAL || rc == -EBADMSG)
+				pr_hint("treat %s as untrusted: keep it and handle it as an incident",
+					base_package);
 			break;
+		}
 		build_upatch_name(upatch->source, expected_name,
 				  sizeof(expected_name));
 		rc = upatch_open(load, &parsed);
@@ -2108,10 +2201,7 @@ out_base:
 	return rc;
 usage:
 	fprintf(stderr,
-		"usage: shirudo bpm config update --base-package "
-		"<package.bee|oci://host/repo:tag> --version <version> "
-		"[-f <name>.bee] "
-		"[--rodata-input <name>=<path>]... [--keys-dir <dir>]\n");
+		"usage: shirudo bpm config update --base-package <package.bee|oci://host/repo:tag> --version <version> [-f <name>.bee] [--rodata-input <name>=<path>]... [--keys-dir <dir>]\n");
 	return -EINVAL;
 }
 

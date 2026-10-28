@@ -81,7 +81,12 @@ static EVP_PKEY *read_priv_pem(const char *path)
 
 	fp = fopen(path, "r");
 	if (!fp) {
-		pr_err("open %s: %s", path, strerror(errno));
+		int err = errno;
+
+		pr_err("open %s: %s", path, strerror(err));
+		if (err == EACCES)
+			pr_hint("run as the user that owns %s rather than loosening its mode 0600",
+				path);
 		return NULL;
 	}
 	k = PEM_read_PrivateKey(fp, NULL, NULL, NULL);
@@ -268,6 +273,7 @@ static int dump_signing_key(const char *pkey_path,
 		printf("  %-22s %s\n", "Cert match:",
 		       "MISMATCH  (private key does NOT match cert)");
 		pr_warn("keys: private key and cert have different public keys");
+		pr_hint("put the cert.der `shirudo genkey` wrote with %s beside it", pkey_path);
 		rc = -1;
 	}
 out:
@@ -418,10 +424,9 @@ static const struct shirudo_help keys_help = {
 		   "       shirudo keys add <cert.der> --vouch <file>\n"
 		   "       shirudo keys revoke <fingerprint> [--promote <fp>]\n"
 		   "       shirudo keys vouch <cert.der> [-o <file>]",
-	.summary = "Inspect the shirudo key material this host holds: the "
-		   "on-disk cert and\nsigning key (if present), the trusted "
-		   "set a target enrols, and the kernel\nkeyring holding it "
-		   "(if init'd). Local-only on either side.",
+	.summary = "Inspect the shirudo key material this host holds: the on-disk cert and\n"
+		   "signing key (if present), the trusted set a target enrols, and the kernel\n"
+		   "keyring holding it (if init'd). Local-only on either side.",
 	.sections   = keys_help_sections,
 	.n_sections = ARRAY_SIZE(keys_help_sections),
 	.footer  = "Default paths:\n"
@@ -447,10 +452,9 @@ static const struct shirudo_help_section keys_add_sections[] = {
 
 static const struct shirudo_help keys_add_help = {
 	.usage   = "shirudo keys add <cert.der> --vouch <file> [--keys-dir <dir>]",
-	.summary = "Add a certificate to the trusted set this target enrols at "
-		   "its next boot.\nThe vouch must verify under a certificate "
-		   "already in the set; regenerate\nthe initrd afterwards "
-		   "(shirudo-gen-initrd). Prints the fingerprint.",
+	.summary = "Add a certificate to the trusted set this target enrols at its next boot.\n"
+		   "The vouch must verify under a certificate already in the set; regenerate\n"
+		   "the initrd afterwards (shirudo-gen-initrd). Prints the fingerprint.",
 	.sections   = keys_add_sections,
 	.n_sections = ARRAY_SIZE(keys_add_sections),
 };
@@ -468,10 +472,9 @@ static const struct shirudo_help_section keys_vouch_sections[] = {
 
 static const struct shirudo_help keys_vouch_help = {
 	.usage   = "shirudo keys vouch <cert.der> [-o <file>] [--keys-dir <dir>]",
-	.summary = "Sign a vouch for another operator's certificate with this "
-		   "operator's key,\nfor `shirudo keys add --vouch` on the "
-		   "targets that enrol this key.\nPrints the vouched "
-		   "certificate's fingerprint.",
+	.summary = "Sign a vouch for another operator's certificate with this operator's key,\n"
+		   "for `shirudo keys add --vouch` on the targets that enrol this key.\n"
+		   "Prints the vouched certificate's fingerprint.",
 	.sections   = keys_vouch_sections,
 	.n_sections = ARRAY_SIZE(keys_vouch_sections),
 };
@@ -494,6 +497,7 @@ static int check_cert_algorithm(const __u8 *der, size_t der_sz,
 	if (rc || strcmp(name, "ML-DSA-87")) {
 		pr_err("keys add: %s is %s; shirudo accepts only ML-DSA-87",
 		       what, rc ? "of an unknown algorithm" : name);
+		pr_hint("a new signer is the cert.der `shirudo genkey` wrote on its operator");
 		return -EKEYREJECTED;
 	}
 	return 0;
@@ -576,8 +580,8 @@ static int keys_add(int argc, const char **argv)
 		return 2;
 	}
 	if (shirudo_image_config_active()) {
-		pr_err("target: add vouched BPF signers to the signed "
-		       "config selected for boot and reboot to enroll them");
+		pr_err("keys add: this target enrolls new BPF signers only from its signed config image, at boot");
+		pr_hint("put the certificate and its vouch at keys/trusted/<fingerprint>.der and keys/trusted/<fingerprint>.vouch in the config image selected for the next boot, then reboot");
 		return 1;
 	}
 	keys_dir = keys_dir_resolve(keys_dir_arg);
@@ -603,8 +607,10 @@ static int keys_add(int argc, const char **argv)
 
 	rc = keys_load(keys_dir, NULL, true, &set);
 	if (rc) {
-		pr_err("keys add: no trusted set under %s: %s (install the "
-		       "primary certificate first)", keys_dir, strerror(-rc));
+		pr_err("keys add: no trusted set under %s: %s", keys_dir,
+		       strerror(-rc));
+		pr_hint("the primary certificate belongs at %s/cert.der; pass --keys-dir <dir> if the set lives elsewhere",
+			keys_dir);
 		goto out;
 	}
 	if (keys_is_revoked(revoked, fp)) {
@@ -619,19 +625,21 @@ static int keys_add(int argc, const char **argv)
 	}
 	rc = keys_verify_vouch(&set, der, der_sz, sig, sig_sz, by);
 	if (rc) {
-		pr_err("keys add: %s does not vouch for %s under any of the "
-		       "%zu trusted certificate%s", vouch_path, fp_hex, set.n,
-		       set.n == 1 ? "" : "s");
+		pr_err("keys add: %s does not vouch for %s under any of the %zu trusted certificate%s",
+		       vouch_path, fp_hex, set.n, set.n == 1 ? "" : "s");
+		pr_hint("treat %s and %s as untrusted: keep them and handle it as an incident",
+			cert, vouch_path);
 		goto out;
 	}
 	hex_encode(by, 32, by_hex);
 	if (!strcmp(keys_dir, SHIRUDO_KEYS_DIR)) {
 		rc = check_voucher_live(&set, by);
 		if (rc) {
-			pr_err("keys add: the vouching certificate %s is not "
-			       "in the bpf keyring this boot%s%s", by_hex,
-			       rc == -ENOKEY ? "" : ": ",
+			pr_err("keys add: the vouching certificate %s is not in the bpf keyring this boot%s%s",
+			       by_hex, rc == -ENOKEY ? "" : ": ",
 			       rc == -ENOKEY ? "" : strerror(-rc));
+			if (rc == -ENOKEY)
+				pr_hint("certificates join the keyring only at boot; `shirudo keys` lists what the live keyring holds");
 			goto out;
 		}
 	}
@@ -645,8 +653,8 @@ static int keys_add(int argc, const char **argv)
 	}
 	/* A set past the limit would fail to load at all, init included. */
 	if (set.n >= SHIRUDO_KEYS_MAX) {
-		pr_err("keys add: the trusted set holds %d certificates, the "
-		       "most a target enrols", SHIRUDO_KEYS_MAX);
+		pr_err("keys add: the trusted set holds %d certificates, the most a target enrols",
+		       SHIRUDO_KEYS_MAX);
 		rc = -E2BIG;
 		goto out;
 	}
@@ -659,8 +667,8 @@ static int keys_add(int argc, const char **argv)
 	}
 	pr_audit("keys add: fingerprint=%s vouched_by=%s path=%s", fp_hex,
 		 by_hex, out);
-	pr_info("keys add: %s joins the set at the next boot; regenerate "
-		"the initrd (shirudo-gen-initrd)", fp_hex);
+	pr_info("keys add: %s joins the set at the next boot; regenerate the initrd (shirudo-gen-initrd)",
+		fp_hex);
 	printf("%s\n", fp_hex);
 out:
 	if (sig)
@@ -671,8 +679,7 @@ out:
 
 static const struct shirudo_help keys_revoke_help = {
 	.usage = "shirudo keys revoke",
-	.summary = "Local revocation is disabled. Publish revocation records "
-		   "in a signed config image and activate it with image update.",
+	.summary = "Local revocation is disabled. Publish revocation records in a signed config image and activate it with image update.",
 };
 
 static int append_key_event(const char *type, const char *fp_hex,
@@ -726,9 +733,7 @@ static int measure_revoke_locked(const struct shirudo_trusted_cert *c,
 	chain_key_event("shirudo-key-revoke", c->sha256, event);
 	rc = chain_extend(event, chain);
 	if (rc) {
-		pr_err("keys revoke: register %s (category: %s); the key is "
-		       "revoked but the revocation is NOT measured; operator "
-		       "must reconcile",
+		pr_err("keys revoke: register %s (category: %s); the key is revoked but the revocation is NOT measured; operator must reconcile",
 		       rc == -ENODEV ? "unavailable" :
 		       rc == -EACCES ? "is not the one init bound" :
 		       "extend failed",
@@ -738,8 +743,7 @@ static int measure_revoke_locked(const struct shirudo_trusted_cert *c,
 	hex_encode(c->sha256, 32, sha_hex);
 	rc = append_key_event("key_revoke", fp_hex, sha_hex, event);
 	if (rc) {
-		pr_err("keys revoke: eventlog append failed after extend -- "
-		       "chain/log desync; operator must reconcile");
+		pr_err("keys revoke: eventlog append failed after extend -- chain/log desync; operator must reconcile");
 		return rc;
 	}
 	hex_encode(chain, 32, chain_hex);
@@ -755,8 +759,8 @@ static int measure_revoke(const struct shirudo_trusted_cert *c,
 
 	lock = eventlog_lock();
 	if (lock < 0) {
-		pr_err("keys revoke: cannot take the register lock: %s; the "
-		       "revocation is NOT measured", strerror(-lock));
+		pr_err("keys revoke: cannot take the register lock: %s; the revocation is NOT measured",
+		       strerror(-lock));
 		return lock;
 	}
 	rc = measure_revoke_locked(c, fp_hex);
@@ -862,8 +866,8 @@ static int keys_revoke(int argc, const char **argv)
 		print_help(&keys_revoke_help);
 		return 0;
 	}
-	pr_err("keys revoke: put revocation records in a signed config image, "
-	       "then run `shirudo image update`");
+	pr_err("keys revoke: local revocation is disabled");
+	pr_hint("put the certificate at keys/revoked/<fingerprint>.der in a signed config image and activate it with `shirudo image update <prefix>`");
 	return 1;
 }
 
@@ -969,8 +973,8 @@ static int keys_show(int argc, const char **argv)
 	    (set.n > 1 || set.n_revoked || set.n_unvouched)) {
 		size_t i;
 
-		printf("%sTrusted set (%zu member%s, %zu revoked, "
-		       "%zu unvouched):\n", shown ? "\n" : "", set.n,
+		printf("%sTrusted set (%zu member%s, %zu revoked, %zu unvouched):\n",
+		       shown ? "\n" : "", set.n,
 		       set.n == 1 ? "" : "s", set.n_revoked, set.n_unvouched);
 		for (i = 0; i < set.n; i++) {
 			char fp[65], sha[65];
@@ -1010,10 +1014,9 @@ static int keys_show(int argc, const char **argv)
 	}
 
 	if (!shown) {
-		pr_err("no shirudo key material on this host: no %s and no "
-		       "\"%s\" kernel keyring -- run `shirudo genkey` "
-		       "(operator) or `shirudo init` (target)",
+		pr_err("no shirudo key material on this host: no %s and no \"%s\" kernel keyring",
 		       cert_path, ".bpf");
+		pr_hint("run `shirudo genkey` on an operator, or `shirudo init` on a target");
 		rc = 1;
 	}
 	return rc;

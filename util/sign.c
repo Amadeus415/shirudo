@@ -26,6 +26,7 @@
 
 #include <openssl/bio.h>
 #include <openssl/cms.h>
+#include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/opensslv.h>
@@ -68,6 +69,12 @@ static void display_openssl_errors(void)
 			display_openssl_errors();	\
 	} while (0)
 
+static bool openssl_has_mldsa(void)
+{
+	return OPENSSL_version_major() > 3 ||
+	       (OPENSSL_version_major() == 3 && OPENSSL_version_minor() >= 5);
+}
+
 int open_signing_key(const char *pkey_path)
 {
 	struct stat st;
@@ -78,6 +85,11 @@ int open_signing_key(const char *pkey_path)
 	if (fd < 0) {
 		rc = -errno;
 		pr_err("open private key %s: %s", pkey_path, strerror(errno));
+		if (rc == -ENOENT)
+			pr_hint("run `shirudo genkey` on the operator, or point --keys-dir (or SHIRUDO_KEYS_DIR) at the directory holding signing_key.pem and cert.der");
+		else if (rc == -EACCES)
+			pr_hint("run as the user that owns %s rather than loosening its mode 0600",
+				pkey_path);
 		return rc;
 	}
 	if (fstat(fd, &st)) {
@@ -91,9 +103,9 @@ int open_signing_key(const char *pkey_path)
 		goto err;
 	}
 	if ((st.st_mode & 07777) != 0600) {
-		pr_err("signing key %s has mode 0%o, must be 0600 "
-		       "(run `chmod 0600 %s`)",
-		       pkey_path, (__u32)(st.st_mode & 07777), pkey_path);
+		pr_err("signing key %s has mode 0%o, must be 0600",
+		       pkey_path, (__u32)(st.st_mode & 07777));
+		pr_hint("run `chmod 0600 %s`", pkey_path);
 		goto err;
 	}
 	return fd;
@@ -120,6 +132,13 @@ static EVP_PKEY *read_private_key(const char *pkey_path)
 	private_key = PEM_read_bio_PrivateKey(b, NULL, NULL, NULL);
 	BIO_free(b);
 	DISPLAY_OSSL_ERR(!private_key);
+	if (!private_key) {
+		pr_err("signing key %s: OpenSSL cannot read it as a PEM private key",
+		       pkey_path);
+		if (!openssl_has_mldsa())
+			pr_hint("this host runs %s; ML-DSA-87 keys need OpenSSL 3.5 or newer",
+				OpenSSL_version(OPENSSL_VERSION));
+	}
 	return private_key;
 }
 
@@ -205,15 +224,18 @@ int cms_sign(struct shirudo_sign_io *io,
 		goto cleanup;
 	}
 	if (!pkey_is_mldsa(private_key)) {
-		pr_err("%s: %s key; shirudo signs with ML-DSA only "
-		       "(re-key with shirudo genkey)", pkey_path,
+		pr_err("%s: %s key; shirudo signs with ML-DSA only", pkey_path,
 		       EVP_PKEY_get0_type_name(private_key) ?: "unknown");
+		pr_hint("create an ML-DSA-87 pair with `shirudo genkey --keys-dir <dir>`");
 		err = -EINVAL;
 		goto cleanup;
 	}
 
 	x509 = read_x509(cert_path);
 	if (!x509) {
+		pr_err("certificate %s: not an X.509 certificate in DER or PEM form",
+		       cert_path);
+		pr_hint("pass the cert.der `shirudo genkey` wrote beside the signing key");
 		err = -EINVAL;
 		goto cleanup;
 	}
@@ -241,6 +263,15 @@ int cms_sign(struct shirudo_sign_io *io,
 
 	if (!CMS_add1_signer(cms, x509, private_key, cms_digest,
 			     signer_flags)) {
+		unsigned long e = ERR_peek_last_error();
+
+		display_openssl_errors();
+		if (ERR_GET_LIB(e) == ERR_LIB_CMS &&
+		    ERR_GET_REASON(e) == CMS_R_PRIVATE_KEY_DOES_NOT_MATCH_CERTIFICATE) {
+			pr_err("signing key %s and certificate %s are not a pair",
+			       pkey_path, cert_path);
+			pr_hint("pass the cert.der `shirudo genkey` wrote with this key; `shirudo keys --keys-dir <dir>` compares a pair");
+		}
 		err = -EINVAL;
 		goto cleanup;
 	}
