@@ -41,6 +41,7 @@
 #include "util/json.h"
 #include "util/macros.h"
 #include "util/identity.h"
+#include "util/image_runtime.h"
 #include "util/keyring.h"
 #include "util/keys.h"
 #include "util/log.h"
@@ -537,6 +538,9 @@ int cmd_status(int argc, const char **argv)
 	const char *otel_status = NULL;
 	const char *chain_mismatch = NULL;
 	bool otel_endpoint_configured = false;
+	char config_root_hex[65] = "";
+	__u8 config_root[32];
+	int config_state;
 
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--json") == 0) {
@@ -652,6 +656,9 @@ int cmd_status(int argc, const char **argv)
 
 	gather_assets(&assets);
 	tamper_rc = tamper_read(&tamper);
+	config_state = shirudo_image_config_state(config_root);
+	if (config_state != -ENODEV)
+		hex_encode(config_root, sizeof(config_root), config_root_hex);
 
 	{
 		if (strsprintf(nv_index, sizeof(nv_index), "0x%08X",
@@ -752,6 +759,9 @@ int cmd_status(int argc, const char **argv)
 					 match == 1, match >= 0,
 					 nv_index);
 			cin.chain_mismatch = chain_mismatch;
+			cin.config_seen = config_state != -ENODEV;
+			cin.config_state = config_state;
+			cin.config_root = config_root_hex;
 			otel_status = status_verdict(&cin);
 			json_kv_string(&e, "status",
 				       otel_status);
@@ -888,6 +898,20 @@ int cmd_status(int argc, const char **argv)
 				       strerror(-tamper_rc));
 		else
 			json_kv_null(&e, "tamper_error");
+		if (config_state != -ENODEV) {
+			json_obj_open_key(&e, "config");
+			json_kv_string(&e, "root_hash", config_root_hex);
+			json_kv_bool(&e, "activation_pending",
+				     config_state == -EINPROGRESS);
+			if (config_state && config_state != -EINPROGRESS)
+				json_kv_string(&e, "error",
+					       strerror(-config_state));
+			else
+				json_kv_null(&e, "error");
+			json_obj_close(&e);
+		} else {
+			json_kv_null(&e, "config");
+		}
 		if (include_system)
 			sysinfo_emit_json(&e, &sysi);
 		{
@@ -1057,6 +1081,13 @@ int cmd_status(int argc, const char **argv)
 					ret = 1;
 				}
 			}
+			if (otel && !otel_endpoint_configured && config_state &&
+			    config_state != -ENODEV) {
+				pr_warn("status: no keepalive is sent: with the config activation %s, no export endpoint is known, since a config image is used only when its activation record vouches for it",
+					config_state == -EINPROGRESS ?
+					"pending" : "unverifiable");
+				pr_hint("an OTEL_EXPORTER_OTLP_ENDPOINT in /etc/shirudo/map-export.env keeps keepalives flowing in this state");
+			}
 			if (json_stdout)
 				printf("%s\n", json_buf);
 		}
@@ -1082,6 +1113,9 @@ int cmd_status(int argc, const char **argv)
 				 match == 1, match >= 0,
 				 nv_index);
 		cin.chain_mismatch = chain_mismatch;
+		cin.config_seen = config_state != -ENODEV;
+		cin.config_state = config_state;
+		cin.config_root = config_root_hex;
 		verdict = status_verdict(&cin);
 		status_reason(&cin, reason, sizeof(reason));
 		nc = conditions(&cin, conds, ARRAY_SIZE(conds));

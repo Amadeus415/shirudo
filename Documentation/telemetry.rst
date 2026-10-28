@@ -221,7 +221,8 @@ Keepalive, one log record from ``shirudo status --otel``::
 
     eventName             shirudo.keepalive
     severityNumber/Text   9 / INFO     status ok
-                          13 / WARN    degraded, init-pending
+                          13 / WARN    degraded, init-pending,
+                                       reboot-pending
                           17 / ERROR   lsm-off, tampered
     body                  the status --json document as a key-value
                           list (schema, status, status_reason, hint,

@@ -48,6 +48,7 @@ severity = {
     "ok": (9, "INFO"),
     "degraded": (13, "WARN"),
     "init-pending": (13, "WARN"),
+    "reboot-pending": (13, "WARN"),
     "lsm-off": (17, "ERROR"),
     "tampered": (17, "ERROR"),
 }[status]
@@ -60,7 +61,7 @@ PY
 
 test_expect_success 'keepalive status severities and structured body are deterministic' '
 	work=$(mktemp -d) || return 1
-	for status in ok degraded init-pending lsm-off tampered
+	for status in ok degraded init-pending reboot-pending lsm-off tampered
 	do
 		python3 ../helper/otel-mock.py success "$work/port" "$work/body" \
 			"$work/meta" &
@@ -79,7 +80,8 @@ import json, sys
 status = sys.argv[1]
 record = json.load(open(sys.argv[2]))["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0]
 expected = {"ok": (9, "INFO"), "degraded": (13, "WARN"),
-            "init-pending": (13, "WARN"), "lsm-off": (17, "ERROR"),
+            "init-pending": (13, "WARN"), "reboot-pending": (13, "WARN"),
+            "lsm-off": (17, "ERROR"),
             "tampered": (17, "ERROR")}[status]
 assert (record["severityNumber"], record["severityText"]) == expected
 assert record["eventName"] == "shirudo.keepalive"

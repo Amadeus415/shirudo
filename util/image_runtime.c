@@ -59,6 +59,7 @@ struct image_context {
 	struct shirudo_tpm *tpm;
 	int candidate_fd;
 	int certificate_fd;
+	int config_state;	/* what current_config() refused status with */
 	bool loaded;
 	bool boot_keys_open;
 	bool boot_target_valid;
@@ -1038,6 +1039,23 @@ static int current_config(void)
 	return rc ? rc : config_mount_check(&record);
 }
 
+/*
+ * status is how a fleet sees these states, so it runs in them while every
+ * other command refuses: with the pending config's settings when that is
+ * the config mounted, and with the runtime image's alone otherwise, since
+ * a config the record cannot vouch for names no export destination.
+ */
+static int status_config(int state)
+{
+	struct shirudo_config_update_record record;
+
+	image.config_state = state;
+	if (state == -EINPROGRESS &&
+	    !shirudo_config_update_read(&image.update, &record))
+		(void)config_mount_check(&record);
+	return 0;
+}
+
 int shirudo_image_enter(const char *command, int argc, const char **argv)
 {
 	struct shirudo_identity identity;
@@ -1080,8 +1098,25 @@ int shirudo_image_enter(const char *command, int argc, const char **argv)
 	if (!strcmp(command, "image"))
 		return open_update();
 	rc = current_config();
+	if (!strcmp(command, "status") &&
+	    (rc == -EINPROGRESS || rc == -EUCLEAN || rc == -ESTALE ||
+	     rc == -EKEYREJECTED))
+		return status_config(rc);
 	config_state_error(rc);
 	return rc;
+}
+
+int shirudo_image_config_state(__u8 root[32])
+{
+	struct shirudo_config_update_record record;
+
+	if (image.update.lock_fd < 0)
+		return -ENODEV;
+	if (shirudo_config_update_read(&image.update, &record))
+		memset(root, 0, 32);
+	else
+		memcpy(root, record.target.root_hash, 32);
+	return image.config_state;
 }
 
 static void image_not_open(void)

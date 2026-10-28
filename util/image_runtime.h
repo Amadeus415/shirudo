@@ -24,4 +24,12 @@ void shirudo_image_leave(void);
 int shirudo_image_update(const char *prefix);
 int shirudo_image_status(void);
 
+/*
+ * The config state status reports: 0 with the selected config active,
+ * -EINPROGRESS while an activation is pending, or the integrity error the
+ * other commands refuse on; -ENODEV without activation state. root is the
+ * selected or pending config's, zero when unknown.
+ */
+int shirudo_image_config_state(__u8 root[32]);
+
 #endif /* SHIRUDO_IMAGE_RUNTIME_H */

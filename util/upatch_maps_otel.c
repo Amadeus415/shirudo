@@ -1639,7 +1639,8 @@ int shirudo_status_otel_severity(const char *status, const char **text)
 		return 9;
 	}
 	if (strcmp(status, "degraded") == 0 ||
-	    strcmp(status, "init-pending") == 0) {
+	    strcmp(status, "init-pending") == 0 ||
+	    strcmp(status, "reboot-pending") == 0) {
 		*text = "WARN";
 		return 13;
 	}

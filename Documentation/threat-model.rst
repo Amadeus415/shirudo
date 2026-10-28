@@ -437,7 +437,10 @@ T12 Interrupted image activation
     An interruption after it, including an ambiguous TPM response, requires
     manual reboot. The node keeps running; Shirudo does not initiate that
     reboot. Further state changes and config attestation refuse; no same-boot
-    recovery or extension retry is attempted. Trusted startup re-verifies the
+    recovery or extension retry is attempted. ``status`` still runs and
+    reports the activation as ``reboot-pending``; it uses the pending
+    config's export settings only when that config is the one mounted,
+    since the record vouches for no other. Trusted startup re-verifies the
     selected image, reads its entire verified mapping, emits a fresh BOOT
     event and applies revocations before restoring upatches. Completion is
     recorded only after startup succeeds. Missing or invalid selected images

@@ -87,6 +87,35 @@ test_expect_success 'the register mismatch names why when the caller knows' '
 	echo "$out" | grep -qx "ChainIntact ALERT this boot'"'"'s eventlog cannot be replayed (tamper?)"
 '
 
+test_expect_success 'an active config is OK' '
+	./$H 1 bpf 100 100 match |
+		grep -qx "ConfigActive OK config 0123456789ab.. is active"
+'
+
+test_expect_success 'a pending activation is reboot-pending with a reboot hint' '
+	out=$(SHIRUDO_TEST_CONFIG_STATE=pending ./$H 1 bpf 100 100 match) &&
+	echo "$out" | grep -qx "status=reboot-pending" &&
+	echo "$out" | grep -qx "reason=a config activation is pending until the next reboot" &&
+	echo "$out" | grep -qx "ConfigActive WARN the activation of config 0123456789ab.. is pending until the next reboot" &&
+	echo "$out" | grep -q "^hint=reboot the node when convenient"
+'
+
+test_expect_success 'a config its records cannot vouch for is tampered' '
+	for state in untrusted stale
+	do
+		out=$(SHIRUDO_TEST_CONFIG_STATE=$state ./$H 1 bpf 100 100 match) &&
+		echo "$out" | grep -qx "status=tampered" &&
+		echo "$out" | grep -qx "reason=the selected config cannot be verified against its records" &&
+		echo "$out" | grep -q "^ConfigActive ALERT .*(tamper?)$" &&
+		echo "$out" | grep -q "^hint=shirudo considers this node tampered" || return 1
+	done
+'
+
+test_expect_success 'a pending activation does not hide a register mismatch' '
+	SHIRUDO_TEST_CONFIG_STATE=pending ./$H 1 bpf 100 100 mismatch |
+		grep -qx "status=tampered"
+'
+
 test_expect_success 'a degraded node points at the TPM or at init' '
 	./$H 1 bpf 100 100 notpm | grep -q "^hint=no TPM answered: check" &&
 	./$H 1 bpf 100 100 none | grep -q "^hint=shirudo init did not set up the TPM register this boot"

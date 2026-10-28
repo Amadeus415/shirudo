@@ -702,8 +702,8 @@ eventlog replay and its anchor, the on-disk assets, and with
 and ``--include-modules`` the corresponding detail.  The register is
 always read: a status that did not ask the TPM would be a status the
 target wrote about itself.  The overall
-``status`` is ``ok``, ``degraded``, ``init-pending``, ``lsm-off`` or
-``tampered``.  ``--json`` emits the same as one document; ``--otel``
+``status`` is ``ok``, ``degraded``, ``reboot-pending``,
+``init-pending``, ``lsm-off`` or ``tampered``.  ``--json`` emits the same as one document; ``--otel``
 pushes it as a keepalive log record.  ``status`` is the target's own
 account of itself; ``shirudo attest`` (section 7) is the account the
 TPM signs.
