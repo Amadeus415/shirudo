@@ -160,6 +160,13 @@ for document in "$WORK"/bad-*.json; do
 	'
 done
 
+test_expect_success 'an inconsistent config history names the check it fails' '
+	! verify "$WORK/bad-reordered.json" >"$WORK/reordered-report" 2>/dev/null &&
+	grep -qx "FAIL: config: the events are one boot event followed by updates in sequence" \
+		"$WORK/reordered-report" &&
+	grep -qx "verdict: FAIL" "$WORK/reordered-report"
+'
+
 test_expect_success 'pending effects prevent evidence collection despite a measured selection' '
 	! SHIRUDO_TEST_CONFIG_TPM=1 SHIRUDO_TEST_CONFIG_ACTIVATE_FAIL=1 \
 		"$U" "$WORK/config" update C >/dev/null &&

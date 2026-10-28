@@ -901,6 +901,8 @@ int attest_verify(const char *evidence, size_t len,
 	}
 
 	rc = shirudo_config_evidence_parse(evidence, len, &config);
+	if (rc == -EKEYREJECTED)
+		say(&rep, false, "config: the events are one boot event followed by updates in sequence");
 	if (rc)
 		goto out;
 
@@ -1108,6 +1110,9 @@ int attest_verify(const char *evidence, size_t len,
 				 branch_written, branch_init, policy);
 	if (rc) {
 		say(&rep, false, "register: cannot compute the signed write policy");
+		/* Malformed recorded values are the document's failure, not a parse error. */
+		if (rc == -EINVAL)
+			rc = -EKEYREJECTED;
 		goto out;
 	}
 	tpm_nv_name(SHIRUDO_NV_INDEX,
