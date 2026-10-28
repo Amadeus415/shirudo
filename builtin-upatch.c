@@ -2535,6 +2535,15 @@ static int parse_op_args(int argc, const char **argv, const char *verb,
 		print_help(help);
 		return 2;
 	}
+	if (*expect_chain) {
+		__u8 want[SHIRUDO_CHAIN_DIGEST_LEN];
+
+		if (hex_decode(*expect_chain, want, sizeof(want))) {
+			fprintf(stderr, "upatch %s: --expect-chain must be %d hexadecimal characters\n",
+				verb, 2 * SHIRUDO_CHAIN_DIGEST_LEN);
+			return 2;
+		}
+	}
 	return 0;
 }
 
