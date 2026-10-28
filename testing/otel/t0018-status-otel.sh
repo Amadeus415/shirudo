@@ -37,8 +37,12 @@ values = {
 }
 assert meta["path"] == "/v1/logs"
 assert record["eventName"] == "shirudo.keepalive"
-assert {"schema", "status", "conditions", "tpm"} <= values.keys()
+assert {"schema", "status", "status_reason", "hint", "conditions",
+        "tpm"} <= values.keys()
 assert values["tpm"]["kvlistValue"]
+for cond in values["conditions"]["arrayValue"]["values"]:
+    keys = {item["key"] for item in cond["kvlistValue"]["values"]}
+    assert {"type", "status", "detail", "hint"} <= keys
 status = values["status"]["stringValue"]
 severity = {
     "ok": (9, "INFO"),

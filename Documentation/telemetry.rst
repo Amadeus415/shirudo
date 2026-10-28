@@ -224,7 +224,8 @@ Keepalive, one log record from ``shirudo status --otel``::
                           13 / WARN    degraded, init-pending
                           17 / ERROR   lsm-off, tampered
     body                  the status --json document as a key-value
-                          list (schema, status, conditions, tpm,
+                          list (schema, status, status_reason, hint,
+                          conditions with a hint each, tpm,
                           tamper_attempts, system, ...)
     attributes            shirudo.status, shirudo.version_id,
                           shirudo.tamper_attempts (the total of the

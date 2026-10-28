@@ -348,12 +348,12 @@ static const struct shirudo_help_item status_options[] = {
 	{ "--otel",                 "export the status report as an OTLP log" },
 	{ "--include-system",       "add a `system` block (hostname, kernel, arch, cpus, ...)" },
 	{ "--include-eventlog",     "dump eventlog entries" },
-	{ "--include-kernellog[=N]", "last N lines of the kernel ring buffer "
-				     "(default 10, max 100)" },
+	{ "--include-kernellog[=N]",
+	  "last N lines of the kernel ring buffer (default 10, max 100)" },
 	{ "--include-modules",
 	  "loaded kernel modules (10 most recent; --show-full for tree)" },
-	{ "--show-full",            "opt into a full dump: implies every --include-* flag and "
-				    "expands the loaded-modules dependency tree" },
+	{ "--show-full",
+	  "full dump: every --include-* section plus the loaded-modules dependency tree" },
 };
 
 static const struct shirudo_help_section status_help_sections[] = {
@@ -362,12 +362,9 @@ static const struct shirudo_help_section status_help_sections[] = {
 };
 
 static const struct shirudo_help status_help = {
-	.usage      = "shirudo status [--json] [--otel] "
-		      "[--include-system] [--include-eventlog]\n"
-		      "                       [--include-kernellog[=N]] "
-		      "[--include-modules] [--show-full]",
-	.summary    = "Local readiness + state report. Auto-detects target "
-		      "vs operator role.\nSafe to run before `shirudo init`.",
+	.usage      = "shirudo status [--json] [--otel] [--include-system] [--include-eventlog]\n"
+		      "                       [--include-kernellog[=N]] [--include-modules] [--show-full]",
+	.summary    = "Local readiness + state report. Auto-detects target vs operator role.\nSafe to run before `shirudo init`.",
 	.sections   = status_help_sections,
 	.n_sections = sizeof(status_help_sections) /
 		      sizeof(status_help_sections[0]),
@@ -538,6 +535,7 @@ int cmd_status(int argc, const char **argv)
 	int match = -1;		/* -1 unknown, 0 mismatch, 1 match */
 	int n_ups, i, fd, ret = 0;
 	const char *otel_status = NULL;
+	const char *chain_mismatch = NULL;
 	bool otel_endpoint_configured = false;
 
 	for (i = 1; i < argc; i++) {
@@ -557,8 +555,7 @@ int cmd_status(int argc, const char **argv)
 
 			if (parse_u64(n, strlen(n), SHIRUDO_KERNEL_LOG_MAX, &v) ||
 			    v < 1) {
-				fprintf(stderr, "status: --include-kernellog=N "
-					"must be 1..%d\n",
+				fprintf(stderr, "status: --include-kernellog=N must be 1..%d\n",
 					SHIRUDO_KERNEL_LOG_MAX);
 				return 2;
 			}
@@ -583,10 +580,12 @@ int cmd_status(int argc, const char **argv)
 
 		if (rc) {
 			pr_err("status: load OTEL configuration: %s", strerror(-rc));
+			pr_hint("`shirudo config` prints the configuration this command reads, map_export.* keys included");
 			return 1;
 		}
 		if (!otel_cfg.map_export_valid) {
 			pr_err("status: invalid OTEL configuration");
+			pr_hint("the config: warnings above name the map_export.* key with a bad value");
 			return 2;
 		}
 		otel_opts.endpoint = otel_cfg.map_export_otel_endpoint[0] ?
@@ -687,10 +686,17 @@ int cmd_status(int argc, const char **argv)
 		if (chain_rc == 0) {
 			__u8 replay[SHIRUDO_CHAIN_DIGEST_LEN];
 
-			match = cst.anchored && !cst.rebound &&
-				eventlog_replay(replay) == 0 &&
-				ct_eq(cst.value, replay,
-				      sizeof(replay));
+			match = 0;
+			if (!cst.anchored)
+				chain_mismatch = "the TPM register is not the one init set up";
+			else if (cst.rebound)
+				chain_mismatch = "the TPM register was set up twice this boot";
+			else if (eventlog_replay(replay))
+				chain_mismatch = "this boot's eventlog is malformed or incomplete";
+			else if (!ct_eq(cst.value, replay, sizeof(replay)))
+				chain_mismatch = "the TPM register does not match the eventlog";
+			else
+				match = 1;
 		}
 	}
 
@@ -728,8 +734,10 @@ int cmd_status(int argc, const char **argv)
 		json_kv_bool(&e, "is_target", is_target);
 		json_kv_bool(&e, "is_operator", is_operator);
 		{
-			struct shirudo_conditions_input cin;
 			struct shirudo_condition conds[SHIRUDO_CONDITIONS_MAX];
+			struct shirudo_conditions_input cin;
+			const char *hint;
+			char reason[160];
 			size_t nc, ci;
 
 			local_cond_input(&cin, lsm_attached, keyring_present,
@@ -743,9 +751,20 @@ int cmd_status(int argc, const char **argv)
 					 cst.tpm, chain_rc == 0,
 					 match == 1, match >= 0,
 					 nv_index);
+			cin.chain_mismatch = chain_mismatch;
 			otel_status = status_verdict(&cin);
 			json_kv_string(&e, "status",
 				       otel_status);
+			status_reason(&cin, reason, sizeof(reason));
+			if (reason[0])
+				json_kv_string(&e, "status_reason", reason);
+			else
+				json_kv_null(&e, "status_reason");
+			hint = is_target ? status_hint(&cin) : NULL;
+			if (hint)
+				json_kv_string(&e, "hint", hint);
+			else
+				json_kv_null(&e, "hint");
 			nc = conditions(&cin, conds,
 					ARRAY_SIZE(conds));
 			json_arr_open(&e, "conditions");
@@ -757,6 +776,11 @@ int cmd_status(int argc, const char **argv)
 					       conds[ci].status);
 				json_kv_string(&e, "detail",
 					       conds[ci].detail);
+				if (is_target && conds[ci].hint)
+					json_kv_string(&e, "hint",
+						       conds[ci].hint);
+				else
+					json_kv_null(&e, "hint");
 				json_obj_close(&e);
 			}
 			json_arr_close(&e);
@@ -780,6 +804,15 @@ int cmd_status(int argc, const char **argv)
 				     keyring_serial == keyring_pinned);
 		else
 			json_kv_null(&e, "keyring_serial_matches");
+		if (keyring_pinned < 0 && keyring_pinned != -ENOENT)
+			json_kv_string(&e, "keyring_error",
+				       strerror(-keyring_pinned));
+		else if (keyring_pinned >= 1 && keyring_serial < 0 &&
+			 keyring_serial != -ENOKEY)
+			json_kv_string(&e, "keyring_error",
+				       strerror(-keyring_serial));
+		else
+			json_kv_null(&e, "keyring_error");
 		json_kv_bool(&e, "cert_present", cert_present);
 		json_arr_open(&e, "certs");
 		for (i = 0; certs_rc == 0 && i < (int)certs.n; i++) {
@@ -800,6 +833,10 @@ int cmd_status(int argc, const char **argv)
 			    certs_rc == 0 ? (int)certs.n_revoked : 0);
 		json_kv_int(&e, "certs_unvouched",
 			    certs_rc == 0 ? (int)certs.n_unvouched : 0);
+		if (certs_rc && certs_rc != -ENOENT)
+			json_kv_string(&e, "certs_error", strerror(-certs_rc));
+		else
+			json_kv_null(&e, "certs_error");
 		if (certs_enrolled >= 0)
 			json_kv_int(&e, "certs_enrolled",
 				    certs_enrolled);
@@ -846,6 +883,11 @@ int cmd_status(int argc, const char **argv)
 		} else {
 			json_kv_null(&e, "tamper_attempts");
 		}
+		if (tamper_rc && tamper_rc != -ENOENT)
+			json_kv_string(&e, "tamper_error",
+				       strerror(-tamper_rc));
+		else
+			json_kv_null(&e, "tamper_error");
 		if (include_system)
 			sysinfo_emit_json(&e, &sysi);
 		{
@@ -862,6 +904,11 @@ int cmd_status(int argc, const char **argv)
 				json_kv_null(&e, "nv_name");
 			json_kv_bool(&e, "register_bound",
 				     chain_rc == 0);
+			if (cst.tpm && chain_rc && chain_rc != -ENODEV)
+				json_kv_string(&e, "error",
+					       strerror(-chain_rc));
+			else
+				json_kv_null(&e, "error");
 			json_kv_bool(&e, "register_anchored",
 				     cst.anchored);
 			json_kv_int(&e, "init_records",
@@ -1006,6 +1053,7 @@ int cmd_status(int argc, const char **argv)
 				if (rc) {
 					pr_err("status: OTEL export failed: %s",
 					       strerror(-rc));
+					pr_hint("the keepalive did not reach the collector: check map_export.otel_endpoint or OTEL_EXPORTER_OTLP_ENDPOINT and the request error above");
 					ret = 1;
 				}
 			}
@@ -1019,8 +1067,8 @@ int cmd_status(int argc, const char **argv)
 		size_t n_rows = 0;
 		size_t nc;
 		char hostname[256] = "?";
+		const char *verdict, *hint;
 		char reason[160];
-		const char *verdict;
 
 		local_cond_input(&cin, lsm_attached, keyring_present,
 				 keyring_mode,
@@ -1033,6 +1081,7 @@ int cmd_status(int argc, const char **argv)
 				 cst.tpm, chain_rc == 0,
 				 match == 1, match >= 0,
 				 nv_index);
+		cin.chain_mismatch = chain_mismatch;
 		verdict = status_verdict(&cin);
 		status_reason(&cin, reason, sizeof(reason));
 		nc = conditions(&cin, conds, ARRAY_SIZE(conds));
@@ -1049,15 +1098,17 @@ int cmd_status(int argc, const char **argv)
 			       reason);
 		else
 			printf("Status:            %s\n", verdict);
+		hint = is_target ? status_hint(&cin) : NULL;
+		if (hint)
+			printf("Hint:              %s\n", hint);
 		printf("Version-ID:        %s\n", shirudo_version_id);
 
 		printf("\n");
-		conditions_print(conds, nc);
+		conditions_print(conds, nc, is_target, hint);
 
 		printf("\nTamper attempts (refused this boot):\n");
 		if (tamper_rc == -ENOENT)
-			printf("  (none recorded: init has not pinned the counters "
-			       "this boot)\n");
+			printf("  (none recorded: init has not run this boot)\n");
 		else if (tamper_rc)
 			printf("  (unavailable: %s)\n", strerror(-tamper_rc));
 		else if (tamper.total == 0)
@@ -1076,8 +1127,7 @@ int cmd_status(int argc, const char **argv)
 			       (__s64)keyring_serial);
 		else if (keyring_pinned == -ENOENT)
 			printf("  %-22s %s\n", "Serial:",
-			       "absent  (operator host, or `shirudo init` "
-			       "not yet run)");
+			       "absent  (operator host, or `shirudo init` not yet run)");
 		else if (keyring_serial == -ENOKEY)
 			printf("  %-22s %s\n", "Serial:", "absent");
 		else
@@ -1092,13 +1142,13 @@ int cmd_status(int argc, const char **argv)
 		else
 			printf("  %-22s %lld%s\n", "Frozen serial:",
 			       (__s64)keyring_pinned, !keyring_present ?
-			       "  (GONE -- removed?)" :
+			       "  (GONE: this keyring no longer exists)" :
 			       keyring_serial == keyring_pinned ?
 			       "  (matches)" :
-			       "  (MISMATCH -- swapped?)");
+			       "  (MISMATCH: not the live keyring)");
 		if (certs_rc == 0) {
-			printf("  %-22s %zu trusted, %zu revoked, %zu "
-			       "unvouched", "Certificates:", certs.n,
+			printf("  %-22s %zu trusted, %zu revoked, %zu unvouched",
+			       "Certificates:", certs.n,
 			       certs.n_revoked, certs.n_unvouched);
 			if (certs_enrolled >= 0)
 				printf(", %d in the bpf keyring",
@@ -1136,14 +1186,13 @@ int cmd_status(int argc, const char **argv)
 				       name_hex);
 				printf("  %-18s %s\n", "Anchored:",
 				       cst.anchored ? "yes (name on record)" :
-				       "NO (index is not the one init bound)");
+				       "NO (not the register init set up)");
 			} else if (!cst.tpm) {
 				printf("  %-18s %s\n", "Chain:",
 				       "unavailable (no TPM answered)");
 			} else if (chain_rc == -ENODEV) {
 				printf("  %-18s %s\n", "Chain:",
-				       "unavailable (register not bound this "
-				       "boot)");
+				       "unavailable (no register set up this boot)");
 			} else {
 				printf("  %-18s unavailable (TPM error: %s)\n",
 				       "Chain:", strerror(-chain_rc));
@@ -1158,13 +1207,15 @@ int cmd_status(int argc, const char **argv)
 				       "root file system");
 			}
 			if (cst.rebound)
-				printf("  %-18s %u for this TPM reset "
-				       "(REBOUND after init; tamper?)\n",
+				printf("  %-18s %u for this TPM reset (set up again after init; tamper?)\n",
 				       "Init records:",
 				       cst.init.records_epoch);
-			printf("  %-18s %s\n", "Chain vs eventlog:",
-			       match < 0 ? "n/a" :
-			       match ? "matches" : "MISMATCH (tamper?)");
+			if (match == 0)
+				printf("  %-18s MISMATCH: %s (tamper?)\n",
+				       "Chain vs eventlog:", chain_mismatch);
+			else
+				printf("  %-18s %s\n", "Chain vs eventlog:",
+				       match < 0 ? "n/a" : "matches");
 			if (ev_rc == 0)
 				printf("  %-18s %s  (%ld entries, %ld bytes)\n",
 				       "Eventlog:", eventlog_path(),
@@ -1236,15 +1287,12 @@ int cmd_status(int argc, const char **argv)
 				printf("\nLoaded modules:\n");
 				printf("  (unavailable: %s)\n", strerror(-mrc));
 			} else {
-				printf("\nLoaded modules (total %zu, "
-				       "last %zu loads, newest first):\n",
+				printf("\nLoaded modules (total %zu, last %zu loads, newest first):\n",
 				       ks.n, shown);
 				kmodules_print_recent(&ks, last,
 						      boot_sec);
 				if (!show_full) {
-					printf("  (Use --show-full to show "
-					       "all loaded modules in a "
-					       "dependency tree)\n");
+					printf("  (Use --show-full to show all loaded modules in a dependency tree)\n");
 				} else {
 					printf("\nDependency tree:\n");
 					kmodules_print_tree(&ks);

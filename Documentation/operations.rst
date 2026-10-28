@@ -102,8 +102,20 @@ machine-readable one.  The fields that matter day to day:
     ``initrd`` or ``root``: where the register was bound.  Production
     means ``initrd``.
 
+``status``, ``status_reason`` and ``hint``
+    The verdict, the condition that decided it and, on a target that is
+    not ``ok``, what to check next; the human report prints the last as
+    its ``Hint:`` line.  A ``tampered`` verdict carries no remedy, only
+    the instruction to keep the evidence and handle the node as an
+    incident.
+
+``keyring_error``, ``certs_error``, ``tamper_error`` and ``tpm.error``
+    Why the matching field is ``null`` or empty when a read failed for
+    another reason than the state not existing yet; ``null`` otherwise.
+
 Conditions
-    Four, each ``OK``, ``WARN`` or ``ALERT`` with a detail:
+    Four, each ``OK``, ``WARN`` or ``ALERT`` with a detail and a
+    ``hint`` (``null`` when ``OK``):
 
     .. list-table::
        :header-rows: 1
@@ -122,7 +134,10 @@ Conditions
        * - ``ChainIntact``
          - ``ALERT`` when replaying this boot's eventlog does not
            reproduce the live register: something extended it that
-           shirudo did not record.
+           shirudo did not record.  The detail says which part failed:
+           the register is not the one ``init`` set up, it was set up
+           twice this boot, this boot's eventlog is malformed or
+           incomplete, or the register does not match the eventlog.
        * - ``TpmMeasured``
          - ``WARN`` when no register is bound this boot
            (``degraded``) or no TPM answers; the detail says which.

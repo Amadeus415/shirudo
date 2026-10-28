@@ -35,12 +35,14 @@ struct shirudo_conditions_input {
 	int		chain_matches;		/* 0/1 if cm_seen */
 	int		cm_seen;
 	const char	*nv_index;
+	const char	*chain_mismatch;	/* why, when !chain_matches */
 };
 
 struct shirudo_condition {
 	const char	*type;		/* "LsmAttached" / "KeyringSealed" / ... */
 	const char	*status;	/* "OK" / "WARN" / "ALERT" */
 	char		detail[192];
+	const char	*hint;		/* NULL when OK */
 };
 
 /*
@@ -53,7 +55,9 @@ struct shirudo_condition {
 size_t conditions(const struct shirudo_conditions_input *in,
 		  struct shirudo_condition *out, size_t cap);
 
-void conditions_print(const struct shirudo_condition *c, size_t n);
+/* Each hint once, and none that the caller has already printed as shown. */
+void conditions_print(const struct shirudo_condition *c, size_t n,
+		      bool hints, const char *shown);
 
 /*
  * Single-word aggregate verdict (severity worst -> best):
@@ -65,5 +69,8 @@ const char *status_verdict(const struct shirudo_conditions_input *in);
 
 void status_reason(const struct shirudo_conditions_input *in,
 		   char *buf, size_t cap);
+
+/* What to check or do for the verdict; NULL for "ok". */
+const char *status_hint(const struct shirudo_conditions_input *in);
 
 #endif /* SHIRUDO_CONDITIONS_H */

@@ -32,14 +32,13 @@ int main(int argc, char **argv)
 	struct shirudo_condition conds[SHIRUDO_CONDITIONS_MAX];
 	struct shirudo_conditions_input in = {};
 	__s64 lsm, serial, pinned;
+	const char *mode, *hint;
 	char reason[160];
-	const char *mode;
 	size_t n, i;
 
-	if (argc != 6 || arg_s64(argv[1], &lsm) || arg_s64(argv[3], &serial) ||
-	    arg_s64(argv[4], &pinned)) {
-		fprintf(stderr, "usage: test-conditions <lsm> <mode> <serial> "
-			"<pinned> <notpm|none|match|mismatch>\n");
+	if ((argc != 6 && argc != 7) || arg_s64(argv[1], &lsm) ||
+	    arg_s64(argv[3], &serial) || arg_s64(argv[4], &pinned)) {
+		fprintf(stderr, "usage: test-conditions <lsm> <mode> <serial> <pinned> <notpm|none|match|mismatch> [<why>]\n");
 		return 2;
 	}
 	mode = argv[2];
@@ -60,13 +59,19 @@ int main(int argc, char **argv)
 	in.cm_seen = in.chain_seen;
 	in.chain_matches = !strcmp(argv[5], "match");
 	in.nv_index = "0x01818E00";
+	in.chain_mismatch = argc == 7 ? argv[6] : NULL;
 
 	status_reason(&in, reason, sizeof(reason));
 	printf("status=%s\n", status_verdict(&in));
 	printf("reason=%s\n", reason);
+	hint = status_hint(&in);
+	printf("hint=%s\n", hint ? hint : "");
 	n = conditions(&in, conds, ARRAY_SIZE(conds));
-	for (i = 0; i < n; i++)
+	for (i = 0; i < n; i++) {
 		printf("%s %s %s\n", conds[i].type, conds[i].status,
 		       conds[i].detail);
+		if (conds[i].hint)
+			printf("%s hint=%s\n", conds[i].type, conds[i].hint);
+	}
 	return 0;
 }
