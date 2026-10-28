@@ -40,3 +40,8 @@ PR_DEFINE(pr_warn)
 PR_DEFINE(pr_info)
 PR_DEFINE(pr_audit)
 PR_DEFINE(pr_hint)
+
+size_t pr_err_count(void)
+{
+	return 0;
+}

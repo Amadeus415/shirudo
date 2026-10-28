@@ -21,6 +21,8 @@
 
 #define LOG_MSG_MAX	8192
 
+static size_t n_errors;
+
 void log_init(void)
 {
 	openlog("shirudo", LOG_PID | LOG_NDELAY, LOG_AUTHPRIV);
@@ -146,6 +148,8 @@ static void emit(int priority, const char *prefix, const char *fmt,
 	if (vstrsprintf(msg, sizeof(msg), fmt, ap) < 0)
 		strscpy(msg, fmt, sizeof(msg));
 	escape(out, sizeof(out), msg);
+	if (priority == LOG_ERR)
+		n_errors++;
 	syslog(priority, "%s%s", prefix, out);
 	print_wrapped(stderr, prefix, out,
 		      prefix[0] ? strlen(prefix) : message_indent(out));
@@ -166,3 +170,8 @@ PR_DEFINE(pr_warn,  LOG_WARNING, "")
 PR_DEFINE(pr_info,  LOG_INFO,    "")
 PR_DEFINE(pr_audit, LOG_NOTICE,  "")
 PR_DEFINE(pr_hint,  LOG_INFO,    "hint: ")
+
+size_t pr_err_count(void)
+{
+	return n_errors;
+}

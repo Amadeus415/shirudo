@@ -9,6 +9,7 @@
 #define SHIRUDO_LOG_H
 
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 
 void log_init(void);
@@ -28,6 +29,9 @@ void pr_audit(const char *fmt, ...)
  */
 void pr_hint(const char *fmt, ...)
 	__attribute__((format(printf, 1, 2)));
+
+/* Lets a catch-all tell whether a failure has been explained already. */
+size_t pr_err_count(void);
 
 /*
  * lead then text, wrapped to a terminal's width under an indent of that

@@ -1507,6 +1507,12 @@ static const char *build_resolve_keys_dir(const char *arg, char *out, size_t cap
 	return out;
 }
 
+/*
+ * What the build commands return for an argument error once the usage
+ * text has said so: positive, so the dispatcher adds no errno line.
+ */
+#define BUILD_USAGE	1
+
 static void build_usage(void)
 {
 	fprintf(stderr,
@@ -1592,8 +1598,11 @@ static int shirudo_build_bpm_build(int argc, char **argv)
 					goto usage;
 			if (!realpath(eq + 1, path))
 				return -errno;
-			if (stat(path, &st) || !S_ISREG(st.st_mode))
+			if (stat(path, &st) || !S_ISREG(st.st_mode)) {
+				pr_err("bpm: --rodata-input %s is not a regular file",
+				       eq + 1);
 				return -EINVAL;
+			}
 			if (strscpy(overrides[n_overrides].path, path,
 				    sizeof(overrides[n_overrides].path)) < 0)
 				return -ENAMETOOLONG;
@@ -1715,7 +1724,7 @@ out:
 	return rc;
 usage:
 	build_usage();
-	return -EINVAL;
+	return BUILD_USAGE;
 }
 
 static int build_copy_package_member(const char *package, const char *member,
@@ -1916,8 +1925,11 @@ int shirudo_build_bpm_config_update(int argc, char **argv)
 					goto usage;
 			if (!realpath(eq + 1, path))
 				return -errno;
-			if (stat(path, &st) || !S_ISREG(st.st_mode))
+			if (stat(path, &st) || !S_ISREG(st.st_mode)) {
+				pr_err("bpm: --rodata-input %s is not a regular file",
+				       eq + 1);
 				return -EINVAL;
+			}
 			if (strscpy(overrides[n_overrides].path, path,
 				    sizeof(overrides[n_overrides].path)) < 0)
 				return -ENAMETOOLONG;
@@ -2202,7 +2214,7 @@ out_base:
 usage:
 	fprintf(stderr,
 		"usage: shirudo bpm config update --base-package <package.bee|oci://host/repo:tag> --version <version> [-f <name>.bee] [--rodata-input <name>=<path>]... [--keys-dir <dir>]\n");
-	return -EINVAL;
+	return BUILD_USAGE;
 }
 
 static void bpm_usage(FILE *fp)
@@ -2229,6 +2241,7 @@ bool shirudo_build_is_help(const char *arg)
 
 int shirudo_build_bpm(int argc, char **argv)
 {
+	size_t reported;
 	int rc;
 
 	if (argc < 2 || shirudo_build_is_help(argv[1])) {
@@ -2236,15 +2249,17 @@ int shirudo_build_bpm(int argc, char **argv)
 		return argc < 2 ? 2 : 0;
 	}
 	if (!strcmp(argv[1], "build")) {
+		reported = pr_err_count();
 		rc = shirudo_build_bpm_build(argc - 1, argv + 1);
-		if (rc < 0 && rc != -EINVAL)
+		if (rc < 0 && pr_err_count() == reported)
 			pr_err("bpm build: %s", strerror(-rc));
 		return rc ? 1 : 0;
 	}
 	if (!strcmp(argv[1], "config") && argc >= 3 &&
 	    !strcmp(argv[2], "update")) {
+		reported = pr_err_count();
 		rc = shirudo_build_bpm_config_update(argc - 2, argv + 2);
-		if (rc < 0 && rc != -EINVAL)
+		if (rc < 0 && pr_err_count() == reported)
 			pr_err("bpm config update: %s", strerror(-rc));
 		return rc ? 1 : 0;
 	}
