@@ -5,6 +5,7 @@
  * syslog(3) wrappers under LOG_AUTHPRIV.
  */
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <syslog.h>
@@ -49,16 +50,23 @@ static void escape(char *dst, size_t cap, const char *src)
 	dst[n] = '\0';
 }
 
+/*
+ * Callers report a failure and then return -errno; syslog(3) and stdio
+ * may change errno on the way (no /dev/log in an early initrd), so it
+ * is kept for them.
+ */
 static void emit(int priority, const char *prefix, const char *fmt,
 		 va_list ap)
 {
 	char msg[LOG_MSG_MAX], out[4 * LOG_MSG_MAX + 1];
+	int saved_errno = errno;
 
 	if (vstrsprintf(msg, sizeof(msg), fmt, ap) < 0)
 		strscpy(msg, fmt, sizeof(msg));
 	escape(out, sizeof(out), msg);
 	syslog(priority, "%s%s", prefix, out);
 	fprintf(stderr, "%s%s\n", prefix, out);
+	errno = saved_errno;
 }
 
 #define PR_DEFINE(name, prio, prefix)				\
