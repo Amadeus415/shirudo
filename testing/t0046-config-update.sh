@@ -208,6 +208,29 @@ test_expect_success 'a second writer cannot acquire the same operation lock' '
 	[ "$(field "$WORK/locked.out" rc)" = -11 ]
 '
 
+test_expect_success 'a command waits for the operation lock another one holds' '
+	command -v flock >/dev/null 2>&1 || exit 0;
+	fresh waiting &&
+	{ flock "$WORK/waiting/lock" sleep 1 & holder=$!; } &&
+	sleep 0.3 &&
+	SHIRUDO_TEST_CONFIG_LOCK_WAIT_MS=10000 "$H" "$WORK/waiting" boot A \
+		>"$WORK/waiting.out" 2>"$WORK/waiting.err" &&
+	wait "$holder" &&
+	[ "$(field "$WORK/waiting.out" rc)" = 0 ]
+'
+
+test_expect_success 'the wait for the operation lock ends with the lock still held' '
+	command -v flock >/dev/null 2>&1 || exit 0;
+	fresh held &&
+	{ flock "$WORK/held/lock" sleep 3 & holder=$!; } &&
+	sleep 0.3 &&
+	! SHIRUDO_TEST_CONFIG_LOCK_WAIT_MS=500 "$H" "$WORK/held" boot A \
+		>"$WORK/held.out" 2>"$WORK/held.err" &&
+	[ "$(field "$WORK/held.out" rc)" = -11 ] &&
+	grep -q "still holds the config operation lock" "$WORK/held.err" &&
+	wait "$holder"
+'
+
 test_expect_success 'seal failures prevent trusted journal creation' '
 	mkdir -m 700 "$WORK/no-seal" &&
 	! SHIRUDO_TEST_CONFIG_SEAL_FAIL=1 "$H" "$WORK/no-seal" boot A >/dev/null &&

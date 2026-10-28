@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "chain.h"
@@ -141,6 +142,33 @@ static int checkpoint(struct shirudo_config_update *update,
 		       0;
 }
 
+/*
+ * Every target command holds the lock for its whole run, and the keepalive
+ * and map-export timers start one every few seconds, so a short wait lets
+ * them take turns instead of failing each other.
+ */
+static int lock_wait(int fd, __u32 wait_ms)
+{
+	struct timespec pause = { .tv_nsec = 100 * 1000 * 1000 };
+	bool told = false;
+	__u32 waited = 0;
+	int err;
+
+	for (;;) {
+		if (!flock(fd, LOCK_EX | LOCK_NB))
+			return 0;
+		err = errno;
+		if (err != EWOULDBLOCK || waited >= wait_ms)
+			return -err;
+		if (!told && waited >= 1000) {
+			pr_info("image: waiting for another shirudo command to release the config operation lock");
+			told = true;
+		}
+		nanosleep(&pause, NULL);
+		waited += 100;
+	}
+}
+
 int shirudo_config_update_open(const char *directory,
 			       const struct shirudo_config_update_ops *ops,
 			       void *ctx, struct shirudo_config_update *out)
@@ -185,12 +213,12 @@ int shirudo_config_update_open(const char *directory,
 	rc = regular_file(out->lock_fd);
 	if (rc)
 		goto fail;
-	if (flock(out->lock_fd, LOCK_EX | LOCK_NB)) {
-		rc = -errno;
+	rc = lock_wait(out->lock_fd, ops->lock_wait_ms);
+	if (rc) {
 		if (rc == -EWOULDBLOCK) {
-			pr_err("image: another shirudo command holds the config operation lock %s/lock",
-			       directory);
-			pr_hint("retry when it has finished; shirudo-keepalive.timer and shirudo-map-export.timer each start a shirudo command every 5 seconds");
+			pr_err("image: another shirudo command still holds the config operation lock %s/lock after %u seconds",
+			       directory, ops->lock_wait_ms / 1000);
+			pr_hint("a long-running command such as `shirudo image update` or `shirudo bpm tree sync` holds it; retry when it has finished");
 		}
 		goto fail;
 	}

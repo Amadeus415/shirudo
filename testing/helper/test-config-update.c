@@ -283,6 +283,7 @@ int main(int argc, char **argv)
 	struct shirudo_config_update second = { .dir_fd = -1, .lock_fd = -1 };
 	struct shirudo_config_update update = { .dir_fd = -1, .lock_fd = -1 };
 	struct test_context ctx = { .update = &update };
+	struct shirudo_config_update_ops ops;
 	struct shirudo_config_update_target target;
 	char hex[65];
 	__u32 pcr = 15;
@@ -320,7 +321,11 @@ int main(int argc, char **argv)
 		if (rc)
 			goto out;
 	}
-	rc = shirudo_config_update_open(argv[1], &test_ops, &ctx, &update);
+	ops = test_ops;
+	if (getenv("SHIRUDO_TEST_CONFIG_LOCK_WAIT_MS"))
+		ops.lock_wait_ms = strtoul(getenv("SHIRUDO_TEST_CONFIG_LOCK_WAIT_MS"),
+					   NULL, 10);
+	rc = shirudo_config_update_open(argv[1], &ops, &ctx, &update);
 	if (rc)
 		goto out;
 	if (!strcmp(argv[2], "boot")) {

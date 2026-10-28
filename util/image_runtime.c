@@ -700,6 +700,7 @@ static const struct shirudo_config_update_ops update_ops = {
 	.prepare = prepare_update,
 	.activate = activate_update,
 	.seal = seal_fd,
+	.lock_wait_ms = 30 * 1000,
 };
 
 static const struct shirudo_config_update_ops boot_ops = {

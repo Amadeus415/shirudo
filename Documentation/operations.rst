@@ -468,7 +468,8 @@ success, ``1`` on any refusal or failure and ``2`` on a usage error;
 Use ``shirudo image status`` to inspect the active config root hash, PCR,
 TPM reset and restart counts, event sequence and pending state. Ordinary target commands
 hold the config operation lock and use one held config directory for the
-operation. They refuse a pending activation or PCR/history inconsistency;
+operation; a command waits up to 30 seconds for another one to release
+it. They refuse a pending activation or PCR/history inconsistency;
 attestation follows the same rule.
 
 Activate a complete locally staged bundle or pull it by HTTPS prefix::

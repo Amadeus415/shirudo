@@ -55,6 +55,8 @@ struct shirudo_config_update_ops {
 	int (*seal)(void *ctx, int fd);
 	int (*checkpoint)(void *ctx,
 			  enum shirudo_config_update_checkpoint checkpoint);
+	/* How long to wait for another command's operation lock; 0 fails at once. */
+	__u32 lock_wait_ms;
 };
 
 typedef int (*shirudo_config_cb)(const struct shirudo_config_update_record *r,
