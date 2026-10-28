@@ -8,7 +8,8 @@
 # SignerInfo, keyid signer, no embedded cert, SHA-512 signed attributes
 # without signingTime on OpenSSL 3.x) by verifying it with openssl over
 # the exact loader_insns || data bytes the kernel folds. Also checks
-# that the builder refuses a classical (RSA) signing key outright.
+# that the builder refuses a classical (RSA) signing key outright, and
+# an ML-DSA key of a smaller parameter set than ML-DSA-87.
 # Needs clang and shirudo-build; the ML-DSA cases need OpenSSL >= 3.5.
 
 cd "$(dirname "$0")"
@@ -58,7 +59,7 @@ test_expect_success 'shirudo-build refuses to sign with an RSA key' '
 	! ( cd .. && "$B" "$WORK/t.bpf.c" -o "$WORK/rsa.upatch" --vmlinux vendor/linux/vmlinux.h \
 		--name t0029rsa --key "$WORK/rsa.pem" --cert "$WORK/rsa.der" ) \
 		>"$WORK/rsa.out" 2>&1 &&
-	grep -q "ML-DSA only" "$WORK/rsa.out" &&
+	grep -q "ML-DSA-87 only" "$WORK/rsa.out" &&
 	! test -e "$WORK/rsa.upatch"
 '
 
@@ -66,6 +67,17 @@ if ! openssl list -public-key-algorithms 2>/dev/null | grep -qi 'ML-DSA'; then
 	printf '# openssl without ML-DSA (needs OpenSSL >= 3.5); signing cases not run\n'
 	test_done
 fi
+
+test_expect_success 'shirudo-build refuses to sign with an ML-DSA-65 key' '
+	openssl req -x509 -newkey ML-DSA-65 -nodes -keyout "$WORK/mldsa65.pem" \
+		-outform DER -out "$WORK/mldsa65.der" -days 1 -subj "/CN=t0029" \
+		>/dev/null 2>&1 &&
+	! ( cd .. && "$B" "$WORK/t.bpf.c" -o "$WORK/mldsa65.upatch" --vmlinux vendor/linux/vmlinux.h \
+		--name t0029mldsa65 --key "$WORK/mldsa65.pem" --cert "$WORK/mldsa65.der" ) \
+		>"$WORK/mldsa65.out" 2>&1 &&
+	grep -q "ML-DSA-65 key; shirudo signs with ML-DSA-87 only" "$WORK/mldsa65.out" &&
+	! test -e "$WORK/mldsa65.upatch"
+'
 
 "$S" genkey --keys-dir "$WORK/keys" >/dev/null 2>&1 ||
 	test_skip_all "genkey failed"

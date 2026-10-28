@@ -20,7 +20,6 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
-#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -171,11 +170,13 @@ cleanup:
 	return x509;
 }
 
-static bool pkey_is_mldsa(const EVP_PKEY *pkey)
+/*
+ * Only ML-DSA-87: the target's trust set refuses the smaller parameter
+ * sets, so an artifact signed with one could never load.
+ */
+static bool pkey_is_mldsa87(const EVP_PKEY *pkey)
 {
-	const char *name = EVP_PKEY_get0_type_name(pkey);
-
-	return name && strncasecmp(name, "ML-DSA", 6) == 0;
+	return EVP_PKEY_is_a(pkey, "ML-DSA-87");
 }
 
 int cms_sign(struct shirudo_sign_io *io,
@@ -223,8 +224,8 @@ int cms_sign(struct shirudo_sign_io *io,
 		err = -EINVAL;
 		goto cleanup;
 	}
-	if (!pkey_is_mldsa(private_key)) {
-		pr_err("%s: %s key; shirudo signs with ML-DSA only", pkey_path,
+	if (!pkey_is_mldsa87(private_key)) {
+		pr_err("%s: %s key; shirudo signs with ML-DSA-87 only", pkey_path,
 		       EVP_PKEY_get0_type_name(private_key) ?: "unknown");
 		pr_hint("create an ML-DSA-87 pair with `shirudo genkey --keys-dir <dir>`");
 		err = -EINVAL;
@@ -247,7 +248,7 @@ int cms_sign(struct shirudo_sign_io *io,
 	 * (crypto/asymmetric_keys/public_key.c). Same workaround as
 	 * bpftool and module signing; OpenSSL 4 signs the content directly.
 	 */
-	if (pkey_is_mldsa(private_key)) {
+	if (pkey_is_mldsa87(private_key)) {
 		signer_flags &= ~CMS_NOATTR;
 		cms_digest = EVP_sha512();
 	}
