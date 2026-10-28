@@ -598,6 +598,7 @@ TEST_HELPERS := $(VERITY_TEST_HELPERS) \
                 testing/helper/test-image-keys \
                 testing/helper/test-json-parser \
                 testing/helper/test-string \
+                testing/helper/test-log \
                 testing/helper/test-conditions \
                 testing/helper/test-config-image \
                 testing/helper/test-harden \
@@ -640,8 +641,13 @@ testing/helper/test-json-parser: testing/helper/test-json-parser.c util/json.o u
 testing/helper/test-string: testing/helper/test-string.c util/string.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
+
+testing/helper/test-log: testing/helper/test-log.c util/log.o util/string.o \
+			 util/malloc.o
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) -o $@ $^
 testing/helper/test-conditions: testing/helper/test-conditions.c util/conditions.o \
-                                util/string.o util/malloc.o
+                                util/log.o util/string.o util/malloc.o
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 

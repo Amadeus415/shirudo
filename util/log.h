@@ -9,6 +9,7 @@
 #define SHIRUDO_LOG_H
 
 #include <stdarg.h>
+#include <stdio.h>
 
 void log_init(void);
 
@@ -27,5 +28,16 @@ void pr_audit(const char *fmt, ...)
  */
 void pr_hint(const char *fmt, ...)
 	__attribute__((format(printf, 1, 2)));
+
+/*
+ * lead then text, wrapped to a terminal's width under an indent of that
+ * many spaces; anything but a terminal gets one line.
+ */
+void print_wrapped(FILE *fp, const char *lead, const char *text,
+		   size_t indent);
+
+/* The same at a given width, 0 for one line. */
+void print_wrapped_to(FILE *fp, size_t width, const char *lead,
+		      const char *text, size_t indent);
 
 #endif /* SHIRUDO_LOG_H */

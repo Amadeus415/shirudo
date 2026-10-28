@@ -1100,7 +1100,7 @@ int cmd_status(int argc, const char **argv)
 			printf("Status:            %s\n", verdict);
 		hint = is_target ? status_hint(&cin) : NULL;
 		if (hint)
-			printf("Hint:              %s\n", hint);
+			print_wrapped(stdout, "Hint:              ", hint, 19);
 		printf("Version-ID:        %s\n", shirudo_version_id);
 
 		printf("\n");

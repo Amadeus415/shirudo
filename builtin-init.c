@@ -65,12 +65,13 @@ static void print_preflight(const struct shirudo_preflight_result *r)
 	printf("pre-flight checks:\n");
 	for (i = 0; i < r->n; i++) {
 		const struct shirudo_preflight_check *c = &r->checks[i];
+		char lead[64];
 
-		printf("  %-22s %s%s%s\n",
-		       c->name,
-		       c->ok ? "OK" : "FAIL",
-		       c->detail[0] ? ": " : "",
-		       c->detail);
+		if (strsprintf(lead, sizeof(lead), "  %-22s %s%s", c->name,
+			       c->ok ? "OK" : "FAIL",
+			       c->detail[0] ? ": " : "") < 0)
+			strscpy(lead, "  ? ", sizeof(lead));
+		print_wrapped(stdout, lead, c->detail, strlen(lead));
 	}
 	printf("%d/%d passed (%d failed)\n",
 	       r->n - r->n_failed, r->n, r->n_failed);

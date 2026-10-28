@@ -194,7 +194,9 @@ A failure that has a determinable cause is followed by a line that
 starts with ``hint:``, logged at info priority, naming the command,
 file, configuration key or kernel option to look at.  Hints for a
 refusal shirudo treats as tampering never suggest a retry or a
-workaround.  ``journalctl -t shirudo -g '^hint:'`` lists them.
+workaround.  ``journalctl -t shirudo -g '^hint:'`` lists them.  On a
+terminal a long message is wrapped at word boundaries under a hanging
+indent; the journal, pipes and files get one line per message.
 
 The target's own account proves nothing to anyone else.  The operator's
 health check is ``shirudo attest`` on the target and ``shirudo attest

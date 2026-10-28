@@ -8,7 +8,11 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 #include <syslog.h>
+#include <unistd.h>
+
+#include <sys/ioctl.h>
 
 #include <shirudo/misc.h>
 #include <shirudo/string.h>
@@ -50,6 +54,84 @@ static void escape(char *dst, size_t cap, const char *src)
 	dst[n] = '\0';
 }
 
+static size_t terminal_width(FILE *fp)
+{
+	struct winsize ws;
+	int fd = fileno(fp);
+
+	if (fd < 0 || !isatty(fd))
+		return 0;
+	if (ioctl(fd, TIOCGWINSZ, &ws) || ws.ws_col < 40)
+		return 80;
+	return ws.ws_col;
+}
+
+/*
+ * The last space that fits, or the last clause break when it fills most
+ * of the line; a word longer than the line, a path say, is never cut.
+ */
+static size_t break_at(const char *text, size_t len, size_t avail)
+{
+	size_t i, space = 0, clause = 0;
+
+	for (i = 1; i <= avail && i < len; i++) {
+		if (text[i] != ' ')
+			continue;
+		space = i;
+		if (strchr(":;,", text[i - 1]) && i >= avail * 3 / 5)
+			clause = i;
+	}
+	if (clause)
+		return clause;
+	if (space)
+		return space;
+	while (i < len && text[i] != ' ')
+		i++;
+	return i;
+}
+
+void print_wrapped_to(FILE *fp, size_t width, const char *lead,
+		      const char *text, size_t indent)
+{
+	size_t col = strlen(lead), len = strlen(text), cut;
+
+	if (indent > width / 2)
+		indent = 4;
+	if (col + 20 > width)
+		width = 0;
+	fputs(lead, fp);
+	while (width && col + len > width) {
+		cut = break_at(text, len, width - col);
+		fwrite(text, 1, cut, fp);
+		text += cut;
+		len -= cut;
+		while (*text == ' ') {
+			text++;
+			len--;
+		}
+		if (!len)
+			break;
+		fprintf(fp, "\n%*s", (int)indent, "");
+		col = indent;
+	}
+	fputs(text, fp);
+	fputc('\n', fp);
+}
+
+void print_wrapped(FILE *fp, const char *lead, const char *text,
+		   size_t indent)
+{
+	print_wrapped_to(fp, terminal_width(fp), lead, text, indent);
+}
+
+/* Continuation lines start under the text after a short "command: " prefix. */
+static size_t message_indent(const char *msg)
+{
+	const char *colon = strstr(msg, ": ");
+
+	return colon && colon - msg < 24 ? (size_t)(colon - msg) + 2 : 2;
+}
+
 /*
  * Callers report a failure and then return -errno; syslog(3) and stdio
  * may change errno on the way (no /dev/log in an early initrd), so it
@@ -65,7 +147,8 @@ static void emit(int priority, const char *prefix, const char *fmt,
 		strscpy(msg, fmt, sizeof(msg));
 	escape(out, sizeof(out), msg);
 	syslog(priority, "%s%s", prefix, out);
-	fprintf(stderr, "%s%s\n", prefix, out);
+	print_wrapped(stderr, prefix, out,
+		      prefix[0] ? strlen(prefix) : message_indent(out));
 	errno = saved_errno;
 }
 

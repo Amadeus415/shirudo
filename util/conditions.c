@@ -12,6 +12,7 @@
 #include <shirudo/string.h>
 
 #include "conditions.h"
+#include "log.h"
 
 /*
  * A tampered verdict gets no remedy: the node is not to be talked back
@@ -148,15 +149,22 @@ static bool hint_shown(const struct shirudo_condition *c, size_t i,
 void conditions_print(const struct shirudo_condition *c, size_t n,
 		      bool hints, const char *shown)
 {
+	char lead[64];
 	size_t i;
 
 	printf("Conditions:\n");
 	printf("  %-16s %-7s %s\n", "TYPE", "STATUS", "DETAIL");
 	for (i = 0; i < n; i++) {
-		printf("  %-16s %-7s %s\n", c[i].type, c[i].status,
-		       c[i].detail);
-		if (hints && c[i].hint && !hint_shown(c, i, shown))
-			printf("  %-16s %-7s hint: %s\n", "", "", c[i].hint);
+		if (strsprintf(lead, sizeof(lead), "  %-16s %-7s ",
+			       c[i].type, c[i].status) < 0)
+			strscpy(lead, "  ? ", sizeof(lead));
+		print_wrapped(stdout, lead, c[i].detail, strlen(lead));
+		if (hints && c[i].hint && !hint_shown(c, i, shown)) {
+			if (strsprintf(lead, sizeof(lead), "  %-16s %-7s hint: ",
+				       "", "") < 0)
+				strscpy(lead, "  hint: ", sizeof(lead));
+			print_wrapped(stdout, lead, c[i].hint, strlen(lead));
+		}
 	}
 }
 
