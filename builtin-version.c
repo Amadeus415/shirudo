@@ -24,9 +24,8 @@ static const struct shirudo_help_section version_help_sections[] = {
 
 static const struct shirudo_help version_help = {
 	.usage      = "shirudo version [--version-id]",
-	.summary    = "Print the release tag plus the architecture-stripped "
-		      "SHIRUDO_VERSION_ID\nthat targets compare against the "
-		      "operator's signed artifacts.",
+	.summary    = "Print the release tag and the architecture-independent SHIRUDO_VERSION_ID\n"
+		      "that targets compare against the operator's signed artifacts.",
 	.sections   = version_help_sections,
 	.n_sections = ARRAY_SIZE(version_help_sections),
 };

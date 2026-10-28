@@ -177,7 +177,8 @@ const char *resolve_subcommand(const char *cmd_label,
 						subcmds, n_subcmds);
 		return NULL;
 	}
-	fprintf(stderr, "%s: '%s' is ambiguous; matches:\n", cmd_label, input);
+	fprintf(stderr, "%s: '%s' is ambiguous; it matches:\n", cmd_label,
+		input);
 	for (i = 0; i < n; i++)
 		fprintf(stderr, "\t%s\n", names[matches[i]]);
 	return NULL;

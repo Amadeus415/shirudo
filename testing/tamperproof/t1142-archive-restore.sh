@@ -111,7 +111,7 @@ test_expect_success 'a state directory hidden behind a mount without its eventlo
 	rc=0; "$SHIRUDO_BIN" init >/dev/null 2>"$STAGE/shadow.err" || rc=$?;
 	umount /var/lib/shirudo &&
 	[ "$rc" != 0 ] &&
-	grep -q "carries no label with enforcement live" \
+	grep -q "carries no seal label although enforcement is active" \
 		"$STAGE/shadow.err" &&
 	[ ! -e "$PIN" ] &&
 	[ "$(chain)" = "$CHAIN" ]

@@ -168,8 +168,9 @@ static void shirudo_tls_info_callback(const SSL *ssl, int where, int ret)
 		      !strcasecmp(group, "SecP256r1MLKEM768")))
 		return;
 	host = SSL_get_servername((SSL *)ssl, TLSEXT_NAMETYPE_host_name);
-	pr_warn("TLS non-hybrid key exchange with %s: %s",
-		host ? host : "unknown host", group ? group : "unknown group");
+	pr_warn("tls: the connection to %s negotiated the key exchange group %s, not a hybrid ML-KEM group",
+		host ? host : "an unknown host",
+		group ? group : "(unknown)");
 }
 
 void tls_ca_cleanup(struct shirudo_tls_ca *ca)

@@ -628,5 +628,5 @@ void openssl_complain(const char *where)
 	char buf[256];
 
 	ERR_error_string_n(ERR_get_error(), buf, sizeof(buf));
-	pr_err("openssl: %s: %s", where, buf);
+	pr_err("openssl: %s failed: %s", where, buf);
 }

@@ -76,7 +76,7 @@ int eventlog_append_to(const char *path, const char *json_line)
 
 	fd = seal_open(path, O_WRONLY | O_CREAT | O_APPEND, 0600);
 	if (fd < 0) {
-		pr_err("eventlog: open %s: %s", path, strerror(-fd));
+		pr_err("eventlog: cannot open %s: %s", path, strerror(-fd));
 		return fd;
 	}
 	while (flock(fd, LOCK_EX) != 0) {
@@ -96,13 +96,14 @@ int eventlog_append_to(const char *path, const char *json_line)
 	if (!rc && fsync(fd) != 0)
 		rc = -errno;
 	if (rc && ftruncate(fd, st.st_size) != 0)
-		pr_warn("eventlog: could not roll back a partial append to "
-			"%s: %s", path, strerror(errno));
+		pr_warn("eventlog: cannot roll back a partial append to %s: %s",
+			path, strerror(errno));
 out:
 	if (close(fd) != 0 && !rc)
 		rc = -errno;
 	if (rc) {
-		pr_err("eventlog: append: %s", strerror(-rc));
+		pr_err("eventlog: cannot append a record to %s: %s", path,
+		       strerror(-rc));
 		return rc;
 	}
 	return 0;

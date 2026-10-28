@@ -80,7 +80,7 @@ static void check_root(struct shirudo_preflight_result *r)
 	if (geteuid() == 0)
 		pass(c);
 	else
-		fail(r, c, "must run as root (EUID=%u)",
+		fail(r, c, "shirudo init must run as root (the effective UID is %u)",
 		     (__u32)geteuid());
 }
 
@@ -115,8 +115,7 @@ static void check_bpf_lsm(struct shirudo_preflight_result *r)
 		pass(c);
 	else
 		fail(r, c,
-		     "/sys/kernel/security/lsm has no \"bpf\" entry "
-		     "(needs CONFIG_BPF_LSM=y, bpf in CONFIG_LSM)");
+		     "/sys/kernel/security/lsm does not list bpf (needs CONFIG_BPF_LSM=y and bpf in CONFIG_LSM or in the lsm= boot parameter)");
 }
 
 static bool bpffs_in_proc_filesystems(void)
@@ -155,8 +154,7 @@ static void check_bpffs(struct shirudo_preflight_result *r)
 		pass(c);
 	else
 		fail(r, c,
-		     "/proc/filesystems does not advertise bpf "
-		     "(needs CONFIG_BPF_FS=y)");
+		     "/proc/filesystems does not list bpf (needs CONFIG_BPF_FS=y)");
 }
 
 static void check_signed_loader_abi(struct shirudo_preflight_result *r)
@@ -184,7 +182,7 @@ static void check_cert(struct shirudo_preflight_result *r)
 		pass(c);
 	else
 		fail(r, c,
-		     "%s missing or empty (copy the operator's cert)",
+		     "%s is missing or empty (copy the operator's cert.der there)",
 		     shirudo_cert_path());
 }
 
@@ -213,7 +211,7 @@ static void check_cert_algorithm(struct shirudo_preflight_result *r)
 
 	if (preflight_keys(&set)) {
 		pass(c);
-		strscpy(c->detail, "skipped (cert unreadable)",
+		strscpy(c->detail, "skipped (the certificates cannot be read)",
 			sizeof(c->detail));
 		return;
 	}
@@ -223,19 +221,19 @@ static void check_cert_algorithm(struct shirudo_preflight_result *r)
 		int rc;
 
 		if (keys_cert_read(&set.certs[i], &cert)) {
-			fail(r, c, "%s: cannot parse", set.certs[i].path);
+			fail(r, c, "%s cannot be parsed as an X.509 certificate",
+			     set.certs[i].path);
 			return;
 		}
 		rc = cert_key_algorithm(&cert, name, sizeof(name));
 		cert_free(&cert);
 		if (rc) {
-			fail(r, c, "%s: cannot determine public-key algorithm",
+			fail(r, c, "cannot determine the public-key algorithm of %s",
 			     set.certs[i].path);
 			return;
 		}
 		if (strcmp(name, "ML-DSA-87") != 0) {
-			fail(r, c, "%s is %s; shirudo accepts only ML-DSA-87 "
-			     "certificates (re-key with shirudo genkey)",
+			fail(r, c, "%s uses %s, but shirudo accepts only ML-DSA-87 certificates (create a new key with shirudo genkey)",
 			     set.certs[i].path, name);
 			return;
 		}
@@ -262,7 +260,7 @@ static void check_cert_kernel_algo(struct shirudo_preflight_result *r)
 
 	if (preflight_keys(&set)) {
 		pass(c);
-		strscpy(c->detail, "skipped (cert unreadable)",
+		strscpy(c->detail, "skipped (the certificates cannot be read)",
 			sizeof(c->detail));
 		return;
 	}
@@ -274,7 +272,8 @@ static void check_cert_kernel_algo(struct shirudo_preflight_result *r)
 
 		rc = keys_cert_der(&set.certs[i], &der, &der_sz);
 		if (rc) {
-			fail(r, c, "%s: %s", set.certs[i].path, strerror(-rc));
+			fail(r, c, "cannot read %s: %s", set.certs[i].path,
+			     strerror(-rc));
 			return;
 		}
 		key = syscall(__NR_add_key, "asymmetric", "", der, der_sz,
@@ -286,15 +285,11 @@ static void check_cert_kernel_algo(struct shirudo_preflight_result *r)
 			continue;
 		if (rc == ENOENT || rc == ENOPKG)
 			fail(r, c,
-			     "kernel cannot verify the public-key algorithm of "
-			     "%s (ML-DSA certs need CONFIG_CRYPTO_MLDSA=y and "
-			     "CONFIG_CRYPTO_SHA512=y; see "
-			     "Documentation/requirements.rst)",
+			     "the kernel cannot verify the public-key algorithm of %s (ML-DSA needs CONFIG_CRYPTO_MLDSA=y and CONFIG_CRYPTO_SHA512=y)",
 			     set.certs[i].path);
 		else
-			fail(r, c, "kernel rejected %s: %s "
-			     "(add_key asymmetric)", set.certs[i].path,
-			     strerror(rc));
+			fail(r, c, "the kernel rejected %s: %s (add_key asymmetric)",
+			     set.certs[i].path, strerror(rc));
 		return;
 	}
 	pass(c);
@@ -310,8 +305,8 @@ static void check_keyring(struct shirudo_preflight_result *r)
 		      (long)KEY_SPEC_USER_KEYRING, 0L, 0L, 0L);
 	if (ret < 0) {
 		fail(r, c,
-		     "keyctl(GET_KEYRING_ID, USER) failed: %s "
-		     "(needs CONFIG_KEYS=y)", strerror(errno));
+		     "cannot look up the user keyring: %s (needs CONFIG_KEYS=y; keyctl GET_KEYRING_ID)",
+		     strerror(errno));
 		return;
 	}
 	ret = syscall(__NR_keyctl, KEYCTL_GET_KEYRING_ID,
@@ -320,8 +315,8 @@ static void check_keyring(struct shirudo_preflight_result *r)
 		pass(c);
 	else
 		fail(r, c,
-		     "keyctl(GET_KEYRING_ID, BPF) failed: %s (the kernel has "
-		     "no bpf keyring)", strerror(errno));
+		     "the kernel has no .bpf keyring: %s (keyctl GET_KEYRING_ID)",
+		     strerror(errno));
 }
 
 static void check_embedded_loader(struct shirudo_preflight_result *r)
@@ -334,7 +329,7 @@ static void check_embedded_loader(struct shirudo_preflight_result *r)
 	if (bpf2 && bpf2->size && seal && seal->size)
 		pass(c);
 	else
-		fail(r, c, "embedded BPF objects missing");
+		fail(r, c, "this shirudo binary carries no embedded BPF objects");
 }
 
 static void check_tpm(struct shirudo_preflight_result *r)
@@ -367,9 +362,7 @@ static void check_tpm(struct shirudo_preflight_result *r)
 		pass(c);
 	else
 		fail(r, c,
-		     "/dev/tpmrm0: %s (shirudo requires a TPM 2.0; for swtpm "
-		     "set tpm.tcti = swtpm:host=...,port=... in "
-		     "/etc/shirudo/shirudo.conf or SHIRUDO_TPM_TCTI)",
+		     "/dev/tpmrm0: %s (shirudo requires a TPM 2.0; for swtpm, set tpm.tcti = swtpm:host=...,port=... in /etc/shirudo/shirudo.conf or SHIRUDO_TPM_TCTI)",
 		     strerror(errno));
 }
 

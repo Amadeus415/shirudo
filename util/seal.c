@@ -68,19 +68,20 @@ static int seal_label_cb(const char *path, const struct stat *sb,
 	if (sb->st_dev != seal_root_dev)
 		return 0;
 	if (!S_ISREG(sb->st_mode) && !S_ISDIR(sb->st_mode)) {
-		pr_warn("seal: %s is not a file or directory of shirudo's "
-			"(foreign entry); ignored", path);
+		pr_warn("seal: %s is neither a regular file nor a directory, so it is not shirudo's (foreign entry); ignored",
+			path);
 		return 0;
 	}
 	if (!seal_first_init) {
 		if (seal_lget(path, label) <= 0)
-			pr_warn("seal: %s carries no label (foreign entry); "
-				"ignored", path);
+			pr_warn("seal: %s carries no seal label (foreign entry); ignored",
+				path);
 		return 0;
 	}
 	rc = seal_label(path);
 	if (rc) {
-		pr_err("seal: label %s: %s", path, strerror(-rc));
+		pr_err("seal: cannot set the seal label on %s: %s", path,
+		       strerror(-rc));
 		seal_walk_error = rc;
 		return 1;
 	}
@@ -105,8 +106,8 @@ int seal_label_tree(bool allow_first)
 	seal_walk_error = 0;
 	seal_first_init = seal_lget(SHIRUDO_VAR_LIB, label) <= 0;
 	if (seal_first_init && !allow_first) {
-		pr_err("seal: %s carries no label with enforcement live "
-		       "(foreign state tree); refusing", SHIRUDO_VAR_LIB);
+		pr_err("seal: %s carries no seal label although enforcement is active, so it is not the state tree init sealed (foreign state tree); refusing to label it",
+		       SHIRUDO_VAR_LIB);
 		return -EPERM;
 	}
 	if (nftw(SHIRUDO_VAR_LIB, seal_label_cb, 16, FTW_PHYS | FTW_MOUNT) != 0)
@@ -191,15 +192,14 @@ static int seal_open_dir(const char *path, bool create, mode_t mode)
 		if (nfd < 0) {
 			rc = -errno;
 			if (rc == -ELOOP || rc == -ENOTDIR)
-				pr_err("%s: %s is not a directory of shirudo's "
-				       "(foreign entry in sealed state)", path,
-				       comp);
+				pr_err("seal: %s in the path %s is not a directory of shirudo's (foreign entry in sealed state)",
+				       comp, path);
 			break;
 		}
 		rc = created ? seal_inherit(dfd, nfd) : seal_same(dfd, nfd);
 		if (rc == -EPERM)
-			pr_err("%s: %s carries no label (foreign entry in "
-			       "sealed state); refusing", path, comp);
+			pr_err("seal: %s in the path %s carries no seal label (foreign entry in sealed state); refusing it",
+			       comp, path);
 		close(dfd);
 		dfd = nfd;
 		if (rc)
@@ -346,7 +346,9 @@ out_fd:
 out_dir:
 	close(dfd);
 	if (rc > 0) {
-		pr_err("%s: refusing to write sealed state", path);
+		pr_err("seal: refusing to write sealed state at %s", path);
+		pr_hint("write the output to a path outside %s and %s",
+			SHIRUDO_VAR_LIB, SHIRUDO_RUN_DIR);
 		rc = -EPERM;
 	}
 	return rc;
@@ -370,8 +372,8 @@ int seal_open(const char *path, int flags, mode_t mode)
 			if (!rc)
 				rc = seal_same(dfd, fd);
 			if (rc == -EPERM)
-				pr_err("%s: carries no label (foreign entry "
-				       "in sealed state); refusing", path);
+				pr_err("seal: %s carries no seal label (foreign entry in sealed state); refusing to open it",
+				       path);
 			if (!rc && (flags & O_TRUNC) && ftruncate(fd, 0))
 				rc = -errno;
 		}
@@ -382,8 +384,8 @@ int seal_open(const char *path, int flags, mode_t mode)
 	} else {
 		rc = -errno;
 		if (rc == -ELOOP)
-			pr_err("%s: is a symbolic link (foreign entry in "
-			       "sealed state); refusing", path);
+			pr_err("seal: %s is a symbolic link (foreign entry in sealed state); refusing to open it",
+			       path);
 	}
 	close(dfd);
 	if (rc) {
@@ -411,8 +413,8 @@ int seal_open_read(const char *path)
 		if (fd >= 0)
 			close(fd);
 		if (rc == -EPERM || rc == -ELOOP)
-			pr_err("%s: not shirudo's own (foreign entry in sealed "
-			       "state); refusing to read it", path);
+			pr_err("seal: %s is not shirudo's own (foreign entry in sealed state); refusing to read it",
+			       path);
 		return rc;
 	}
 	return fd;

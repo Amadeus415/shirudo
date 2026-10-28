@@ -208,7 +208,8 @@ static int register_expectation(const __u8 pcr_before[32],
 	rc = tpm_register_policy(SHIRUDO_CHAIN_PCR_MASK, values, 2, writer_public,
 				 branch_written, branch_init, policy);
 	if (rc) {
-		pr_err("tpm: compute signed register policy: %s", strerror(-rc));
+		pr_err("tpm: cannot compute the register's write policy: %s",
+		       strerror(-rc));
 		return rc;
 	}
 	tpm_nv_name(SHIRUDO_NV_INDEX, SHIRUDO_TPM_REGISTER_ATTRS,
@@ -273,11 +274,12 @@ int chain_tpm_bound(struct shirudo_tpm *tpm)
 		return rc;
 	rc = identity_read(&id);
 	if (rc) {
-		pr_err("tpm: frozen identity unreadable: %s", strerror(-rc));
+		pr_err("tpm: cannot read the identity map that init pinned: %s",
+		       strerror(-rc));
 		return rc;
 	}
 	if (id.ak_name_len != SHIRUDO_TPM_NAME_LEN) {
-		pr_err("tpm: no attestation key name on record");
+		pr_err("tpm: the identity map holds no attestation key name");
 		return -EPROTO;
 	}
 	rc = tpm_ak_create(tpm, &ak);
@@ -285,8 +287,7 @@ int chain_tpm_bound(struct shirudo_tpm *tpm)
 		return rc;
 	if (ak.name_len != SHIRUDO_TPM_NAME_LEN ||
 	    !ct_eq(ak.name, id.ak_name, SHIRUDO_TPM_NAME_LEN)) {
-		pr_err("tpm: not the TPM init bound (attestation key name "
-		       "differs)");
+		pr_err("tpm: this is not the TPM that init used this boot (its attestation key name differs from the recorded one)");
 		rc = -EACCES;
 	}
 	tpm_key_flush(tpm, &ak);
@@ -331,9 +332,8 @@ int chain_init(const __u8 event[32],
 	 */
 	rc = eventlog_boot_init(&rec);
 	if (rc && rc != -ENOENT) {
-		pr_err("tpm: eventlog %s unreadable: %s; not binding register "
-		       "0x%08x", eventlog_path(), strerror(-rc),
-		       SHIRUDO_NV_INDEX);
+		pr_err("tpm: cannot read the eventlog %s (%s), so the register at NV index 0x%08x is not set up",
+		       eventlog_path(), strerror(-rc), SHIRUDO_NV_INDEX);
 		goto out;
 	}
 	recorded = !rc && (!rec.have_reset_count ||
@@ -348,14 +348,13 @@ int chain_init(const __u8 event[32],
 		if (rc)
 			goto out;
 		if (!name_equals(&nv, written)) {
-			pr_err("tpm: recorded register has an obsolete policy; "
-			       "trusted reboot required");
+			pr_err("tpm: the register recorded this boot does not carry the write policy its record implies: it was recreated, or set up by another shirudo version");
 			rc = -EEXIST;
 			goto out;
 		}
 		if (!ct_eq(info->writer_public, rec.writer_public,
 			   sizeof(info->writer_public))) {
-			pr_err("tpm: recorded NV writer differs from the guarded key");
+			pr_err("tpm: the NV writer key in this boot's init record is not the kernel-held key in the identity map");
 			rc = -EKEYREJECTED;
 			goto out;
 		}
@@ -377,16 +376,16 @@ int chain_init(const __u8 event[32],
 			info->reused = true;
 			goto out;
 		}
-		pr_err("tpm: register 0x%08x bound this boot is %s; not "
-		       "binding another before the next TPM reset",
-		       SHIRUDO_NV_INDEX, !nv.defined ? "gone" :
-		       !nv.written ? "unwritten" : "not the recorded index");
+		pr_err("tpm: the register at NV index 0x%08x that init set up this boot %s; shirudo does not set up another one before the next TPM reset",
+		       SHIRUDO_NV_INDEX, !nv.defined ? "is gone" :
+		       !nv.written ? "is defined but unwritten" :
+		       "is not the index init recorded");
 		rc = -EEXIST;
 		goto out;
 	}
 	if (nv.defined && nv.written)
-		pr_warn("tpm: register 0x%08x written this boot without a "
-			"record; rebinding it", SHIRUDO_NV_INDEX);
+		pr_warn("tpm: the register at NV index 0x%08x was written this boot, but the eventlog holds no record of it; setting it up afresh",
+			SHIRUDO_NV_INDEX);
 
 	rc = tpm_pcr_read(tpm, SHIRUDO_CHAIN_PCR, info->pcr_before);
 	if (!rc)
@@ -414,8 +413,8 @@ int chain_init(const __u8 event[32],
 		if (rc)
 			goto out;
 		if (!nv.defined || !name_equals(&nv, unwritten)) {
-			pr_err("tpm: register 0x%08x name does not match the "
-			       "computed public area", SHIRUDO_NV_INDEX);
+			pr_err("tpm: the name the TPM gives the register at NV index 0x%08x does not match the public area shirudo computed",
+			       SHIRUDO_NV_INDEX);
 			rc = -EPROTO;
 			goto out;
 		}
@@ -435,8 +434,7 @@ int chain_init(const __u8 event[32],
 	rc = tpm_pcr_extend(tpm, SHIRUDO_CHAIN_PCR,
 			    info->anchor_digest);
 	if (rc) {
-		pr_err("tpm: register written but PCR %u not anchored; "
-		       "the init branch stays open until reboot",
+		pr_err("tpm: the register was written but could not be anchored in PCR %u, so its first-write policy branch stays usable until reboot",
 		       SHIRUDO_CHAIN_PCR);
 		goto out;
 	}
@@ -463,7 +461,8 @@ int chain_extend(const __u8 event[32], __u8 out_chain[32])
 	rc = tpm_register_policy(SHIRUDO_CHAIN_PCR_MASK, values, 2, rec.writer_public,
 				 branch_written, branch_init, policy);
 	if (rc) {
-		pr_err("tpm: compute signed register policy: %s", strerror(-rc));
+		pr_err("tpm: cannot compute the register's write policy: %s",
+		       strerror(-rc));
 		return rc;
 	}
 
@@ -481,13 +480,13 @@ int chain_extend(const __u8 event[32], __u8 out_chain[32])
 		goto out;
 	}
 	if (!name_equals(&nv, rec.name)) {
-		pr_err("tpm: register 0x%08x is not the index init recorded "
-		       "(recreated?)", SHIRUDO_NV_INDEX);
+		pr_err("tpm: the register at NV index 0x%08x is not the one init recorded this boot (recreated?)",
+		       SHIRUDO_NV_INDEX);
 		rc = -EACCES;
 		goto out;
 	}
 	if (!ct_eq(nv.policy, policy, sizeof(policy))) {
-		pr_err("tpm: register write policy is obsolete or substituted");
+		pr_err("tpm: the register's write policy is not the one init recorded (outdated or substituted)");
 		rc = -EACCES;
 		goto out;
 	}
@@ -495,7 +494,7 @@ int chain_extend(const __u8 event[32], __u8 out_chain[32])
 	if (rc)
 		goto out;
 	if (!rec.have_reset_count || reset != rec.reset_count) {
-		pr_err("tpm: register reset differs from the init record");
+		pr_err("tpm: the TPM reset count differs from the one in this boot's init record");
 		rc = -EACCES;
 		goto out;
 	}
@@ -503,7 +502,7 @@ int chain_extend(const __u8 event[32], __u8 out_chain[32])
 	if (rc)
 		goto out;
 	if (!ct_eq(writer_public, rec.writer_public, sizeof(writer_public))) {
-		pr_err("tpm: recorded NV writer differs from the guarded key");
+		pr_err("tpm: the NV writer key in this boot's init record is not the kernel-held key in the identity map");
 		rc = -EKEYREJECTED;
 		goto out;
 	}
@@ -586,7 +585,8 @@ int chain_status(struct chain_status *st)
 					 st->init.writer_public, branch_written,
 					 branch_init, policy);
 		if (rc) {
-			pr_err("tpm: compute signed register policy: %s", strerror(-rc));
+			pr_err("tpm: cannot compute the register's write policy: %s",
+			       strerror(-rc));
 			st->anchored = false;
 			goto out;
 		}

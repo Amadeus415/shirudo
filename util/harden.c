@@ -59,6 +59,7 @@ int harden_self(void)
 		int err = -errno;
 
 		pr_err("hardening: cannot lock process memory: %s", strerror(-err));
+		pr_hint("shirudo locks all its memory at startup: allow it with LimitMEMLOCK=infinity in the systemd unit or a larger ulimit -l");
 		return err;
 	}
 	return 0;

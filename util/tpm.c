@@ -49,6 +49,38 @@ int tpm_tcti(char *buf, size_t size)
 	return n < 0 ? (int)n : 0;
 }
 
+static bool rc_is(TSS2_RC rc, TSS2_RC code)
+{
+	if ((rc & 0xFFFF0000u) != 0)
+		return false;	/* not a TPM-layer code */
+	if (rc & TPM2_RC_FMT1)
+		return (rc & 0x0BFu) == (code & 0x0BFu);
+	return (rc & 0xFFFu) == code;
+}
+
+static bool rc_is_auth_failure(TSS2_RC rc)
+{
+	return rc_is(rc, TPM2_RC_BAD_AUTH) || rc_is(rc, TPM2_RC_AUTH_FAIL) ||
+	       rc_is(rc, TPM2_RC_NV_AUTHORIZATION) ||
+	       rc_is(rc, TPM2_RC_POLICY_FAIL);
+}
+
+/*
+ * Only the codes whose cause is the TPM's state, not shirudo's input:
+ * an authorization or policy failure is a verdict and gets no hint.
+ */
+static void rc_hint(TSS2_RC rc)
+{
+	if (rc_is(rc, TPM2_RC_LOCKOUT))
+		pr_hint("the TPM is in dictionary-attack lockout after repeated failed authorizations: find what sent them before waiting out the recovery interval or clearing it with the lockout authorization");
+	else if (rc_is(rc, TPM2_RC_RETRY) || rc_is(rc, TPM2_RC_YIELDED) ||
+		 rc_is(rc, TPM2_RC_TESTING) || rc_is(rc, TPM2_RC_NV_RATE) ||
+		 rc_is(rc, TPM2_RC_NV_UNAVAILABLE))
+		pr_hint("the TPM was busy, self-testing or rate-limiting NV writes: run the command again once it settles");
+	else if ((rc & TSS2_RC_LAYER_MASK) == TSS2_TCTI_RC_LAYER)
+		pr_hint("the TPM did not answer: check that /dev/tpmrm0 exists and is not held by another TPM stack, or that tpm.tcti names a reachable TPM");
+}
+
 static int open_tpm(struct shirudo_tpm **out, bool quiet)
 {
 	char tcti[SHIRUDO_TPM_TCTI_MAX];
@@ -67,7 +99,7 @@ static int open_tpm(struct shirudo_tpm **out, bool quiet)
 	err = tpm_tcti(tcti, sizeof(tcti));
 	if (err) {
 		if (!quiet)
-			pr_err("tpm: the TCTI is longer than %d bytes",
+			pr_err("tpm: the configured TCTI is longer than %d bytes",
 			       SHIRUDO_TPM_TCTI_MAX - 1);
 		return err;
 	}
@@ -77,16 +109,21 @@ static int open_tpm(struct shirudo_tpm **out, bool quiet)
 		return -ENOMEM;
 	rc = Tss2_TctiLdr_Initialize(tcti, &t->tcti);
 	if (rc != TSS2_RC_SUCCESS) {
-		if (!quiet)
-			pr_err("tpm: TctiLdr_Initialize(%s): rc=0x%08x", tcti,
-			       (__u32)rc);
+		if (!quiet) {
+			pr_err("tpm: cannot open the TPM through the TCTI \"%s\" (Tss2_TctiLdr_Initialize rc=0x%08x)",
+			       tcti, (__u32)rc);
+			pr_hint("check that /dev/tpmrm0 exists (tpm_tis or tpm_crb loaded), or that tpm.tcti or SHIRUDO_TPM_TCTI names a running TPM");
+		}
 		xfree(t, sizeof(*t));
 		return -EIO;
 	}
 	rc = Esys_Initialize(&t->esys, t->tcti, NULL);
 	if (rc != TSS2_RC_SUCCESS) {
-		if (!quiet)
-			pr_err("tpm: Esys_Initialize: rc=0x%08x", (__u32)rc);
+		if (!quiet) {
+			pr_err("tpm: cannot set up the connection to the TPM (Esys_Initialize rc=0x%08x)",
+			       (__u32)rc);
+			rc_hint(rc);
+		}
 		Tss2_TctiLdr_Finalize(&t->tcti);
 		xfree(t, sizeof(*t));
 		return -EIO;
@@ -120,28 +157,12 @@ int tpm_nv_set_writer(struct shirudo_tpm *t,
 		      const __u8 public[SHIRUDO_TPM_NV_RSA_BYTES])
 {
 	if (!t || !public) {
-		pr_err("tpm: NV writer modulus is required");
+		pr_err("tpm: the NV writer public key is missing");
 		return -EACCES;
 	}
 	memcpy(t->writer_public, public, sizeof(t->writer_public));
 	t->writer_set = true;
 	return 0;
-}
-
-static bool rc_is(TSS2_RC rc, TSS2_RC code)
-{
-	if ((rc & 0xFFFF0000u) != 0)
-		return false;	/* not a TPM-layer code */
-	if (rc & TPM2_RC_FMT1)
-		return (rc & 0x0BFu) == (code & 0x0BFu);
-	return (rc & 0xFFFu) == code;
-}
-
-static bool rc_is_auth_failure(TSS2_RC rc)
-{
-	return rc_is(rc, TPM2_RC_BAD_AUTH) || rc_is(rc, TPM2_RC_AUTH_FAIL) ||
-	       rc_is(rc, TPM2_RC_NV_AUTHORIZATION) ||
-	       rc_is(rc, TPM2_RC_POLICY_FAIL);
 }
 
 static void pcr_selection(__u32 mask, TPML_PCR_SELECTION *sel)
@@ -169,11 +190,15 @@ int tpm_pcr_read(struct shirudo_tpm *t, __u32 pcr,
 	rc = Esys_PCR_Read(t->esys, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
 			   &sel, &counter, NULL, &values);
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: PCR_Read(%u): rc=0x%08x", pcr, (__u32)rc);
+		pr_err("tpm: cannot read PCR %u (PCR_Read rc=0x%08x)", pcr,
+		       (__u32)rc);
+		rc_hint(rc);
 		return -EIO;
 	}
 	if (values->count != 1 || values->digests[0].size != 32) {
-		pr_err("tpm: PCR %u has no SHA-256 bank", pcr);
+		pr_err("tpm: the TPM returned no SHA-256 value for PCR %u",
+		       pcr);
+		pr_hint("shirudo needs the TPM's SHA-256 PCR bank: enable it in the firmware's TPM settings");
 		Esys_Free(values);
 		return -ENOENT;
 	}
@@ -195,7 +220,9 @@ int tpm_pcr_extend(struct shirudo_tpm *t, __u32 pcr,
 	rc = Esys_PCR_Extend(t->esys, ESYS_TR_PCR0 + pcr, ESYS_TR_PASSWORD,
 			     ESYS_TR_NONE, ESYS_TR_NONE, &dv);
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: PCR_Extend(%u): rc=0x%08x", pcr, (__u32)rc);
+		pr_err("tpm: cannot extend PCR %u (PCR_Extend rc=0x%08x)", pcr,
+		       (__u32)rc);
+		rc_hint(rc);
 		return -EIO;
 	}
 	return 0;
@@ -212,7 +239,9 @@ int shirudo_tpm_boot_identity(struct shirudo_tpm *t, __u32 *reset,
 	rc = Esys_ReadClock(t->esys, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
 			    &info);
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: ReadClock: rc=0x%08x", (__u32)rc);
+		pr_err("tpm: cannot read the TPM's reset and restart counts (ReadClock rc=0x%08x)",
+		       (__u32)rc);
+		rc_hint(rc);
 		return -EIO;
 	}
 	*reset = info->clockInfo.resetCount;
@@ -229,7 +258,9 @@ int tpm_reset_count(struct shirudo_tpm *t, __u32 *out)
 	rc = Esys_ReadClock(t->esys, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
 			    &info);
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: ReadClock: rc=0x%08x", (__u32)rc);
+		pr_err("tpm: cannot read the TPM's reset count (ReadClock rc=0x%08x)",
+		       (__u32)rc);
+		rc_hint(rc);
 		return -EIO;
 	}
 	*out = info->clockInfo.resetCount;
@@ -246,8 +277,9 @@ static int nv_handle(struct shirudo_tpm *t, __u32 index, ESYS_TR *out)
 	if (rc_is(rc, TPM2_RC_HANDLE))
 		return -ENOENT;		/* quiet: undefined is normal */
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: TR_FromTPMPublic(0x%08x): rc=0x%08x", index,
-		       (__u32)rc);
+		pr_err("tpm: cannot look up NV index 0x%08x (TR_FromTPMPublic rc=0x%08x)",
+		       index, (__u32)rc);
+		rc_hint(rc);
 		return -EIO;
 	}
 	return 0;
@@ -272,8 +304,9 @@ int tpm_nv_info(struct shirudo_tpm *t, __u32 index,
 				ESYS_TR_NONE, &pub, &name);
 	Esys_TR_Close(t->esys, &nv);
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: NV_ReadPublic(0x%08x): rc=0x%08x", index,
-		       (__u32)rc);
+		pr_err("tpm: cannot read the public area of NV index 0x%08x (NV_ReadPublic rc=0x%08x)",
+		       index, (__u32)rc);
+		rc_hint(rc);
 		return -EIO;
 	}
 	info->defined = true;
@@ -305,7 +338,8 @@ static int owner_auth_set(struct shirudo_tpm *t, const void *auth, size_t len)
 	rc = Esys_TR_SetAuth(t->esys, ESYS_TR_RH_OWNER, &owner);
 	explicit_bzero(owner.buffer, sizeof(owner.buffer));
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: TR_SetAuth(owner): rc=0x%08x", (__u32)rc);
+		pr_err("tpm: cannot apply the owner authorization (TR_SetAuth rc=0x%08x)",
+		       (__u32)rc);
 		return -EIO;
 	}
 	return 0;
@@ -318,17 +352,19 @@ static void owner_auth_clear(struct shirudo_tpm *t)
 	Esys_TR_SetAuth(t->esys, ESYS_TR_RH_OWNER, &empty);
 }
 
-static int owner_auth_error(const char *op, __u32 index, TSS2_RC rc)
+static int owner_auth_error(const char *action, const char *op, __u32 index,
+			    TSS2_RC rc)
 {
 	if (rc_is_auth_failure(rc)) {
-		pr_err("tpm: %s(0x%08x): owner-hierarchy authorization "
-		       "failed (rc=0x%08x). This TPM has owner auth set; "
-		       "supply it via tpm.owner_auth in %s (or "
-		       "SHIRUDO_TPM_OWNER_AUTH), or clear the TPM owner "
-		       "auth.", op, index, (__u32)rc, SHIRUDO_CONF_PATH);
+		pr_err("tpm: the TPM refused the owner-hierarchy authorization to %s NV index 0x%08x (%s rc=0x%08x)",
+		       action, index, op, (__u32)rc);
+		pr_hint("this TPM has an owner authorization set: supply it as tpm.owner_auth in %s or SHIRUDO_TPM_OWNER_AUTH, or clear it",
+			SHIRUDO_CONF_PATH);
 		return -EACCES;
 	}
-	pr_err("tpm: %s(0x%08x): rc=0x%08x", op, index, (__u32)rc);
+	pr_err("tpm: cannot %s NV index 0x%08x (%s rc=0x%08x)", action, index,
+	       op, (__u32)rc);
+	rc_hint(rc);
 	return -EIO;
 }
 
@@ -356,7 +392,7 @@ int tpm_nv_define(struct shirudo_tpm *t, __u32 index,
 				 &nv);
 	owner_auth_clear(t);
 	if (rc != TSS2_RC_SUCCESS)
-		return owner_auth_error("NV_DefineSpace", index, rc);
+		return owner_auth_error("define", "NV_DefineSpace", index, rc);
 	Esys_TR_Close(t->esys, &nv);
 	return 0;
 }
@@ -382,7 +418,8 @@ int tpm_nv_undefine(struct shirudo_tpm *t, __u32 index,
 	owner_auth_clear(t);
 	if (rc != TSS2_RC_SUCCESS) {
 		Esys_TR_Close(t->esys, &nv);
-		return owner_auth_error("NV_UndefineSpace", index, rc);
+		return owner_auth_error("remove", "NV_UndefineSpace", index,
+					rc);
 	}
 	return 0;
 }
@@ -403,12 +440,14 @@ int tpm_nv_read(struct shirudo_tpm *t, __u32 index, __u8 out[32])
 	if (rc_is(rc, TPM2_RC_NV_UNINITIALIZED))
 		return -ENODATA;	/* quiet: nothing written this boot */
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: NV_Read(0x%08x): rc=0x%08x", index, (__u32)rc);
+		pr_err("tpm: cannot read NV index 0x%08x (NV_Read rc=0x%08x)",
+		       index, (__u32)rc);
+		rc_hint(rc);
 		return -EIO;
 	}
 	if (data->size != SHIRUDO_TPM_NV_DIGEST_LEN) {
-		pr_err("tpm: NV_Read returned %u bytes, expected %u",
-		       data->size, SHIRUDO_TPM_NV_DIGEST_LEN);
+		pr_err("tpm: reading NV index 0x%08x returned %u bytes instead of %u",
+		       index, data->size, SHIRUDO_TPM_NV_DIGEST_LEN);
 		Esys_Free(data);
 		return -EIO;
 	}
@@ -427,7 +466,9 @@ int tpm_policy_session_start(struct shirudo_tpm *t, ESYS_TR *session)
 				   NULL, TPM2_SE_POLICY, &sym, TPM2_ALG_SHA256,
 				   session);
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: StartAuthSession: rc=0x%08x", (__u32)rc);
+		pr_err("tpm: cannot start a TPM policy session (StartAuthSession rc=0x%08x)",
+		       (__u32)rc);
+		rc_hint(rc);
 		return -EIO;
 	}
 	return 0;
@@ -451,12 +492,14 @@ int tpm_writer_prepare(struct shirudo_tpm *t, ESYS_TR session,
 	authorization->cphash.size = SHIRUDO_TPM_DIGEST_LEN;
 	err = tpm_nv_extend_cphash(name, event, authorization->cphash.buffer);
 	if (err) {
-		pr_err("tpm: compute NV_Extend command hash: %s", strerror(-err));
+		pr_err("tpm: cannot compute the command hash of the register extend (NV_Extend cpHash): %s",
+		       strerror(-err));
 		return err;
 	}
 	rc = Esys_TRSess_GetNonceTPM(t->esys, session, &nonce);
 	if (rc != TSS2_RC_SUCCESS || !nonce) {
-		pr_err("tpm: NV writer PolicySigned: rc=0x%08x", (__u32)rc);
+		pr_err("tpm: cannot get the session nonce for the NV writer authorization (TRSess_GetNonceTPM rc=0x%08x)",
+		       (__u32)rc);
 		Esys_Free(nonce);
 		return -EACCES;
 	}
@@ -465,7 +508,8 @@ int tpm_writer_prepare(struct shirudo_tpm *t, ESYS_TR session,
 	err = tpm_writer_auth_hash(authorization->nonce.buffer, authorization->nonce.size,
 				   authorization->cphash.buffer, authorization->digest);
 	if (err)
-		pr_err("tpm: compute NV writer authorization: %s", strerror(-err));
+		pr_err("tpm: cannot compute the NV writer authorization digest: %s",
+		       strerror(-err));
 	return err;
 }
 
@@ -502,14 +546,15 @@ int tpm_writer_load(struct shirudo_tpm *t,
 	err = tpm_object_name(public_area, sizeof(public_area), expected);
 	if (err || name->size != sizeof(expected) ||
 	    memcmp(name->name, expected, sizeof(expected))) {
-		pr_err("tpm: loaded NV writer Name differs from its public area");
+		pr_err("tpm: the TPM names the loaded NV writer key differently than its public area implies");
 		err = -EPROTO;
 		goto out;
 	}
 	err = 0;
 	goto out;
 tss_error:
-	pr_err("tpm: NV writer PolicySigned: rc=0x%08x", (__u32)rc);
+	pr_err("tpm: cannot load the NV writer public key into the TPM (LoadExternal rc=0x%08x)",
+	       (__u32)rc);
 	err = -EACCES;
 out:
 	Esys_Free(name);
@@ -556,7 +601,8 @@ static int policy_writer_signed(struct shirudo_tpm *t, ESYS_TR session,
 	if (err)
 		return err;
 	if (!nv.defined || nv.name_len != SHIRUDO_TPM_NAME_LEN) {
-		pr_err("tpm: NV writer requires a defined register");
+		pr_err("tpm: NV index 0x%08x is not defined, so the NV writer cannot authorize a write to it",
+		       index);
 		return -ENODEV;
 	}
 	err = tpm_writer_prepare(t, session, nv.name, event, &authorization);
@@ -571,7 +617,8 @@ static int policy_writer_signed(struct shirudo_tpm *t, ESYS_TR session,
 	rc = tpm_writer_authorize(t, key, session, &authorization, signature);
 	session_flush(t, key);
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: NV writer PolicySigned: rc=0x%08x", (__u32)rc);
+		pr_err("tpm: the TPM rejected the NV writer's signed authorization (PolicySigned rc=0x%08x)",
+		       (__u32)rc);
 		return -EACCES;
 	}
 	return 0;
@@ -587,15 +634,16 @@ int tpm_policy_session_finish(struct shirudo_tpm *t, ESYS_TR session,
 	rc = Esys_PolicyCommandCode(t->esys, session, ESYS_TR_NONE,
 				    ESYS_TR_NONE, ESYS_TR_NONE, TPM2_CC_NV_Extend);
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: register policy assertion: rc=0x%08x", (__u32)rc);
+		pr_err("tpm: cannot complete the register's write policy (PolicyCommandCode rc=0x%08x)",
+		       (__u32)rc);
 		return -EACCES;
 	}
 	rc = Esys_PolicyGetDigest(t->esys, session, ESYS_TR_NONE,
 				  ESYS_TR_NONE, ESYS_TR_NONE, &digest);
 	if (rc != TSS2_RC_SUCCESS || !digest || digest->size != SHIRUDO_TPM_DIGEST_LEN ||
 	    memcmp(digest->buffer, expected, SHIRUDO_TPM_DIGEST_LEN)) {
-		pr_err("tpm: register policy digest does not match the "
-		       "computed policy (rc=0x%08x)", (__u32)rc);
+		pr_err("tpm: the policy session digest does not match the register's computed write policy (PolicyGetDigest rc=0x%08x)",
+		       (__u32)rc);
 		err = -EPROTO;
 	}
 	Esys_Free(digest);
@@ -620,7 +668,7 @@ static int policy_session_register(struct shirudo_tpm *t, bool init,
 	int err;
 
 	if (!t->writer_set) {
-		pr_err("tpm: register policy requires the NV writer public key");
+		pr_err("tpm: the register's write policy needs the NV writer public key, which was not provided");
 		return -EACCES;
 	}
 	err = tpm_policy_session_start(t, session);
@@ -654,10 +702,9 @@ static int policy_session_register(struct shirudo_tpm *t, bool init,
 	}
 	if (rc != TSS2_RC_SUCCESS) {
 		if (rc_is(rc, TPM2_RC_VALUE) && init)
-			pr_err("tpm: the anchoring PCR moved; the register "
-			       "can only be initialised in the boot window");
+			pr_err("tpm: a PCR the register's write policy is bound to has changed, and the register can only be set up in the boot window");
 		else
-			pr_err("tpm: register policy assertion: rc=0x%08x",
+			pr_err("tpm: the TPM refused a step of the register's write policy (rc=0x%08x)",
 			       (__u32)rc);
 		session_flush(t, *session);
 		*session = ESYS_TR_NONE;
@@ -665,7 +712,8 @@ static int policy_session_register(struct shirudo_tpm *t, bool init,
 	}
 	err = tpm_register_policy_final(branch_written, branch_init, t->writer_public, expected);
 	if (err)
-		pr_err("tpm: compute signed register policy: %s", strerror(-err));
+		pr_err("tpm: cannot compute the register's write policy: %s",
+		       strerror(-err));
 	else
 		err = tpm_policy_session_finish(t, *session, expected);
 	if (err) {
@@ -691,8 +739,9 @@ static int nv_extend_session(struct shirudo_tpm *t, __u32 index,
 			    ESYS_TR_NONE, &data);
 	Esys_TR_Close(t->esys, &nv);
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: NV_Extend(0x%08x): rc=0x%08x", index,
-		       (__u32)rc);
+		pr_err("tpm: cannot extend the register at NV index 0x%08x (NV_Extend rc=0x%08x)",
+		       index, (__u32)rc);
+		rc_hint(rc);
 		return rc_is_auth_failure(rc) ? -EACCES : -EIO;
 	}
 	return 0;
@@ -829,12 +878,12 @@ static int endorsement_primary(struct shirudo_tpm *t,
 				&handle, &out_pub, NULL, NULL, NULL);
 	if (rc != TSS2_RC_SUCCESS) {
 		if (rc_is_auth_failure(rc))
-			pr_err("tpm: CreatePrimary(%s): the endorsement "
-			       "hierarchy has an auth value (rc=0x%08x)", what,
-			       (__u32)rc);
+			pr_err("tpm: cannot create the %s: the endorsement hierarchy has an authorization value set (CreatePrimary rc=0x%08x)",
+			       what, (__u32)rc);
 		else
-			pr_err("tpm: CreatePrimary(%s): rc=0x%08x", what,
-			       (__u32)rc);
+			pr_err("tpm: cannot create the %s (CreatePrimary rc=0x%08x)",
+			       what, (__u32)rc);
+		rc_hint(rc);
 		return -EIO;
 	}
 	key->handle = handle;
@@ -848,8 +897,8 @@ static int endorsement_primary(struct shirudo_tpm *t,
 		rc = Esys_TR_GetName(t->esys, handle, &name);
 		if (rc != TSS2_RC_SUCCESS || name->size != sizeof(computed) ||
 		    memcmp(name->name, computed, sizeof(computed)) != 0) {
-			pr_err("tpm: %s name does not match its marshalled "
-			       "public area", what);
+			pr_err("tpm: the name the TPM gives the %s does not match its public area",
+			       what);
 			err = -EPROTO;
 		} else {
 			memcpy(key->name, name->name, name->size);
@@ -958,7 +1007,9 @@ int tpm_quote(struct shirudo_tpm *t, const struct shirudo_tpm_key *ak,
 	rc = Esys_Quote(t->esys, ak->handle, ESYS_TR_PASSWORD, ESYS_TR_NONE,
 			ESYS_TR_NONE, &qual, &scheme, &sel, &quoted, &sig);
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: Quote: rc=0x%08x", (__u32)rc);
+		pr_err("tpm: cannot get a signed PCR quote (Quote rc=0x%08x)",
+		       (__u32)rc);
+		rc_hint(rc);
 		return -EIO;
 	}
 	err = attestation_copy(quoted, sig, out);
@@ -992,8 +1043,9 @@ int tpm_nv_certify(struct shirudo_tpm *t,
 			     SHIRUDO_TPM_NV_DIGEST_LEN, 0, &info, &sig);
 	Esys_TR_Close(t->esys, &nv);
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: NV_Certify(0x%08x): rc=0x%08x", index,
-		       (__u32)rc);
+		pr_err("tpm: cannot get a signed certification of NV index 0x%08x (NV_Certify rc=0x%08x)",
+		       index, (__u32)rc);
+		rc_hint(rc);
 		return rc_is(rc, TPM2_RC_NV_UNINITIALIZED) ? -ENODATA : -EIO;
 	}
 	err = attestation_copy(info, sig, out);
@@ -1030,8 +1082,9 @@ int tpm_activate_credential(struct shirudo_tpm *t,
 			       ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
 			       NULL, NULL, NULL, 0, NULL, NULL);
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: PolicySecret(endorsement): rc=0x%08x",
+		pr_err("tpm: cannot authorize use of the endorsement key (PolicySecret rc=0x%08x)",
 		       (__u32)rc);
+		rc_hint(rc);
 		session_flush(t, session);
 		return -EACCES;
 	}
@@ -1040,7 +1093,8 @@ int tpm_activate_credential(struct shirudo_tpm *t,
 				     &id, &sec, &cert_info);
 	session_flush(t, session);
 	if (rc != TSS2_RC_SUCCESS) {
-		pr_err("tpm: ActivateCredential: rc=0x%08x", (__u32)rc);
+		pr_err("tpm: the TPM did not activate the challenge credential (ActivateCredential rc=0x%08x)",
+		       (__u32)rc);
 		return (rc & 0xFFFF0000u) == 0 ? -EKEYREJECTED : -EIO;
 	}
 	if (cert_info->size > cap) {

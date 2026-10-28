@@ -120,32 +120,27 @@ static int init_bpf_keyring(key_serial_t ring,
 
 		rc = keys_cert_der(&set->certs[i], &der, &der_sz);
 		if (rc) {
-			pr_err("read %s: %s", set->certs[i].path,
-			       strerror(-rc));
+			pr_err("init: cannot read the certificate %s: %s",
+			       set->certs[i].path, strerror(-rc));
 			return rc;
 		}
 		key = keyring_bpf_add_cert(der, der_sz);
 		if (key >= 0) {
-			pr_info("bpf keyring serial=%d: %s enrolled (key "
-				"serial=%d)", (int)ring, set->certs[i].path,
-				(int)key);
+			pr_info("init: enrolled %s in the .bpf keyring (keyring serial %d, key serial %d)",
+				set->certs[i].path, (int)ring, (int)key);
 			continue;
 		}
 		if (key != -EPERM && key != -EACCES) {
-			pr_err("bpf keyring: add %s: %s", set->certs[i].path,
-			       strerror(-key));
+			pr_err("init: the kernel refused to add %s to the .bpf keyring: %s",
+			       set->certs[i].path, strerror(-key));
 			if (key == -ENOENT || key == -ENOPKG)
-				pr_err("kernel cannot verify this cert's "
-				       "public-key algorithm (ML-DSA needs "
-				       "CONFIG_CRYPTO_MLDSA=y and "
-				       "CONFIG_CRYPTO_SHA512=y; see "
-				       "Documentation/requirements.rst)");
+				pr_hint("the kernel cannot verify the certificate's public-key algorithm: ML-DSA needs CONFIG_CRYPTO_MLDSA=y and CONFIG_CRYPTO_SHA512=y");
 			return key;
 		}
 		if (i > 0) {
-			pr_err("bpf keyring serial=%d was sealed while init "
-			       "enrolled the certificates (tampered)",
+			pr_err("init: the .bpf keyring (serial %d) was sealed by another task while init was enrolling the certificates (tampered)",
 			       (int)ring);
+			pr_hint("shirudo does not trust this boot: keep the journal and handle it as an incident; a keyring tool in the initrd that seals .bpf, such as systemd-keyring-setup, causes the same refusal");
 			return -EKEYREJECTED;
 		}
 		sealed = true;
@@ -153,41 +148,42 @@ static int init_bpf_keyring(key_serial_t ring,
 	if (!sealed) {
 		rc = keyring_bpf_seal();
 		if (rc == -EEXIST) {
-			pr_err("bpf keyring serial=%d carries a restriction "
-			       "init did not install (tampered)", (int)ring);
+			pr_err("init: the .bpf keyring (serial %d) carries a restriction that init did not install (tampered)",
+			       (int)ring);
+			pr_hint("shirudo does not trust this boot: keep the journal and handle it as an incident; a keyring tool in the initrd that restricts .bpf, such as systemd-keyring-setup, causes the same refusal");
 			return -EKEYREJECTED;
 		}
 		if (rc) {
-			pr_err("bpf keyring: certificates enrolled but the "
-			       "keyring could not be sealed: %s",
-			       strerror(-rc));
+			pr_err("init: enrolled the certificates but cannot seal the .bpf keyring (serial %d): %s",
+			       (int)ring, strerror(-rc));
 			return rc;
 		}
 	}
 	rc = keyring_holds_set(ring, set);
 	if (rc < 0) {
-		pr_err("bpf keyring: compare: %s", strerror(-rc));
+		pr_err("init: cannot compare the .bpf keyring (serial %d) with the trusted certificates: %s",
+		       (int)ring, strerror(-rc));
 		return rc;
 	}
 	if (!rc && sealed && keyring_holds_exactly(ring, NULL, 0) == 1) {
-		pr_err("bpf keyring serial=%d was sealed empty at boot; boot "
-		       "with bpf.keyring_unsealed=1", (int)ring);
+		pr_err("init: the kernel sealed the .bpf keyring (serial %d) empty at boot, so no certificate can be enrolled",
+		       (int)ring);
+		pr_hint("add bpf.keyring_unsealed=1 to the kernel command line of the UKI, regenerate it and reboot");
 		return -ENOKEY;
 	}
 	if (!rc) {
-		pr_err("bpf keyring serial=%d is sealed around keys other than "
-		       "the %zu trusted certificate%s (tampered)", (int)ring,
-		       set->n, set->n == 1 ? "" : "s");
+		pr_err("init: the sealed .bpf keyring (serial %d) does not hold exactly the %zu trusted certificate%s (tampered)",
+		       (int)ring, set->n, set->n == 1 ? "" : "s");
+		pr_hint("shirudo does not trust this boot: keep the journal and handle it as an incident");
 		return -EKEYREJECTED;
 	}
 	if (sealed) {
-		pr_info("bpf keyring serial=%d: already holds the %zu trusted "
-			"certificate%s, sealed this boot", (int)ring, set->n,
-			set->n == 1 ? "" : "s");
+		pr_info("init: the .bpf keyring (serial %d) already holds the %zu trusted certificate%s and was sealed earlier this boot",
+			(int)ring, set->n, set->n == 1 ? "" : "s");
 		return -EEXIST;
 	}
-	pr_info("bpf keyring serial=%d: %zu certificate%s enrolled and sealed",
-		(int)ring, set->n, set->n == 1 ? "" : "s");
+	pr_info("init: enrolled %zu certificate%s in the .bpf keyring (serial %d) and sealed it",
+		set->n, set->n == 1 ? "" : "s", (int)ring);
 	return 0;
 }
 
@@ -201,14 +197,25 @@ static int init_keyring(void)
 	ring = keyring_bpf_serial();
 	if (ring <= 0) {
 		rc = ring ? ring : -ENOKEY;
-		pr_err("bpf keyring lookup: %s", strerror(-rc));
+		pr_err("init: cannot find the kernel's .bpf keyring: %s",
+		       strerror(-rc));
+		if (rc == -EINVAL || rc == -ENOKEY)
+			pr_hint("the kernel has no .bpf keyring: boot a current kernel with CONFIG_KEYS, CONFIG_ASYMMETRIC_KEY_TYPE and the signed-loader ABI");
 		return rc;
 	}
 	if (!identity_read(&id)) {
 		if (id.keyring_type != SHIRUDO_SIG_KEYRING_BPF ||
-		    id.keyring_serial != ring ||
-		    memcmp(id.runtime_root, shirudo_image_runtime_root(), 32))
+		    id.keyring_serial != ring) {
+			pr_err("init: the .bpf keyring (serial %d) is not the one init recorded earlier this boot (tampered)",
+			       (int)ring);
+			pr_hint("shirudo does not trust this boot: keep the journal and eventlog as evidence and handle it as an incident");
 			return -EKEYREJECTED;
+		}
+		if (memcmp(id.runtime_root, shirudo_image_runtime_root(), 32)) {
+			pr_err("init: this runtime image is not the one init ran from earlier this boot");
+			pr_hint("after a runtime upgrade, update the runtime root in the bootstrap settings, rebuild the UKI with its initrd and reboot; if there was no upgrade, handle it as an incident");
+			return -EKEYREJECTED;
+		}
 		return 0;
 	}
 	rc = shirudo_image_boot_keys(&set);
@@ -251,12 +258,14 @@ static int init_bpffs(void)
 
 	rc = seal_mkdir_p(SHIRUDO_VAR_LIB, 0700);
 	if (rc) {
-		pr_err("mkdir %s: %s", SHIRUDO_VAR_LIB, strerror(-rc));
+		pr_err("init: cannot create %s: %s", SHIRUDO_VAR_LIB,
+		       strerror(-rc));
 		return rc;
 	}
 	rc = seal_mkdir_p(SHIRUDO_RUN_DIR, 0700);
 	if (rc) {
-		pr_err("mkdir %s: %s", SHIRUDO_RUN_DIR, strerror(-rc));
+		pr_err("init: cannot create %s: %s", SHIRUDO_RUN_DIR,
+		       strerror(-rc));
 		return rc;
 	}
 	rc = is_bpffs_mounted(SHIRUDO_BPFFS_DIR);
@@ -285,30 +294,32 @@ static int init_bpffs(void)
 		return rc;
 	rc = seal_mkdir_p(SHIRUDO_BPFFS_DIR, 0700);
 	if (rc) {
-		pr_err("mkdir %s: %s",
+		pr_err("init: cannot create %s: %s",
 		       SHIRUDO_BPFFS_DIR, strerror(-rc));
 		return rc;
 	}
 
 	rc = is_bpffs_mounted(SHIRUDO_BPFFS_DIR);
 	if (rc < 0) {
-		pr_err("read /proc/self/mounts: %s", strerror(-rc));
+		pr_err("init: cannot read /proc/self/mounts: %s",
+		       strerror(-rc));
 		return rc;
 	}
 	if (rc) {
-		pr_info("bpffs already mounted at %s", SHIRUDO_BPFFS_DIR);
+		pr_info("init: the private bpffs is already mounted at %s",
+			SHIRUDO_BPFFS_DIR);
 		return 0;
 	}
 
 	if (mount("bpf", SHIRUDO_BPFFS_DIR, "bpf",
 		  MS_NOSUID | MS_NODEV | MS_NOEXEC, "mode=0700") != 0) {
-		pr_err("mount bpffs at %s: %s",
+		pr_err("init: cannot mount the private bpffs at %s: %s",
 		       SHIRUDO_BPFFS_DIR, strerror(errno));
 		return -errno;
 	}
 
-	pr_info("mounted private bpffs at %s "
-		"(mode=0700,nosuid,nodev,noexec)", SHIRUDO_BPFFS_DIR);
+	pr_info("init: mounted the private bpffs at %s (mode=0700,nosuid,nodev,noexec)",
+		SHIRUDO_BPFFS_DIR);
 	return 0;
 }
 
@@ -386,12 +397,14 @@ static int attach_guard_group(struct bpf_object *obj,
 	for (i = 0; i < count; i++) {
 		program = bpf_object__find_program_by_name(obj, guards[i].prog);
 		if (!program) {
-			pr_err("program %s missing", guards[i].prog);
+			pr_err("init: the embedded BPF object has no program %s",
+			       guards[i].prog);
 			return -ENOENT;
 		}
 		rc = attach_pin(program, guards[i].pin, &links[i]);
 		if (rc) {
-			pr_err("attach %s: %s", guards[i].prog, strerror(-rc));
+			pr_err("init: cannot attach the BPF program %s: %s",
+			       guards[i].prog, strerror(-rc));
 			return rc;
 		}
 	}
@@ -434,13 +447,14 @@ static int attach_seal(struct bpf_object *policy, struct bpf_object **obj_out,
 
 	*obj_out = NULL;
 	if (!blob || !blob->data || !blob->size) {
-		pr_err("embedded seal blob missing");
+		pr_err("seal: this shirudo binary carries no embedded seal BPF object");
 		return -ENOENT;
 	}
 	obj = bpf_object__open_mem(blob->data, blob->size, NULL);
 	err = libbpf_get_error(obj);
 	if (err) {
-		pr_err("seal: bpf_object__open_mem: %d", err);
+		pr_err("seal: cannot open the embedded seal BPF object: %s (bpf_object__open_mem: %d)",
+		       strerror(-err), err);
 		return err;
 	}
 	err = share_policy_maps(policy, obj);
@@ -453,7 +467,8 @@ static int attach_seal(struct bpf_object *policy, struct bpf_object **obj_out,
 		err = scratch ? bpf_map_freeze(bpf_map__fd(scratch)) : -ENOENT;
 	}
 	if (err) {
-		pr_err("seal: bpf_object__load: %d", err);
+		pr_err("seal: cannot load the embedded seal BPF object: %s (bpf_object__load: %d)",
+		       strerror(-err), err);
 		bpf_object__close(obj);
 		return err;
 	}
@@ -505,19 +520,19 @@ static int dm_verity_anchor(struct shirudo_identity *id)
 	ring = shirudo_keyring_dm_verity_serial();
 	if (ring <= 0) {
 		err = ring ? ring : -ENOKEY;
-		pr_err("resolve the dm-verity keyring serial: %s",
+		pr_err("init: cannot find the kernel's .dm-verity keyring: %s",
 		       strerror(-err));
 		return err;
 	}
 	err = keyring_list(ring, collect_asymmetric, &keys);
 	if (err) {
-		pr_err("list the dm-verity keyring %d: %s", (int)ring,
-		       strerror(-err));
+		pr_err("init: cannot list the keys in the .dm-verity keyring (serial %d): %s",
+		       (int)ring, strerror(-err));
 		return err;
 	}
 	if (keys.n != 1) {
-		pr_err("dm-verity keyring %d holds %zu keys, not the config "
-		       "certificate alone", (int)ring, keys.n);
+		pr_err("init: the .dm-verity keyring (serial %d) holds %zu keys instead of the config certificate alone",
+		       (int)ring, keys.n);
 		return -EKEYREJECTED;
 	}
 	id->dm_verity_ring = (__s32)ring;
@@ -618,47 +633,51 @@ static int init_lsm(void)
 		if (err || id.nv_writer_ring <= 0 ||
 		    id.nv_writer_key <= 0 ||
 		    access(SHIRUDO_KEY_PERMISSION_LINK_PIN, F_OK)) {
-			pr_err("init: NV writer protection missing; reboot "
-			       "with the updated initrd");
+			pr_err("init: enforcement is already active this boot but lacks the NV writer protection this version needs");
+			pr_hint("an older shirudo attached the LSM earlier this boot: rebuild the UKI and initrd with this version and reboot");
 			return err ? err : -EACCES;
 		}
-		pr_info("bpf2 already attached (%s exists)",
+		pr_info("init: enforcement is already active this boot (%s exists)",
 			shirudo_gate_guards[SHIRUDO_GUARD_BPF].pin);
 		return 0;
 	}
 	/* A pin without the links behind it is what a failed attempt leaves. */
 	if (unlink(SHIRUDO_IDENTITY_PIN) != 0 && errno != ENOENT) {
-		pr_err("unlink stale %s: %s", SHIRUDO_IDENTITY_PIN,
-		       strerror(errno));
+		pr_err("init: cannot remove %s, left behind by an earlier failed init: %s",
+		       SHIRUDO_IDENTITY_PIN, strerror(errno));
 		return -errno;
 	}
 	if (unlink(SHIRUDO_TAMPER_PIN) != 0 && errno != ENOENT) {
-		pr_err("unlink stale %s: %s", SHIRUDO_TAMPER_PIN,
-		       strerror(errno));
+		pr_err("init: cannot remove %s, left behind by an earlier failed init: %s",
+		       SHIRUDO_TAMPER_PIN, strerror(errno));
 		return -errno;
 	}
 
 	if (!blob || !blob->data || !blob->size) {
-		pr_err("embedded bpf2 blob missing");
+		pr_err("init: this shirudo binary carries no embedded LSM BPF object");
 		return -ENOENT;
 	}
 
 	obj = bpf_object__open_mem(blob->data, blob->size, NULL);
 	err = libbpf_get_error(obj);
 	if (err) {
-		pr_err("bpf_object__open_mem: %d", err);
+		pr_err("init: cannot open the embedded LSM BPF object: %s (bpf_object__open_mem: %d)",
+		       strerror(-err), err);
 		return err;
 	}
 
 	err = bpf_object__load(obj);
 	if (err) {
-		pr_err("bpf_object__load: %d", err);
+		pr_err("init: cannot load the embedded LSM programs into the kernel: %s (bpf_object__load: %d)",
+		       strerror(-err), err);
+		pr_hint("shirudo's embedded LSM programs need a kernel with CONFIG_BPF_LSM and bpf in its LSM list, CONFIG_DEBUG_INFO_BTF and the signed-loader ABI");
 		goto out;
 	}
 
 	if (stat(SHIRUDO_BPFFS_DIR, &st) != 0) {
 		err = -errno;
-		pr_err("stat %s: %s", SHIRUDO_BPFFS_DIR, strerror(errno));
+		pr_err("init: cannot stat %s: %s", SHIRUDO_BPFFS_DIR,
+		       strerror(-err));
 		goto out;
 	}
 	id.sb_dev = kernel_dev_t(st.st_dev);
@@ -681,7 +700,8 @@ static int init_lsm(void)
 	id.keyring_type = SHIRUDO_SIG_KEYRING_BPF;
 	if (keyring <= 0) {
 		err = keyring ? keyring : -ENOKEY;
-		pr_err("resolve the bpf keyring serial: %s", strerror(-err));
+		pr_err("init: cannot find the kernel's .bpf keyring: %s",
+		       strerror(-err));
 		goto out;
 	}
 	id.keyring_serial = (__s32)keyring;
@@ -693,12 +713,12 @@ static int init_lsm(void)
 	 */
 	err = keyring_list(keyring, collect_asymmetric, &keys);
 	if (err) {
-		pr_err("list the anchor keyring %d: %s", (int)keyring,
-		       strerror(-err));
+		pr_err("init: cannot list the keys in the .bpf keyring (serial %d): %s",
+		       (int)keyring, strerror(-err));
 		goto out;
 	}
 	if (keys.overflow || keys.n == 0) {
-		pr_err("anchor keyring %d holds %s asymmetric keys",
+		pr_err("init: the .bpf keyring (serial %d) holds %s asymmetric keys",
 		       (int)keyring, keys.overflow ? "too many" : "no");
 		err = keys.overflow ? -E2BIG : -ENOKEY;
 		goto out;
@@ -710,33 +730,37 @@ static int init_lsm(void)
 		goto out;
 	err = nv_writer_create(&id.nv_writer_ring, &id.nv_writer_key, id.nv_writer_public);
 	if (err) {
-		pr_err("init: create RSA-3072 NV writer: %s "
-		       "(requires kernel PKCS#8 private-key and RSA support)",
+		pr_err("init: cannot create the kernel-held RSA-3072 NV writer key: %s",
 		       strerror(-err));
+		if (err == -EBADMSG || err == -ENOPKG)
+			pr_hint("the kernel needs PKCS#8 private-key and RSA support: boot a kernel with CONFIG_PKCS8_PRIVATE_KEY_PARSER=y and CONFIG_CRYPTO_RSA=y");
 		goto out;
 	}
 	err = record_attestation_key(&id);
 	if (err) {
-		pr_err("init: record the attestation key name: %s (tpm_error)",
+		pr_err("init: cannot record the name of the TPM attestation key: %s (tpm_error)",
 		       strerror(-err));
+		pr_hint("the TPM could not create the attestation key; the tpm: messages above say why");
 		goto out;
 	}
 
 	m_sb = bpf_object__find_map_by_name(obj, "shirudo_bpffs_sb");
 	if (!m_sb) {
-		pr_err("shirudo_bpffs_sb map not in embedded bpf2");
+		pr_err("init: the embedded LSM BPF object has no shirudo_bpffs_sb map");
 		err = -ENOENT;
 		goto out;
 	}
 	map_fd = bpf_map__fd(m_sb);
 	if (bpf_map_update_elem(map_fd, &zero, &id, BPF_ANY) != 0) {
 		err = -errno;
-		pr_err("populate sb-identity map: %s", strerror(errno));
+		pr_err("init: cannot write the identity map (shirudo_bpffs_sb): %s",
+		       strerror(-err));
 		goto out;
 	}
 	if (bpf_map_freeze(map_fd) != 0) {
 		err = -errno;
-		pr_err("freeze sb-identity map: %s", strerror(errno));
+		pr_err("init: cannot make the identity map read-only (bpf_map_freeze): %s",
+		       strerror(-err));
 		goto out;
 	}
 	err = freeze_task_maps(obj);
@@ -749,8 +773,8 @@ static int init_lsm(void)
 	 */
 	if (bpf_obj_pin(map_fd, SHIRUDO_IDENTITY_PIN) != 0) {
 		err = -errno;
-		pr_err("pin identity map at %s: %s", SHIRUDO_IDENTITY_PIN,
-		       strerror(errno));
+		pr_err("init: cannot pin the identity map at %s: %s",
+		       SHIRUDO_IDENTITY_PIN, strerror(-err));
 		goto out;
 	}
 
@@ -775,7 +799,7 @@ static int init_lsm(void)
 	if (!p_unlink || !p_setx || !p_rmx || !p_pload || !p_bpf_map ||
 	    !p_bpf ||
 	    !p_key) {
-		pr_err("expected programs missing in bpf2 object");
+		pr_err("init: the embedded LSM BPF object lacks programs that init needs");
 		err = -ENOENT;
 		goto out;
 	}
@@ -790,22 +814,26 @@ static int init_lsm(void)
 	 */
 	err = attach_guard(p_unlink, SHIRUDO_GUARD_UNLINK, &link_unlink);
 	if (err) {
-		pr_err("attach lsm/inode_unlink: %s", strerror(-err));
+		pr_err("init: cannot attach the LSM hook lsm/inode_unlink: %s",
+		       strerror(-err));
 		goto out;
 	}
 	err = attach_guard(p_setx, SHIRUDO_GUARD_SETXATTR, &link_setx);
 	if (err) {
-		pr_err("attach lsm/inode_setxattr: %s", strerror(-err));
+		pr_err("init: cannot attach the LSM hook lsm/inode_setxattr: %s",
+		       strerror(-err));
 		goto out;
 	}
 	err = attach_guard(p_rmx, SHIRUDO_GUARD_REMOVEXATTR, &link_rmx);
 	if (err) {
-		pr_err("attach lsm/inode_removexattr: %s", strerror(-err));
+		pr_err("init: cannot attach the LSM hook lsm/inode_removexattr: %s",
+		       strerror(-err));
 		goto out;
 	}
 	err = attach_guard(p_key, SHIRUDO_GUARD_KEY_PERMISSION, &link_keyperm);
 	if (err) {
-		pr_err("attach lsm/key_permission: %s", strerror(-err));
+		pr_err("init: cannot attach the LSM hook lsm/key_permission: %s",
+		       strerror(-err));
 		goto out;
 	}
 	/*
@@ -818,7 +846,8 @@ static int init_lsm(void)
 		goto out;
 	err = record_bpffs_mount(obj);
 	if (err) {
-		pr_err("record the bpffs mount: %s", strerror(-err));
+		pr_err("init: cannot record the private bpffs mount for the mount guards: %s",
+		       strerror(-err));
 		goto out;
 	}
 
@@ -828,23 +857,26 @@ static int init_lsm(void)
 
 	err = attach_guard(p_bpf_map, SHIRUDO_GUARD_BPF_MAP, &link_bpf_map);
 	if (err) {
-		pr_err("attach lsm/bpf_map: %s", strerror(-err));
+		pr_err("init: cannot attach the LSM hook lsm/bpf_map: %s",
+		       strerror(-err));
 		goto out;
 	}
 
 	err = attach_guard(p_pload, SHIRUDO_GUARD_PROG_LOAD, &link_pload);
 	if (err) {
-		pr_err("attach lsm/bpf_prog_load: %s", strerror(-err));
+		pr_err("init: cannot attach the LSM hook lsm/bpf_prog_load: %s",
+		       strerror(-err));
 		goto out;
 	}
 
 	err = attach_guard(p_bpf, SHIRUDO_GUARD_BPF, &link_bpf);
 	if (err) {
-		pr_err("attach lsm/bpf: %s", strerror(-err));
+		pr_err("init: cannot attach the LSM hook lsm/bpf: %s",
+		       strerror(-err));
 		goto out;
 	}
 
-	pr_info("%s + seal attached: lsm/bpf gate live, writable state sealed",
+	pr_info("init: the LSM programs (%s and seal) are attached; the bpf() gate is live and writable state is sealed",
 		blob->name);
 	err = 0;
 out:
@@ -931,7 +963,7 @@ static int boot_restore(bool recorded,
 	if (n < 0) {
 		if (errno == ENOENT)
 			return 0;
-		pr_err("boot-restore: scandir %s: %s",
+		pr_err("boot-restore: cannot list the archived upatches in %s: %s",
 		       SHIRUDO_UPATCHES_DIR, strerror(errno));
 		return -errno;
 	}
@@ -961,19 +993,18 @@ static int boot_restore(bool recorded,
 			goto next;
 		if (strsprintf(path, sizeof(path), "%s/%s", SHIRUDO_UPATCHES_DIR,
 			       names[i]->d_name) < 0) {
-			pr_err("boot-restore: path too long: %s",
+			pr_err("boot-restore: the path of %s is too long",
 			       names[i]->d_name);
 			rc = -ENAMETOOLONG;
 			goto next;
 		}
 		if (!seal_owns(path)) {
-			pr_warn("boot-restore: %s is not shirudo's own "
-				"(foreign entry); ignored", names[i]->d_name);
+			pr_warn("boot-restore: %s is not shirudo's own (foreign entry); ignored",
+				names[i]->d_name);
 			goto next;
 		}
 		if (upatch_open(path, &u) != 0) {
-			pr_warn("boot-restore: %s is not an artifact shirudo "
-				"archived (foreign entry); ignored",
+			pr_warn("boot-restore: %s is not an artifact shirudo archived (foreign entry); ignored",
 				names[i]->d_name);
 			goto next;
 		}
@@ -988,27 +1019,26 @@ static int boot_restore(bool recorded,
 			upatch_payload_sha256(set[cnt].name, pinned_hex,
 					      sizeof(pinned_hex));
 			if (strcmp(pinned_hex, set[cnt].payload_hex) != 0) {
-				pr_err("boot-restore: %s is loaded with a "
-				       "payload other than the archived one "
-				       "(tampered)", set[cnt].name);
+				pr_err("boot-restore: %s is loaded with a payload other than the archived one (tampered)",
+				       set[cnt].name);
+				pr_hint("shirudo does not trust this upatch: keep the eventlog and journal as evidence and handle it as an incident");
 				rc = -EINVAL;
 				goto next;
 			}
-			pr_info("boot-restore: %s already loaded",
+			pr_info("boot-restore: %s is already loaded",
 				set[cnt].name);
 			cnt++;
 			goto next;
 		}
 		if (recorded) {
-			pr_err("boot-restore: %s is archived but not loaded "
-			       "after the register was bound this boot "
-			       "(tampered); unload it or reboot",
+			pr_err("boot-restore: %s is archived but not loaded, and the register was already set up this boot, so it can no longer be measured (tampered)",
 			       names[i]->d_name);
+			pr_hint("shirudo does not trust this boot's upatch set: keep the eventlog and journal as evidence and handle it as an incident; an upatch load or unload that was cut short leaves the same state");
 			rc = -EPERM;
 			goto next;
 		}
 		if (shirudo_upatch_apply(path) != 0) {
-			pr_err("boot-restore: failed to apply %s",
+			pr_err("boot-restore: cannot load the archived upatch %s",
 			       names[i]->d_name);
 			rc = -EINVAL;
 			goto next;
@@ -1109,7 +1139,7 @@ static int append_init_event(const struct shirudo_measured_upatch *set,
 	json_obj_close(&e);
 
 	if (e.err) {
-		pr_err("eventlog: init entry encode failed: %s",
+		pr_err("eventlog: cannot encode the init record: %s",
 		       strerror(-e.err));
 		return e.err;
 	}
@@ -1167,7 +1197,7 @@ static int chain_extend_init(struct shirudo_measured_upatch *set, size_t n)
 		rc = config_load(&cfg);
 		if (rc) {
 			explicit_bzero(&cfg, sizeof(cfg));
-			pr_err("chain: configuration unreadable: %s",
+			pr_err("init: cannot read the configuration: %s",
 			       strerror(-rc));
 			return rc;
 		}
@@ -1175,20 +1205,21 @@ static int chain_extend_init(struct shirudo_measured_upatch *set, size_t n)
 		full = eventlog_would_exceed(max_bytes);
 		explicit_bzero(&cfg, sizeof(cfg));
 		if (full) {
-			pr_err("eventlog %s would exceed eventlog.max_bytes=%llu; "
-			       "refusing chain extend (eventlog_full)",
+			pr_err("eventlog: %s would grow past eventlog.max_bytes=%llu, so the register is not extended (eventlog_full)",
 			       eventlog_path(), max_bytes);
+			pr_hint("archive the eventlog and raise eventlog.max_bytes through the signed config");
 			return -ENOSPC;
 		}
 	}
 
 	if (!enrolled.n) {
-		pr_err("chain: no certificate enrolled");
+		pr_err("init: no trusted certificate is enrolled");
 		return -ENOENT;
 	}
 	rc = keys_set_digest(&enrolled, cert_sha);
 	if (rc) {
-		pr_err("chain: cannot hash the enrolled set: %s", strerror(-rc));
+		pr_err("init: cannot hash the enrolled certificate set: %s",
+		       strerror(-rc));
 		return rc;
 	}
 
@@ -1202,60 +1233,54 @@ static int chain_extend_init(struct shirudo_measured_upatch *set, size_t n)
 			      init_digest);
 
 	if (rc) {
-		pr_err("chain: cannot hash the init event: %s", strerror(-rc));
+		pr_err("init: cannot compute the init event digest: %s",
+		       strerror(-rc));
 		return rc;
 	}
 	rc = chain_init(init_digest, &info);
 	if (rc == -ENODEV) {
-		pr_err("tpm: not usable; shirudo requires a TPM 2.0 "
-		       "(tpm_error)");
+		pr_err("tpm: cannot open the TPM; shirudo requires a TPM 2.0 (tpm_error)");
+		pr_hint("check that /dev/tpmrm0 exists (tpm_tis or tpm_crb loaded) or that tpm.tcti names a reachable TPM; `shirudo init --check-only` tests it");
 		return rc;
 	}
 	if (rc == -EEXIST) {
-		pr_err("tpm: the register this boot recorded is gone or "
-		       "replaced; refusing to bind another before the next "
-		       "TPM reset (tampered)");
+		pr_err("tpm: the register that init set up earlier this boot is gone or was replaced; shirudo does not set up another one before the next TPM reset (tampered)");
+		pr_hint("shirudo does not trust this boot's register: keep the eventlog and journal as evidence and handle it as an incident");
 		return rc;
 	}
 	if (rc == -EACCES) {
-		pr_err("tpm: register 0x%08X cannot be bound (tpm_error); on "
-		       "a TPM with owner auth set, supply it via "
-		       "tpm.owner_auth in /etc/shirudo/shirudo.conf or "
-		       "SHIRUDO_TPM_OWNER_AUTH", SHIRUDO_NV_INDEX);
+		pr_err("tpm: cannot set up the register at NV index 0x%08X: access was refused (tpm_error)",
+		       SHIRUDO_NV_INDEX);
+		pr_hint("the tpm: messages above say what the TPM refused and why");
 		return rc;
 	}
 	if (rc) {
-		pr_err("tpm: register extend failed -- chain NOT advanced "
-		       "while LSM active (tpm_error); operator must "
-		       "reconcile");
+		pr_err("tpm: the register was NOT fully set up, so enforcement is active but this boot is not measured (tpm_error)");
+		pr_hint("enforcement is active but not measured: fix the TPM error above and run `shirudo init` again, which is safe to repeat");
 		return rc;
 	}
 	if (info.reused) {
-		pr_info("tpm: register already bound this boot; chain "
-			"unchanged (index 0x%08X)", SHIRUDO_NV_INDEX);
+		pr_info("tpm: the register (NV index 0x%08X) was already set up earlier this boot and is left unchanged",
+			SHIRUDO_NV_INDEX);
 		return 0;
 	}
 
 	rc = append_init_event(set, n, cert_sha, set_digest, tree_root,
 			       init_digest, &info);
 	if (rc) {
-		pr_err("eventlog: append failed after extend -- chain/log "
-		       "desync; operator must reconcile");
+		pr_err("eventlog: the register was set up and extended, but the init record could not be appended to the eventlog");
+		pr_hint("the TPM register and the eventlog now disagree, so `shirudo status` reports this node as tampered until reboot; the error above says why the eventlog write failed");
 		return rc;
 	}
 
-	pr_info("tpm: register bound in the %s and extended (index 0x%08X, "
-		"PCR %u anchored, %zu upatch%s in set)",
-		info.initrd ? "initrd" : "root file system", SHIRUDO_NV_INDEX,
+	pr_info("tpm: set up the register (NV index 0x%08X) from the %s, anchored it in PCR %u and measured %zu upatch%s",
+		SHIRUDO_NV_INDEX, info.initrd ? "initrd" : "root file system",
 		SHIRUDO_CHAIN_PCR, n, n == 1 ? "" : "es");
 	if (!info.initrd)
-		pr_warn("tpm: init ran after the initrd; the register's binding "
-			"can be told from an initrd one by PCR %u",
+		pr_warn("tpm: init set up the register from the root file system, not from the initrd; a verifier sees this in PCR %u",
 			SHIRUDO_CHAIN_PHASE_PCR);
 	else if (phase_unmeasured(info.phase_before))
-		pr_warn("tpm: PCR %u holds no phase measurement; systemd "
-			"measures enter-initrd only for a measured UKI boot, so "
-			"a verifier cannot pin this binding to the initrd by it",
+		pr_warn("tpm: PCR %u holds no boot phase measurement (systemd measures enter-initrd only for a measured UKI boot), so a verifier cannot use it to confirm that the register was set up from the initrd",
 			SHIRUDO_CHAIN_PHASE_PCR);
 	return 0;
 }
@@ -1271,8 +1296,8 @@ static const struct shirudo_help_section init_help_sections[] = {
 
 static const struct shirudo_help init_help = {
 	.usage      = "shirudo init [--check-only]",
-	.summary    = "Bootstrap enforcement on this target. Idempotent; safe "
-		      "to re-run.\nThe pinned link survives the process exit.",
+	.summary    = "Bootstrap enforcement on this target; safe to run again.\n"
+		      "The pinned links survive the process exit.",
 	.sections   = init_help_sections,
 	.n_sections = sizeof(init_help_sections) /
 		      sizeof(init_help_sections[0]),
@@ -1307,34 +1332,37 @@ static int initrd_enter(void)
 	if (statfs("/", &root) != 0)
 		return -errno;
 	if (root.f_type != TMPFS_MAGIC && root.f_type != RAMFS_MAGIC) {
-		pr_err("initrd: the root file system is not an initramfs");
+		pr_err("initrd: an initrd-release file marks this as the initrd, but the root file system is not an initramfs");
 		return -ENOTBLK;
 	}
 	if (strsprintf(src, sizeof(src), "%s%s", sysroot(),
 		       SHIRUDO_VAR_LIB) < 0)
 		return -ENAMETOOLONG;
 	if (stat(src, &st) != 0 || !S_ISDIR(st.st_mode)) {
-		pr_err("initrd: %s is not a directory; the root file system "
-		       "must be mounted at %s with /var on it or mounted "
-		       "there (x-initrd.mount)", src, sysroot());
+		pr_err("initrd: %s is not a directory", src);
+		pr_hint("the root file system must be mounted at %s, with /var on it or mounted there by an x-initrd.mount entry, before shirudo init runs in the initrd",
+			sysroot());
 		return -ENOENT;
 	}
 	rc = seal_mkdir_p(SHIRUDO_VAR_LIB, 0700);
 	if (rc) {
-		pr_err("initrd: mkdir %s: %s", SHIRUDO_VAR_LIB, strerror(-rc));
+		pr_err("initrd: cannot create %s: %s", SHIRUDO_VAR_LIB,
+		       strerror(-rc));
 		return rc;
 	}
 	if (mount(src, SHIRUDO_VAR_LIB, NULL, MS_BIND | MS_REC, NULL) != 0) {
-		pr_err("initrd: bind %s at %s: %s", src, SHIRUDO_VAR_LIB,
-		       strerror(errno));
+		pr_err("initrd: cannot bind-mount %s at %s: %s", src,
+		       SHIRUDO_VAR_LIB, strerror(errno));
 		return -errno;
 	}
 	if (statvfs(SHIRUDO_VAR_LIB, &state)) {
 		rc = -errno;
-		pr_err("initrd: statvfs %s: %s", src, strerror(-rc));
+		pr_err("initrd: cannot query the file system of %s: %s", src,
+		       strerror(-rc));
 	} else if (state.f_flag & ST_RDONLY) {
 		rc = -EROFS;
-		pr_err("initrd: %s is read-only", src);
+		pr_err("initrd: %s is mounted read-only, but init must write its state there",
+		       src);
 	} else {
 		rc = 0;
 	}
@@ -1342,7 +1370,7 @@ static int initrd_enter(void)
 		umount2(SHIRUDO_VAR_LIB, MNT_DETACH);
 		return rc;
 	}
-	pr_info("initrd: %s bound writable at %s for config recovery",
+	pr_info("initrd: bind-mounted %s writable at %s for config recovery",
 		src, SHIRUDO_VAR_LIB);
 	return 0;
 
@@ -1351,7 +1379,7 @@ static int initrd_enter(void)
 static void initrd_leave(void)
 {
 	if (umount2(SHIRUDO_VAR_LIB, MNT_DETACH) != 0)
-		pr_warn("initrd: detach %s: %s", SHIRUDO_VAR_LIB,
+		pr_warn("initrd: cannot unmount %s: %s", SHIRUDO_VAR_LIB,
 			strerror(errno));
 }
 
@@ -1377,11 +1405,11 @@ static int run_init(void)
 	bootstrap = rc == 0;
 	rc = init_bpffs();
 	if (rc)
-		return init_phase_error(rc, "private bpffs setup");
+		return init_phase_error(rc, "setting up the private bpffs");
 
 	rc = init_keyring();
 	if (rc)
-		return init_phase_error(rc, "BPF keyring initialization");
+		return init_phase_error(rc, "setting up the .bpf keyring");
 	rc = shirudo_image_boot_keys_close();
 	if (rc)
 		return init_phase_error(rc, "closing the boot key image");
@@ -1396,7 +1424,7 @@ static int run_init(void)
 
 	rc = init_lsm();
 	if (rc)
-		return init_phase_error(rc, "loading enforcement");
+		return init_phase_error(rc, "loading the LSM enforcement");
 
 	rc = seal_label_tree(bootstrap);
 	if (rc)
@@ -1419,32 +1447,30 @@ static int run_init(void)
 	 */
 	rc = eventlog_boot_init(&rec);
 	if (rc && rc != -ENOENT) {
-		pr_err("init: eventlog %s unreadable: %s", eventlog_path(),
+		pr_err("init: cannot read the eventlog %s: %s", eventlog_path(),
 		       strerror(-rc));
 		return rc;
 	}
 	recorded = rc == 0 || chain_bound();
 	rc = boot_restore(recorded, &set, &n);
 	if (rc) {
-		pr_err("init: boot-restore failed; further changes "
-		       "and attestation remain blocked");
+		pr_err("init: the archived upatches were not all restored, so upatch changes and attestation stay blocked");
 		xfree(set, n * sizeof(*set));
-		return init_phase_error(rc, "restoring boot upatches");
+		return init_phase_error(rc, "restoring the archived upatches");
 	}
 
 	rc = chain_extend_init(set, n);
 	xfree(set, n * sizeof(*set));
 	if (rc) {
-		pr_err("init: incomplete -- LSM active and upatches "
-		       "loaded, but TPM register not advanced");
-		return init_phase_error(rc, "binding the TPM register");
+		pr_err("init: stopped before completing; the LSM is active and the upatches are loaded, but the TPM register was not set up");
+		return init_phase_error(rc, "setting up the TPM register");
 	}
 
 	rc = shirudo_image_boot_complete();
 	if (rc)
 		return init_phase_error(rc, "completing authenticated boot");
 
-	pr_info("init: complete (LSM active, writable state sealed)");
+	pr_info("init: complete; the LSM is active and writable state is sealed");
 	return 0;
 }
 
@@ -1473,15 +1499,24 @@ int cmd_init(int argc, const char **argv)
 	initrd_mode = in_initrd();
 	rc = shirudo_image_bootstrap_load();
 	if (rc < 0) {
-		pr_err("init: authenticated image settings: %s", strerror(-rc));
+		pr_err("init: cannot load the authenticated image settings: %s",
+		       strerror(-rc));
 		return 1;
 	}
 	preflight_run(&res);
 	print_preflight(&res);
 
 	if (res.n_failed > 0) {
-		pr_err("init: pre-flight failed (%d/%d checks)",
+		pr_err("init: %d of %d pre-flight checks failed",
 		       res.n_failed, res.n);
+		for (i = 0; i < res.n; i++) {
+			if (!res.checks[i].ok)
+				pr_err("init: pre-flight %s: %s",
+				       res.checks[i].name,
+				       res.checks[i].detail[0] ?
+				       res.checks[i].detail : "failed");
+		}
+		pr_hint("fix each failed check, then run `shirudo init --check-only` again; each FAIL detail names the kernel option or file it needs");
 		return 1;
 	}
 

@@ -178,12 +178,19 @@ int check_trusted(int fd, const char *path, bool secret)
 		return 0;
 	if (fstat(fd, &st))
 		return -errno;
-	if (!S_ISREG(st.st_mode) || !trusted_owner(st.st_uid) ||
+	if (!S_ISREG(st.st_mode)) {
+		pr_err("refusing %s: it is not a regular file", path);
+		return -EPERM;
+	}
+	if (!trusted_owner(st.st_uid) ||
 	    (st.st_mode & (secret ? 077 : 022))) {
-		pr_err("%s: owner %u, mode %04o: refusing a file another user "
-		       "could %s", path, (__u32)st.st_uid,
-		       (__u32)(st.st_mode & 07777),
-		       secret ? "read or change" : "change");
+		pr_err("refusing %s: another user could %s it (owner uid %u, mode %04o)",
+		       path, secret ? "read or change" : "change",
+		       (__u32)st.st_uid, (__u32)(st.st_mode & 07777));
+		pr_hint("make %s owned by root or the invoking user and %s",
+			path, secret ?
+			"accessible only to its owner (mode 0600)" :
+			"not writable by group or others (mode 0644)");
 		return -EPERM;
 	}
 	if (!realpath(path, real))
@@ -199,10 +206,11 @@ int check_trusted(int fd, const char *path, bool secret)
 		if (!S_ISDIR(st.st_mode) || !trusted_owner(st.st_uid) ||
 		    ((st.st_mode & 022) &&
 		     !((st.st_mode & S_ISVTX) && st.st_uid == 0))) {
-			pr_err("%s: directory %s, owner %u, mode %04o: "
-			       "refusing a file another user could replace",
+			pr_err("refusing %s: another user could replace it through the directory %s (owner uid %u, mode %04o)",
 			       path, real, (__u32)st.st_uid,
 			       (__u32)(st.st_mode & 07777));
+			pr_hint("make %s owned by root or the invoking user and not writable by group or others",
+				real);
 			return -EPERM;
 		}
 	} while (slash != real);

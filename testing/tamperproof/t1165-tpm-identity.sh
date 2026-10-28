@@ -66,14 +66,14 @@ test_expect_success 'a load against a TPM init did not bind is refused' '
 	rc=0; at_slave "$SHIRUDO_BIN" upatch load "$LOAD" --no-precheck \
 		>/dev/null 2>"$W/load.err" || rc=$?;
 	[ "$rc" != 0 ] &&
-	grep -q "not the TPM init bound" "$W/load.err" &&
+	grep -q "not the TPM that init used this boot" "$W/load.err" &&
 	[ ! -e "$PIN" ] &&
 	[ "$(chain)" = "$CHAIN" ]
 '
 
 test_expect_success 'status against it is refused the same way' '
 	! at_slave "$SHIRUDO_BIN" status >/dev/null 2>"$W/status.err" &&
-	grep -q "not the TPM init bound" "$W/status.err"
+	grep -q "not the TPM that init used this boot" "$W/status.err"
 '
 
 test_expect_success 'the same load succeeds against the TPM init bound' '

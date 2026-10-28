@@ -54,8 +54,9 @@ void nv_writer_destroy(key_serial_t ring)
 	for (i = 0; i < ARRAY_SIZE(parents); i++) {
 		if (syscall(__NR_keyctl, KEYCTL_UNLINK, ring, parents[i], 0, 0) < 0 &&
 		    errno != ENOENT)
-			pr_err("nv writer: unlink ring %d from %d: %s",
-			       ring, parents[i], strerror(errno));
+			pr_err("nv writer: cannot unlink the NV writer keyring %d from the %s keyring: %s",
+			       ring, parents[i] == KEY_SPEC_USER_KEYRING ?
+			       "user" : "session", strerror(errno));
 	}
 }
 
@@ -82,7 +83,7 @@ int nv_writer_create(key_serial_t *ring, key_serial_t *writer,
 	    EVP_PKEY_keygen(ctx, &key) <= 0 ||
 	    EVP_PKEY_get_bn_param(key, OSSL_PKEY_PARAM_RSA_N, &n) <= 0 ||
 	    BN_bn2binpad(n, public, SHIRUDO_TPM_NV_RSA_BYTES) != SHIRUDO_TPM_NV_RSA_BYTES) {
-		openssl_complain("generate RSA-3072 NV writer");
+		openssl_complain("RSA-3072 key generation for the NV writer");
 		goto out;
 	}
 	info = EVP_PKEY2PKCS8(key);
@@ -158,7 +159,8 @@ int nv_writer_read(__u8 public[SHIRUDO_TPM_NV_RSA_BYTES])
 	memcpy(public, id.nv_writer_public, sizeof(id.nv_writer_public));
 	return 0;
 fail:
-	pr_err("nv writer: public key lookup failed: %s", strerror(-rc));
+	pr_err("nv writer: cannot read the NV writer public key from the identity map: %s",
+	       strerror(-rc));
 	return rc;
 }
 
@@ -179,7 +181,8 @@ int nv_writer_sign_key(key_serial_t key,
 	if (ret == SHIRUDO_TPM_NV_RSA_BYTES)
 		return 0;
 	rc = ret < 0 ? -errno : -EPROTO;
-	pr_err("nv writer: kernel signing failed: %s", strerror(-rc));
+	pr_err("nv writer: the kernel could not sign with the NV writer key (KEYCTL_PKEY_SIGN): %s",
+	       strerror(-rc));
 	return rc;
 }
 
@@ -198,6 +201,7 @@ int nv_writer_sign(const __u8 digest[SHIRUDO_TPM_DIGEST_LEN],
 	}
 	return nv_writer_sign_key(id.nv_writer_key, digest, signature);
 fail:
-	pr_err("nv writer: kernel signing failed: %s", strerror(-rc));
+	pr_err("nv writer: cannot find the NV writer key in the identity map: %s",
+	       strerror(-rc));
 	return rc;
 }

@@ -10,7 +10,7 @@
 
 #include <stdbool.h>
 
-#define SHIRUDO_PREFLIGHT_DETAIL_MAX	256
+#define SHIRUDO_PREFLIGHT_DETAIL_MAX	512
 
 enum shirudo_preflight_id {
 	SHIRUDO_PRE_ROOT,
