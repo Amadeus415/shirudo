@@ -28,6 +28,7 @@
 
 struct image_download {
 	int fd;
+	int err;	/* why the last write was refused */
 	__u64 limit;
 	__u64 written;
 };
@@ -36,23 +37,35 @@ static size_t download_write(char *data, size_t size, size_t count, void *ctx)
 {
 	struct image_download *download = ctx;
 	size_t bytes;
+	int rc;
 
-	if (size && count > SIZE_MAX / size)
+	if (size && count > SIZE_MAX / size) {
+		download->err = -EFBIG;
 		return 0;
+	}
 	bytes = size * count;
-	if (bytes > download->limit - download->written ||
-	    write_complete(download->fd, data, bytes))
+	if (bytes > download->limit - download->written) {
+		download->err = -EFBIG;
 		return 0;
+	}
+	rc = write_complete(download->fd, data, bytes);
+	if (rc) {
+		download->err = rc;
+		return 0;
+	}
 	download->written += bytes;
 	return bytes;
 }
 
-static void download_error(const char *source, CURLcode result, long status)
+static void download_error(const char *source, CURLcode result, long status,
+			   int err)
 {
 	const char *name = strrchr(source, '/');
 
 	name = name ? name + 1 : source;
-	if (result == CURLE_HTTP_RETURNED_ERROR)
+	if (result == CURLE_WRITE_ERROR && err)
+		pr_err("image: download of %s failed: %s", name, strerror(-err));
+	else if (result == CURLE_HTTP_RETURNED_ERROR)
 		pr_err("image: download of %s failed: HTTP %ld", name, status);
 	else
 		pr_err("image: download of %s failed: %s", name,
@@ -83,8 +96,12 @@ static void download_error(const char *source, CURLcode result, long status)
 		pr_hint("bundle downloads and their redirects must use https://");
 		break;
 	case CURLE_WRITE_ERROR:
-		pr_hint("%s exceeds its size limit, or %s could not be written (check free space)",
-			name, SHIRUDO_IMAGE_CACHE_DIR);
+		if (err == -EFBIG)
+			pr_hint("%s is larger than a config bundle may carry for it",
+				name);
+		else
+			pr_hint("check free space on the file system of %s",
+				SHIRUDO_IMAGE_CACHE_DIR);
 		break;
 	default:
 		break;
@@ -121,8 +138,8 @@ static int download_https(const char *source, struct image_download *download)
 	result = curl_easy_perform(curl);
 	if (result != CURLE_OK) {
 		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-		download_error(source, result, status);
-		rc = -EIO;
+		download_error(source, result, status, download->err);
+		rc = download->err ? download->err : -EIO;
 	}
 out:
 	curl_easy_cleanup(curl);
@@ -156,7 +173,7 @@ static int copy_local(const char *source, struct image_download *download)
 			break;
 		}
 		if (download_write(buffer, 1, n, download) != (size_t)n) {
-			rc = -EFBIG;
+			rc = download->err;
 			break;
 		}
 	}
@@ -273,8 +290,11 @@ int shirudo_image_cache_fetch(const char *source,
 				pr_hint("%s must be a regular file of at most %llu bytes",
 					from, files[i].max_bytes);
 			else if (rc == -EFBIG)
-				pr_hint("writing into %s failed or the file grew past %llu bytes while copied; check free space",
-					SHIRUDO_IMAGE_CACHE_DIR, files[i].max_bytes);
+				pr_hint("%s grew past %llu bytes while it was copied",
+					from, files[i].max_bytes);
+			else if (rc == -ENOSPC || rc == -EDQUOT)
+				pr_hint("check free space on the file system of %s",
+					SHIRUDO_IMAGE_CACHE_DIR);
 		}
 		if (rc)
 			goto out;
