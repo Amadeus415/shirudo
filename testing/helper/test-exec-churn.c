@@ -137,8 +137,7 @@ int main(int argc, char **argv)
 	if (exit_status)
 		return 1;
 	elapsed = monotonic_ns() - start;
-	printf("execs=%llu elapsed_ns=%llu"
-	       " execs_per_sec=%.3f workers=%llu\n", completed, elapsed,
+	printf("execs=%llu elapsed_ns=%llu execs_per_sec=%.3f workers=%llu\n", completed, elapsed,
 	       elapsed ? (double)completed * 1e9 / (double)elapsed : 0.0,
 	       workers);
 	return 0;

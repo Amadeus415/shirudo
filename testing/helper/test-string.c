@@ -119,7 +119,6 @@ int main(int argc, char **argv)
 		xstrfree(str);
 		return 0;
 	}
-	fprintf(stderr, "usage: test-string "
-		"digits|u64|x64|s64|strscpy|strsprintf|xasprintf ...\n");
+	fprintf(stderr, "usage: test-string digits|u64|x64|s64|strscpy|strsprintf|xasprintf ...\n");
 	return 2;
 }

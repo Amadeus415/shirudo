@@ -77,8 +77,8 @@ static int count_lines(const char *line, size_t len, void *ctx)
 int main(int argc, char **argv)
 {
 	if (argc < 2) {
-		fprintf(stderr, "usage: %s init log|pending <bound_in> "
-			"[reset] | boot-init | lines | adopt\n", argv[0]);
+		fprintf(stderr, "usage: %s init log|pending <bound_in> [reset] | boot-init | lines | adopt\n",
+			argv[0]);
 		return 2;
 	}
 	if (strcmp(argv[1], "init") == 0 && (argc == 4 || argc == 5)) {

@@ -120,8 +120,8 @@ static int check_classification(const struct shirudo_dm_verity *device)
 			break;
 		}
 		if (entry.dev == dev)
-			printf("device=%u diskseq=%llu record_diskseq=%llu "
-			       "kind=%u root_match=%d\n", dev,
+			printf("device=%u diskseq=%llu record_diskseq=%llu kind=%u root_match=%d\n",
+			       dev,
 			       (__u64)diskseq,
 			       (__u64)entry.diskseq, entry.kind,
 			       !memcmp(entry.root, device->image.root_hash,
@@ -199,8 +199,7 @@ int __wrap_main(int argc, const char **argv)
 		return config_root_test(argv[2], argv[3]);
 	if (argc != 4 || strcmp(argv[1], "image") ||
 	    strcmp(argv[2], "update")) {
-		fprintf(stderr, "usage: shirudo-image-fault "
-			"image update <prefix>\n");
+		fprintf(stderr, "usage: shirudo-image-fault image update <prefix>\n");
 		return 2;
 	}
 	return __real_main(argc, argv);

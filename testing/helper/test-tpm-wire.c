@@ -184,9 +184,8 @@ int main(int argc, char **argv)
 		printf("rc=%d\n", rc);
 		if (rc)
 			return 0;
-		printf("type=0x%04x attrs=0x%08x policy_len=%zu sym=0x%04x/%u/0x%04x "
-		       "scheme=0x%04x/0x%04x curve=0x%04x rsa_bits=%u exponent=%u "
-		       "n_len=%zu\n", pub.type, pub.attrs, pub.policy_len,
+		printf("type=0x%04x attrs=0x%08x policy_len=%zu sym=0x%04x/%u/0x%04x scheme=0x%04x/0x%04x curve=0x%04x rsa_bits=%u exponent=%u n_len=%zu\n",
+		       pub.type, pub.attrs, pub.policy_len,
 		       pub.sym_alg, pub.sym_bits, pub.sym_mode, pub.scheme,
 		       pub.scheme_hash, pub.curve, pub.rsa_bits,
 		       pub.rsa_exponent, pub.n_len);

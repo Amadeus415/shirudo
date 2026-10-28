@@ -50,8 +50,8 @@ int main(int argc, char **argv)
 	int rc;
 
 	if (argc < 3) {
-		fprintf(stderr, "usage: %s label|mkdir|open|write|inherit|get "
-			"<path> [text]\n", argv[0]);
+		fprintf(stderr, "usage: %s label|mkdir|open|write|inherit|get <path> [text]\n",
+			argv[0]);
 		return 2;
 	}
 	if (strcmp(argv[1], "get") == 0) {

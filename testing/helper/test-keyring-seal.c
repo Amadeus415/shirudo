@@ -165,8 +165,7 @@ int main(int argc, char **argv)
 	int rc;
 
 	if (argc != 5) {
-		fprintf(stderr, "usage: %s exact|fresh|foreign|nested|"
-			"restricted|empty <keys-dir> <revoked-dir> <other.der>\n",
+		fprintf(stderr, "usage: %s exact|fresh|foreign|nested|restricted|empty <keys-dir> <revoked-dir> <other.der>\n",
 			argv[0]);
 		return 2;
 	}
