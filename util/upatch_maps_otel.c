@@ -771,6 +771,9 @@ static int build_log_payload(const char *path,
 							      &decoded, &decoded_len) :
 			upatch_decode_map_otel(v, &decoded, &decoded_len);
 	if (!decode_rc && record_max && decoded_len > record_max) {
+		pr_err("otel: the decoded record of map %s of upatch %s is %zu bytes, above map_export.log_record_max_bytes (%zu); it was not exported",
+		       v->name, v->upatch, decoded_len, record_max);
+		pr_hint("raise `map_export.log_record_max_bytes` in shirudo.conf, the config image's etc/shirudo/shirudo.conf on a target, or set `map_export.s3_uri` for snapshots this large");
 		xfree(decoded, decoded_len + 1);
 		decode_rc = -E2BIG;
 	}

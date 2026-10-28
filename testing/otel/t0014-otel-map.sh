@@ -317,8 +317,9 @@ test_expect_success 'OTLP request and decoded-record limits reject only oversize
 	rm -f otel.port otel.body otel.meta
 	python3 ../helper/otel-mock.py no-request otel.port otel.body otel.meta & server=$!
 	i=0; while test ! -s otel.port && test "$i" -lt 50; do i=$((i+1)); sleep .02; done
-	port=$(cat otel.port) && ! "$H" send-log-limits "http://127.0.0.1:$port" 0 "$((bytes - 1))" 0 && wait "$server" &&
+	port=$(cat otel.port) && ! "$H" send-log-limits "http://127.0.0.1:$port" 0 "$((bytes - 1))" 0 2>otel-record.err && wait "$server" &&
 	python3 -c '\''import json; assert json.load(open("otel.meta"))["attempts"] == 0'\'' &&
+	grep -q "above map_export.log_record_max_bytes" otel-record.err &&
 	rm -f otel.port otel.body otel.meta
 	python3 ../helper/otel-mock.py success otel.port otel.body otel.meta & server=$!
 	i=0; while test ! -s otel.port && test "$i" -lt 50; do i=$((i+1)); sleep .02; done
@@ -331,8 +332,9 @@ test_expect_success 'OTLP request and decoded-record limits reject only oversize
 	rm -f otel.port otel.body otel.meta
 	python3 ../helper/otel-mock.py no-request otel.port otel.body otel.meta & server=$!
 	i=0; while test ! -s otel.port && test "$i" -lt 50; do i=$((i+1)); sleep .02; done
-	port=$(cat otel.port) && ! "$H" send-log-limits "http://127.0.0.1:$port" 0 0 "$((request - 1))" && wait "$server" &&
-	python3 -c '\''import json; assert json.load(open("otel.meta"))["attempts"] == 0'\''
+	port=$(cat otel.port) && ! "$H" send-log-limits "http://127.0.0.1:$port" 0 0 "$((request - 1))" 2>otel-request.err && wait "$server" &&
+	python3 -c '\''import json; assert json.load(open("otel.meta"))["attempts"] == 0'\'' &&
+	grep -q "exceeds map_export.otlp_max_bytes" otel-request.err
 '
 
 test_expect_success 'HTTPS verifies by default and --otel-insecure disables verification noisily' '
@@ -553,5 +555,5 @@ test_expect_success '--otel=s3 preserves upload-before-reference failure orderin
 
 rm -f otel.port otel.body otel.meta otel-security.err otel-tls.err otel.crt otel.key \
 	s3.port s3.snapshot s3.log s3.meta combined.ndjson
-rm -f s3-security.err s3-fail.err
+rm -f s3-security.err s3-fail.err otel-record.err otel-request.err
 test_done
