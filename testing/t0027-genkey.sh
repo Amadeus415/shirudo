@@ -7,6 +7,7 @@
 # subject/authority key identifiers, and there is no algorithm option
 # at all. The ML-DSA cases need an OpenSSL (>= 3.5) that knows the
 # algorithm; on older toolchains genkey must refuse with an upgrade hint.
+# A --force that cannot put the new pair in place leaves the old one.
 
 cd "$(dirname "$0")"
 . ./test-lib.sh
@@ -71,6 +72,21 @@ if [ "$have_mldsa" = 1 ]; then
 	test_expect_success 'genkey refuses to overwrite without --force' '
 		! "$SHIRUDO" genkey --keys-dir "$tmp/keys" >/dev/null 2>&1 &&
 		"$SHIRUDO" genkey --keys-dir "$tmp/keys" --force >/dev/null 2>&1
+	'
+
+	test_expect_success 'a --force that cannot finish keeps the old pair' '
+		cp "$tmp/keys/signing_key.pem" "$tmp/old.pem" &&
+		mv "$tmp/keys/cert.der" "$tmp/old.der" &&
+		mkdir "$tmp/keys/cert.der" &&
+		! "$SHIRUDO" genkey --keys-dir "$tmp/keys" --force >"$tmp/force.out" 2>&1 &&
+		cmp "$tmp/old.pem" "$tmp/keys/signing_key.pem" &&
+		! test -e "$tmp/keys/signing_key.pem.old" &&
+		! test -e "$tmp/keys/signing_key.pem.new" &&
+		! test -e "$tmp/keys/cert.der.new" &&
+		rmdir "$tmp/keys/cert.der" &&
+		mv "$tmp/old.der" "$tmp/keys/cert.der" &&
+		"$SHIRUDO" keys --keys-dir "$tmp/keys" >"$tmp/keys.out" 2>&1 &&
+		grep -q "signing key matches cert" "$tmp/keys.out"
 	'
 else
 	test_expect_success 'genkey refuses with an upgrade hint on an OpenSSL without ML-DSA' '

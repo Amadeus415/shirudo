@@ -318,6 +318,52 @@ out:
 	return rc;
 }
 
+/*
+ * The two renames cannot be one, so the old key stays linked aside until
+ * the new certificate is in place: a rename that fails between them puts
+ * the old key back rather than leave the new key beside a certificate it
+ * does not match.
+ */
+static int replace_pair(const char *pkey_new, const char *pkey_path,
+			const char *cert_new, const char *cert_path,
+			const char *pkey_old)
+{
+	bool had_old = true;
+	int err;
+
+	if (link(pkey_path, pkey_old) != 0) {
+		if (errno != ENOENT) {
+			err = errno;
+			pr_err("genkey: cannot keep the old key aside as %s: %s",
+			       pkey_old, strerror(err));
+			return -err;
+		}
+		had_old = false;
+	}
+	if (rename(pkey_new, pkey_path) != 0) {
+		err = errno;
+		pr_err("genkey: cannot move %s to %s: %s", pkey_new, pkey_path,
+		       strerror(err));
+		if (had_old)
+			unlink(pkey_old);
+		return -err;
+	}
+	if (rename(cert_new, cert_path) != 0) {
+		err = errno;
+		pr_err("genkey: cannot move %s to %s: %s", cert_new, cert_path,
+		       strerror(err));
+		if (had_old ? rename(pkey_old, pkey_path) : unlink(pkey_path)) {
+			pr_err("genkey: %s and %s are no longer a pair: %s",
+			       pkey_path, cert_path, strerror(errno));
+			pr_hint("remove both and run `shirudo genkey` again");
+		}
+		return -err;
+	}
+	if (had_old)
+		unlink(pkey_old);
+	return 0;
+}
+
 static const struct shirudo_help_item genkey_options[] = {
 	{ "--force, -f",      "overwrite an existing key/cert (refused otherwise)" },
 	{ "--keys-dir <dir>",
@@ -421,25 +467,30 @@ int cmd_genkey(int argc, const char **argv)
 
 	if (force) {
 		char pkey_new[PATH_MAX], cert_new[PATH_MAX];
+		char pkey_old[PATH_MAX];
 
 		/* The old pair goes only once the new one is on disk. */
 		if (strsprintf(pkey_new, sizeof(pkey_new), "%s.new",
 			       pkey_path) < 0 ||
 		    strsprintf(cert_new, sizeof(cert_new), "%s.new",
-			       cert_path) < 0) {
+			       cert_path) < 0 ||
+		    strsprintf(pkey_old, sizeof(pkey_old), "%s.old",
+			       pkey_path) < 0) {
 			pr_err("genkey: no room for a temporary beside %s",
 			       pkey_path);
 			goto out;
 		}
 		unlink(pkey_new);
 		unlink(cert_new);
+		unlink(pkey_old);
 		if (write_private_pem(pkey, pkey_new) != 0)
 			goto out;
-		if (write_cert_der(cert, cert_new) != 0 ||
-		    rename(pkey_new, pkey_path) != 0 ||
-		    rename(cert_new, cert_path) != 0) {
-			pr_err("genkey: cannot put the new pair in place: %s",
-			       strerror(errno));
+		if (write_cert_der(cert, cert_new) != 0) {
+			unlink(pkey_new);
+			goto out;
+		}
+		if (replace_pair(pkey_new, pkey_path, cert_new, cert_path,
+				 pkey_old) != 0) {
 			unlink(pkey_new);
 			unlink(cert_new);
 			goto out;
