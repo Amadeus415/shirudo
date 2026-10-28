@@ -930,7 +930,8 @@ static int print_rodata_json(const struct shirudo_upatch *u,
 	if (!rc)
 		rc = write_complete(STDOUT_FILENO, "\n", 1);
 	if (rc == -ENOSPC)
-		pr_err("BTF JSON output exceeds %u bytes", SHIRUDO_JSON_MAX_BYTES);
+		pr_err("bpm info data: the .rodata of %s does not fit the %u-byte limit of the JSON output",
+		       path, SHIRUDO_JSON_MAX_BYTES);
 	xfree(buf, SHIRUDO_JSON_MAX_BYTES);
 	return rc;
 }

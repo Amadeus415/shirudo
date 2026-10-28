@@ -112,12 +112,12 @@ int kernel_abi_validate_btf(const struct btf *btf,
 		detail[0] = '\0';
 	if (!btf)
 		return abi_fail(detail, detail_sz,
-				"kernel BTF is unavailable; boot a Shirudo-patched kernel");
+				"kernel BTF is unavailable; boot a kernel built with CONFIG_DEBUG_INFO_BTF=y");
 
 	map_id = btf__find_by_name_kind(btf, "bpf_map", BTF_KIND_STRUCT);
 	if (map_id < 0)
 		return abi_fail(detail, detail_sz,
-				"kernel BTF has no struct bpf_map; boot a Shirudo-patched kernel");
+				"kernel BTF has no struct bpf_map; boot a bpf-next kernel with the signed BPF loader ABI");
 	map = btf__type_by_id(btf, (__u32)map_id);
 	if (!map)
 		return abi_fail(detail, detail_sz,
@@ -126,10 +126,10 @@ int kernel_abi_validate_btf(const struct btf *btf,
 	sha = find_member(btf, map, "sha", &member_idx);
 	if (!sha)
 		return abi_fail(detail, detail_sz,
-				"struct bpf_map.sha is missing; boot a Shirudo-patched kernel");
+				"struct bpf_map.sha is missing; boot a bpf-next kernel with the signed BPF loader ABI");
 	if (btf_member_bitfield_size(map, member_idx) != 0)
 		return abi_fail(detail, detail_sz,
-				"struct bpf_map.sha must be a non-bitfield");
+				"struct bpf_map.sha must not be a bitfield");
 	sha_type = unwrap_type(btf, sha->type);
 	if (!sha_type || !btf_is_array(sha_type))
 		return abi_fail(detail, detail_sz,
@@ -144,10 +144,10 @@ int kernel_abi_validate_btf(const struct btf *btf,
 	excl_prog_sha = find_member(btf, map, "excl_prog_sha", &member_idx);
 	if (!excl_prog_sha)
 		return abi_fail(detail, detail_sz,
-				"struct bpf_map.excl_prog_sha is missing; boot a Shirudo-patched kernel");
+				"struct bpf_map.excl_prog_sha is missing; boot a bpf-next kernel with the signed BPF loader ABI");
 	if (btf_member_bitfield_size(map, member_idx) != 0)
 		return abi_fail(detail, detail_sz,
-				"struct bpf_map.excl_prog_sha must be a non-bitfield");
+				"struct bpf_map.excl_prog_sha must not be a bitfield");
 	excl_type = unwrap_type(btf, excl_prog_sha->type);
 	if (!excl_type || !btf_is_ptr(excl_type))
 		return abi_fail(detail, detail_sz,
@@ -160,7 +160,7 @@ int kernel_abi_validate_btf(const struct btf *btf,
 	aux_id = btf__find_by_name_kind(btf, "bpf_prog_aux", BTF_KIND_STRUCT);
 	if (aux_id < 0)
 		return abi_fail(detail, detail_sz,
-				"kernel BTF has no struct bpf_prog_aux; boot a Shirudo-patched kernel");
+				"kernel BTF has no struct bpf_prog_aux; boot a bpf-next kernel with the signed BPF loader ABI");
 	aux = btf__type_by_id(btf, (__u32)aux_id);
 	if (!aux)
 		return abi_fail(detail, detail_sz,
@@ -169,7 +169,7 @@ int kernel_abi_validate_btf(const struct btf *btf,
 	sig = find_member(btf, aux, "sig", &member_idx);
 	if (!sig)
 		return abi_fail(detail, detail_sz,
-				"struct bpf_prog_aux.sig is missing; boot a Shirudo-patched kernel");
+				"struct bpf_prog_aux.sig is missing; boot a bpf-next kernel with the signed BPF loader ABI");
 	sig_type = unwrap_type(btf, sig->type);
 	if (!sig_type || !btf_is_struct(sig_type))
 		return abi_fail(detail, detail_sz,
@@ -206,7 +206,7 @@ int kernel_abi_check(char *detail, size_t detail_sz)
 	err = libbpf_get_error(btf);
 	if (err)
 		return abi_fail(detail, detail_sz,
-				"cannot read target kernel BTF: %s; boot a Shirudo-patched kernel",
+				"cannot read the kernel BTF at /sys/kernel/btf/vmlinux: %s; boot a kernel built with CONFIG_DEBUG_INFO_BTF=y",
 				strerror((int)-err));
 
 	rc = kernel_abi_validate_btf(btf, detail, detail_sz);

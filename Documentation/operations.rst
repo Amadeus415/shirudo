@@ -175,6 +175,12 @@ load`` or ``unload`` measured with the register value afterwards, and
 an ``upatch unload`` that found nothing to unload.  Every refusal is
 logged at error priority with its category.
 
+A failure that has a determinable cause is followed by a line that
+starts with ``hint:``, logged at info priority, naming the command,
+file, configuration key or kernel option to look at.  Hints for a
+refusal shirudo treats as tampering never suggest a retry or a
+workaround.  ``journalctl -t shirudo -g '^hint:'`` lists them.
+
 The target's own account proves nothing to anyone else.  The operator's
 health check is ``shirudo attest`` on the target and ``shirudo attest
 verify`` on the operator against the value ``shirudo attest predict``
@@ -355,7 +361,11 @@ anything and is the first thing to run on a target that misbehaves.
 -----------------------------
 
 Every ``upatch load`` and ``unload`` ends in one category, in the
-report (``--report``) and in the journal.  The commands exit ``0`` on
+report (``--report``) and in the journal.  A failure prints one
+``upatch load failed:`` or ``upatch unload failed:`` line with the
+name, phase, category, errno and message, followed by the category's
+``hint:`` line; the report carries the same text in ``hint``.  The
+commands exit ``0`` on
 success, ``1`` on any refusal or failure and ``2`` on a usage error;
 ``shirudo init`` exits ``1`` when the pre-flight fails or a step does.
 
@@ -407,6 +417,18 @@ success, ``1`` on any refusal or failure and ``2`` on a usage error;
    * - ``btf_mismatch``
      - A CO-RE relocation found no match.
      - Regenerate ``vmlinux.h`` from the target kernel.
+   * - ``attach_target_missing``
+     - The function, tracepoint, module or binary the upatch attaches
+       to is absent on this host.
+     - Load the module or install the binary, or do not ship the
+       upatch to this host.
+   * - ``binary_mismatch``
+     - The uprobe target binary is not the build the upatch was made
+       for.
+     - Rebuild against the installed binary.
+   * - ``attach_scope_mismatch``
+     - The link the kernel made is not at the site the upatch declares.
+     - Rebuild the upatch.
    * - ``payload_mismatch``
      - The unload directive's expected payload is not the pin's.
      - Build the directive for the loaded artifact.

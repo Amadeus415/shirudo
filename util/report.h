@@ -17,10 +17,12 @@
 
 /*
  * Phase strings (failure-report ordering):
- *   pre_flight, parse, signed_loader_load, payload_load, link_create,
- *   pin, persist, tpm_extend, done
- * Category strings: ok, tampered, keyring_missing, lsm_denied,
- *   signature_rejected, verifier_rejected, parser_rejected,
+ *   pre_flight, parse, target_verify, signed_loader_load, payload_load,
+ *   link_create, pin, persist, tpm_extend, done
+ * Category strings: ok, tampered, keyring_missing, kernel_abi_unsupported,
+ *   version_mismatch, eventlog_full, lsm_denied, signature_rejected,
+ *   signature_unsupported, verifier_rejected, parser_rejected,
+ *   attach_target_missing, binary_mismatch, attach_scope_mismatch,
  *   payload_mismatch, already_unloaded, detach_failed, tpm_error,
  *   unknown.
  */
@@ -41,6 +43,12 @@ struct shirudo_op_report {
 };
 
 int report_emit(const char *path, const struct shirudo_op_report *r);
+
+/*
+ * What to check or run for a failure category and its errno (positive);
+ * NULL when none applies.
+ */
+const char *report_category_hint(const char *category, int err);
 
 void report_set_log(struct shirudo_op_report *r, const char *log);
 void report_free(struct shirudo_op_report *r);

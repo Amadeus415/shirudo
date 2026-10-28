@@ -1230,15 +1230,16 @@ static int run_lua_decoder(const struct upatch_decoder_view *d,
 	if (luaL_loadbufferx(L, d->source, d->source_len, d->source_name,
 			     "t") ||
 	    lua_pcall(L, 0, 1, 0)) {
-		fprintf(stderr, "upatch map: decoder load failed: %s\n",
+		fprintf(stderr, "upatch map: cannot load the Lua decoder %s for map %s of upatch %s: %s\n",
+			d->source_name, d->map, d->upatch,
 			lua_error_message(L));
 		rc = -EINVAL;
 		goto out_close;
 	}
 	rc = lua_get_decoder_entrypoint(L, d->entrypoint);
 	if (rc) {
-		fprintf(stderr, "upatch map: decoder entrypoint '%s' not found\n",
-			d->entrypoint);
+		fprintf(stderr, "upatch map: the Lua decoder %s for map %s of upatch %s has no function named '%s'\n",
+			d->source_name, d->map, d->upatch, d->entrypoint);
 		goto out_close;
 	}
 	lua_pushlightuserdata(L, &call);
@@ -1246,7 +1247,8 @@ static int run_lua_decoder(const struct upatch_decoder_view *d,
 	lua_pushcclosure(L, lua_call_decoder, 2);
 	lua_remove(L, -2);
 	if (lua_pcall(L, 0, 1, 0)) {
-		fprintf(stderr, "upatch map: decoder failed: %s\n",
+		fprintf(stderr, "upatch map: the Lua decoder %s for map %s of upatch %s failed: %s\n",
+			d->source_name, d->map, d->upatch,
 			lua_error_message(L));
 		rc = -EINVAL;
 		goto out_close;
@@ -1254,8 +1256,8 @@ static int run_lua_decoder(const struct upatch_decoder_view *d,
 	rc = otel ? lua_otel_emit_value(L, -1, &jo, 0) :
 		lua_json_emit_value(L, -1, &jo, 0);
 	if (rc) {
-		fprintf(stderr, "upatch map: decoder encode failed: %s\n",
-			strerror(-rc));
+		fprintf(stderr, "upatch map: cannot encode what the Lua decoder %s for map %s of upatch %s returned: %s\n",
+			d->source_name, d->map, d->upatch, strerror(-rc));
 		goto out_close;
 	}
 	if (jo.err) {

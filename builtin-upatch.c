@@ -88,6 +88,28 @@ static void rep_fail(struct shirudo_op_report *rep, const char *phase,
 		strscpy(rep->message, msg, sizeof(rep->message));
 }
 
+/* The command a shared load path reports under: unload verifies through it. */
+static const char *rep_cmd(const struct shirudo_op_report *rep)
+{
+	return rep && rep->op && !strcmp(rep->op, "upatch_unload") ?
+	       "upatch unload" : "upatch load";
+}
+
+static void rep_print_failure(const char *op, const char *name,
+			      const struct shirudo_op_report *rep)
+{
+	const char *hint = report_category_hint(rep->category, rep->err);
+
+	pr_err("upatch %s failed: name=%s phase=%s category=%s err=%d (%s) message=%s",
+	       op, name[0] ? name : "(unknown)",
+	       rep->phase ? rep->phase : "(unknown)",
+	       rep->category ? rep->category : "(unknown)",
+	       rep->err, rep->err ? strerror(rep->err) : "none",
+	       rep->message[0] ? rep->message : "(none)");
+	if (hint)
+		pr_hint("%s", hint);
+}
+
 /*
  * ENOPKG is the kernel's X.509 parser meeting an algorithm it was not
  * built with: an ML-DSA signature without CONFIG_CRYPTO_MLDSA.
@@ -142,11 +164,11 @@ static int print_sha256_hex(const __u8 hash[32])
 
 static const struct shirudo_help upatch_info_help = {
 	.usage   = "shirudo upatch info [--json] <file.upatch>",
-	.summary = "Describe a .upatch file: header, signature, payload "
-		   "digest,\nattach metadata and signed decoders. Offline -- "
-		   "no kernel state\nread, runs on any host. For the program as "
-		   "actually loaded\n(authoritative, via kernel BTF line_info) "
-		   "use `shirudo upatch get`.",
+	.summary = "Describe a .upatch file: header, signature, payload digest,\n"
+		   "attach metadata and signed decoders. Runs offline on any host and\n"
+		   "reads no kernel state. For the program as the kernel loaded it\n"
+		   "(authoritative, from the kernel's BTF line_info) use\n"
+		   "`shirudo upatch get`.",
 	.footer  =
 "Examples:\n"
 "  shirudo upatch info cve-2026-31431.upatch\n"
@@ -156,10 +178,9 @@ static const struct shirudo_help upatch_info_help = {
 static const struct shirudo_help upatch_list_help = {
 	.usage   = "shirudo upatch list [--json]",
 	.summary = "List upatches on this host. Shows the persisted set\n"
-		   "(under /var/lib/shirudo/upatches/, survives reboot) "
-		   "alongside the\nbpffs-pinned active set (loaded now). "
-		   "Drift in either direction\n(persisted-but-not-loaded "
-		   "or loaded-but-not-persisted) is flagged.",
+		   "(under /var/lib/shirudo/upatches/, survives a reboot) alongside\n"
+		   "the set pinned in bpffs (loaded now). An upatch that is persisted\n"
+		   "but not loaded, or loaded but not persisted, is flagged.",
 	.footer  =
 "Examples:\n"
 "  shirudo upatch list\n"
@@ -167,15 +188,12 @@ static const struct shirudo_help upatch_list_help = {
 };
 
 static const struct shirudo_help upatch_load_help = {
-	.usage   = "shirudo upatch load [--expect-chain=<hex>] "
-		   "[--expect-version-id=<hex>]\n"
-		   "                       [--no-precheck] [--no-version-check] "
-		   "[--report=<path>]\n"
+	.usage   = "shirudo upatch load [--expect-chain=<hex>] [--expect-version-id=<hex>]\n"
+		   "                       [--no-precheck] [--no-version-check] [--report=<path>]\n"
 		   "                       <file.upatch>",
-	.summary = "Load a signed LOAD .upatch into the target kernel: verify "
-		   "the\nsignature, run the loader, pin the resulting link, "
-		   "and extend this\nboot's TPM measurement register. "
-		   "Target-only.",
+	.summary = "Load a signed LOAD .upatch into the target kernel: verify the\n"
+		   "signature, run the loader, pin the resulting link, and extend this\n"
+		   "boot's TPM measurement register. Target-only.",
 	.footer  =
 "Examples:\n"
 "  shirudo upatch load cve-2026-31431.upatch\n"
@@ -184,15 +202,12 @@ static const struct shirudo_help upatch_load_help = {
 };
 
 static const struct shirudo_help upatch_unload_help = {
-	.usage   = "shirudo upatch unload [--expect-chain=<hex>] "
-		   "[--expect-version-id=<hex>]\n"
-		   "                       [--no-precheck] [--no-version-check] "
-		   "[--report=<path>]\n"
+	.usage   = "shirudo upatch unload [--expect-chain=<hex>] [--expect-version-id=<hex>]\n"
+		   "                       [--no-precheck] [--no-version-check] [--report=<path>]\n"
 		   "                       <unload-directive.upatch>",
 	.summary = "Apply a signed UNLOAD directive: detach the named upatch,\n"
-		   "remove its pin, and extend the TPM measurement register "
-		   "(unloads\nmove the register forward, never roll it back). "
-		   "Target-only.",
+		   "remove its pin, and extend the TPM measurement register (an unload\n"
+		   "moves the register forward, never back). Target-only.",
 	.footer  =
 "Examples:\n"
 "  shirudo upatch unload cve-2026-31431.unload.upatch\n"
@@ -217,22 +232,17 @@ static const struct shirudo_help_section upatch_map_sections[] = {
 };
 
 static const struct shirudo_help upatch_map_help = {
-	.usage      = "shirudo upatch map [--all] [<upatch>] [<map>] "
-		      "[--json[=<path>]] [--show-full] [--peek]\n"
-		      "                          [--otel] "
-		      "[--otel-endpoint=<url>]\n"
-		      "                          [--otel-insecure] "
-		      "[--otel-retries=<0-10>] [--s3-uri=<uri>]",
+	.usage      = "shirudo upatch map [--all] [<upatch>] [<map>] [--json[=<path>]] [--show-full] [--peek]\n"
+		      "                          [--otel] [--otel-endpoint=<url>]\n"
+		      "                          [--otel-insecure] [--otel-retries=<0-10>] [--s3-uri=<uri>]",
 	.summary    = "Read the contents of a pinned upatch map from the\n"
-		      "target kernel. With no positional args, list every "
-		      "pinned\nmap across every loaded upatch. With "
-		      "<upatch>, list maps\nfor that upatch only. With "
-		      "<upatch> <map>, dump the map's\ncontents -- BTF "
-		      "type-aware where the build embedded `-g`. If the "
-		      "upatch\npins a serializer for the map, run it and "
-		      "print the serialized\npages. With --all, export detailed "
-		      "contents for every loaded map\nusing command-line or "
-		      "map_export.* configuration.",
+		      "target kernel. With no positional arguments, list every pinned\n"
+		      "map of every loaded upatch. With <upatch>, list the maps\n"
+		      "of that upatch only. With <upatch> <map>, dump the map's\n"
+		      "contents, typed from BTF where the build embedded `-g`. If the upatch\n"
+		      "pins a serializer for the map, run it and print the serialized\n"
+		      "pages. With --all, export the contents of every loaded map\n"
+		      "as the command line or the map_export.* configuration says.",
 	.sections   = upatch_map_sections,
 	.n_sections = ARRAY_SIZE(upatch_map_sections),
 	.footer     =
@@ -267,7 +277,7 @@ static const struct shirudo_help upatch_get_help = {
 		   "    signed loader (authoritative, but sparse),\n"
 		   "  - every pinned map: BTF key/value type definitions plus\n"
 		   "    the live key/value contents.\n"
-		   "Read-only; uses only LSM-allowed bpf() ops + xattr / stat.",
+		   "Read-only; uses only the bpf() commands the LSM allows, xattrs and stat.",
 	.sections   = upatch_get_sections,
 	.n_sections = ARRAY_SIZE(upatch_get_sections),
 	.footer  =
@@ -311,7 +321,7 @@ static int cmd_upatch_info(int argc, const char **argv)
 
 	rc = upatch_open(path, &u);
 	if (rc != 0) {
-		pr_err("upatch info: %s: %s", path, strerror(-rc));
+		pr_err("upatch info: cannot open %s: %s", path, strerror(-rc));
 		return 1;
 	}
 
@@ -386,7 +396,7 @@ static int cmd_upatch_info(int argc, const char **argv)
 		json_arr_close(&e);
 		json_obj_close(&e);
 		if (e.err)
-			fprintf(stderr, "upatch info: json encode failed: %s\n",
+			fprintf(stderr, "upatch info: cannot encode the JSON output: %s\n",
 				strerror(-e.err));
 		else
 			printf("%s\n", buf);
@@ -565,8 +575,9 @@ static int cmd_upatch_list(int argc, const char **argv)
 			continue;
 		if (upatch_open(path, &u) != 0) {
 			if (!json)
-				printf("  %-6s  %-6s  %-18s  %s\n", "?", "?",
-				       "(unreadable)", persisted[i]->d_name);
+				printf("  %-6s  %-6s  %-6s  %-18s  %s\n", "?",
+				       "?", "?", "(unreadable)",
+				       persisted[i]->d_name);
 			continue;
 		}
 		memcpy(name, u.hdr.name, sizeof(u.hdr.name));
@@ -621,9 +632,8 @@ static int cmd_upatch_list(int argc, const char **argv)
 			json_kv_null(&e, "payload_sha256");
 			json_obj_close(&e);
 		} else {
-			printf("  %-6s  %-6s  %-18s  %s  (orphan: no persisted "
-			       ".upatch, will not survive reboot)\n",
-			       "yes", "?", "-", raw_name);
+			printf("  %-6s  %-6s  %-6s  %-18s  %s  (orphan: loaded, but no persisted .upatch, so it will not survive a reboot)\n",
+			       "yes", "?", "?", "-", raw_name);
 		}
 	}
 
@@ -631,7 +641,7 @@ static int cmd_upatch_list(int argc, const char **argv)
 		json_arr_close(&e);
 		json_obj_close(&e);
 		if (e.err) {
-			fprintf(stderr, "upatch list: json encode failed: %s\n",
+			fprintf(stderr, "upatch list: cannot encode the JSON output: %s\n",
 				strerror(-e.err));
 			rc = 1;
 		} else {
@@ -867,27 +877,23 @@ static int prog_attach_cgroup_skb_fallback(int prog_fd,
 	strscpy(func, info->name, sizeof(func));
 	rc = prog_func_name(prog_fd, info, func, sizeof(func));
 	if (rc && !func[0]) {
-		pr_err("program metadata says raw_tracepoint, but loaded "
-		       "program type is cgroup_skb and function name is "
-		       "unavailable; rebuild the upatch with cgroup_skb "
-		       "metadata");
+		pr_err("upatch load: the attach metadata says raw_tracepoint, but the loaded program is cgroup_skb and has no function name to tell ingress from egress");
+		pr_hint("rebuild the upatch so its attach metadata names cgroup_skb/ingress or cgroup_skb/egress");
 		return rc;
 	}
 	rc = cgroup_skb_attach_type_from_name(func, &attach_type);
 	if (rc) {
-		pr_err("program metadata says raw_tracepoint, but loaded "
-		       "program type is cgroup_skb and function '%s' does "
-		       "not identify ingress or egress; rebuild the upatch "
-		       "with cgroup_skb metadata", func);
+		pr_err("upatch load: the attach metadata says raw_tracepoint, but the loaded program is cgroup_skb and its function name '%s' names neither ingress nor egress",
+		       func);
+		pr_hint("rebuild the upatch so its attach metadata names cgroup_skb/ingress or cgroup_skb/egress");
 		return rc;
 	}
-	pr_warn("program metadata says raw_tracepoint, but loaded program "
-		"type is cgroup_skb; inferring %s from function '%s'",
+	pr_warn("upatch load: the attach metadata says raw_tracepoint, but the loaded program is cgroup_skb; attaching it as %s, as its function name '%s' suggests",
 		attach_type == BPF_CGROUP_INET_EGRESS ? "egress" : "ingress",
 		func);
 	rc = prog_attach_cgroup_skb(prog_fd, attach_type);
 	if (rc >= 0)
-		pr_info("attached cgroup_skb fallback as %s",
+		pr_info("upatch load: attached the cgroup_skb program as %s",
 			attach_type == BPF_CGROUP_INET_EGRESS ?
 			"egress" : "ingress");
 	return rc;
@@ -1334,7 +1340,7 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 	int rc;
 
 	if (nr_progs == 0) {
-		pr_warn("upatch carries no programs to attach");
+		pr_warn("upatch load: %s carries no programs to attach", name);
 		return 0;
 	}
 	if (upatch_bpffs_name(bpffs_name, sizeof(bpffs_name), name))
@@ -1342,8 +1348,8 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 
 	rc = mkdir_if_absent(SHIRUDO_BPFFS_UPATCHES_DIR, 0700, NULL);
 	if (rc) {
-		pr_err("mkdir %s: %s", SHIRUDO_BPFFS_UPATCHES_DIR,
-		       strerror(-rc));
+		pr_err("upatch load: cannot create the bpffs directory %s: %s",
+		       SHIRUDO_BPFFS_UPATCHES_DIR, strerror(-rc));
 		return rc;
 	}
 	if (strsprintf(dir, sizeof(dir), "%s/%s",
@@ -1357,7 +1363,8 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 		return -ENOMEM;
 	rc = mkdir_if_absent(dir, 0700, &made_dir);
 	if (rc) {
-		pr_err("mkdir %s: %s", dir, strerror(-rc));
+		pr_err("upatch load: cannot create the pin directory %s: %s",
+		       dir, strerror(-rc));
 		goto out;
 	}
 	count_attach_progs(specs, nr_progs, &attach_count);
@@ -1371,7 +1378,8 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 		int link_fd;
 
 		if (inner_fd <= 0) {
-			pr_err("loader produced no fd for prog %u", i);
+			pr_err("upatch load: the signed loader returned no file descriptor for program %u of %s",
+			       i, name);
 			rc = -EINVAL;
 			goto out;
 		}
@@ -1385,8 +1393,8 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 			rc = mkdir_if_absent(serializers_dir, 0700,
 					     &made_serializers);
 			if (rc) {
-				pr_err("mkdir %s: %s", serializers_dir,
-				       strerror(-rc));
+				pr_err("upatch load: cannot create the serializer pin directory %s: %s",
+				       serializers_dir, strerror(-rc));
 				goto out;
 			}
 			/*
@@ -1395,18 +1403,19 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 			 */
 			if (stat(pin, &st) == 0 && unlink(pin)) {
 				rc = -errno;
-				pr_err("unlink stale serializer pin %s: %s", pin,
-				       strerror(-rc));
+				pr_err("upatch load: cannot remove the stale serializer pin %s: %s",
+				       pin, strerror(-rc));
 				goto out;
 			}
 			rc = obj_pin(inner_fd, pin);
 			if (rc) {
-				pr_err("pin serializer %s: %s", pin,
-				       strerror(-rc));
+				pr_err("upatch load: cannot pin the serializer at %s: %s",
+				       pin, strerror(-rc));
 				goto out;
 			}
 			made[i] = true;
-			pr_info("pinned serializer prog %u -> %s", i, pin);
+			pr_info("upatch load: pinned serializer program %u at %s",
+				i, pin);
 			continue;
 		}
 		if (spec->role == SHIRUDO_UPATCH_PROG_ROLE_TEST_RUN) {
@@ -1415,18 +1424,19 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 			test_fd = inner_fd;
 			if (stat(pin, &st) == 0 && unlink(pin)) {
 				rc = -errno;
-				pr_err("unlink stale test-run pin %s: %s", pin,
-				       strerror(-rc));
+				pr_err("upatch load: cannot remove the stale test-run pin %s: %s",
+				       pin, strerror(-rc));
 				goto out;
 			}
 			rc = obj_pin(inner_fd, pin);
 			if (rc) {
-				pr_err("pin test-run program %s: %s", pin,
-				       strerror(-rc));
+				pr_err("upatch load: cannot pin the test-run program at %s: %s",
+				       pin, strerror(-rc));
 				goto out;
 			}
 			made[i] = true;
-			pr_info("pinned test-run prog %u -> %s", i, pin);
+			pr_info("upatch load: pinned test-run program %u at %s",
+				i, pin);
 			continue;
 		}
 		attach_seen++;
@@ -1434,16 +1444,16 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 		link_fd = prog_attach_for_spec(inner_fd, spec);
 		if (link_fd < 0) {
 			if (spec->kind == SHIRUDO_UPATCH_ATTACH_UPROBE_MULTI)
-				pr_err("attach prog %u (%s %s:%s): %s", i,
-				       attach_kind_name(spec->kind),
+				pr_err("upatch load: cannot attach program %u (%s %s:%s): %s",
+				       i, attach_kind_name(spec->kind),
 				       spec->uprobe_path, spec->target,
 				       strerror(-link_fd));
 			else if (spec->target[0])
-				pr_err("attach prog %u (%s %s): %s",
+				pr_err("upatch load: cannot attach program %u (%s %s): %s",
 				       i, attach_kind_name(spec->kind),
 				       spec->target, strerror(-link_fd));
 			else
-				pr_err("attach prog %u (%s): %s",
+				pr_err("upatch load: cannot attach program %u (%s): %s",
 				       i, attach_kind_name(spec->kind),
 				       strerror(-link_fd));
 			rc = link_fd;
@@ -1452,21 +1462,28 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 		/* Unpinned, a closed link detaches. */
 		rc = link_matches_spec(link_fd, spec);
 		if (rc) {
-			pr_err("attach prog %u (%s %s): the link is not at "
-			       "the site the metadata names: %s", i,
-			       attach_kind_name(spec->kind), spec->target,
-			       strerror(-rc));
+			if (rc == -EXDEV)
+				pr_err("upatch load: refusing program %u (%s%s%s): the kernel attached it somewhere other than its attach metadata says",
+				       i, attach_kind_name(spec->kind),
+				       spec->target[0] ? " " : "",
+				       spec->target);
+			else
+				pr_err("upatch load: refusing program %u (%s%s%s): cannot confirm where the kernel attached it: %s",
+				       i, attach_kind_name(spec->kind),
+				       spec->target[0] ? " " : "", spec->target,
+				       strerror(-rc));
 			close(link_fd);
 			goto out;
 		}
 		rc = obj_pin(link_fd, pin);
 		close(link_fd);
 		if (rc) {
-			pr_err("pin %s: %s", pin, strerror(-rc));
+			pr_err("upatch load: cannot pin the link of program %u at %s: %s",
+			       i, pin, strerror(-rc));
 			goto out;
 		}
 		made[i] = true;
-		pr_info("attached + pinned prog %u (%s) -> %s",
+		pr_info("upatch load: attached program %u (%s) and pinned its link at %s",
 			i, attach_kind_name(spec->kind), pin);
 	}
 	if (test_fd >= 0) {
@@ -1477,7 +1494,7 @@ static int attach_and_pin_progs(const struct shirudo_loader_ctx *cx,
 		rc = prog_test_run(test_fd, init_ctx, sizeof(init_ctx),
 				   &retval);
 		if (rc || (__s32)retval < 0) {
-			pr_err("initialize test-run arena: %s",
+			pr_err("upatch load: cannot initialize the arena through the test-run program: %s",
 			       rc ? strerror(-rc) : strerror(-(__s32)retval));
 			if (!rc)
 				rc = (__s32)retval;
@@ -1530,8 +1547,8 @@ static int pin_upatch_maps(const struct shirudo_loader_ctx *cx,
 		return -ENAMETOOLONG;
 	rc = mkdir_if_absent(maps_dir, 0700, NULL);
 	if (rc) {
-		pr_warn("upatch maps: mkdir %s: %s (continuing without "
-			"map pins)", maps_dir, strerror(-rc));
+		pr_warn("upatch load: cannot create the map pin directory %s: %s; %s stays loaded, but its maps are not pinned",
+			maps_dir, strerror(-rc), name);
 		return 0;
 	}
 	for (i = 0; i < nr_maps; i++) {
@@ -1548,8 +1565,8 @@ static int pin_upatch_maps(const struct shirudo_loader_ctx *cx,
 			continue;
 		err = bpf_map_get_info_by_fd(md->map_fd, &info, &info_len);
 		if (err) {
-			pr_warn("upatch maps: get_info(map %u): %s",
-				i, strerror(errno));
+			pr_warn("upatch load: cannot read the details of map %u of %s, so it is not pinned: %s",
+				i, name, strerror(errno));
 			continue;
 		}
 		if (info.name[0] == '\0')
@@ -1565,11 +1582,11 @@ static int pin_upatch_maps(const struct shirudo_loader_ctx *cx,
 		if (stat(pin, &st) == 0)
 			continue;	/* already pinned (idempotent) */
 		if (obj_pin(md->map_fd, pin) != 0) {
-			pr_warn("upatch maps: pin %s: %s", pin,
-				strerror(errno));
+			pr_warn("upatch load: cannot pin map %s at %s, so it stays unpinned: %s",
+				info.name, pin, strerror(errno));
 			continue;
 		}
-		pr_info("pinned map %u (%s, type=%u) -> %s",
+		pr_info("upatch load: pinned map %u (%s, type %u) at %s",
 			i, info.name, (__u32)info.type, pin);
 	}
 	return 0;
@@ -1591,8 +1608,7 @@ static void set_pin_payload(const char *name, const __u8 payload[32])
 		       bpffs_name) < 0)
 		return;
 	if (setxattr(dir, SHIRUDO_XATTR_PAYLOAD, payload, 32, 0) != 0)
-		pr_err("upatch: cannot record payload xattr on %s: %s "
-		       "(unload of this upatch will refuse)",
+		pr_err("upatch load: cannot record the payload xattr on %s: %s; `shirudo upatch unload` will refuse to unload this upatch",
 		       dir, strerror(errno));
 }
 
@@ -1625,18 +1641,19 @@ static int trust_anchor_keyring(key_serial_t *keyring, key_serial_t *serial,
 
 	rc = identity_read(&id);
 	if (rc) {
-		pr_err("no trust anchor frozen this boot: %s (run `shirudo "
-		       "init`)", strerror(-rc));
+		pr_err("%s: cannot read the trust anchor shirudo init records each boot: %s",
+		       rep_cmd(rep), strerror(-rc));
 		rep_fail(rep, "pre_flight", "keyring_missing", -rc,
-			 "no trust anchor frozen this boot");
+			 "no trust anchor recorded this boot");
 		return -1;
 	}
 	ring = keyring_bpf_serial();
 	if (id.keyring_type != SHIRUDO_SIG_KEYRING_BPF ||
 	    ring <= 0 || ring != id.keyring_serial) {
-		pr_err("the kernel BPF keyring differs from the frozen anchor");
+		pr_err("%s: the kernel's .bpf keyring is not the one shirudo init recorded this boot (category: tampered)",
+		       rep_cmd(rep));
 		rep_fail(rep, "pre_flight", "tampered", 0,
-			 "BPF keyring is not the frozen anchor");
+			 "the .bpf keyring is not the one init recorded");
 		return -1;
 	}
 	*keyring = KEY_SPEC_BPF_KEYRING;
@@ -1670,6 +1687,7 @@ static void close_loader_fds(const struct shirudo_loader_ctx *cx,
 static int upatch_apply(const char *path, bool verify_only,
 			struct shirudo_op_report *rep)
 {
+	const char *shown = rep && rep->path ? rep->path : path;
 	struct shirudo_upatch u;
 	struct shirudo_prog_spec *prog_specs = NULL;
 	const struct bpf_insn *insns;
@@ -1692,7 +1710,8 @@ static int upatch_apply(const char *path, bool verify_only,
 
 	rc = upatch_open(path, &u);
 	if (rc) {
-		pr_err("open %s: %s", path, strerror(-rc));
+		pr_err("%s: cannot open %s: %s", rep_cmd(rep), path,
+		       strerror(-rc));
 		rep_fail(rep, "parse", "parser_rejected", -rc,
 			 "cannot open .upatch");
 		xfree(vlog, SHIRUDO_VERIFIER_LOG_MAX);
@@ -1705,16 +1724,17 @@ static int upatch_apply(const char *path, bool verify_only,
 	 * stops before TEST_RUN/attach.
 	 */
 	if (!verify_only && upatch_is_unload(&u)) {
-		pr_err("upatch load: %s is an UNLOAD directive; "
-		       "use `shirudo upatch unload`", path);
+		pr_err("upatch load: %s is an UNLOAD directive; apply it with `shirudo upatch unload`",
+		       shown);
 		rep_fail(rep, "parse", "parser_rejected", 0,
 			 "is an UNLOAD directive");
 		rc = 1;
 		goto out;
 	}
 	if (u.hdr.loader_insns_len % sizeof(struct bpf_insn)) {
-		pr_err("upatch load: loader_insns_len=%u not a multiple of %zu",
-		       u.hdr.loader_insns_len, sizeof(struct bpf_insn));
+		pr_err("%s: %s is malformed: its loader length (loader_insns_len=%u) is not a multiple of the %zu-byte BPF instruction size",
+		       rep_cmd(rep), shown, u.hdr.loader_insns_len,
+		       sizeof(struct bpf_insn));
 		rep_fail(rep, "parse", "parser_rejected", 0,
 			 "loader_insns_len misaligned");
 		rc = 1;
@@ -1756,7 +1776,8 @@ static int upatch_apply(const char *path, bool verify_only,
 	memcpy(upatch_name, u.hdr.name, SHIRUDO_UPATCH_NAME_MAX);
 	upatch_name[SHIRUDO_UPATCH_NAME_MAX] = '\0';
 	if (!safe_upatch_name(upatch_name)) {
-		pr_err("upatch: refusing unsafe upatch name '%s'", upatch_name);
+		pr_err("%s: refusing the upatch name '%s': a name may hold only letters, digits, '.', '_' and '-', and must not start with '.'",
+		       rep_cmd(rep), upatch_name);
 		rep_fail(rep, "parse", "parser_rejected", 0,
 			 "unsafe upatch name");
 		rc = 1;
@@ -1766,9 +1787,8 @@ static int upatch_apply(const char *path, bool verify_only,
 	if (!upatch_signed_name(&u) ||
 	    memcmp(upatch_signed_name(&u), u.hdr.name,
 		   SHIRUDO_UPATCH_NAME_MAX)) {
-		pr_err("upatch: the name of '%s' is not signature-covered or "
-		       "differs from the signed one; rebuild the artifact",
-		       upatch_name);
+		pr_err("%s: the signature of %s does not cover its name '%s', or the signed name differs from the header",
+		       rep_cmd(rep), shown, upatch_name);
 		rep_fail(rep, "parse", "parser_rejected", 0,
 			 "name not signed");
 		rc = 1;
@@ -1787,8 +1807,8 @@ static int upatch_apply(const char *path, bool verify_only,
 			 data, u.hdr.data_len, content_digest);
 		if (!ct_eq(content_digest, u.hdr.payload_sha256,
 			   sizeof(content_digest))) {
-			pr_err("upatch: payload_sha256 does not match signed "
-			       "content (insns || data); refusing");
+			pr_err("%s: refusing %s: its payload_sha256 is not the SHA-256 of the signed loader instructions and data",
+			       rep_cmd(rep), shown);
 			rep_fail(rep, "parse", "parser_rejected", 0,
 				 "payload_sha256 mismatch");
 			rc = 1;
@@ -1811,9 +1831,8 @@ static int upatch_apply(const char *path, bool verify_only,
 
 		attach = upatch_signed_attach(&u, &attach_len);
 		if (!attach) {
-			pr_err("upatch: the attach metadata of '%s' is not "
-			       "signature-covered; rebuild the artifact",
-			       upatch_name);
+			pr_err("upatch load: the signature of %s does not cover the attach metadata of '%s'",
+			       shown, upatch_name);
 			rep_fail(rep, "parse", "parser_rejected", 0,
 				 "attach metadata not signed");
 			rc = 1;
@@ -1822,8 +1841,8 @@ static int upatch_apply(const char *path, bool verify_only,
 		rc = prog_specs_parse(attach, attach_len, u.hdr.nr_progs,
 				      &prog_specs);
 		if (rc) {
-			pr_err("upatch program metadata rejected: %s",
-			       strerror(-rc));
+			pr_err("upatch load: the attach metadata of '%s' is invalid: %s",
+			       upatch_name, strerror(-rc));
 			rep_fail(rep, "parse", "parser_rejected", -rc,
 				 "invalid program attach metadata");
 			rc = 1;
@@ -1844,8 +1863,8 @@ static int upatch_apply(const char *path, bool verify_only,
 				cat = "parser_rejected";
 			else
 				cat = "unknown";
-			pr_err("uprobe target verification failed (%s): %s",
-			       cat, strerror(e));
+			pr_err("upatch load: cannot verify the uprobe target binary of '%s' (category: %s): %s",
+			       upatch_name, cat, strerror(e));
 			rep_fail(rep, "target_verify", cat, e,
 				 "uprobe target verification failed");
 			rc = 1;
@@ -1863,7 +1882,8 @@ static int upatch_apply(const char *path, bool verify_only,
 
 		if (shirudo_sha256(insns, u.hdr.loader_insns_len,
 				   loader_digest)) {
-			pr_err("__loader.map: cannot hash the loader");
+			pr_err("%s: cannot compute the SHA-256 of the signed loader for its metadata map (__loader.map)",
+			       rep_cmd(rep));
 			rep_fail(rep, "signed_loader_load", "unknown", EIO,
 				 "loader digest failed");
 			rc = 1;
@@ -1875,7 +1895,8 @@ static int upatch_apply(const char *path, bool verify_only,
 	if (map_fd < 0) {
 		int err = errno;
 
-		pr_err("__loader.map create: %s", strerror(err));
+		pr_err("%s: cannot create the signed loader's metadata map (__loader.map): %s",
+		       rep_cmd(rep), strerror(err));
 		rep_fail(rep, "signed_loader_load", cat_from_load_errno(err),
 			 err, "__loader.map create failed");
 		rc = 1;
@@ -1886,7 +1907,8 @@ static int upatch_apply(const char *path, bool verify_only,
 	if (rc) {
 		int err = errno;
 
-		pr_err("__loader.map update: %s", strerror(err));
+		pr_err("%s: cannot write the signed loader's metadata map (__loader.map): %s",
+		       rep_cmd(rep), strerror(err));
 		rep_fail(rep, "signed_loader_load", cat_from_load_errno(err),
 			 err, "__loader.map update failed");
 		rc = 1;
@@ -1898,7 +1920,8 @@ static int upatch_apply(const char *path, bool verify_only,
 	if (rc) {
 		int err = errno;
 
-		pr_err("__loader.map freeze: %s", strerror(err));
+		pr_err("%s: cannot freeze the signed loader's metadata map (__loader.map): %s",
+		       rep_cmd(rep), strerror(err));
 		rep_fail(rep, "signed_loader_load", cat_from_load_errno(err),
 			 err, "__loader.map freeze failed");
 		rc = 1;
@@ -1917,20 +1940,20 @@ static int upatch_apply(const char *path, bool verify_only,
 	if (prog_fd < 0) {
 		int e = errno;
 
-		pr_err("BPF_PROG_LOAD (signed loader): %s", strerror(e));
+		pr_err("%s: the kernel refused to load the signed loader of %s (BPF_PROG_LOAD): %s",
+		       rep_cmd(rep), shown, strerror(e));
 		if (vlog[0])
-			fprintf(stderr, "loader verifier log:\n%s\n", vlog);
+			fprintf(stderr, "verifier log of the signed loader:\n%s\n", vlog);
 		rep_fail(rep, "signed_loader_load", cat_from_load_errno(e), e,
-			 "BPF_PROG_LOAD of signed loader failed");
+			 "the kernel refused the signed loader (BPF_PROG_LOAD)");
 		report_set_log(rep, vlog);
 		rc = 1;
 		goto out;
 	}
 
-	pr_info("loaded signed loader: prog_fd=%d keyring=%d "
-		"sig=%uB insns=%zu data=%uB",
-		prog_fd, (int)serial, u.hdr.signature_len, insn_cnt,
-		u.hdr.data_len);
+	pr_info("%s: the kernel verified the signature and loaded the signed loader of %s (prog_fd=%d keyring=%d signature=%u bytes insns=%zu data=%u bytes)",
+		rep_cmd(rep), upatch_name, prog_fd, (int)serial,
+		u.hdr.signature_len, insn_cnt, u.hdr.data_len);
 
 	if (verify_only) {
 		rc = 0;
@@ -1954,9 +1977,9 @@ static int upatch_apply(const char *path, bool verify_only,
 		 1024;
 	cx = xmalloc(ctx_sz);
 	if (!cx) {
-		pr_err("ctx alloc");
+		pr_err("upatch load: out of memory for the signed loader's context");
 		rep_fail(rep, "payload_load", "unknown", ENOMEM,
-			 "ctx alloc failed");
+			 "out of memory for the loader context");
 		rc = 1;
 		goto out;
 	}
@@ -1975,11 +1998,12 @@ static int upatch_apply(const char *path, bool verify_only,
 	if (rc) {
 		int err = errno;
 
-		pr_err("BPF_PROG_TEST_RUN: %s", strerror(err));
+		pr_err("upatch load: cannot run the signed loader of %s (BPF_PROG_TEST_RUN): %s",
+		       upatch_name, strerror(err));
 		if (vlog[0])
-			fprintf(stderr, "loader runtime log:\n%s\n", vlog);
+			fprintf(stderr, "verifier log of the upatch programs:\n%s\n", vlog);
 		rep_fail(rep, "payload_load", "verifier_rejected", err,
-			 "BPF_PROG_TEST_RUN failed");
+			 "the signed loader could not run (BPF_PROG_TEST_RUN)");
 		report_set_log(rep, vlog);
 		rc = 1;
 		goto out;
@@ -1990,11 +2014,12 @@ static int upatch_apply(const char *path, bool verify_only,
 		 * numbers left in the context name nothing of ours now.
 		 */
 		memset(cx + 1, 0, ctx_sz - sizeof(*cx));
-		pr_err("loader returned error: %d", (__s32)retval);
-		fprintf(stderr, "loader runtime log (len=%zu):\n%.4096s\n",
+		pr_err("upatch load: the signed loader could not create the programs and maps of %s: %s (%d)",
+		       upatch_name, strerror(-(__s32)retval), (__s32)retval);
+		fprintf(stderr, "verifier log of the upatch programs (%zu bytes):\n%.4096s\n",
 			strnlen(vlog, SHIRUDO_VERIFIER_LOG_MAX), vlog);
 		rep_fail(rep, "payload_load", "verifier_rejected",
-			 -(__s32)retval, "inner loader returned error");
+			 -(__s32)retval, "the signed loader returned an error");
 		if (rep)
 			rep->loader_return = (__s32)retval;
 		report_set_log(rep, vlog);
@@ -2002,8 +2027,8 @@ static int upatch_apply(const char *path, bool verify_only,
 		goto out;
 	}
 
-	pr_info("loader ok, retval=%d (maps=%u progs=%u)", (__s32)retval,
-		u.hdr.nr_maps, u.hdr.nr_progs);
+	pr_info("upatch load: the signed loader created %u maps and %u programs for %s (retval=%d)",
+		u.hdr.nr_maps, u.hdr.nr_progs, upatch_name, (__s32)retval);
 
 	/*
 	 * Without a pinned link a program detaches when this one-shot CLI
@@ -2078,8 +2103,8 @@ static int upatch_preflight(const char *expect_chain,
 
 	rc = kernel_abi_check(abi_detail, sizeof(abi_detail));
 	if (rc) {
-		pr_err("upatch: pre-flight refused (category: "
-		       "kernel_abi_unsupported, message: %s)", abi_detail);
+		pr_err("%s: pre-flight refused (category: kernel_abi_unsupported): %s",
+		       rep_cmd(rep), abi_detail);
 		rep_fail(rep, "pre_flight", "kernel_abi_unsupported",
 			 EOPNOTSUPP, abi_detail);
 		return rc;
@@ -2090,9 +2115,10 @@ static int upatch_preflight(const char *expect_chain,
 
 	fd = bpf_obj_get(SHIRUDO_LSM_LINK_PIN);
 	if (fd < 0) {
-		pr_err("upatch load: pre-flight refused (category: tampered, "
-		       "message: lsm_detached) -- %s not pinned",
-		       SHIRUDO_LSM_LINK_PIN);
+		pr_err("%s: pre-flight refused (category: tampered, message: lsm_detached): the shirudo LSM link is not pinned at %s",
+		       rep_cmd(rep), SHIRUDO_LSM_LINK_PIN);
+		rep_fail(rep, "pre_flight", "tampered", 0,
+			 "lsm_detached: the shirudo LSM is not attached");
 		return -1;
 	}
 	close(fd);
@@ -2101,27 +2127,31 @@ static int upatch_preflight(const char *expect_chain,
 		return 0;
 
 	if (hex_decode(expect_chain, want, sizeof(want))) {
-		pr_err("upatch load: --expect-chain must be %d hex chars",
-		       2 * SHIRUDO_CHAIN_DIGEST_LEN);
+		pr_err("%s: --expect-chain must be %d hexadecimal characters",
+		       rep_cmd(rep), 2 * SHIRUDO_CHAIN_DIGEST_LEN);
 		return -1;
 	}
 	rc = chain_read(have);
 	if (rc == -ENODEV) {
-		pr_err("upatch load: pre-flight refused (category: tampered, "
-		       "message: chain_drift) -- register unreadable, cannot "
-		       "confirm --expect-chain");
+		pr_err("%s: pre-flight refused (category: tampered, message: chain_drift): no TPM register is set up this boot, so --expect-chain cannot be confirmed",
+		       rep_cmd(rep));
+		rep_fail(rep, "pre_flight", "tampered", ENODEV,
+			 "chain_drift: no TPM register is set up this boot");
 		return -1;
 	}
 	if (rc) {
-		pr_err("upatch load: chain read failed: %s", strerror(-rc));
+		pr_err("%s: pre-flight refused (category: tampered, message: chain_drift): cannot read the TPM register to confirm --expect-chain: %s",
+		       rep_cmd(rep), strerror(-rc));
+		rep_fail(rep, "pre_flight", "tampered", -rc,
+			 "chain_drift: the TPM register could not be read");
 		return -1;
 	}
 	if (!ct_eq(want, have, sizeof(want))) {
 		hex_encode(have, sizeof(have), have_hex);
-		pr_err("upatch load: pre-flight refused (category: tampered, "
-		       "message: chain_drift) -- live chain %s != expected; "
-		       "re-status and re-issue with the refreshed value",
-		       have_hex);
+		pr_err("%s: pre-flight refused (category: tampered, message: chain_drift): the TPM register holds %s, not the value --expect-chain gives",
+		       rep_cmd(rep), have_hex);
+		rep_fail(rep, "pre_flight", "tampered", 0,
+			 "chain_drift: the TPM register differs from --expect-chain");
 		return -1;
 	}
 	return 0;
@@ -2137,8 +2167,7 @@ static int eventlog_room(struct shirudo_op_report *rep, const char *op)
 
 	config_load(&cfg);
 	if (eventlog_would_exceed(cfg.eventlog_max_bytes)) {
-		pr_err("upatch %s: eventlog %s would exceed "
-		       "eventlog.max_bytes=%llu; refusing -- no load, no extend",
+		pr_err("upatch %s: refusing, because the next record would grow the eventlog %s past eventlog.max_bytes=%llu; nothing was changed or measured",
 		       op, eventlog_path(), cfg.eventlog_max_bytes);
 		rep_fail(rep, "pre_flight", "eventlog_full", ENOSPC,
 			 "eventlog would exceed eventlog.max_bytes");
@@ -2157,12 +2186,10 @@ static int version_gate(const char *expect_version_id, bool no_version_check,
 	if (no_version_check || !expect_version_id)
 		return 0;
 	if (strcmp(expect_version_id, shirudo_version_id) != 0) {
-		pr_err("upatch %s: version mismatch -- operator expects %s, "
-		       "target is %s; redeploy a matching shirudo or pass "
-		       "--no-version-check", op, expect_version_id,
-		       shirudo_version_id);
+		pr_err("upatch %s: version mismatch: the operator expects shirudo build %s, but this target runs %s (--no-version-check skips this check)",
+		       op, expect_version_id, shirudo_version_id);
 		rep_fail(rep, "pre_flight", "version_mismatch", EPERM,
-			 "SHIRUDO_VERSION_ID mismatch (operator vs target)");
+			 "the operator's SHIRUDO_VERSION_ID differs from the target's");
 		return -1;
 	}
 	return 0;
@@ -2202,7 +2229,7 @@ static int format_upatch_event(const char *type, const char *name,
 	json_obj_close(&e);
 
 	if (e.err) {
-		pr_err("eventlog: %s entry encode failed: %s", type,
+		pr_err("eventlog: cannot encode the %s record: %s", type,
 		       strerror(-e.err));
 		return e.err;
 	}
@@ -2243,42 +2270,40 @@ static int upatch_chain_event_locked(const char *tag, const char *type,
 		*measured = false;
 	rc = chain_upatch_event(tag, name, payload, event);
 	if (rc) {
-		pr_err("upatch %s: cannot hash the event (category: tpm_error)",
-		       op);
+		pr_err("upatch %s: cannot compute the register event for %s (category: tpm_error)",
+		       op, name);
 		return rc;
 	}
 
 	rc = chain_extend(event, chain);
 	if (rc == -ENODEV) {
-		pr_err("upatch %s: TPM/register unavailable (category: "
-		       "tpm_error) -- op done but NOT measured; shirudo "
-		       "requires the register init bound this boot", op);
+		pr_err("upatch %s: %s was NOT measured: the TPM does not answer, or shirudo init has not set up the TPM register this boot (category: tpm_error)",
+		       op, name);
 		return rc;
 	}
 	if (rc == -EACCES) {
-		pr_err("upatch %s: register is not the one init bound "
-		       "(category: tampered) -- op done but NOT measured; "
-		       "operator must reconcile", op);
+		pr_err("upatch %s: %s was NOT measured: the TPM register is not the one shirudo init set up this boot (category: tampered)",
+		       op, name);
 		return rc;
 	}
 	if (rc) {
-		pr_err("upatch %s: chain extend failed (category: tpm_error) "
-		       "-- op done but chain NOT advanced; operator must "
-		       "reconcile", op);
+		pr_err("upatch %s: %s was NOT measured: extending the TPM register failed: %s (category: tpm_error)",
+		       op, name, strerror(-rc));
 		return rc;
 	}
 	if (measured)
 		*measured = true;
 	rc = append_upatch_event(type, name, payload, event, reason);
 	if (rc) {
-		pr_err("upatch %s: eventlog append failed after extend -- "
-		       "chain/log desync; operator must reconcile", op);
+		pr_err("upatch %s: the TPM register was extended for %s, but the eventlog record could not be written: %s; the eventlog no longer matches the register",
+		       op, name, strerror(-rc));
 		return rc;
 	}
 	hex_encode(chain, 32, chain_hex);
 	if (out_chain)
 		memcpy(out_chain, chain_hex, sizeof(chain_hex));
-	pr_info("upatch %s: chain extended, value=%s", op, chain_hex);
+	pr_info("upatch %s: measured %s; the TPM register now holds %s",
+		op, name, chain_hex);
 	pr_audit("upatch %s measured: name=%s chain=%s", op, name, chain_hex);
 	return 0;
 }
@@ -2296,9 +2321,8 @@ static int upatch_chain_event(const char *tag, const char *type,
 		*measured = false;
 	lock = eventlog_lock();
 	if (lock < 0) {
-		pr_err("upatch %s: cannot take the register lock: %s "
-		       "(category: tpm_error) -- nothing measured", op,
-		       strerror(-lock));
+		pr_err("upatch %s: cannot take the register lock: %s (category: tpm_error); nothing was measured",
+		       op, strerror(-lock));
 		return lock;
 	}
 	rc = upatch_chain_event_locked(tag, type, op, name, payload, reason,
@@ -2372,7 +2396,7 @@ static int append_json_record(const char *path, const char *json, size_t len)
 	if (!rc && fsync(fd) != 0)
 		rc = -errno;
 	if (rc && ftruncate(fd, original_size) != 0)
-		pr_warn("upatch map: could not roll back partial JSON append to %s: %s",
+		pr_warn("upatch map: cannot remove the partly written JSON record from %s: %s",
 			path, strerror(errno));
 out_unlock:
 	(void)flock(fd, LOCK_UN);
@@ -2453,7 +2477,8 @@ static int persist_upatch(const char *src, const char *name)
 
 	rc = seal_mkdir_p(SHIRUDO_UPATCHES_DIR, 0700);
 	if (rc) {
-		pr_err("mkdir %s: %s", SHIRUDO_UPATCHES_DIR, strerror(-rc));
+		pr_err("upatch load: cannot create the archive directory %s: %s",
+		       SHIRUDO_UPATCHES_DIR, strerror(-rc));
 		return rc;
 	}
 	if (strsprintf(dst, sizeof(dst), "%s/%s.upatch", SHIRUDO_UPATCHES_DIR,
@@ -2627,11 +2652,10 @@ static void unload_unmeasured(const char *name)
 	    unlink(persisted) != 0 && errno != ENOENT)
 		rc = -errno;
 	if (rc)
-		pr_err("upatch load: %s is loaded but not measured and could "
-		       "not be undone: %s; operator must reconcile", name,
-		       strerror(-rc));
+		pr_err("upatch load: %s is loaded but NOT measured, and undoing the load failed: %s",
+		       name, strerror(-rc));
 	else
-		pr_err("upatch load: %s was not measured; the load was undone",
+		pr_err("upatch load: %s was not measured, so the load was undone",
 		       name);
 }
 
@@ -2664,7 +2688,7 @@ static int cmd_upatch_load(int argc, const char **argv)
 
 	rc = stage_upatch(file, staged, sizeof(staged));
 	if (rc) {
-		pr_err("upatch load: read %s: %s", file, strerror(-rc));
+		pr_err("upatch load: cannot read %s: %s", file, strerror(-rc));
 		rep_fail(&rep, "parse", "parser_rejected", -rc,
 			 "cannot read .upatch");
 		goto done;
@@ -2673,7 +2697,8 @@ static int cmd_upatch_load(int argc, const char **argv)
 
 	rc = upatch_open(file, &u);
 	if (rc) {
-		pr_err("open %s: %s", file, strerror(-rc));
+		pr_err("upatch load: cannot open %s (staged copy of %s): %s",
+		       file, rep.path, strerror(-rc));
 		rep_fail(&rep, "parse", "parser_rejected", -rc,
 			 "cannot open .upatch");
 		goto done;
@@ -2687,8 +2712,7 @@ static int cmd_upatch_load(int argc, const char **argv)
 	have_id = true;
 
 	if (no_precheck) {
-		pr_warn("upatch load: --no-precheck, pre-flight state check "
-			"skipped");
+		pr_warn("upatch load: --no-precheck given, skipping the pre-flight checks");
 	} else if (upatch_preflight(expect_chain, &rep) != 0) {
 		if (!rep.category)
 			rep_fail(&rep, "pre_flight", "tampered", EPERM,
@@ -2699,7 +2723,8 @@ static int cmd_upatch_load(int argc, const char **argv)
 	if (eventlog_room(&rep, "load") != 0)
 		goto done;
 	if (have_id && !safe_upatch_name(name)) {
-		pr_err("upatch load: refusing unsafe upatch name '%s'", name);
+		pr_err("upatch load: refusing the upatch name '%s': a name may hold only letters, digits, '.', '_' and '-', and must not start with '.'",
+		       name);
 		rep_fail(&rep, "parse", "parser_rejected", 0,
 			 "unsafe upatch name");
 		goto done;
@@ -2724,11 +2749,11 @@ static int cmd_upatch_load(int argc, const char **argv)
 	 */
 	rc = persist_upatch(file, name);
 	if (rc) {
-		pr_err("upatch load: loaded but failed to persist to %s: %s "
-		       "-- not measured", SHIRUDO_UPATCHES_DIR, strerror(-rc));
+		pr_err("upatch load: %s is loaded, but cannot be archived in %s: %s; it was not measured",
+		       name, SHIRUDO_UPATCHES_DIR, strerror(-rc));
 		unload_unmeasured(name);
 		rep_fail(&rep, "persist", "unknown", -rc,
-			 "persist failed; the load was undone");
+			 "archiving failed; the load was undone");
 		goto done;
 	}
 
@@ -2738,8 +2763,8 @@ static int cmd_upatch_load(int argc, const char **argv)
 		if (!measured)
 			unload_unmeasured(name);
 		rep_fail(&rep, "tpm_extend", "tpm_error", EIO, measured ?
-			 "eventlog append failed after the extend" :
-			 "chain extend failed; the load was undone");
+			 "the TPM register was extended, but the eventlog record was not written" :
+			 "the TPM register could not be extended; the load was undone");
 		goto done;
 	}
 	rep.ok = true;
@@ -2747,6 +2772,8 @@ static int cmd_upatch_load(int argc, const char **argv)
 	rep.tpm_present = rep.chain_after[0] != '\0';
 	ret = 0;
 done:
+	if (ret != 0)
+		rep_print_failure("load", name, &rep);
 	if (ret == 1 && rep.category &&
 	    !strcmp(rep.category, "attach_target_missing"))
 		ret = SHIRUDO_UPATCH_INSTALL_TARGET_MISSING;
@@ -2793,7 +2820,8 @@ static int cmd_upatch_unload(int argc, const char **argv)
 	 */
 	rc = stage_upatch(file, staged, sizeof(staged));
 	if (rc) {
-		pr_err("upatch unload: read %s: %s", file, strerror(-rc));
+		pr_err("upatch unload: cannot read %s: %s", file,
+		       strerror(-rc));
 		rep_fail(&rep, "parse", "parser_rejected", -rc,
 			 "cannot read .upatch");
 		goto done;
@@ -2802,14 +2830,15 @@ static int cmd_upatch_unload(int argc, const char **argv)
 
 	rc = upatch_open(file, &u);
 	if (rc) {
-		pr_err("open %s: %s", file, strerror(-rc));
+		pr_err("upatch unload: cannot open %s (staged copy of %s): %s",
+		       file, rep.path, strerror(-rc));
 		rep_fail(&rep, "parse", "parser_rejected", -rc,
 			 "cannot open .upatch");
 		goto done;
 	}
 	if (!upatch_is_unload(&u)) {
-		pr_err("upatch unload: %s is a LOAD upatch; use "
-		       "`shirudo upatch load`", file);
+		pr_err("upatch unload: %s is a LOAD upatch, not an unload directive; load it with `shirudo upatch load`",
+		       rep.path);
 		rep_fail(&rep, "parse", "parser_rejected", 0,
 			 "is a LOAD upatch");
 		upatch_close(&u);
@@ -2823,9 +2852,8 @@ static int cmd_upatch_unload(int argc, const char **argv)
 	if (!upatch_signed_name(&u) || !upatch_signed_unload_payload(&u) ||
 	    memcmp(upatch_signed_name(&u), u.hdr.name,
 		   SHIRUDO_UPATCH_NAME_MAX)) {
-		pr_err("upatch unload: the target of %s is not "
-		       "signature-covered or differs from the header; rebuild "
-		       "the directive", rep.path);
+		pr_err("upatch unload: the signature of %s does not cover the name and payload of the upatch to unload, or the signed name differs from the header",
+		       rep.path);
 		rep_fail(&rep, "parse", "parser_rejected", 0,
 			 "directive target not signed");
 		upatch_close(&u);
@@ -2839,7 +2867,8 @@ static int cmd_upatch_unload(int argc, const char **argv)
 	hex_encode(payload, sizeof(payload), rep.payload_hex);
 
 	if (!safe_upatch_name(name)) {
-		pr_err("upatch unload: refusing unsafe upatch name '%s'", name);
+		pr_err("upatch unload: refusing the upatch name '%s': a name may hold only letters, digits, '.', '_' and '-', and must not start with '.'",
+		       name);
 		rep_fail(&rep, "parse", "parser_rejected", 0,
 			 "unsafe upatch name");
 		goto done;
@@ -2849,8 +2878,7 @@ static int cmd_upatch_unload(int argc, const char **argv)
 		goto done;
 
 	if (no_precheck) {
-		pr_warn("upatch unload: --no-precheck, pre-flight state check "
-			"skipped");
+		pr_warn("upatch unload: --no-precheck given, skipping the pre-flight checks");
 	} else if (upatch_preflight(expect_chain, &rep) != 0) {
 		if (!rep.category)
 			rep_fail(&rep, "pre_flight", "tampered", EPERM,
@@ -2863,7 +2891,8 @@ static int cmd_upatch_unload(int argc, const char **argv)
 
 	/* A bad signature fails here, before anything is removed. */
 	if (upatch_apply(file, true, &rep) != 0) {
-		pr_err("upatch unload: signature verification failed; refusing");
+		pr_err("upatch unload: cannot verify the signature of %s; nothing was unloaded",
+		       rep.path);
 		goto done;
 	}
 
@@ -2880,18 +2909,17 @@ static int cmd_upatch_unload(int argc, const char **argv)
 		xrc = get_pin_payload(name, live);
 		if (xrc == 0) {
 			if (!ct_eq(live, payload, sizeof(payload))) {
-				pr_err("upatch unload: payload_mismatch -- the "
-				       "upatch loaded under '%s' is not what the "
-				       "directive expects; refusing", name);
+				pr_err("upatch unload: refusing (category: payload_mismatch): the upatch loaded as '%s' has a different payload than the directive names",
+				       name);
 				rep_fail(&rep, "pin", "payload_mismatch", EPERM,
 					 "loaded payload does not match directive");
 				goto done;
 			}
-			pr_info("upatch unload: payload matches for '%s'", name);
+			pr_info("upatch unload: the payload of '%s' matches the directive",
+				name);
 		} else if (xrc != -ENOENT) {
-			pr_err("upatch unload: cannot read the payload "
-			       "recorded for '%s': %s; refusing", name,
-			       strerror(-xrc));
+			pr_err("upatch unload: refusing, because the payload recorded on the pin of '%s' cannot be read: %s",
+			       name, strerror(-xrc));
 			rep_fail(&rep, "pin", "payload_mismatch", -xrc,
 				 "payload xattr unreadable");
 			goto done;
@@ -2900,9 +2928,10 @@ static int cmd_upatch_unload(int argc, const char **argv)
 
 	if (!upatch_is_pinned(name)) {
 		if (unlink(persisted) != 0 && errno != ENOENT)
-			pr_warn("upatch unload: could not remove %s: %s",
+			pr_warn("upatch unload: cannot remove the archived copy %s: %s",
 				persisted, strerror(errno));
-		pr_info("upatch unload: %s already unloaded (no pin)", name);
+		pr_info("upatch unload: %s is already unloaded (it has no pin)",
+			name);
 		pr_audit("upatch unload: name=%s already_unloaded", name);
 		rep.ok = true;
 		rep.phase = "done";
@@ -2923,22 +2952,22 @@ static int cmd_upatch_unload(int argc, const char **argv)
 			       name, payload, NULL, rep.chain_after,
 			       NULL) != 0) {
 		rep_fail(&rep, "tpm_extend", "tpm_error", EIO,
-			 "chain extend failed; nothing detached");
+			 "the TPM register could not be extended; nothing was detached");
 		goto done;
 	}
 
 	rc = remove_pin_dir(name);
 	if (rc) {
-		pr_err("upatch unload: measured, but failed to remove the pin "
-		       "for %s: %s; repeat the unload", name, strerror(-rc));
+		pr_err("upatch unload: the unload of %s was measured, but removing its pins failed: %s",
+		       name, strerror(-rc));
 		rep_fail(&rep, "pin", "detach_failed", -rc,
 			 "pin removal failed after the event was measured");
 		goto done;
 	}
-	pr_info("upatch unload: detached + unpinned %s", name);
+	pr_info("upatch unload: detached %s and removed its pins", name);
 
 	if (unlink(persisted) != 0 && errno != ENOENT)
-		pr_warn("upatch unload: could not remove %s: %s",
+		pr_warn("upatch unload: cannot remove the archived copy %s: %s",
 			persisted, strerror(errno));
 	rep.ok = true;
 	rep.phase = "done";
@@ -2946,14 +2975,7 @@ static int cmd_upatch_unload(int argc, const char **argv)
 	ret = 0;
 done:
 	if (ret != 0)
-		pr_err("upatch unload failed: name=%s phase=%s category=%s "
-		       "err=%d (%s) message=%s",
-		       name[0] ? name : "(unknown)",
-		       rep.phase ? rep.phase : "(unknown)",
-		       rep.category ? rep.category : "(unknown)",
-		       rep.err,
-		       rep.err ? strerror(rep.err) : "none",
-		       rep.message[0] ? rep.message : "(none)");
+		rep_print_failure("unload", name, &rep);
 	if (staged[0])
 		unlink(staged);
 	if (report)
@@ -2996,14 +3018,14 @@ int shirudo_upatch_purge(const char *name, const char *reason)
 			return rc;
 		rc = remove_pin_dir(name);
 		if (rc) {
-			pr_err("upatch purge: measured, but failed to remove "
-			       "the pin for %s: %s", name, strerror(-rc));
+			pr_err("upatch purge: the removal of %s was measured, but removing its pins failed: %s",
+			       name, strerror(-rc));
 			return rc;
 		}
 	}
 	if (unlink(persisted) != 0 && errno != ENOENT) {
-		pr_err("upatch purge: could not remove %s: %s", persisted,
-		       strerror(errno));
+		pr_err("upatch purge: cannot remove the archived copy %s: %s",
+		       persisted, strerror(errno));
 		return -errno;
 	}
 	pr_audit("upatch purge: name=%s reason=%s %s", name, reason,
@@ -3171,8 +3193,8 @@ static int export_one_map(const char *upatch, const char *map,
 				    peek ? SHIRUDO_MAP_READ_PEEK : 0,
 				    &v);
 	if (rc) {
-		pr_err("upatch map: read %s/%s: %s", upatch, map,
-		       strerror(-rc));
+		pr_err("upatch map: cannot read map %s of upatch %s: %s", map,
+		       upatch, strerror(-rc));
 		map_view_free(&v);
 		return 1;
 	}
@@ -3180,10 +3202,10 @@ static int export_one_map(const char *upatch, const char *map,
 		rc = append_one_map_json(json_path, &v);
 		if (rc) {
 			if (json_path)
-				pr_err("upatch map: append JSON to %s: %s",
+				pr_err("upatch map: cannot append the JSON record to %s: %s",
 				       json_path, strerror(-rc));
 			else
-				pr_err("upatch map: print JSON: %s",
+				pr_err("upatch map: cannot write the JSON record to standard output: %s",
 				       strerror(-rc));
 			ret = 1;
 		}
@@ -3199,8 +3221,8 @@ static int export_one_map(const char *upatch, const char *map,
 			rc = shirudo_upatch_maps_otel_send_decoded(&v, decoder_signal,
 								   otel_opts);
 		if (rc) {
-			pr_err("upatch map: OTLP export %s/%s: %s", upatch, map,
-			       strerror(-rc));
+			pr_err("upatch map: cannot export map %s of upatch %s over OTLP: %s",
+			       map, upatch, strerror(-rc));
 			ret = 1;
 		}
 	}
@@ -3237,21 +3259,21 @@ static int cmd_upatch_map(int argc, const char **argv)
 		}
 		if (strcmp(a, "--all") == 0) {
 			if (all) {
-				fprintf(stderr, "upatch map: duplicate --all\n");
+				fprintf(stderr, "upatch map: --all given more than once\n");
 				return 2;
 			}
 			all = true;
 		} else if (strncmp(a, "--json=", 7) == 0) {
 			if (json_output || !a[7]) {
 				fprintf(stderr,
-					"upatch map: invalid or duplicate --json\n");
+					"upatch map: --json=<path> needs a path, and --json may be given only once\n");
 				return 2;
 			}
 			json_output = true;
 			json_path = a + 7;
 		} else if (strcmp(a, "--json") == 0) {
 			if (json_output) {
-				fprintf(stderr, "upatch map: duplicate --json\n");
+				fprintf(stderr, "upatch map: --json given more than once\n");
 				return 2;
 			}
 			json_output = true;
@@ -3261,29 +3283,26 @@ static int cmd_upatch_map(int argc, const char **argv)
 			peek = true;
 		} else if (strcmp(a, "--otel") == 0) {
 			if (otel) {
-				fprintf(stderr, "upatch map: duplicate --otel\n");
+				fprintf(stderr, "upatch map: --otel given more than once\n");
 				return 2;
 			}
 			otel = true;
 		} else if (strncmp(a, "--otel-endpoint=", 16) == 0) {
 			if (otel_opts.endpoint || !a[16]) {
-				fprintf(stderr, "upatch map: invalid or duplicate "
-					"--otel-endpoint\n");
+				fprintf(stderr, "upatch map: --otel-endpoint needs a URL and may be given only once\n");
 				return 2;
 			}
 			otel_opts.endpoint = a + 16;
 		} else if (strncmp(a, "--tenant-id=", 12) == 0) {
 			if (otel_opts.tenant_id ||
 			    !tenant_id_valid(a + 12)) {
-				fprintf(stderr, "upatch map: invalid or duplicate "
-					"--tenant-id; expected 1..128 characters using "
-					"A-Z, a-z, 0-9, '.', '_', or '-'\n");
+				fprintf(stderr, "upatch map: --tenant-id needs 1 to 128 characters from A-Z, a-z, 0-9, '.', '_' and '-', and may be given only once\n");
 				return 2;
 			}
 			otel_opts.tenant_id = a + 12;
 		} else if (strcmp(a, "--otel-insecure") == 0) {
 			if (insecure_set) {
-				fprintf(stderr, "upatch map: duplicate --otel-insecure\n");
+				fprintf(stderr, "upatch map: --otel-insecure given more than once\n");
 				return 2;
 			}
 			insecure_set = true;
@@ -3292,20 +3311,18 @@ static int cmd_upatch_map(int argc, const char **argv)
 			__u64 value;
 
 			if (retries_set || !a[15]) {
-				fprintf(stderr, "upatch map: invalid or duplicate "
-					"--otel-retries\n");
+				fprintf(stderr, "upatch map: --otel-retries needs a value and may be given only once\n");
 				return 2;
 			}
 			if (parse_u64(a + 15, strlen(a + 15), 10, &value)) {
-				fprintf(stderr, "upatch map: --otel-retries must be 0..10\n");
+				fprintf(stderr, "upatch map: --otel-retries must be a number from 0 to 10\n");
 				return 2;
 			}
 			otel_opts.retries = (__u32)value;
 			retries_set = true;
 		} else if (strncmp(a, "--s3-uri=", 9) == 0) {
 			if (otel_opts.s3_uri || !a[9]) {
-				fprintf(stderr, "upatch map: invalid or duplicate "
-					"--s3-uri\n");
+				fprintf(stderr, "upatch map: --s3-uri needs a URI and may be given only once\n");
 				return 2;
 			}
 			otel_opts.s3_uri = a + 9;
@@ -3326,12 +3343,12 @@ static int cmd_upatch_map(int argc, const char **argv)
 		int rc = config_load(&export_cfg);
 
 		if (rc) {
-			pr_err("upatch map: load export configuration: %s",
+			pr_err("upatch map: cannot load the map export configuration: %s",
 			       strerror(-rc));
 			return 1;
 		}
 		if (!export_cfg.map_export_valid) {
-			pr_err("upatch map: invalid map_export configuration");
+			pr_err("upatch map: the map_export.* settings in the configuration are invalid");
 			return 2;
 		}
 		if (!json_output && export_cfg.map_export_json_path[0]) {
@@ -3368,16 +3385,16 @@ static int cmd_upatch_map(int argc, const char **argv)
 		if ((otel_opts.endpoint || otel_opts.tenant_id || insecure_set ||
 		     retries_set ||
 		     otel_opts.s3_uri) && !otel) {
-			fprintf(stderr, "upatch map: OTLP options require --otel\n");
+			fprintf(stderr, "upatch map: the OTLP options need --otel\n");
 			return 2;
 		}
 		if (all && (upatch || map)) {
 			fprintf(stderr,
-				"upatch map: --all does not accept positional arguments\n");
+				"upatch map: --all takes no <upatch> or <map> argument\n");
 			return 2;
 		}
 		if (otel && !all && (!upatch || !map)) {
-			fprintf(stderr, "upatch map: --otel requires <upatch> and <map>\n");
+			fprintf(stderr, "upatch map: --otel needs <upatch> and <map>, or --all\n");
 			return 2;
 		}
 	}
@@ -3454,10 +3471,10 @@ static int cmd_upatch_map(int argc, const char **argv)
 
 			if (rc) {
 				if (json_path)
-					pr_err("upatch map: append JSON to %s: %s",
+					pr_err("upatch map: cannot append the JSON record to %s: %s",
 					       json_path, strerror(-rc));
 				else
-					pr_err("upatch map: print JSON: %s",
+					pr_err("upatch map: cannot write the JSON record to standard output: %s",
 					       strerror(-rc));
 				ret = 1;
 			}
@@ -3601,7 +3618,7 @@ static void render_one_map_text(const char *upatch, const char *map,
 
 	printf("\n== Map: %s ==\n", map);
 	if (rc != 0) {
-		printf("  (read failed: %s)\n", strerror(-rc));
+		printf("  (cannot read the map: %s)\n", strerror(-rc));
 		map_view_free(&v);
 		return;
 	}
@@ -3636,7 +3653,7 @@ static void render_get_text(const struct upatch_get_ctx *c,
 
 	printf("\nSource (kernel BTF line_info):\n\n");
 	if (c->n_ents == 0)
-		printf("  (no line info -- built without `clang -g`?)\n");
+		printf("  (no line info; was the upatch built without `clang -g`?)\n");
 	else
 		dump_line_info_text(c->ents, c->n_ents);
 
@@ -3706,7 +3723,7 @@ static int render_get_json(const struct upatch_get_ctx *c,
 	json_obj_close(&e);	/* upatch */
 	json_obj_close(&e);	/* root */
 	if (e.err) {
-		fprintf(stderr, "upatch get: json encode failed: %s\n",
+		fprintf(stderr, "upatch get: cannot encode the JSON output: %s\n",
 			strerror(-e.err));
 		ret = 1;
 	} else {
@@ -3753,13 +3770,17 @@ static int cmd_upatch_get(int argc, const char **argv)
 		return 2;
 	}
 	if (!safe_upatch_name(want)) {
-		pr_err("upatch get: invalid name '%s'", want);
+		pr_err("upatch get: invalid upatch name '%s'", want);
 		return 2;
 	}
 
 	rc = upatch_get_collect(want, &ctx);
 	if (rc != 0) {
-		pr_err("upatch get: '%s': %s", want, strerror(-rc));
+		pr_err("upatch get: cannot read the loaded upatch '%s': %s",
+		       want, strerror(-rc));
+		if (rc == -ENOENT)
+			pr_hint("'%s' is not loaded: `shirudo upatch list` shows the loaded upatches",
+				want);
 		upatch_get_ctx_free(&ctx);
 		return 1;
 	}
@@ -3778,8 +3799,8 @@ static int cmd_upatch_get(int argc, const char **argv)
 
 static const struct shirudo_help_item upatch_subcmds[] = {
 	{ "load",   "load a signed .upatch into the target kernel (target-only)" },
-	{ "unload", "apply a signed UNLOAD directive (forward chain extension)" },
-	{ "list",   "list persisted + bpffs-pinned upatches on this host" },
+	{ "unload", "apply a signed UNLOAD directive (measured in the TPM register)" },
+	{ "list",   "list persisted and bpffs-pinned upatches on this host" },
 	{ "info",   "describe a .upatch file (any host; offline, no kernel state)" },
 	{ "get",    "dump source of a loaded upatch from the target kernel (BTF line_info)" },
 	{ "map",    "read pinned map contents (target-only; BTF type-aware)" },
@@ -3792,9 +3813,8 @@ static const struct shirudo_help_section upatch_help_sections[] = {
 
 static const struct shirudo_help upatch_help = {
 	.usage      = "shirudo upatch <subcommand> [<args>...]",
-	.summary    = "Manage signed BPF programs (.upatch). load/unload are "
-		      "target-only;\nlist/info/get are read-only and run on "
-		      "either side.",
+	.summary    = "Manage signed BPF programs (.upatch). load and unload are target-only;\n"
+		      "list, info and get are read-only and run on either side.",
 	.sections   = upatch_help_sections,
 	.n_sections = ARRAY_SIZE(upatch_help_sections),
 };

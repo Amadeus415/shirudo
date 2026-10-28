@@ -47,13 +47,11 @@ static inline const char *map_skip_reason(__u32 type)
 {
 	switch (type) {
 	case BPF_MAP_TYPE_RINGBUF:
-		return "use `shirudo upatch ringbuf` (future work)";
+		return "a ring buffer is a stream, not a table to snapshot";
 	case BPF_MAP_TYPE_PERF_EVENT_ARRAY:
-		return "perf-event-array: use `shirudo upatch perfbuf` "
-		       "(future work)";
+		return "a perf event array is a stream, not a table to snapshot";
 	case BPF_MAP_TYPE_STACK_TRACE:
-		return "stack-trace: use `shirudo upatch stacktrace` "
-		       "(future work)";
+		return "stack trace maps are not exported yet";
 	case BPF_MAP_TYPE_PROG_ARRAY:
 		return "prog-array carries function pointers; not dumpable";
 	case BPF_MAP_TYPE_ARENA:

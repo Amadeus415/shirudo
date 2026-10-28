@@ -1516,7 +1516,7 @@ void upatch_maps_print_detail(const struct shirudo_map_view *v)
 		printf("Type:                %s\n", v->type_name);
 	printf("Max entries:         %u\n", v->max_entries);
 	if (v->skipped) {
-		printf("Status:              skipped -- %s\n",
+		printf("Status:              skipped: %s\n",
 		       v->skipped_reason ? v->skipped_reason : "(no reason)");
 		return;
 	}
