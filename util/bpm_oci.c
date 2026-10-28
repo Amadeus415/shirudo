@@ -912,9 +912,10 @@ int bpm_oci_get_file(struct bpm_oci_client *c, const char *url,
 			rc = curl_once(c, "GET", url, accept, auth, &r, &sink, true);
 		}
 	}
+	/* A failed write ends the transfer too; it, not the transfer, is the cause. */
 	if (sink.overflow)
 		rc = -EFBIG;
-	if (!rc && sink.err)
+	else if (sink.err)
 		rc = sink.err;
 	if (!rc && (r.status < 200 || r.status >= 300)) {
 		rc = r.status == 404 ? -ENOENT : -EACCES;
