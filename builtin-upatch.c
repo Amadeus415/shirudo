@@ -2308,6 +2308,12 @@ static int upatch_chain_event_locked(const char *tag, const char *type,
 	return 0;
 }
 
+/* A register other than the one init set up is a verdict, not a TPM fault. */
+static const char *chain_event_category(int rc, bool measured)
+{
+	return !measured && rc == -EACCES ? "tampered" : "tpm_error";
+}
+
 static int upatch_chain_event(const char *tag, const char *type,
 			      const char *op, const char *name,
 			      const __u8 payload[32], const char *reason,
@@ -2766,12 +2772,14 @@ static int cmd_upatch_load(int argc, const char **argv)
 		goto done;
 	}
 
-	if (upatch_chain_event("shirudo-upatch", "upatch_load", "load",
-			       name, payload, NULL, rep.chain_after,
-			       &measured) != 0) {
+	rc = upatch_chain_event("shirudo-upatch", "upatch_load", "load",
+				name, payload, NULL, rep.chain_after,
+				&measured);
+	if (rc) {
 		if (!measured)
 			unload_unmeasured(name);
-		rep_fail(&rep, "tpm_extend", "tpm_error", EIO, measured ?
+		rep_fail(&rep, "tpm_extend", chain_event_category(rc, measured),
+			 rc, measured ?
 			 "the TPM register was extended, but the eventlog record was not written" :
 			 "the TPM register could not be extended; the load was undone");
 		goto done;
@@ -2957,11 +2965,11 @@ static int cmd_upatch_unload(int argc, const char **argv)
 	 * fails after the event leaves a shield the register says is gone,
 	 * which the next status reports and the operator can repeat.
 	 */
-	if (upatch_chain_event("shirudo-unload", "upatch_unload", "unload",
-			       name, payload, NULL, rep.chain_after,
-			       NULL) != 0) {
-		rep_fail(&rep, "tpm_extend", "tpm_error", EIO,
-			 "the TPM register could not be extended; nothing was detached");
+	rc = upatch_chain_event("shirudo-unload", "upatch_unload", "unload",
+				name, payload, NULL, rep.chain_after, NULL);
+	if (rc) {
+		rep_fail(&rep, "tpm_extend", chain_event_category(rc, false),
+			 rc, "the TPM register could not be extended; nothing was detached");
 		goto done;
 	}
 
