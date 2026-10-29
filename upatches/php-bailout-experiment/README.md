@@ -106,6 +106,55 @@ The test keeps its output and downloaded PHP under build/, outside Git.
 prepare-vm.sh must run again after rebuilding the VM bundle, because each
 bundle has its own signing key.
 
+## Apache worker demo
+
+The CLI test above checks Shirudo's load path. This second demo runs
+PHP 8.4.26 as Apache's `mod_php` on an x86-64 Shirudo VM. It uses the
+prefork MPM, one worker, and a listener on `127.0.0.1:18080`. The
+operator builds `libphp.so` in a Docker container from the same
+SHA-256-checked PHP source and signs a probe for that library's build
+ID. The VM installs Apache and copies the library to the exact path
+named by the signed probe.
+
+Prepare the same VM bundle as above, then run:
+
+~~~sh
+BUNDLE="$PWD/build/test-vm/host-bundle-bpf-next-verity"
+with_memlock upatches/php-bailout-experiment/apache/prepare-vm.sh "$BUNDLE"
+
+KERNEL="$PWD/artifacts/bpf-next-kernel-debs"
+sudo env TEST_VM_KERNEL="$KERNEL/bzImage" \
+    TEST_VM_KERNEL_ARTIFACT_DIR="$KERNEL" \
+    TEST_VM_HOST_BUNDLE="$BUNDLE" TEST_VM_SUITE=php2shell \
+    VM_MODE=interactive VM_NAME=php2shell-apache \
+    testing/vm/run.sh
+
+sudo env VM_NAME=php2shell-apache \
+    VM_SSH_COMMAND='bash /mnt/shirudo-src/upatches/php-bailout-experiment/apache/guest-test.sh' \
+    testing/vm/run.sh --ssh
+
+sudo env VM_NAME=php2shell-apache testing/vm/run.sh --stop
+~~~
+
+The host needs Docker and the guest needs network access to install
+Apache. The demo starts Apache directly. This also lets a checkout under
+`/tmp` supply the module even when the Apache systemd service uses a
+private `/tmp`. The guest script stops Apache and unloads
+the signed upatch when it finishes.
+
+The script makes only local, benign HTTP requests. Before loading,
+fatal and memory-limit errors run the PHP shutdown handler in the
+same worker. With the probe loaded, those two requests lose their
+connections, their shutdown marker is absent, and a new worker serves
+the next healthy request. It checks for two probe hits and zero signal
+errors. Signed unload restores the original behavior. A passing run
+ends with `APACHE_PHP_BAILOUT_DEMO_PASS`.
+
+In a fresh VM using kernel CI run 40839802208, the baseline requests
+all used worker PID 2953. The two guarded errors closed their
+connections; the next healthy request used PID 3024. Shirudo reported
+`{ hits=2, signal_errors=0 }` and measured both load and unload.
+
 ## Scope of the result
 
 This experiment was tested with the PHP CLI binary and fixture above on an
@@ -113,12 +162,16 @@ x86-64 Shirudo VM using kernel CI run 40839802208, repository commit
 e28420aa2dae03e7c787af5fbd4128583533319f. The signed load, both
 counters, the build-ID refusal and both signed unloads passed.
 
-This does not establish protection against every PHP2Shell path. Code may
-run before the bailout probe, and some error paths may never enter
-_zend_bailout. Existing worker state would remain until workers restart.
-FPM, Apache/libphp, extensions, JIT, ZTS, other architectures and other
-kernel scheduling behavior have not been tested. The probe must be built
-for the ELF actually mapped by each worker.
+The complete fix is to upgrade to a patched PHP release, such as 8.4.27,
+and restart every Apache worker. The upstream changes cover more request
+state and error paths than this one probe. The benign tests here do not
+exercise a PHP2Shell payload or establish protection against every path.
+
+Code may run before the bailout probe, and some error paths never enter
+_zend_bailout. The probe does not repair state already retained by a
+worker. The Apache/libphp demo above covers non-ZTS prefork only. FPM,
+extensions, JIT, ZTS, other architectures and other kernel scheduling
+behavior remain untested. Sign separately for the ELF each worker maps.
 
 Upstream advisories:
 - https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w
