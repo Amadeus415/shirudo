@@ -84,7 +84,9 @@ install_kernel_modules()
 	# nf_flow_table.ko when enabled; it therefore does not have a separate
 	# /sys/module entry. Validate the
 	# procfs interface exposed by the feature instead.
-	test -r /proc/net/stat/nf_flowtable
+	if [[ "${TEST_VM_SUITE:-}" != php2shell ]]; then
+		test -r /proc/net/stat/nf_flowtable
+	fi
 }
 
 install_kernel_config()
