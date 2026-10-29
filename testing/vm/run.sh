@@ -330,8 +330,15 @@ make_seed()
 
 	tool="$(seed_tool)" || die "no tool to build the cloud-init seed"
 	if [[ "$tool" == cloud-localds ]]; then
-		cloud-localds --network-config="$NETWORK_CONFIG" "$SEED" \
-			"$USER_DATA" "$META_DATA"
+		if [[ -r "$KERNEL_ARTIFACT_DIR/kernel.config" ]] &&
+		   ! grep -qx 'CONFIG_ISO9660_FS=y' "$KERNEL_ARTIFACT_DIR/kernel.config" &&
+		   grep -qx 'CONFIG_VFAT_FS=y' "$KERNEL_ARTIFACT_DIR/kernel.config"; then
+			cloud-localds --filesystem=vfat --network-config="$NETWORK_CONFIG" \
+				"$SEED" "$USER_DATA" "$META_DATA"
+		else
+			cloud-localds --network-config="$NETWORK_CONFIG" "$SEED" \
+				"$USER_DATA" "$META_DATA"
+		fi
 		return
 	fi
 	writer=("$tool")
