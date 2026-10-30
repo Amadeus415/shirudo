@@ -176,3 +176,53 @@ behavior remain untested. Sign separately for the ELF each worker maps.
 Upstream advisories:
 - https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w
 - https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp
+
+## Compare the broad and selective guards
+
+The Apache preparation script also signs two guards for the exact
+`libphp.so` build. The broad guard stops OOM, bailout, every diagnostic,
+and every multipart request. The selective guard allows ordinary script
+warnings and multipart forms while stopping OOM, bailout, fatal or early
+diagnostics, and early session initialization.
+
+Build both tested fixture sets:
+
+~~~sh
+BUNDLE="$PWD/build/test-vm/host-bundle-bpf-next-verity"
+with_memlock upatches/php-bailout-experiment/apache/prepare-vm.sh "$BUNDLE"
+PHP_DEMO_VERSION=8.5.11 \
+    with_memlock upatches/php-bailout-experiment/apache/prepare-vm.sh "$BUNDLE"
+~~~
+
+Run each version in a fresh VM. Use the same kernel and bundle paths as the
+Apache demo above:
+
+~~~sh
+sudo env TEST_VM_KERNEL="$KERNEL/bzImage" \
+    TEST_VM_KERNEL_ARTIFACT_DIR="$KERNEL" \
+    TEST_VM_HOST_BUNDLE="$BUNDLE" TEST_VM_SUITE=php2shell \
+    VM_MODE=interactive VM_NAME=php2shell-guards \
+    testing/vm/run.sh
+
+sudo env VM_NAME=php2shell-guards \
+    VM_SSH_COMMAND='bash /mnt/shirudo-src/upatches/php-bailout-experiment/apache/guard-test.sh' \
+    testing/vm/run.sh --ssh
+~~~
+
+For PHP 8.5.11, set `PHP_DEMO_VERSION=8.5.11` in `VM_SSH_COMMAND` and
+boot a fresh VM with that fixture set. A passing comparison ends with
+`APACHE_PHP_GUARD_PASS`.
+
+The test checks a healthy page, an ordinary warning, an ordinary multipart
+form, session upload progress, a harmless fatal error, a memory-limit error,
+and a shutdown warning. It verifies signed load and unload, worker
+replacement, the reason counters, and zero signal or task-state errors.
+
+The broad guard drops the ordinary warning and multipart form. The selective
+guard preserves those requests and drops the other tested error paths. These
+controls show which boundaries the probes stop and the collateral damage of
+each mode. They do not reproduce an invalid memory access, so they do not
+establish complete PHP2Shell coverage.
+
+`Documentation/upatches/php-worker-guards.rst` explains the design, test
+results, limits, and relationship to the upstream PHP fix.

@@ -26,3 +26,4 @@ published package. :doc:`/upatches/attach-kinds` and
    publishing
    debugging
    examples
+   php-worker-guards
