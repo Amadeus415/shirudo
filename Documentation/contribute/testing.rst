@@ -105,9 +105,10 @@ A shell test is named ``t<F><K><NN>-<what>.sh``:
      - ``functional/signing/``
      - Keys, signatures, vouching, revocation and the trusted set
    * - 3
-     - ``functional/upatch/``
+     - ``functional/upatch/``, ``functional/php2shell/``
      - The ``.upatch`` container, attach metadata, decoders,
-       serializers, load, unload and ``upatch get``
+       serializers, load, unload, ``upatch get`` and the optional
+       signed PHP guard VM tests
    * - 4
      - ``functional/tpm/``
      - TPM structures, the measurement register, the eventlog,
