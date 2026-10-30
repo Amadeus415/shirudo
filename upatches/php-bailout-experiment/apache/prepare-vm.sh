@@ -5,10 +5,25 @@ set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/../../.." && pwd)
 apache="$repo/upatches/php-bailout-experiment/apache"
-work="$repo/build/php2shell/apache-demo"
-archive="$repo/build/php2shell/php-8.4.26.tar.xz"
-target="$work/php-8.4.26/.libs/libphp.so"
-archive_sha256=32a2de53862ad44ed4a5005244ce4f1b50c271e74dced215449a4443b40569f1
+php_version=${PHP_DEMO_VERSION:-8.4.26}
+case "$php_version" in
+    8.4.26)
+        archive_sha256=32a2de53862ad44ed4a5005244ce4f1b50c271e74dced215449a4443b40569f1
+        work="$repo/build/php2shell/apache-demo"
+        fixture_name=php2shell
+        ;;
+    8.5.11)
+        archive_sha256=d9be75c08e8c316f4c8f4194d8fbe1750a15f6a6d9d4e3fe72082abeeb800360
+        work="$repo/build/php2shell/apache-demo-8.5.11"
+        fixture_name=php2shell-8.5.11
+        ;;
+    *)
+        printf 'unsupported PHP demo version: %s\n' "$php_version" >&2
+        exit 2
+        ;;
+esac
+archive="$repo/build/php2shell/php-$php_version.tar.xz"
+target="$work/php-$php_version/.libs/libphp.so"
 
 [ "$#" -eq 1 ] || {
     printf 'usage: %s <test-vm-host-bundle>\n' "$0" >&2
@@ -16,7 +31,7 @@ archive_sha256=32a2de53862ad44ed4a5005244ce4f1b50c271e74dced215449a4443b40569f1
 }
 bundle=$(realpath "$1")
 keys="$bundle.operator/keys"
-fixtures="$bundle/fixtures/php2shell"
+fixtures="$bundle/fixtures/$fixture_name"
 builder="$repo/tools/shirudo-build/shirudo-build"
 mkdir -p "$work" "$fixtures"
 
@@ -33,7 +48,7 @@ cmp -s "$keys/cert.der" "$bundle/fixtures/cert.der" || {
     exit 1
 }
 if [ ! -s "$archive" ]; then
-    curl -fL --retry 3 https://www.php.net/distributions/php-8.4.26.tar.xz \
+    curl -fL --retry 3 "https://www.php.net/distributions/php-$php_version.tar.xz" \
         -o "$archive.tmp"
     mv "$archive.tmp" "$archive"
 fi
@@ -45,13 +60,14 @@ docker build -q -t shirudo-php2shell-apache-demo:local \
         exit 1
     }
 docker run --rm --network none --user "$(id -u):$(id -g)" \
-    -e HOME=/tmp -v "$work:/work/apache-demo" -v "$archive:/php-src.tar.xz:ro" \
+    -e HOME=/tmp -e PHP_DEMO_VERSION="$php_version" \
+    -v "$work:/work/apache-demo" -v "$archive:/php-src.tar.xz:ro" \
     shirudo-php2shell-apache-demo:local bash -lc '
         set -euo pipefail
-        if [ ! -d /work/apache-demo/php-8.4.26 ]; then
+        if [ ! -d /work/apache-demo/php-$PHP_DEMO_VERSION ]; then
             tar -xJf /php-src.tar.xz -C /work/apache-demo
         fi
-        cd /work/apache-demo/php-8.4.26
+        cd /work/apache-demo/php-$PHP_DEMO_VERSION
         if [ ! -f config.status ]; then
             CFLAGS="-O2 -g" LDFLAGS="-Wl,--build-id=sha1" \
                 ./configure --disable-all --with-apxs2=/usr/bin/apxs2 \
@@ -70,27 +86,50 @@ docker run --rm --network none --user "$(id -u):$(id -g)" \
     exit 1
 }
 
-object="$work/php-bailout-apache.bpf.o"
-load="$work/php-bailout-apache.upatch"
-unload="$work/php-bailout-apache.unload.upatch"
-clang -target bpf -D__TARGET_ARCH_x86 -O2 -g -Wall -Wextra -Werror \
-    -Wno-missing-declarations -Wno-unused-parameter \
-    -I"$repo/vendor/linux" -I"$repo/vendor/libbpf" \
-    "-DPHP_BAILOUT_TARGET=\"$target\"" \
-    -c "$repo/upatches/php-bailout-experiment/php-bailout.bpf.c" -o "$object"
-"$builder" "$object" --name php-bailout-apache -o "$load" --keys-dir "$keys"
-digest=$("$repo/shirudo" upatch info "$load" --json |
-    python3 -c 'import json, sys; print(json.load(sys.stdin)["payload_sha256"])')
-"$builder" --unload php-bailout-apache -o "$unload" \
-    --payload-sha256 "$digest" --keys-dir "$keys"
-"$repo/testing/helper/test-upatch-prog-metadata" "$load" \
-    uprobe-multi "$target" _zend_bailout 1
-install -m 0644 "$load" "$unload" "$fixtures/"
-install -m 0644 "$target" "$fixtures/libphp-8.4.26.so"
+build_upatch()
+{
+    local name=$1 source=$2 object load unload digest
+
+    object="$work/$name.bpf.o"
+    load="$work/$name.upatch"
+    unload="$work/$name.unload.upatch"
+    clang -target bpf -D__TARGET_ARCH_x86 -O2 -g -Wall -Wextra -Werror \
+        -Wno-missing-declarations -Wno-unused-parameter \
+        -I"$repo/vendor/linux" -I"$repo/vendor/libbpf" \
+        "-DPHP_BAILOUT_TARGET=\"$target\"" \
+        -c "$source" -o "$object"
+    "$builder" "$object" --name "$name" -o "$load" --keys-dir "$keys"
+    digest=$("$repo/shirudo" upatch info "$load" --json |
+        python3 -c 'import json, sys; print(json.load(sys.stdin)["payload_sha256"])')
+    "$builder" --unload "$name" -o "$unload" \
+        --payload-sha256 "$digest" --keys-dir "$keys"
+    install -m 0644 "$load" "$unload" "$fixtures/"
+}
+
+build_upatch php-bailout-apache \
+    "$repo/upatches/php-bailout-experiment/php-bailout.bpf.c"
+for symbol in zend_mm_safe_error _zend_bailout zend_error_zstr_at \
+    php_error_cb rfc1867_post_handler php_execute_script \
+    php_request_startup php_request_shutdown php_session_initialize; do
+    nm "$target" | awk -v name="$symbol" '$3 == name { found = 1 } END { exit !found }' || {
+        printf 'required PHP symbol missing: %s\n' "$symbol" >&2
+        exit 1
+    }
+done
+build_upatch php-guard-broad \
+    "$repo/upatches/php-bailout-experiment/php-guard-broad.bpf.c"
+build_upatch php-guard-selective \
+    "$repo/upatches/php-bailout-experiment/php-guard-selective.bpf.c"
+"$repo/testing/helper/test-upatch-prog-metadata" \
+    "$work/php-bailout-apache.upatch" uprobe-multi "$target" _zend_bailout 1
+install -m 0644 "$target" "$fixtures/libphp-$php_version.so"
 printf '%s\n' "$target" >"$fixtures/apache.path"
 (
     cd "$fixtures"
-    sha256sum libphp-8.4.26.so php-bailout-apache.upatch \
-        php-bailout-apache.unload.upatch apache.path >APACHE-SHA256SUMS
+    sha256sum "libphp-$php_version.so" php-bailout-apache.upatch \
+        php-bailout-apache.unload.upatch \
+        php-guard-broad.upatch php-guard-broad.unload.upatch \
+        php-guard-selective.upatch php-guard-selective.unload.upatch \
+        apache.path >APACHE-SHA256SUMS
 )
 printf 'Apache demo ready in %s\n' "$fixtures"
