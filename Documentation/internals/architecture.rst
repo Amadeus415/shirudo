@@ -197,3 +197,19 @@ Where to read more
 - :doc:`design-decisions` gives the reasons behind the design.
 - :doc:`/security/threat-model` states what the design defends against
   and where it stops.
+
+Authenticated runtime entry
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Runtime services start ``/run/shirudo/runtime/usr/bin/shirudo`` directly.
+``make runtime`` links it as a separate static-PIE ELF, and
+``shirudo-gen-runtime`` stages those exact bytes, validated by
+``shirudo-runtime-elf``. A static target needs no interpreter or host
+library lookup. A dynamic extra binary needs the fixed runtime interpreter
+and its complete library closure from the same image.
+
+Starting the runtime through its dynamic loader made the loader the
+executable. The guard could not tell that from a direct loader invocation
+on any other binary of the image, which then got the full Shirudo role.
+Fresh full authority is now granted only on exec of the bound entry inode;
+a loader or helper started directly from the image gets none.

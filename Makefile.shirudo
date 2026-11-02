@@ -539,6 +539,17 @@ shirudo-target: $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF
 	$(Q)sh .github/scripts/check-static-target.sh $@ || \
 	    { rm -f $@; exit 1; }
 
+# The host/bootstrap ELF stays independently usable and inventoried. Resolve
+# its trusted host closure, then link the same target objects with fixed runtime
+# paths; never mutate a signed/inventoried binary after packaging.
+shirudo-runtime: shirudo-target tools/gen-image/shirudo-runtime-elf
+	@printf '  LD      $@ (authenticated static runtime entry)\n'
+	$(Q)$(LD) $(CFLAGS) $(TARGET_TLS_CFLAGS) $(HARDEN_STATIC_PIE_LDFLAGS) $(LDFLAGS) \
+	    -static-pie -static-libgcc -o $@ \
+	    $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) \
+	    $(STATIC_LIBS) $(TARGET_TLS_STATIC_LINK_LIBS) $(TARGET_STATIC_RUNTIME_LINK_LIBS)
+	$(Q)sh .github/scripts/check-static-target.sh $@
+
 # util/loader.o has a make-level dep on every embedded bpf object.
 util/loader.o: $(BPF_OBJS)
 build/target/util/loader.o: $(BPF_OBJS)
@@ -664,7 +675,7 @@ install-common:
 # Target machines additionally get the reboot-persistence, periodic map
 # export, and status keepalive units. They are deliberately NOT in
 # install-operator.
-install-target: shirudo-target install-common systemd/shirudo.service \
+install-target: shirudo-target shirudo-runtime install-common systemd/shirudo.service \
 		systemd/shirudo-initrd.service \
 		systemd/shirudo-map-export.service \
 		systemd/shirudo-map-export.timer \
@@ -679,6 +690,9 @@ install-target: shirudo-target install-common systemd/shirudo.service \
 	@printf '  INSTALL $(DESTDIR)$(bindir)/shirudo (static PIE)\n'
 	$(Q)install -d $(DESTDIR)$(bindir)
 	$(Q)install -m 0755 shirudo-target $(DESTDIR)$(bindir)/shirudo
+	@printf '  INSTALL $(DESTDIR)$(libexecdir)/shirudo/shirudo-runtime (runtime entry)\n'
+	$(Q)install -d $(DESTDIR)$(libexecdir)/shirudo
+	$(Q)install -m 0755 shirudo-runtime $(DESTDIR)$(libexecdir)/shirudo/shirudo-runtime
 	@printf '  INSTALL $(DESTDIR)$(bindir)/shirudo-gen-initrd\n'
 	$(Q)install -m 0755 tools/gen-initrd/shirudo-gen-initrd \
 	    $(DESTDIR)$(bindir)/shirudo-gen-initrd
@@ -715,7 +729,7 @@ install-operator: install shirudo-build quote-check $(VMLINUX_H) $(BPF_LIBBPF_HE
 	$(Q)install -m 0755 tools/quote-check/shirudo-quote-check \
 	    $(DESTDIR)$(bindir)/shirudo-quote-check
 	$(Q)install -d $(DESTDIR)$(libexecdir)/shirudo/gen-image
-	$(Q)install -m 0755 tools/gen-image/shirudo-gen-* \
+	$(Q)install -m 0755 tools/gen-image/shirudo-gen-* tools/gen-image/shirudo-runtime-elf \
 	    $(DESTDIR)$(libexecdir)/shirudo/gen-image/
 	$(Q)install -m 0644 tools/gen-image/common.sh \
 	    tools/gen-image/runtime-service*.conf.in \
@@ -752,6 +766,7 @@ build/verity-tests/shirudo-policy-probe: \
 
 
 ifeq ($(PROFILE),target)
+VERITY_RUNTIME_DEPS := shirudo-target tools/gen-image/shirudo-runtime-elf
 VERITY_TEST_LIBS := $(TARGET_TLS_STATIC_LINK_LIBS) \
 		    $(TARGET_STATIC_RUNTIME_LINK_LIBS)
 VERITY_TEST_LDFLAGS := $(HARDEN_STATIC_PIE_LDFLAGS) -static-pie -static-libgcc
@@ -761,7 +776,7 @@ endif
 
 build/verity-tests/shirudo-image-fault: testing/helper/image-fault.c \
 		testing/helper/image-fault.h \
-		$(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A)
+		$(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A) | $(VERITY_RUNTIME_DEPS)
 	@printf '  CC      $@\n'
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) \
@@ -1390,7 +1405,7 @@ fuzz-targets: $(FUZZ_TARGETS)
 # ----- clean ------------------------------------------------------
 
 clean:
-	$(Q)rm -f shirudo shirudo-target tools/shirudo-build/shirudo-build $(TEST_HELPERS)
+	$(Q)rm -f shirudo shirudo-target shirudo-runtime tools/shirudo-build/shirudo-build $(TEST_HELPERS)
 	$(Q)rm -f tools/quote-check/shirudo-quote-check
 	$(Q)rm -f $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) \
 	          $(BUILD_OBJS) $(SIGN_OBJ) $(QUOTE_CHECK_OBJS) $(VERSION_OBJ) \
