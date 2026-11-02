@@ -675,6 +675,10 @@ struct prog_desc {
 	int		prog_fd;
 };
 
+struct link_desc {
+	int		link_fd;
+};
+
 static int loader_map_create(const char *name, __u32 value_size,
 			     const void *excl_prog_hash,
 			     __u32 excl_prog_hash_sz)
@@ -1657,7 +1661,13 @@ static void close_loader_fds(const struct loader_ctx *cx,
 {
 	const struct map_desc *md = (const void *)(cx + 1);
 	const struct prog_desc *pd = (const void *)(md + nr_maps);
+	const struct link_desc *ld = (const void *)(pd + nr_progs);
 	__u32 i;
+
+	for (i = 0; i < nr_progs; i++) {
+		if (ld[i].link_fd > 0)
+			close(ld[i].link_fd);
+	}
 
 	for (i = 0; i < nr_maps; i++) {
 		if (md[i].map_fd > 0)
@@ -1941,10 +1951,8 @@ static int __upatch_apply(const char *path, bool verify_only,
 	}
 
 	/*
-	 * The loader creates the programs and maps from kernel context but
-	 * cannot attach or pin: gen_loader emits no link-create and
-	 * bpf_sys_bpf() cannot BPF_OBJ_PIN. Its descriptors trail the context,
-	 * sized from the header's counts.
+	 * Descriptor arrays follow libbpf's loader context. Reserve link
+	 * slots even for older loaders, which leave the zeroed tail alone.
 	 */
 	prog_desc_off = size_add(sizeof(struct loader_ctx),
 				 size_mul(u.hdr.nr_maps,
@@ -1955,7 +1963,8 @@ static int __upatch_apply(const char *path, bool verify_only,
 	 */
 	ctx_sz = size_add(size_add(prog_desc_off,
 				   size_mul(u.hdr.nr_progs,
-					    sizeof(struct prog_desc))),
+					    sizeof(struct prog_desc) +
+					    sizeof(struct link_desc))),
 			  1024);
 	/* TEST_RUN takes no larger a context for a syscall program. */
 	if (ctx_sz > UINT16_MAX) {
