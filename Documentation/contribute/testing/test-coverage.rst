@@ -97,6 +97,9 @@ signed config image.
        ``-mcpu`` in ``--extra-cflags`` replaces it; a dense ``switch``
        compiles to branches, not a table in ``.rodata``
 
+   * - ``t1010-local-stack``
+     - VM-first service configuration and stable public trust across starts
+
 ``signing`` (2)
 ~~~~~~~~~~~~~~~
 
