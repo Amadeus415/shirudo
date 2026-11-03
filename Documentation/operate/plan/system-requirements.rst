@@ -66,13 +66,6 @@ Kernel source
        enrolls and seals the config certificate in the ``.dm-verity``
        keyring through ``KEY_SPEC_DM_VERITY_KEYRING``. Apply it to a
        bpf-next tree that predates it.
-   * - :src:`kernel/0001-x86-ftrace-Mark-jmp-mode-by-clearing-bit-63-of-the-trampoline-address.patch`
-     - x86-64 only. Without it, detaching one BPF program from a hook
-       that others share can crash tasks that run the hook during the
-       update, on kernels where an ftrace callback starts at an odd
-       address (seen with gcc 13 and ``CONFIG_CC_OPTIMIZE_FOR_SIZE=y``).
-       Unloading an upatch detaches its programs from hooks that other
-       programs share.
    * - :src:`kernel/0002-tpm-Let-LSMs-inspect-userspace-commands.patch`
      - Adds the ``tpm_command`` LSM hook. ``shirudo init`` attaches
        ``lsm/tpm_command`` to refuse an untrusted ``TPM2_NV_Extend`` of

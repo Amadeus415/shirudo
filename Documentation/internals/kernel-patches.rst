@@ -22,10 +22,6 @@ Summary
      - Author
      - In bpf-next
      - Architectures
-   * - ``0001-x86-ftrace-Mark-jmp-mode-by-clearing-bit-63-of-the-trampoline-address.patch``
-     - Daniel Borkmann
-     - No
-     - x86-64
    * - ``0002-tpm-Let-LSMs-inspect-userspace-commands.patch``
      - KP Singh
      - No
@@ -44,8 +40,7 @@ Summary
      - All
 
 "In bpf-next" was checked against the bpf-next tree at commit
-``cd5bc55288d4``: ``include/linux/ftrace.h`` there still marks jmp mode
-with bit 0, ``include/linux/lsm_hook_defs.h`` has no ``tpm_command``
+``d4bf9e34e299``: ``include/linux/lsm_hook_defs.h`` has no ``tpm_command``
 hook, ``fs/bpf_fs_kfuncs.c`` checks the calling task's read permission
 before it returns a ``security.bpf.`` xattr to an LSM program, the
 sleepable hook set of ``kernel/bpf/bpf_lsm.c`` lacks ``inode_mkdir``,
@@ -61,55 +56,6 @@ How the test kernel applies them
 :src:`testing/vm/build-kernel.sh` applies each patch in name order with
 ``git apply --index`` and commits it, and skips a patch whose reverse
 already applies. A patch that applies neither way fails the build.
-
-x86 ftrace jmp mode
--------------------
-
-Subject
-    x86/ftrace: Mark jmp mode by clearing bit 63 of the trampoline
-    address
-
-Fixes
-    ``0c3772a8db1f`` ("x86/ftrace: Implement DYNAMIC_FTRACE_WITH_JMP"),
-    first released in v6.19.
-
-Files
-    ``arch/x86/kernel/ftrace_64.S``, ``include/linux/ftrace.h``,
-    ``kernel/trace/Kconfig``.
-
-What it changes
-    With ``CONFIG_DYNAMIC_FTRACE_WITH_JMP``, which only x86-64 selects,
-    ``ftrace_call_replace()`` emits a ``jmp`` instead of a ``call`` when
-    bit 0 of the target is set, the mark of a direct trampoline entered
-    by a jump. The same code patches the call of the ftrace callback in
-    ``ftrace_caller``, ``ftrace_regs_caller`` and the ftrace trampolines,
-    but a callback is a C function and can start at an odd address. It
-    does with gcc 13 and ``CONFIG_CC_OPTIMIZE_FOR_SIZE=y``: gcc 13 has no
-    ``-fmin-function-alignment``, and ``-falign-functions=16`` does not
-    apply to functions optimized for size. The call then becomes a jump
-    to the byte before the callback, which decodes as another instruction
-    and swallows part of the callback's prologue; the callback runs
-    without a return address and returns through the saved registers.
-    The patch marks jmp mode by
-    clearing bit 63 instead, which is set in every x86-64 kernel text
-    address, so no callback can carry the mark, and a marked address
-    that is used without being unmarked is not canonical and faults.
-
-Why shirudo needs it
-    The list callback ``ftrace_ops_list_func()`` is installed whenever two
-    ``ftrace_ops`` are registered, and every
-    ``update_ftrace_direct_mod()`` registers a stub ops for the sites it
-    modifies. Detaching one of several BPF LSM programs from a busy hook
-    is such an update. shirudo puts several programs on the same hooks,
-    ``bpf2`` and ``seal`` share ten, and an upatch unload detaches
-    programs from hooks that other tasks are running. The test kernel's
-    slim configuration sets ``CONFIG_CC_OPTIMIZE_FOR_SIZE=y``.
-
-Without it
-    On an affected x86-64 build, a task that runs the hook during the
-    trampoline update can take a kernel page fault on an instruction
-    fetch, and the kernel oopses. Builds whose callbacks start at even
-    addresses, and other architectures, are not affected.
 
 TPM command LSM hook
 --------------------
