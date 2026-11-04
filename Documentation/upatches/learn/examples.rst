@@ -10,20 +10,20 @@ Example packages
 
 The tree ships three packages under :src:`upatches/`: ``kernel-obs``, a
 complete observability package with arena tables, serializers, decoders
-and generated ``.rodata``, and ``kernel-cve``, a set of small CVE
+and generated ``.rodata``, ``kernel-cve``, a set of small CVE
 detectors exported from a mitigation campaign, and ``ksock-dummy``, a
 one-shot UDP sender using the kernel's BPF ksock kfuncs.
 
 ksock-dummy
 -----------
 
-The sender uses the BPF ksock kfuncs to send one UDP datagram to
-``10.0.2.2:19090`` per load. It releases its socket and fails the load on
-socket errors. It needs the ksock kfuncs and ``CONFIG_INET=y``.
+Build, receiver and load instructions:
+
+.. include:: ../../../upatches/ksock-dummy/README.md
+   :parser: myst_parser.sphinx_
 
 The send buffer must be writable stack memory; frozen ``.rodata`` is
-rejected by the verifier. Override ``DEST_ADDR`` and ``DEST_PORT`` with
-``--extra-cflags`` before signing. UDP send success does not prove delivery.
+rejected by the ksock verifier contract.
 
 kernel-obs
 ----------
