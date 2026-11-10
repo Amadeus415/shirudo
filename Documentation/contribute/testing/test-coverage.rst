@@ -166,6 +166,9 @@ signed config image.
      - Attach kinds the builder refuses
    * - ``t3011-string-bounds``
      - Names and the tree repository are refused rather than cut
+   * - ``t3012-struct-ops-metadata``
+     - ``struct_ops`` program metadata, refusal of a map outside
+       ``.struct_ops.link`` and of a program no map names
    * - ``t3101-target-fixtures``
      - Prebuilt fixtures load and unload, foreign and own-keyring
        fixtures are refused, a map fixture exports
@@ -190,6 +193,9 @@ signed config image.
        maps
    * - ``t3110-double-load``
      - A second load of a loaded upatch is refused as ``already_loaded``
+   * - ``t3111-struct-ops``
+     - A ``tcp_congestion_ops`` struct_ops registers at load, a connection
+       runs it, ``upatch get`` names the struct, the unload removes it
 
 ``tpm`` (4)
 ~~~~~~~~~~~

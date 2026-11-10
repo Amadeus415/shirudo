@@ -1304,6 +1304,18 @@ static void count_attach_progs(const struct prog_spec *specs,
 	*out = n;
 }
 
+static int link_pin_path(char *pin, size_t sz, const char *dir,
+			 __u32 link_count, __u32 link_idx)
+{
+	int n;
+
+	if (link_count == 1)
+		n = strsprintf(pin, sz, "%s/link", dir);
+	else
+		n = strsprintf(pin, sz, "%s/link_%u", dir, link_idx);
+	return n < 0 ? -ENAMETOOLONG : 0;
+}
+
 static int prog_pin_path(char *pin, size_t sz, const char *dir,
 			 const char *serializers_dir,
 			 const struct prog_spec *spec,
@@ -1315,11 +1327,94 @@ static int prog_pin_path(char *pin, size_t sz, const char *dir,
 		n = strsprintf(pin, sz, "%s/%s", serializers_dir, spec->map);
 	else if (spec->role == UPATCH_PROG_ROLE_TEST_RUN)
 		n = strsprintf(pin, sz, "%s/test", dir);
-	else if (attach_count == 1)
-		n = strsprintf(pin, sz, "%s/link", dir);
 	else
-		n = strsprintf(pin, sz, "%s/link_%u", dir, attach_idx);
+		return link_pin_path(pin, sz, dir, attach_count, attach_idx);
 	return n < 0 ? -ENAMETOOLONG : 0;
+}
+
+static int loader_map_fd(const struct loader_ctx *cx, __u32 idx)
+{
+	const struct map_desc *md =
+		(const void *)((const char *)cx + sizeof(*cx) +
+			       (size_t)idx * sizeof(*md));
+
+	return md->map_fd;
+}
+
+/* *id is the id of the struct_ops map behind map_fd, 0 for any other. */
+static int struct_ops_map_id(int map_fd, __u32 *id)
+{
+	struct bpf_map_info info = {};
+	__u32 len = sizeof(info);
+
+	*id = 0;
+	if (map_fd <= 0)
+		return 0;
+	if (bpf_map_get_info_by_fd(map_fd, &info, &len))
+		return -errno;
+	if (info.type == BPF_MAP_TYPE_STRUCT_OPS)
+		*id = info.id;
+	return 0;
+}
+
+static int count_struct_ops_maps(const struct loader_ctx *cx, __u32 nr_maps,
+				 __u32 *out)
+{
+	__u32 i, id, n = 0;
+	int ret;
+
+	for (i = 0; i < nr_maps; i++) {
+		ret = struct_ops_map_id(loader_map_fd(cx, i), &id);
+		if (ret)
+			return ret;
+		if (id)
+			n++;
+	}
+	*out = n;
+	return 0;
+}
+
+/*
+ * A struct_ops map attaches, not its programs: its link takes the link
+ * pin after those of the programs. *made counts the pins this call
+ * made, for the caller to take out on a failure.
+ */
+static int attach_and_pin_struct_ops(const struct loader_ctx *cx,
+				     __u32 nr_maps, const char *dir,
+				     __u32 link_count, __u32 first_idx,
+				     __u32 *made)
+{
+	char pin[PATH_MAX + 32];
+	int map_fd, link_fd, ret;
+	__u32 i, id;
+
+	for (i = 0; i < nr_maps; i++) {
+		map_fd = loader_map_fd(cx, i);
+		ret = struct_ops_map_id(map_fd, &id);
+		if (ret)
+			return ret;
+		if (!id)
+			continue;
+		ret = link_pin_path(pin, sizeof(pin), dir, link_count,
+				    first_idx + *made);
+		if (ret)
+			return ret;
+		link_fd = bpf_link_create(map_fd, 0, BPF_STRUCT_OPS, NULL);
+		if (link_fd < 0) {
+			pr_err("attach struct_ops map %u: %s", i,
+			       strerror(-link_fd));
+			return link_fd;
+		}
+		ret = obj_pin(link_fd, pin);
+		close(link_fd);
+		if (ret) {
+			pr_err("pin %s: %s", pin, strerror(-ret));
+			return ret;
+		}
+		(*made)++;
+		pr_info("upatch load: struct_ops map %u pinned at %s", i, pin);
+	}
+	return 0;
 }
 
 /*
@@ -1327,13 +1422,14 @@ static int prog_pin_path(char *pin, size_t sz, const char *dir,
  * A failure unpins what this call pinned: the upatch is then neither
  * archived nor measured, so none of its programs may stay attached.
  */
-static int attach_and_pin_progs(const struct loader_ctx *cx,
+static int attach_and_pin_progs(const struct loader_ctx *cx, __u32 nr_maps,
 				size_t prog_desc_off, __u32 nr_progs,
 				const char *name,
 				const struct prog_spec *specs)
 {
 	char dir[PATH_MAX], serializers_dir[PATH_MAX + 16];
 	__u32 i, attach_count = 0, attach_seen = 0;
+	__u32 nr_struct_ops = 0, struct_ops_made = 0;
 	bool made_dir = false, made_serializers = false;
 	char pin[PATH_MAX + 32];
 	bool *made = NULL;
@@ -1365,6 +1461,10 @@ static int attach_and_pin_progs(const struct loader_ctx *cx,
 		goto out;
 	}
 	count_attach_progs(specs, nr_progs, &attach_count);
+	ret = count_struct_ops_maps(cx, nr_maps, &nr_struct_ops);
+	if (ret)
+		goto out;
+	attach_count += nr_struct_ops;
 
 	for (i = 0; i < nr_progs; i++) {
 		const struct prog_desc *pd =
@@ -1379,6 +1479,8 @@ static int attach_and_pin_progs(const struct loader_ctx *cx,
 			ret = -EINVAL;
 			goto out;
 		}
+		if (spec->role == UPATCH_PROG_ROLE_STRUCT_OPS)
+			continue;
 		ret = prog_pin_path(pin, sizeof(pin), dir, serializers_dir,
 				    spec, attach_count, attach_seen);
 		if (ret)
@@ -1490,6 +1592,8 @@ static int attach_and_pin_progs(const struct loader_ctx *cx,
 			goto out;
 		}
 	}
+	ret = attach_and_pin_struct_ops(cx, nr_maps, dir, attach_count,
+					attach_seen, &struct_ops_made);
 out:
 	if (ret) {
 		attach_seen = 0;
@@ -1501,6 +1605,11 @@ out:
 				unlink(pin);
 			if (specs[i].role == UPATCH_PROG_ROLE_ATTACH)
 				attach_seen++;
+		}
+		for (i = 0; i < struct_ops_made; i++) {
+			if (!link_pin_path(pin, sizeof(pin), dir, attach_count,
+					   attach_seen + i))
+				unlink(pin);
 		}
 		if (made_serializers)
 			rmdir(serializers_dir);
@@ -1515,6 +1624,7 @@ out:
  * Best effort: the upatch is loaded, so a map that cannot be pinned is
  * logged and left unobservable until the next load. bpffs reserves dots
  * in path components, so libbpf's .bss, .data and .rodata are skipped.
+ * A struct_ops map is skipped too: its link pin holds it.
  */
 static int pin_upatch_maps(const struct loader_ctx *cx,
 			   __u32 nr_maps, __u32 shared_policy_map_idx,
@@ -1557,7 +1667,8 @@ static int pin_upatch_maps(const struct loader_ctx *cx,
 				i, strerror(errno));
 			continue;
 		}
-		if (info.name[0] == '\0')
+		if (info.name[0] == '\0' ||
+		    info.type == BPF_MAP_TYPE_STRUCT_OPS)
 			continue;
 		if (strchr(info.name, '.'))
 			continue;
@@ -2143,7 +2254,8 @@ static int __upatch_apply(const char *path, bool verify_only,
 	 * Without a pinned link a program detaches when this one-shot CLI
 	 * exits.
 	 */
-	ret = attach_and_pin_progs(cx, prog_desc_off, u.hdr.nr_progs,
+	ret = attach_and_pin_progs(cx, u.hdr.nr_maps, prog_desc_off,
+				   u.hdr.nr_progs,
 				   upatch_name, prog_specs);
 	if (ret) {
 		int e = -ret;
@@ -3791,7 +3903,7 @@ static int upatch_get_collect(const char *want, struct upatch_get_ctx *c)
 		return ret;
 	}
 	close(link_fd);
-	if (linfo.prog_id == 0)
+	if (linfo.prog_id == 0 && linfo.type != BPF_LINK_TYPE_STRUCT_OPS)
 		return -EINVAL;
 	c->prog_id = linfo.prog_id;
 	upatch_loaded_at(want, c->loaded_at, sizeof(c->loaded_at));
@@ -3801,6 +3913,9 @@ static int upatch_get_collect(const char *want, struct upatch_get_ctx *c)
 	upatch_resolve_location(vbtf, want, c->location,
 				sizeof(c->location));
 	btf__free(vbtf);
+	/* The link of a struct_ops map holds the map, not one program. */
+	if (!linfo.prog_id)
+		return 0;
 
 	prog_fd = bpf_prog_get_fd_by_id(linfo.prog_id);
 	if (prog_fd < 0)

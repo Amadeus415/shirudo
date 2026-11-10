@@ -648,6 +648,7 @@ int prog_specs_parse(const void *metadata, __u32 metadata_len,
 			spec->map[sizeof(spec->map) - 1] = '\0';
 			continue;
 		case UPATCH_PROG_ROLE_TEST_RUN:
+		case UPATCH_PROG_ROLE_STRUCT_OPS:
 			if (prog.kind || prog.offset || prog.target[0] || prog.map[0])
 				goto out;
 			spec->role = role;

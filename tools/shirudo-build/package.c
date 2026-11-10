@@ -736,6 +736,14 @@ static bool is_syscall_section(const char *sec)
 	return sec && strcmp(sec, "syscall") == 0;
 }
 
+static bool is_struct_ops_section(const char *sec)
+{
+	if (!sec)
+		return false;
+	return (!strncmp(sec, "struct_ops/", 11) && sec[11]) ||
+	       (!strncmp(sec, "struct_ops.s/", 13) && sec[13]);
+}
+
 static const char *serializer_map_name(const struct bpf_program *p)
 {
 	const char *name = bpf_program__name(p);
@@ -1102,6 +1110,25 @@ static int compose_signed_data(const void *data, __u32 data_len,
 	return 0;
 }
 
+/*
+ * Without BPF_F_LINK the map update in the loader registers the
+ * struct_ops, before the target holds a pin that could take it out.
+ */
+static int validate_struct_ops_maps(struct bpf_object *obj)
+{
+	struct bpf_map *m;
+
+	bpf_object__for_each_map(m, obj) {
+		if (bpf_map__type(m) != BPF_MAP_TYPE_STRUCT_OPS ||
+		    bpf_map__map_flags(m) & BPF_F_LINK)
+			continue;
+		pr_err("struct_ops map '%s' must be in SEC(\".struct_ops.link\")",
+		       bpf_map__name(m));
+		return -EINVAL;
+	}
+	return 0;
+}
+
 static int validate_serializer_output_map(struct bpf_object *obj)
 {
 	struct bpf_map *m;
@@ -1172,6 +1199,9 @@ static int build_prog_metadata(struct bpf_object *obj, __u32 nr_maps,
 		if (err)
 			return err;
 	}
+	err = validate_struct_ops_maps(obj);
+	if (err)
+		return err;
 	base_len = struct_size(md, progs, nr_progs);
 	if (base_len > UINT32_MAX)
 		return -EOVERFLOW;
@@ -1247,6 +1277,12 @@ static int build_prog_metadata(struct bpf_object *obj, __u32 nr_maps,
 			i++;
 			continue;
 		}
+		if (is_struct_ops_section(sec)) {
+			md->progs[i].role =
+				cpu_to_le32(UPATCH_PROG_ROLE_STRUCT_OPS);
+			i++;
+			continue;
+		}
 		if (is_syscall_section(sec)) {
 			const char *prog_name = bpf_program__name(p);
 			size_t prefix_len = strlen(TEST_RUN_PREFIX);
@@ -1310,7 +1346,7 @@ static int build_prog_metadata(struct bpf_object *obj, __u32 nr_maps,
 		kind = attach_kind_from_section(sec, &target);
 		if (kind == UPATCH_ATTACH_RAW_TRACEPOINT &&
 		    !default_attach_section(sec)) {
-			pr_err("unsupported section '%s'; supported are fentry, fexit, fmod_ret, lsm, tp_btf, kprobe, kretprobe, uprobe.multi, cgroup_skb and netfilter",
+			pr_err("unsupported section '%s'; supported are fentry, fexit, fmod_ret, lsm, tp_btf, kprobe, kretprobe, uprobe.multi, cgroup_skb, netfilter and struct_ops",
 			       sec);
 			err = -EOPNOTSUPP;
 			goto err_free;

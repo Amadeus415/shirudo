@@ -29,7 +29,9 @@ Description
 - ``Location``: the attach point in ``SEC()`` form, for example
   ``fentry/do_nanosleep``.
 - the program ID, the load time and the payload digest recorded on the
-  pin.
+  pin. The first link of a ``struct_ops`` upatch without other programs
+  is that of its map, ``struct_ops/tcp_congestion_ops`` for example,
+  which has no program: the ID is 0 and no source lines follow.
 - the source lines from the program's BTF line info, which the signed
   loader installed. They are exact but cover only the lines the compiler
   kept.

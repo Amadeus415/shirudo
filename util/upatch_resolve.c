@@ -84,6 +84,46 @@ static const char *loc_prefix(__u32 prog_type, __u32 attach_type)
 	return NULL;
 }
 
+#define STRUCT_OPS_VALUE_PREFIX		"bpf_struct_ops_"
+
+/*
+ * The kernel names the value of a struct_ops map after the struct it
+ * fills, tcp_congestion_ops in bpf_struct_ops_tcp_congestion_ops. A
+ * module's type has an id past those of vmlinux and stays unnamed.
+ */
+static int struct_ops_location(struct btf *vbtf, __u32 map_id,
+			       char *out, size_t cap)
+{
+	LIBBPF_OPTS(bpf_get_fd_by_id_opts, opts, .open_flags = BPF_F_RDONLY);
+	size_t prefix_len = strlen(STRUCT_OPS_VALUE_PREFIX);
+	struct bpf_map_info info = {};
+	__u32 len = sizeof(info);
+	const struct btf_type *t;
+	const char *value_name;
+	int map_fd, ret;
+
+	map_fd = bpf_map_get_fd_by_id_opts(map_id, &opts);
+	if (map_fd < 0)
+		return -errno;
+	ret = bpf_map_get_info_by_fd(map_fd, &info, &len);
+	close(map_fd);
+	if (ret)
+		return ret;
+	if (!vbtf || !info.btf_vmlinux_value_type_id ||
+	    info.btf_vmlinux_value_type_id >= btf__type_cnt(vbtf))
+		goto unnamed;
+	t = btf__type_by_id(vbtf, info.btf_vmlinux_value_type_id);
+	value_name = t ? btf__name_by_offset(vbtf, t->name_off) : NULL;
+	if (!value_name || strncmp(value_name, STRUCT_OPS_VALUE_PREFIX,
+				   prefix_len) || !value_name[prefix_len])
+		goto unnamed;
+	return strsprintf(out, cap, "struct_ops/%s",
+			  value_name + prefix_len) < 0 ? -E2BIG : 0;
+unnamed:
+	strscpy(out, "struct_ops", cap);
+	return 0;
+}
+
 int upatch_resolve_location(struct btf *vbtf, const char *name,
 			    char *out, size_t cap)
 {
@@ -101,6 +141,11 @@ int upatch_resolve_location(struct btf *vbtf, const char *name,
 		return link_fd;
 	len = sizeof(linfo);
 	ret = bpf_link_get_info_by_fd(link_fd, &linfo, &len);
+	if (ret == 0 && linfo.type == BPF_LINK_TYPE_STRUCT_OPS) {
+		close(link_fd);
+		return struct_ops_location(vbtf, linfo.struct_ops.map_id, out,
+					   cap);
+	}
 	if (ret != 0 || linfo.prog_id == 0) {
 		close(link_fd);
 		return ret ? ret : -EINVAL;

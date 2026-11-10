@@ -5,25 +5,34 @@
 #include <limits.h>
 #include <string.h>
 
+#include <shirudo/string.h>
+
 #include "unit.h"
 #include "upatch.h"
 
 #define ONE_PROG_LEN \
 	(sizeof(struct upatch_prog_metadata) + sizeof(struct upatch_prog_entry))
 
-static void one_raw_tracepoint(__u8 *buf, __u32 nr_maps)
+static void one_prog(__u8 *buf, __u32 nr_maps,
+		     const struct upatch_prog_entry *prog)
 {
 	struct upatch_prog_metadata md = {};
-	struct upatch_prog_entry prog = {};
 
 	md.magic = cpu_to_le32(UPATCH_PROG_MAGIC);
 	md.version = cpu_to_le32(UPATCH_PROG_VERSION);
 	md.nr_progs = cpu_to_le32(1);
 	md.nr_maps = cpu_to_le32(nr_maps);
+	memcpy(buf, &md, sizeof(md));
+	memcpy(buf + sizeof(md), prog, sizeof(*prog));
+}
+
+static void one_raw_tracepoint(__u8 *buf, __u32 nr_maps)
+{
+	struct upatch_prog_entry prog = {};
+
 	prog.role = cpu_to_le32(UPATCH_PROG_ROLE_ATTACH);
 	prog.kind = cpu_to_le32(UPATCH_ATTACH_RAW_TRACEPOINT);
-	memcpy(buf, &md, sizeof(md));
-	memcpy(buf + sizeof(md), &prog, sizeof(prog));
+	one_prog(buf, nr_maps, &prog);
 }
 
 static void prog_specs_take_the_signed_counts(void)
@@ -51,6 +60,32 @@ static void prog_specs_refuse_another_header_count(void)
 	EXPECT_EQ(prog_specs_parse(buf, sizeof(buf), 2, 1, &specs), -EINVAL);
 	EXPECT_EQ(prog_specs_parse(buf, sizeof(buf), 3, 2, &specs), -EINVAL);
 	EXPECT_EQ(prog_specs_parse(buf, sizeof(buf), 3, 0, &specs), -EINVAL);
+	EXPECT_FALSE(specs);
+}
+
+static void prog_specs_take_a_struct_ops_program_without_a_site(void)
+{
+	struct upatch_prog_entry prog = {};
+	struct prog_spec *specs = NULL;
+	__u8 buf[ONE_PROG_LEN];
+
+	prog.role = cpu_to_le32(UPATCH_PROG_ROLE_STRUCT_OPS);
+	one_prog(buf, 2, &prog);
+	ASSERT_EQ(prog_specs_parse(buf, sizeof(buf), 2, 1, &specs), 0);
+	ASSERT_TRUE(specs);
+	EXPECT_UEQ(specs[0].role, UPATCH_PROG_ROLE_STRUCT_OPS);
+	prog_specs_free(specs, 1);
+
+	ASSERT_TRUE(strscpy(prog.target, "tcp_congestion_ops",
+			    sizeof(prog.target)) > 0);
+	one_prog(buf, 2, &prog);
+	EXPECT_EQ(prog_specs_parse(buf, sizeof(buf), 2, 1, &specs), -EINVAL);
+	EXPECT_FALSE(specs);
+
+	prog.target[0] = '\0';
+	prog.kind = cpu_to_le32(UPATCH_ATTACH_KPROBE);
+	one_prog(buf, 2, &prog);
+	EXPECT_EQ(prog_specs_parse(buf, sizeof(buf), 2, 1, &specs), -EINVAL);
 	EXPECT_FALSE(specs);
 }
 
@@ -128,6 +163,7 @@ static void name_fits_its_pin_directory(void)
 static const struct unit_case cases[] = {
 	UNIT_CASE(prog_specs_take_the_signed_counts),
 	UNIT_CASE(prog_specs_refuse_another_header_count),
+	UNIT_CASE(prog_specs_take_a_struct_ops_program_without_a_site),
 	UNIT_CASE(header_name_is_terminated),
 	UNIT_CASE(prog_name_is_what_the_kernel_takes),
 	UNIT_CASE(name_signed_is_the_header_name),

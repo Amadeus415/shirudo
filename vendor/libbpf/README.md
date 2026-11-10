@@ -33,7 +33,13 @@ commit: `MAX_USED_PROGS` is 64 instead of 32, as required by the
 kernel-obs package. In addition `gen_loader.c` also supports reusing a
 signer-selected map FD supplied through the loader context.
 `bpf/btf_dump.c` preserves complete native GNU attribute spellings without
-wrapping them twice. `bpf-deps`
+wrapping them twice. `bpf/gen_loader.c`, `bpf/libbpf.c`,
+`bpf/bpf_gen_internal.h` and `include/uapi/linux/bpf.h` carry the libbpf
+half of the struct_ops by name change, whose kernel half is
+`kernel/0005-bpf-Match-struct_ops-members-by-name-in-the-kernel.patch`:
+the loader names a struct_ops map and its programs by the struct and its
+members in the object's BTF, and stores the program fds into the
+struct it hands the kernel. `bpf-deps`
 overwrites these files, so re-apply those changes after a refresh until
 they are upstream.
 

@@ -66,6 +66,13 @@ the link against the metadata and pins it.
      - netfilter
      - ``BPF_LINK_CREATE``, ``BPF_NETFILTER``, IPv6 pre-routing
      - ``CONFIG_NETFILTER``, ``CONFIG_NETFILTER_BPF_LINK``
+   * - ``struct_ops/<name>``, ``struct_ops.s/<name>``, in a
+       ``SEC(".struct_ops.link")`` map
+     - struct_ops
+     - not attached itself: its map is, with ``BPF_LINK_CREATE`` and
+       ``BPF_STRUCT_OPS``
+     - the struct_ops patch of :doc:`/internals/kernel-patches` and what the
+       struct needs, ``CONFIG_INET`` for ``tcp_congestion_ops``
    * - ``syscall``, named ``shirudo_serialize__<map>``
      - syscall
      - not attached, run by ``shirudo upatch map``
@@ -79,10 +86,11 @@ The base requirements are the kernel options shirudo itself needs, listed
 in :doc:`/operate/plan/system-requirements`. They include BPF trampolines, BTF
 and the BPF LSM, which is why the BTF-based kinds need nothing more.
 
-Every attached program becomes one link pinned at
-``/run/shirudo/bpffs/upatches/<name>/link`` when the upatch has one attach
-program, and at ``link_0``, ``link_1`` and so on, in the order of the
-object, when it has several. ``<name>`` has every ``.`` written as ``~d``.
+Every attached program and every struct_ops map becomes one link pinned
+at ``/run/shirudo/bpffs/upatches/<name>/link`` when the upatch has one
+link, and at ``link_0``, ``link_1`` and so on, in the order of the object
+with the maps after the programs, when it has several. ``<name>`` has
+every ``.`` written as ``~d``.
 
 fentry and fexit
 ----------------
@@ -236,6 +244,51 @@ shirudo fixes the family, hook and priority. The section name carries
 none of them. A shield that needs another family or hook is written as a
 ``cgroup_skb`` or ``lsm`` program.
 
+struct_ops
+----------
+
+A ``struct_ops`` program implements one member of a kernel struct of
+function pointers such as ``tcp_congestion_ops``. The struct goes in a
+map in ``SEC(".struct_ops.link")`` that names the programs:
+
+.. code-block:: c
+
+   SEC("struct_ops/cc_ssthresh")
+   __u32 BPF_PROG(cc_ssthresh, struct sock *sk)
+   {
+           return tcp_reno_ssthresh(sk);
+   }
+
+   SEC(".struct_ops.link")
+   struct tcp_congestion_ops cc = {
+           .ssthresh       = (void *)cc_ssthresh,
+           /* .cong_avoid and .undo_cwnd alike */
+           .name           = "cc",
+   };
+
+The object names the struct and its members, and the kernel finds its own
+struct and members by these names. The upatch therefore carries no
+offsets of a kernel, and the signature covers the names. A member that
+the target's struct lacks is skipped when it is zero and fails the load
+when it is not. The signed loader creates the map, loads the programs and
+fills the map with the struct and the descriptors of the programs. shirudo
+then attaches the map, not the programs, with ``BPF_LINK_CREATE`` and
+``BPF_STRUCT_OPS``, and the kernel registers the struct. A
+``tcp_congestion_ops`` map adds an algorithm under its ``.name`` to
+``net.ipv4.tcp_available_congestion_control``, which a socket runs once
+it selects it with ``TCP_CONGESTION`` or root makes it the default.
+
+The unload unpins the link and the kernel unregisters the struct. A socket
+that runs the algorithm keeps it until the socket closes. The map is not
+pinned under ``maps/``, as its link holds it.
+
+``shirudo build`` refuses a map in ``SEC(".struct_ops")``: the loader would
+register it when it fills it, before shirudo holds a pin that takes it out
+again. A ``struct_ops`` program that no map names fails the build with
+libbpf's ``program isn't referenced anywhere``. A kernel without the
+struct_ops patch refuses the map and the programs inside the loader, as
+``verifier_rejected`` in phase ``payload_load``.
+
 Programs that attach nowhere
 ----------------------------
 
@@ -288,11 +341,13 @@ it generates a loader.
    * - ``fmod_ret``, ``fmod_ret.s`` without a function
      - ``unsupported fmod_ret section '<section>'; use fmod_ret/<symbol> or
        fmod_ret.s/<symbol>``
-   * - every other section, ``tp/``, ``raw_tp/``, ``xdp`` and ``tc`` among
-       them
+   * - every other section, ``tp/``, ``raw_tp/``, ``xdp``, ``tc`` and
+       ``struct_ops`` without a name among them
      - ``unsupported section '<section>'; supported are fentry, fexit,
-       fmod_ret, lsm, tp_btf, kprobe, kretprobe, uprobe.multi, cgroup_skb
-       and netfilter``
+       fmod_ret, lsm, tp_btf, kprobe, kretprobe, uprobe.multi, cgroup_skb,
+       netfilter and struct_ops``
+   * - a map in ``SEC(".struct_ops")``
+     - ``struct_ops map '<map>' must be in SEC(".struct_ops.link")``
    * - ``syscall`` with another program name
      - ``SEC("syscall") program '<name>' must be named shirudo_test__<id>``
 
@@ -326,6 +381,9 @@ metadata:
      - a tracing link with attach type ``BPF_MODIFY_RETURN``
    * - ``fentry``, ``fexit``, ``lsm``, ``tp_btf``
      - a tracing or raw tracepoint link
+   * - ``struct_ops``
+     - nothing: shirudo links the map the signed loader made, and the
+       kernel registers a struct_ops for every namespace alike
 
 On a mismatch shirudo closes the link, which detaches it, removes the pins
 this load made and fails with ``attach_scope_mismatch`` in phase

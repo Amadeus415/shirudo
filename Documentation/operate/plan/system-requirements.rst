@@ -96,6 +96,10 @@ Kernel source
        The seal reads the label of the directory a new entry goes into
        from it; without the patch the verifier refuses the seal's entry
        hooks.
+   * - :src:`kernel/0005-bpf-Match-struct_ops-members-by-name-in-the-kernel.patch`
+     - Lets a struct_ops map and its programs name their struct by the
+       names in the object's BTF. ``struct_ops`` upatches need it and fail
+       inside the loader without it; shirudo itself does not.
 
 :doc:`/internals/kernel-patches` gives the upstream status of the
 carried patches.
@@ -258,6 +262,8 @@ point is missing fails to load.
      - ``cgroup_skb`` upatches.
    * - ``CONFIG_NETFILTER``, ``CONFIG_NETFILTER_BPF_LINK``
      - ``netfilter`` upatches.
+   * - ``CONFIG_INET``
+     - ``struct_ops`` upatches of ``tcp_congestion_ops``.
 
 :doc:`/upatches/write/attach-kinds` describes each attach kind.
 

@@ -743,6 +743,7 @@ queue_fixture build_fixture uprobe-multi.bpf.c shirudo-test-uprobe-multi "$FIXTU
 queue_fixture build_fixture scope-netfilter.bpf.c shirudo-test-scope-netfilter "$FIXTURE_WORK/trusted"
 queue_fixture build_fixture scope-cgroup.bpf.c shirudo-test-scope-cgroup "$FIXTURE_WORK/trusted"
 queue_fixture build_fixture scope-kprobe.bpf.c shirudo-test-scope-kprobe "$FIXTURE_WORK/trusted"
+queue_fixture build_fixture struct-ops-tcp.bpf.c shirudo-test-struct-ops "$FIXTURE_WORK/trusted"
 queue_fixture build_fixture basic.bpf.c shirudo-test-foreign "$FIXTURE_WORK/foreign"
 queue_fixture build_fixture basic.bpf.c shirudo-test-own-keyring "$FIXTURE_WORK/own"
 queue_fixture build_policy_labels_fixture
@@ -786,13 +787,13 @@ observability_payload="$($REPO_ROOT/shirudo upatch info \
 observability_anomaly_payload="$($REPO_ROOT/shirudo upatch info \
 	"$TMP_DIR/fixtures/kernel-obs-cred-anomaly.upatch" --json |
 	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-for scope in netfilter cgroup kprobe; do
-	scope_payload="$($REPO_ROOT/shirudo upatch info \
-		"$TMP_DIR/fixtures/shirudo-test-scope-$scope.upatch" --json |
+for unload_name in scope-netfilter scope-cgroup scope-kprobe struct-ops; do
+	unload_payload="$($REPO_ROOT/shirudo upatch info \
+		"$TMP_DIR/fixtures/shirudo-test-$unload_name.upatch" --json |
 		python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
 	queue_fixture "$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
-		"shirudo-test-scope-$scope" --payload-sha256 "$scope_payload" \
-		-o "$TMP_DIR/fixtures/shirudo-test-scope-$scope.unload.upatch" \
+		"shirudo-test-$unload_name" --payload-sha256 "$unload_payload" \
+		-o "$TMP_DIR/fixtures/shirudo-test-$unload_name.unload.upatch" \
 		--key "$FIXTURE_WORK/trusted/signing_key.pem" \
 		--cert "$FIXTURE_WORK/trusted/cert.der"
 done

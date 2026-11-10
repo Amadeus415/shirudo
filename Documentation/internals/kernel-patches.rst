@@ -38,6 +38,10 @@ Summary
      - Daniel Borkmann
      - No
      - All
+   * - ``0005-bpf-Match-struct_ops-members-by-name-in-the-kernel.patch``
+     - Alexei Starovoitov
+     - No
+     - All
 
 "In bpf-next" was checked against the bpf-next tree at commit
 ``57fae4059380``: ``include/linux/lsm_hook_defs.h`` there has no
@@ -45,8 +49,9 @@ Summary
 read permission before it returns a ``security.bpf.`` xattr to an LSM
 program, the sleepable hook set of ``kernel/bpf/bpf_lsm.c`` lacks
 ``inode_mkdir``, ``inode_link``, ``inode_set_acl``, ``inode_remove_acl``,
-``inode_file_setattr`` and ``inode_copy_up``, and the verifier trusts
-``d_inode`` of a dentry but not ``d_parent``.
+``inode_file_setattr`` and ``inode_copy_up``, the verifier trusts
+``d_inode`` of a dentry but not ``d_parent``, and a struct_ops map or
+program can name its struct only by an id in the kernel's BTF.
 
 The x86 ftrace fix the tree used to carry is upstream as
 ``31ac959c915c`` ("x86/ftrace: Mark jmp mode by clearing bit 63 of
@@ -201,6 +206,49 @@ Without it
     The verifier refuses ``d_parent`` as the kfunc's argument, so the
     ``seal`` object fails to load and ``init`` fails at "loading
     enforcement", with the result the TPM command hook describes.
+
+struct_ops by name
+------------------
+
+Subject
+    bpf: Match struct_ops members by name in the kernel
+
+Files
+    ``include/linux/bpf.h``, ``include/uapi/linux/bpf.h``,
+    ``kernel/bpf/bpf_struct_ops.c``, ``kernel/bpf/syscall.c``,
+    ``tools/include/uapi/linux/bpf.h``.
+
+What it changes
+    ``BPF_MAP_CREATE`` of a ``BPF_MAP_TYPE_STRUCT_OPS`` map takes
+    ``btf_fd``, ``btf_value_type_id`` and ``value_size`` of a struct in
+    the BTF of the object, ``tcp_congestion_ops`` or
+    ``tcp_congestion_ops___v2``. The kernel finds its struct_ops of the
+    same name, without the ``___`` suffix, in vmlinux or a module.
+    ``BPF_PROG_LOAD`` of a ``BPF_PROG_TYPE_STRUCT_OPS`` program takes the
+    object's BTF as ``attach_btf_obj_fd``, that struct as
+    ``attach_btf_id`` and the index of its member as
+    ``expected_attach_type``, and the kernel replaces them with its own
+    struct and the member of the same name. ``BPF_MAP_UPDATE_ELEM``
+    takes the object's struct with the program descriptors in it and
+    copies each member to the kernel's member of the same name. A member
+    the kernel lacks is skipped when it is zero and refused when it is
+    not. The kernel refused these calls before, so nothing changes for
+    a loader that passes the kernel's ids. Alexei Starovoitov proposed
+    it on the bpf list.
+
+Why shirudo needs it
+    libbpf matches a struct_ops by name in userspace, against the BTF
+    of the running kernel, and passes the ids and offsets it finds. A
+    signed loader is generated on the operator and cannot know them;
+    with the patch it passes only what the object's BTF holds, which the
+    signature covers. ``struct_ops`` upatches need it, see
+    :doc:`/upatches/write/attach-kinds`. Its libbpf half is the local
+    change in ``vendor/libbpf/README.md``.
+
+Without it
+    The kernel refuses the struct_ops map or program the loader creates,
+    so a ``struct_ops`` upatch fails inside the loader as
+    ``verifier_rejected``. Other upatches are not affected.
 
 Related
 -------

@@ -82,6 +82,7 @@ static void spec_valid(const struct prog_spec *s)
 				 !s->offset, "a map and nothing else");
 		break;
 	case UPATCH_PROG_ROLE_TEST_RUN:
+	case UPATCH_PROG_ROLE_STRUCT_OPS:
 		__CPROVER_assert(!s->map[0] && !s->target[0] && !s->kind &&
 				 !s->offset, "nothing");
 		break;

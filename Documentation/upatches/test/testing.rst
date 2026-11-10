@@ -195,6 +195,8 @@ one.
        ``shirudo-test-scope-kprobe``
      - ``cgroup_skb``, ``netfilter`` and ``kprobe`` attachments and the
        attach-scope check
+   * - ``shirudo-test-struct-ops``
+     - a ``tcp_congestion_ops`` struct_ops named ``shirudo_test_cc``
    * - ``kernel-obs``
      - the upatch of the ``kernel-obs`` package
 

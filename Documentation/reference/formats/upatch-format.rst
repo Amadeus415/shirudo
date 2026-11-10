@@ -356,8 +356,8 @@ Each program entry is 160 bytes:
    * - +4
      - 4
      - ``kind``
-     - Attach kind, see the table below. 0 for the serializer and test-run
-       roles.
+     - Attach kind, see the table below. 0 for the serializer, test-run
+       and struct_ops roles.
    * - +8
      - 8
      - ``offset``
@@ -391,6 +391,11 @@ Each program entry is 160 bytes:
    * - 2
      - test-run
      - The one ``SEC("syscall")`` program named ``shirudo_test__<id>``.
+   * - 3
+     - struct_ops
+     - A ``struct_ops/<name>`` or ``struct_ops.s/<name>`` program. The
+       target does not attach it: it links each struct_ops map the loader
+       made, which holds the programs.
 
 .. list-table::
    :header-rows: 1

@@ -169,7 +169,9 @@ where the caller is the loader.
        The loader fills the descriptors.
    * - loader: ``BPF_MAP_CREATE``, ``BPF_MAP_UPDATE_ELEM``,
        ``BPF_MAP_FREEZE``, ``BPF_PROG_LOAD`` through ``bpf_sys_bpf()``
-     - As gen_loader recorded them.
+     - As gen_loader recorded them. A struct_ops map and its programs name
+       the struct in the object's BTF, which the struct_ops patch of
+       :doc:`kernel-patches` accepts.
    * - ``BPF_RAW_TRACEPOINT_OPEN``
      - Attach kind 0 for a program that is not ``BPF_PROG_TYPE_LSM``:
        ``raw_tracepoint.name`` 0, ``prog_fd``.
@@ -187,7 +189,9 @@ where the caller is the loader.
        Kind 7, ``uprobe.multi``: ``attach_type``
        ``BPF_TRACE_UPROBE_MULTI``, ``offsets``, ``cnt``, ``flags``
        ``BPF_F_UPROBE_MULTI_PATH_FD``, ``path_fd`` a descriptor of the
-       target binary opened and checked by build ID.
+       target binary opened and checked by build ID. Each
+       ``BPF_MAP_TYPE_STRUCT_OPS`` map, after the programs: ``map_fd`` the
+       map, ``target_fd`` 0, ``attach_type`` ``BPF_STRUCT_OPS``.
    * - ``BPF_OBJ_GET_INFO_BY_FD``
      - On each link before it is pinned. Cgroup links: ``cgroup_id`` 1.
        Netfilter: ``pf``, ``hooknum``, ``priority`` as set, and the
@@ -195,9 +199,11 @@ where the caller is the loader.
        perf event type, function name and offset as signed. Uprobe:
        offset count. ``fmod_ret``: ``BPF_MODIFY_RETURN``.
    * - ``BPF_OBJ_PIN``
-     - Links at ``upatches/<name>/link`` or ``link_<n>``, serializer
+     - Links at ``upatches/<name>/link`` or ``link_<n>``, those of the
+       struct_ops maps after those of the programs, serializer
        programs at ``serializers/<map>``, the test-run program at
-       ``test``, maps at ``maps/<map>``, under ``/run/shirudo/bpffs``.
+       ``test``, maps other than struct_ops maps at ``maps/<map>``, under
+       ``/run/shirudo/bpffs``.
 
 A kprobe link's perf event comes from ``perf_event_open(2)`` with
 ``type`` read from ``/sys/bus/event_source/devices/kprobe/type``,

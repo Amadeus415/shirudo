@@ -97,6 +97,28 @@ static int expect_serializer(const struct upatch *u)
 	return arena && error ? 0 : fail("serializer map mismatch");
 }
 
+/* Every program a struct_ops one, which the target's parser accepts. */
+static int expect_struct_ops(const struct upatch *u)
+{
+	struct prog_spec *specs;
+	const void *raw;
+	__u32 len, i;
+	int ret = 0;
+
+	raw = upatch_signed_attach(u, &len);
+	if (!raw)
+		return fail("missing signed metadata");
+	if (prog_specs_parse(raw, len, u->hdr.nr_maps, u->hdr.nr_progs,
+			     &specs))
+		return fail("the target refuses the metadata");
+	for (i = 0; i < u->hdr.nr_progs && !ret; i++) {
+		if (specs[i].role != UPATCH_PROG_ROLE_STRUCT_OPS)
+			ret = fail("program is not a struct_ops program");
+	}
+	prog_specs_free(specs, u->hdr.nr_progs);
+	return ret;
+}
+
 static int expect_uprobe_multi(const struct upatch *u,
 			       const char *path, const char *pattern,
 			       __u32 expected_offsets)
@@ -244,6 +266,8 @@ int main(int argc, char **argv)
 		else
 			ret = expect_uprobe_multi(&u, argv[3], argv[4],
 						  (__u32)count);
+	} else if (strcmp(mode, "struct-ops") == 0 && argc == 3) {
+		ret = expect_struct_ops(&u);
 	} else if (strcmp(mode, "policy-labels") == 0 && argc == 3) {
 		ret = expect_policy_labels(&u);
 	} else {

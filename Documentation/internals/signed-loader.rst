@@ -127,10 +127,12 @@ loader inside the kernel, which ``lsm/bpf`` sees with ``kernel`` true.
      - ``lsm/bpf`` and ``lsm/bpf_prog_load`` see ``kernel`` true and
        allow. The verifier checks each payload program as usual.
    * - userspace
-     - ``BPF_LINK_CREATE`` or ``BPF_RAW_TRACEPOINT_OPEN``, per program
+     - ``BPF_LINK_CREATE`` or ``BPF_RAW_TRACEPOINT_OPEN``, per program,
+       then ``BPF_LINK_CREATE`` per struct_ops map
      - ``lsm/bpf``, runtime authority (``ProgAttach``). shirudo then
-       compares the link the kernel reports with the signed metadata and
-       refuses ``attach_scope_mismatch`` when they differ.
+       compares the link of a program the kernel reports with the signed
+       metadata and refuses ``attach_scope_mismatch`` when they differ.
+       A struct_ops map attaches instead of its programs.
    * - userspace
      - ``BPF_OBJ_PIN`` of each link and map
      - ``lsm/bpf``, runtime authority (``ObjPin``), and the bpffs inode
@@ -149,8 +151,9 @@ The loader returns the descriptors of what it created in its context
 buffer, and the command attaches and pins them. Links are created in
 userspace because gen_loader emits no link creation and
 ``bpf_sys_bpf()`` has no ``BPF_OBJ_PIN``. Each link is pinned at
-``/run/shirudo/bpffs/upatches/<name>/link``, or ``link_<n>`` for several,
-serializers under ``serializers/`` and maps under ``maps/`` beside it. A
+``/run/shirudo/bpffs/upatches/<name>/link``, or ``link_<n>`` for several
+with those of struct_ops maps last, serializers under ``serializers/``
+and maps under ``maps/`` beside it. A
 dot in the name is written as ``~d`` there. The directory carries the
 ``security.bpf.shirudo.payload`` extended attribute with the payload
 digest, which only a task with runtime authority can set.
