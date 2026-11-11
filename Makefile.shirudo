@@ -224,7 +224,6 @@ UTIL_SRCS := \
     util/hex.c \
     util/string.c \
     util/bpm_tree.c \
-    util/image_cache.c \
     util/image_runtime.c \
     util/image_guards.c \
     util/image_keys.c \
