@@ -54,6 +54,133 @@ static void prog_specs_refuse_another_header_count(void)
 	EXPECT_FALSE(specs);
 }
 
+#define KPROBE_BLOCK_LEN \
+	(sizeof(struct upatch_kprobe_targets) + \
+	 sizeof(struct upatch_kprobe_target))
+#define KPROBE_NAMES_MAX	16
+
+/* Metadata of one program whose UPKS block holds the given names. */
+static __u32 one_kprobe_multi(__u8 *buf, __u32 kind, const char *names,
+			      __u32 names_len, __u32 nr_syms)
+{
+	struct upatch_kprobe_targets targets = {};
+	struct upatch_kprobe_target record = {};
+	struct upatch_prog_entry prog;
+	__u8 *cursor = buf + ONE_PROG_LEN;
+
+	one_raw_tracepoint(buf, 0);
+	memcpy(&prog, buf + sizeof(struct upatch_prog_metadata), sizeof(prog));
+	prog.kind = cpu_to_le32(kind);
+	memcpy(buf + sizeof(struct upatch_prog_metadata), &prog, sizeof(prog));
+	targets.magic = cpu_to_le32(UPATCH_KPROBE_TARGET_MAGIC);
+	targets.version = cpu_to_le32(UPATCH_KPROBE_TARGET_VERSION);
+	targets.nr_targets = cpu_to_le32(1);
+	record.nr_syms = cpu_to_le32(nr_syms);
+	record.syms_len = cpu_to_le32(names_len);
+	memcpy(cursor, &targets, sizeof(targets));
+	cursor += sizeof(targets);
+	memcpy(cursor, &record, sizeof(record));
+	cursor += sizeof(record);
+	memcpy(cursor, names, names_len);
+	return (__u32)(ONE_PROG_LEN + KPROBE_BLOCK_LEN + names_len);
+}
+
+static int parse_one(const __u8 *buf, __u32 len)
+{
+	struct prog_spec *specs = NULL;
+	int ret;
+
+	ret = prog_specs_parse(buf, len, 0, 1, &specs);
+	if (!ret)
+		prog_specs_free(specs, 1);
+	else
+		EXPECT_FALSE(specs);
+	return ret;
+}
+
+static void kprobe_multi_names_are_parsed_in_order(void)
+{
+	__u8 buf[ONE_PROG_LEN + KPROBE_BLOCK_LEN + KPROBE_NAMES_MAX];
+	struct prog_spec *specs = NULL;
+	__u32 len;
+
+	len = one_kprobe_multi(buf, UPATCH_ATTACH_KRETPROBE_MULTI, "vfs_a\0vfs_b", 12, 2);
+	ASSERT_EQ(prog_specs_parse(buf, len, 0, 1, &specs), 0);
+	EXPECT_UEQ(specs[0].kind, UPATCH_ATTACH_KRETPROBE_MULTI);
+	ASSERT_UEQ(specs[0].nr_kprobe_syms, 2);
+	EXPECT_STREQ(specs[0].kprobe_syms[0], "vfs_a");
+	EXPECT_STREQ(specs[0].kprobe_syms[1], "vfs_b");
+	prog_specs_free(specs, 1);
+}
+
+static void kprobe_multi_refuses_a_malformed_list(void)
+{
+	__u8 buf[ONE_PROG_LEN + KPROBE_BLOCK_LEN + KPROBE_NAMES_MAX];
+	const __u32 k = UPATCH_ATTACH_KPROBE_MULTI;
+	__u32 len;
+
+	len = one_kprobe_multi(buf, k, "b\0a", 4, 2);
+	EXPECT_EQ(parse_one(buf, len), -EINVAL);
+	len = one_kprobe_multi(buf, k, "a\0a", 4, 2);
+	EXPECT_EQ(parse_one(buf, len), -EINVAL);
+	len = one_kprobe_multi(buf, k, "a\0b", 4, 1);
+	EXPECT_EQ(parse_one(buf, len), -EINVAL);
+	len = one_kprobe_multi(buf, k, "a", 2, 0);
+	EXPECT_EQ(parse_one(buf, len), -EINVAL);
+	len = one_kprobe_multi(buf, k, "a*", 3, 1);
+	EXPECT_EQ(parse_one(buf, len), -EINVAL);
+	len = one_kprobe_multi(buf, k, "\0a", 3, 1);
+	EXPECT_EQ(parse_one(buf, len), -EINVAL);
+	len = one_kprobe_multi(buf, k, "abc", 3, 1);
+	EXPECT_EQ(parse_one(buf, len), -EINVAL);
+}
+
+static void kprobe_multi_block_is_exact(void)
+{
+	__u8 buf[ONE_PROG_LEN + KPROBE_BLOCK_LEN + KPROBE_NAMES_MAX];
+	struct upatch_prog_entry prog;
+	__u32 len;
+
+	len = one_kprobe_multi(buf, UPATCH_ATTACH_KPROBE_MULTI, "a", 2, 1);
+	EXPECT_EQ(parse_one(buf, len), 0);
+	EXPECT_EQ(parse_one(buf, ONE_PROG_LEN), -EINVAL);
+	EXPECT_EQ(parse_one(buf, len - 1), -EINVAL);
+	EXPECT_EQ(parse_one(buf, len + 1), -EINVAL);
+
+	buf[ONE_PROG_LEN] ^= 1;
+	EXPECT_EQ(parse_one(buf, len), -EINVAL);
+	buf[ONE_PROG_LEN] ^= 1;
+
+	memcpy(&prog, buf + sizeof(struct upatch_prog_metadata), sizeof(prog));
+	prog.target[0] = 'a';
+	memcpy(buf + sizeof(struct upatch_prog_metadata), &prog, sizeof(prog));
+	EXPECT_EQ(parse_one(buf, len), -EINVAL);
+	prog.target[0] = '\0';
+	prog.offset = cpu_to_le64(1);
+	memcpy(buf + sizeof(struct upatch_prog_metadata), &prog, sizeof(prog));
+	EXPECT_EQ(parse_one(buf, len), -EINVAL);
+}
+
+static void kprobe_sym_is_one_plain_name(void)
+{
+	char name[UPATCH_KPROBE_SYM_MAX + 1];
+
+	EXPECT_TRUE(kprobe_sym_valid("vfs_read", 8));
+	EXPECT_TRUE(kprobe_sym_valid("foo.cold.1", 10));
+	EXPECT_FALSE(kprobe_sym_valid("", 0));
+	EXPECT_FALSE(kprobe_sym_valid("a,b", 3));
+	EXPECT_FALSE(kprobe_sym_valid("a*", 2));
+	EXPECT_FALSE(kprobe_sym_valid("a?", 2));
+	EXPECT_FALSE(kprobe_sym_valid("a|b", 3));
+	EXPECT_FALSE(kprobe_sym_valid("a b", 3));
+	EXPECT_FALSE(kprobe_sym_valid("a\n", 2));
+	EXPECT_FALSE(kprobe_sym_valid("a\x7f", 2));
+	EXPECT_FALSE(kprobe_sym_valid("a\xc3", 2));
+	memset(name, 'a', sizeof(name));
+	EXPECT_TRUE(kprobe_sym_valid(name, UPATCH_KPROBE_SYM_MAX - 1));
+	EXPECT_FALSE(kprobe_sym_valid(name, UPATCH_KPROBE_SYM_MAX));
+}
+
 static void header_name_is_terminated(void)
 {
 	char out[UPATCH_NAME_MAX + 1];
@@ -221,6 +348,10 @@ static void xdp_programs_select_disjoint_classes(void)
 static const struct unit_case cases[] = {
 	UNIT_CASE(prog_specs_take_the_signed_counts),
 	UNIT_CASE(prog_specs_refuse_another_header_count),
+	UNIT_CASE(kprobe_multi_names_are_parsed_in_order),
+	UNIT_CASE(kprobe_multi_refuses_a_malformed_list),
+	UNIT_CASE(kprobe_multi_block_is_exact),
+	UNIT_CASE(kprobe_sym_is_one_plain_name),
 	UNIT_CASE(header_name_is_terminated),
 	UNIT_CASE(prog_name_is_what_the_kernel_takes),
 	UNIT_CASE(name_signed_is_the_header_name),
