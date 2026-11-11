@@ -218,7 +218,6 @@ UTIL_SRCS := \
     util/loader.c \
     util/upatch.c \
     util/measured.c \
-    util/keys.c \
     util/identity.c \
     util/tamper.c \
     util/paths.c \
@@ -483,7 +482,7 @@ tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o \
                                    util/log.o util/loader.o \
                                    util/io.o util/malloc.o util/paths.o \
                                    util/upatch.o \
-                                   util/hex.o util/keys.o \
+                                   util/hex.o \
                                    util/seal.o util/string.o \
                                    util/upatch_rodata.o \
                                    util/bpm_tree.o $(VERSION_OBJ) \
@@ -730,7 +729,7 @@ testing/helper/test-tpm-preopened: testing/helper/test-tpm-preopened.c \
 	$(Q)$(CC) $(CFLAGS) -o $@ $(filter-out %.h,$^) $(REGISTER_LIBS) \
 		-Wl,--wrap=enforcement_active
 
-testing/helper/test-keys: testing/helper/test-keys.c util/keys.o \
+testing/helper/test-keys: testing/helper/test-keys.c \
                           util/upatch.o $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
@@ -890,7 +889,7 @@ testing/helper/test-config-attest: testing/helper/test-config-attest.c \
 # which the Rust library defines too: the link keeps the first
 # definition, the helper's.
 testing/helper/test-image-keys: testing/helper/test-image-keys.c \
-		util/image_keys.o util/keys.o $(REGISTER_OBJS)
+		util/image_keys.o $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS) \
 		-Wl,--allow-multiple-definition
@@ -1076,7 +1075,7 @@ testing/fuzz/fuzz-serializer: testing/fuzz/fuzz-serializer.c $(FUZZ_BASE) \
                               $(LIBBPF_A)
 testing/fuzz/fuzz-serializer: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-serializer: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS)
-testing/fuzz/fuzz-cms: testing/fuzz/fuzz-cms.c $(FUZZ_BASE) util/keys.c \
+testing/fuzz/fuzz-cms: testing/fuzz/fuzz-cms.c $(FUZZ_BASE) \
                        util/io.c $(FUZZ_SEAL)
 testing/fuzz/fuzz-decoder: testing/fuzz/fuzz-decoder.c $(FUZZ_BASE) \
                            util/upatch_decode.c util/upatch.c util/io.c \
