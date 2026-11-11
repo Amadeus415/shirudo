@@ -221,7 +221,6 @@ UTIL_SRCS := \
     util/identity.c \
     util/tamper.c \
     util/paths.c \
-    util/preflight.c \
     util/kernel_abi.c \
     util/log.c \
     util/io.c \
