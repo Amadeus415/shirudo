@@ -247,7 +247,6 @@ UTIL_SRCS := \
     util/dm_verity.c \
     util/config_update.c \
     util/config_attest.c \
-    util/report.c \
     util/malloc.c \
     util/sysinfo.c \
     util/seal.c \
