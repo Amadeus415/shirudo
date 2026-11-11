@@ -250,7 +250,6 @@ UTIL_SRCS := \
     util/report.c \
     util/malloc.c \
     util/sysinfo.c \
-    util/help.c \
     util/conditions.c \
     util/seal.c \
     util/serializer.c \
