@@ -238,7 +238,6 @@ UTIL_SRCS := \
     util/bpm_tree.c \
     util/bpm_tree_state.c \
     util/image_cache.c \
-    util/image_config.c \
     util/image_runtime.c \
     util/image_guards.c \
     util/image_keys.c \
@@ -489,7 +488,7 @@ build/target/util/loader.o: $(BPF_OBJS)
 tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o \
                                    util/log.o util/loader.o \
                                    util/io.o util/malloc.o util/paths.o \
-                                   util/image_config.o util/upatch.o \
+                                   util/upatch.o \
                                    util/elf_target.o util/hex.o util/keys.o \
                                    util/seal.o util/string.o \
                                    util/crypto_openssl.o util/tls_openssl.o \
@@ -709,7 +708,7 @@ REGISTER_OBJS := util/config_update.o \
                  util/chain.o util/tpm.o \
                  util/upatch.o \
                  util/hex.o util/crypto_openssl.o util/string.o \
-                 util/io.o util/seal.o util/image_config.o \
+                 util/io.o util/seal.o \
                  util/log.o util/malloc.o \
                  util/identity.o \
                  $(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
@@ -745,7 +744,7 @@ testing/helper/test-keys: testing/helper/test-keys.c util/keys.o \
 
 testing/helper/test-seal: testing/helper/test-seal.c util/seal.o util/io.o \
                           util/log.o util/string.o util/malloc.o \
-                          util/image_config.o util/hex.o $(RUST_LIB)
+                          util/hex.o $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
@@ -787,7 +786,7 @@ testing/helper/test-tpm-session: testing/helper/test-tpm-session.c \
 		-Wl,--wrap=enforcement_active,--wrap=identity_read
 
 testing/helper/test-config: testing/helper/test-config.c util/io.o util/seal.o util/log.o util/hex.o \
-                            util/image_config.o util/string.o util/malloc.o $(RUST_LIB)
+                            util/string.o util/malloc.o $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
@@ -822,7 +821,6 @@ testing/helper/test-signed-load: testing/helper/test-signed-load.c
 testing/helper/test-otel-map: testing/helper/test-otel-map.c util/upatch_maps.o \
                         util/upatch_maps_otel.o util/crypto_openssl.o \
                         util/tls_openssl.o util/seal.o \
-                        util/image_config.o \
                         util/upatch_decode.o util/upatch_resolve.o \
                         util/upatch.o util/string.o util/log.o \
                         util/paths.o \
@@ -845,7 +843,6 @@ testing/helper/test-upatch-serializer-pages: testing/helper/test-upatch-serializ
                                        util/upatch_maps.o util/upatch_resolve.o \
                                        util/seal.o \
                                        util/string.o \
-                                       util/image_config.o \
                                        util/malloc.o util/io.o util/paths.o \
                                        util/log.o util/hex.o \
                                        $(RUST_LIB)
@@ -906,7 +903,7 @@ testing/helper/test-image-keys: testing/helper/test-image-keys.c \
 		-Wl,--allow-multiple-definition
 
 testing/helper/test-image-config: testing/helper/test-image-config.c \
-		util/hex.o util/crypto_openssl.o util/image_config.o \
+		util/hex.o util/crypto_openssl.o \
 		util/io.o util/seal.o util/log.o util/malloc.o \
 		util/string.o $(RUST_LIB)
 	@printf '  CC      $@\n'
@@ -1034,8 +1031,7 @@ FUZZ_LIBS := $(RUST_FUZZ_LIB) $(LIBCRYPTO_LIBS) $(LIBSSL_LIBS) \
              $(LIBCURL_LIBS) $(ZLIB_LIBS) $(RUST_TEST_LDLIBS) \
              -Wl,-z,start-stop-gc
 FUZZ_BASE := util/string.c util/hex.c util/malloc.c testing/fuzz/log.c
-FUZZ_CONFIG := util/image_config.c
-FUZZ_SEAL := util/seal.c $(FUZZ_CONFIG)
+FUZZ_SEAL := util/seal.c
 FUZZ_OCI := util/io.c $(FUZZ_SEAL) util/crypto_openssl.c \
             util/tls_openssl.c
 FUZZ_PACKAGE := util/bpm_tree.c util/upatch.c $(FUZZ_OCI)
@@ -1111,7 +1107,7 @@ testing/fuzz/fuzz-oci-ref: testing/fuzz/fuzz-oci-ref.c $(FUZZ_BASE) \
 testing/fuzz/fuzz-registry-auth: testing/fuzz/fuzz-registry-auth.c \
                                  $(FUZZ_BASE) $(FUZZ_OCI)
 testing/fuzz/fuzz-config: testing/fuzz/fuzz-config.c $(FUZZ_BASE) \
-                          $(FUZZ_CONFIG) util/seal.c util/io.c
+                          util/seal.c util/io.c
 testing/fuzz/fuzz-image: testing/fuzz/fuzz-image.c $(FUZZ_BASE) \
                          util/crypto_openssl.c \
                          util/io.c util/paths.c \
