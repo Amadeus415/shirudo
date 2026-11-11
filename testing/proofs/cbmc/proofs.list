@@ -39,7 +39,6 @@ otel-header-fields	-I ../../../vendor/libbpf -I ../../../vendor/libbpf/include/u
 otel-retry-after	-I ../../../vendor/libbpf -I ../../../vendor/libbpf/include/uapi -D__NO_CTYPE --unwind 1 --unwindset response_header.0:33,response_header.1:33,otel_retry_after.0:33,otel_retry_after.1:33,delay.0:33,strlen.0:34,strncasecmp.0:13 LEN=32
 bpm-tree-selector	--unwind 10 --malloc-may-fail --malloc-fail-null LEN=0,1
 bpm-tree-reader		--unwind 6 --malloc-may-fail --malloc-fail-null LEN=0,1
-bpm-source-config	--unwind 14
 chain-events		--unwind 258 LEN=0-8,255-257
 hex-model		--unwind 20
 paths-bpffs-name-model	--unwind 20

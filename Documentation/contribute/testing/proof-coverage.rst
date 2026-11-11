@@ -100,11 +100,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - ``upatch_bpffs_name()``, ``upatch_name_from_bpffs()``
      - Up to 8 bytes, buffers up to 18
      - The result and the string of the Lean model ``Shirudo.PinName``
-   * - ``bpm-source-config``
-     - ``bpm_parse_source_line()``, ``bpm_parse_tree_line()``
-     - Lines up to 12 bytes
-     - A setting written only for its exact key and terminated, without
-       CR or LF
    * - ``bpm-tree-selector``
      - ``tree_selector_kv_add()``, ``tree_selector_copy()``,
        ``tree_selector_free()``, ``tree_text()``
@@ -499,14 +494,15 @@ client of :src:`rust/src/util/bpm_oci/`, the package reader of
 version order and upatch member names included, the TPM structures,
 policy digests and key derivations of :src:`rust/src/util/tpm_wire/`,
 the eventlog of :src:`rust/src/util/eventlog/`, the site configuration
-of :src:`rust/src/util/config.rs`, and the kernel's build ID and release
+of :src:`rust/src/util/config.rs`, the kernel's build ID and release
 match of :src:`rust/src/util/kernel_build_id.rs` and
-:src:`rust/src/util/kernel_release.rs`, whose CBMC proofs went with the
-C they proved when the modules moved to Rust; and how ``json_parse()``
-dispatches objects, arrays and maps to their schemas, the OTLP headers a
-configuration adds, the registry references and URLs, the kernel
-configuration the tree selectors read, the tree log, the evidence
-document beyond its PCRs, the config update record, the site
+:src:`rust/src/util/kernel_release.rs`, and the registry source and tree
+lines of :src:`rust/src/util/bpm_source_config.rs`, whose CBMC proofs
+went with the C they proved when the modules moved to Rust; and how
+``json_parse()`` dispatches objects, arrays and maps to their schemas,
+the OTLP headers a configuration adds, the registry references and URLs,
+the kernel configuration the tree selectors read, the tree log, the
+evidence document beyond its PCRs, the config update record, the site
 configuration file and the config image's settings and tree. The
 ``.upatch`` reader and the tree reader are covered part by part, as the
 table shows; what joins those parts has no proof.
