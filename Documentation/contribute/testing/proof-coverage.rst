@@ -232,14 +232,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - Every index and 64-byte value text
      - Stores only PCRs 0 to 23 and marks exactly that one, from 64 hex
        digits; a refusal marks nothing
-   * - ``config-update-follows``
-     - ``event_follows()`` and ``same_event()`` of :src:`util/config_update.c`
-     - Every record ``record_decode()`` accepts, and the zeroed one before
-       the first line
-     - ``event_follows()`` accepts exactly what ``Follows`` of
-       ``Shirudo.ConfigActivation`` does and refuses with ``EUCLEAN``;
-       ``same_event()`` is the equality of TPM boot, sequence, PCR, kind,
-       initial value and root
    * - ``dm-names``
      - ``dm_name_ok()``, ``dm_device()``
      - Up to 7 bytes
@@ -374,8 +366,8 @@ the model follows the C.
      - None since the port to Rust; the CBMC models went with
        ``util/json.c``
    * - ``Shirudo.ConfigActivation``, the config activation of
-       :src:`util/config_update.c` as ``image update``, ``status`` and
-       ``init`` drive it
+       :src:`rust/src/util/config_update.rs` as ``image update``,
+       ``status`` and ``init`` drive it
      - ``consistent_or_refusing``, ``refusal_persists``: the PCR replays
        from the record with its config mounted, or every command but
        ``status`` and ``image status`` refuses, a pending or drifted state
@@ -395,8 +387,9 @@ the model follows the C.
        equal values from equal extensions (``pcr_value_eq_iff`` with
        ``Shirudo.Chain``'s assumptions); TPM boot identities never repeat;
        a TPM Restart or Resume only between commands
-     - Review; CBMC, ``config-update-follows``, for ``event_follows()`` and
-       ``same_event()``
+     - Review; the CBMC harness ``config-update-follows`` of
+       ``event_follows()`` and ``same_event()`` went with
+       ``util/config_update.c`` in the port to Rust
    * - ``Shirudo.UpatchLoad``, the load, unload and purge of
        :src:`builtin-upatch.c`, the gate of :src:`util/image_runtime.c` and
        the boot restore of :src:`builtin-init.c`

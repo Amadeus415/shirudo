@@ -232,7 +232,6 @@ UTIL_SRCS := \
     util/image_guards.c \
     util/image_keys.c \
     util/dm_verity.c \
-    util/config_update.c \
     util/malloc.c \
     util/seal.c \
     util/upatch_maps.c \
@@ -692,8 +691,7 @@ testing/helper/test-harden: testing/helper/test-harden.c util/log.o \
 # util/malloc.o brings in x*/libc_free that the Rust library uses.
 # The register code pulls in the eventlog, which pulls in the seal
 # label writer and the JSON codec.
-REGISTER_OBJS := util/config_update.o \
-                 util/upatch.o \
+REGISTER_OBJS := util/upatch.o \
                  util/hex.o util/string.o \
                  util/io.o util/seal.o \
                  util/log.o util/malloc.o \
@@ -870,7 +868,6 @@ testing/helper/test-config-image: testing/helper/test-config-image.c \
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-config-update: testing/helper/test-config-update.c \
-		util/config_update.o \
 		$(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
@@ -1050,7 +1047,6 @@ testing/fuzz/fuzz-tpm-wire: testing/fuzz/fuzz-tpm-wire.c $(FUZZ_BASE) \
 testing/fuzz/fuzz-attest: testing/fuzz/fuzz-attest.c $(FUZZ_BASE) \
                           util/attest.c \
                           util/io.c $(FUZZ_SEAL) \
-                          util/config_update.c \
                           util/identity.c \
                           util/version_id.c util/upatch.c \
                           $(LIBBPF_A)
@@ -1096,7 +1092,7 @@ testing/fuzz/fuzz-image: testing/fuzz/fuzz-image.c $(FUZZ_BASE) \
                          util/io.c util/paths.c \
                          $(FUZZ_SEAL)
 testing/fuzz/fuzz-config-update: testing/fuzz/fuzz-config-update.c \
-                                 $(FUZZ_BASE) util/config_update.c \
+                                 $(FUZZ_BASE) \
                                  util/io.c $(FUZZ_SEAL)
 FUZZ_TREE_STATE := util/bpm_tree.c util/upatch.c \
                    util/io.c $(FUZZ_SEAL)
@@ -1110,7 +1106,6 @@ testing/fuzz/fuzz-kconfig: testing/fuzz/fuzz-kconfig.c $(FUZZ_BASE) \
 testing/fuzz/fuzz-otel: FUZZ_INCLUDED := util/upatch_maps_otel.c
 testing/fuzz/fuzz-serializer: FUZZ_INCLUDED := util/upatch_maps.c
 testing/fuzz/fuzz-decoder: FUZZ_INCLUDED := util/upatch_decode.c
-testing/fuzz/fuzz-config-update: FUZZ_INCLUDED := util/config_update.c
 
 $(FUZZ_TARGETS): testing/fuzz/fuzz.h $(RUST_FUZZ_LIB)
 	@printf '  FUZZ    $@\n'
