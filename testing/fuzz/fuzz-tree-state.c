@@ -7,16 +7,9 @@
  */
 
 #include "fuzz.h"
-#include "paths.h"
+#include "bpm_tree.h"
 
 static char fuzz_path[64];
-
-#undef BPM_TREE_STATE_PATH
-#define BPM_TREE_STATE_PATH fuzz_path
-#undef BPM_TREE_EVENTLOG_PATH
-#define BPM_TREE_EVENTLOG_PATH fuzz_path
-
-#include "bpm_tree_state.c"
 
 int LLVMFuzzerTestOneInput(const __u8 *data, size_t size)
 {
@@ -27,8 +20,8 @@ int LLVMFuzzerTestOneInput(const __u8 *data, size_t size)
 	fd = fuzz_file(data, size, fuzz_path, sizeof(fuzz_path));
 	if (fd < 0)
 		return 0;
-	tree_state_read(&state);
-	tree_event_replay(root);
+	tree_state_read_path(fuzz_path, &state);
+	tree_event_replay_path(fuzz_path, root);
 	close(fd);
 	return 0;
 }

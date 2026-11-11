@@ -1,7 +1,18 @@
 // SPDX-License-Identifier: BSD-2-Clause
 /* Copyright (c) 2026 Authors of shirudo */
 
-#include "../../util/bpm_tree_state.c"
+#include <errno.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <zlib.h>
+
+#include <shirudo/string.h>
+
+#include "../../util/bpm_tree.h"
+#include "../../util/io.h"
 
 #include "unit.h"
 
@@ -32,7 +43,6 @@ static void write_config(const char *text, bool gz)
 static const char *modules_in(const char *text, bool gz)
 {
 	static char values[TREE_MAX_KCONFIG][TREE_STRING_MAX];
-	static int slots[TREE_SELECTOR_HASH_SIZE];
 	static struct tree_selector sel;
 	bool found[TREE_MAX_KCONFIG] = {};
 	struct tree_selector_kv *kv;
@@ -43,9 +53,8 @@ static const char *modules_in(const char *text, bool gz)
 	ASSERT_EQ(tree_selector_kv_add(&sel.kconfig, &sel.n_kconfig,
 				       TREE_MAX_KCONFIG, &kv), 0);
 	strscpy(kv->key, "CONFIG_MODULES", sizeof(kv->key));
-	selector_hash_build(&sel, slots);
 	write_config(text, gz);
-	ret = read_selector_config_file(path, &sel, slots, values, found, gz);
+	ret = tree_kconfig_read(path, &sel, values, found, gz);
 	tree_selector_free(&sel);
 	unlink(path);
 	ASSERT_EQ(ret, 0);
@@ -76,7 +85,6 @@ static void long_line_is_one_line(void)
 static int read_gz(bool gz, off_t cut, const char *extra)
 {
 	static char values[TREE_MAX_KCONFIG][TREE_STRING_MAX];
-	static int slots[TREE_SELECTOR_HASH_SIZE];
 	bool found[TREE_MAX_KCONFIG] = {};
 	struct tree_selector sel = {};
 	struct tree_selector_kv *kv;
@@ -86,7 +94,6 @@ static int read_gz(bool gz, off_t cut, const char *extra)
 	ASSERT_EQ(tree_selector_kv_add(&sel.kconfig, &sel.n_kconfig,
 				       TREE_MAX_KCONFIG, &kv), 0);
 	strscpy(kv->key, "CONFIG_MODULES", sizeof(kv->key));
-	selector_hash_build(&sel, slots);
 	write_config("CONFIG_MODULES=y\n", gz);
 	ASSERT_EQ(stat(path, &st), 0);
 	ASSERT_EQ(truncate(path, st.st_size - cut), 0);
@@ -96,7 +103,7 @@ static int read_gz(bool gz, off_t cut, const char *extra)
 		ASSERT_EQ(write_complete(fd, extra, strlen(extra)), 0);
 		ASSERT_EQ(close(fd), 0);
 	}
-	ret = read_selector_config_file(path, &sel, slots, values, found, true);
+	ret = tree_kconfig_read(path, &sel, values, found, true);
 	tree_selector_free(&sel);
 	unlink(path);
 	if (!ret && (!found[0] || strcmp(values[0], "y")))

@@ -232,7 +232,6 @@ UTIL_SRCS := \
     util/hex.c \
     util/string.c \
     util/bpm_tree.c \
-    util/bpm_tree_state.c \
     util/image_cache.c \
     util/image_runtime.c \
     util/image_guards.c \
@@ -1107,7 +1106,7 @@ testing/fuzz/fuzz-config-update: testing/fuzz/fuzz-config-update.c \
                                  $(FUZZ_BASE) util/config_update.c \
                                  testing/fuzz/chain.c \
                                  util/io.c $(FUZZ_SEAL)
-FUZZ_TREE_STATE := util/bpm_tree_state.c util/bpm_tree.c util/upatch.c \
+FUZZ_TREE_STATE := util/bpm_tree.c util/upatch.c \
                    util/io.c $(FUZZ_SEAL) \
                    testing/fuzz/chain.c
 testing/fuzz/fuzz-tree-state: testing/fuzz/fuzz-tree-state.c $(FUZZ_BASE) \
@@ -1117,8 +1116,6 @@ testing/fuzz/fuzz-kconfig: testing/fuzz/fuzz-kconfig.c $(FUZZ_BASE) \
 
 # A target that reaches static parsers includes their source, which it
 # then depends on without linking it a second time.
-testing/fuzz/fuzz-tree-state testing/fuzz/fuzz-kconfig: \
-	FUZZ_INCLUDED := util/bpm_tree_state.c
 testing/fuzz/fuzz-otel: FUZZ_INCLUDED := util/upatch_maps_otel.c
 testing/fuzz/fuzz-serializer: FUZZ_INCLUDED := util/upatch_maps.c
 testing/fuzz/fuzz-decoder: FUZZ_INCLUDED := util/upatch_decode.c
