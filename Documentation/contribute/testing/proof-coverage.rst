@@ -263,19 +263,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
        ``Shirudo.ConfigActivation`` does and refuses with ``EUCLEAN``;
        ``same_event()`` is the equality of TPM boot, sequence, PCR, kind,
        initial value and root
-   * - ``image-bootstrap``
-     - ``bootstrap_parse()`` with ``read_text_line()``
-     - One settings line of 0 to 8 bytes, every earlier state, failed
-       reads and allocations
-     - A certificate under the runtime directory; a PCR only one the
-       config accepts; nothing changes the runtime outside the initial
-       settings
-   * - ``image-path``
-     - ``image_path_valid()``
-     - Up to 8 bytes
-     - An accepted path is absolute, not ``/``, with no ``..`` component
-       and no empty one but the last; every absolute path of plain
-       components is accepted
    * - ``dm-names``
      - ``dm_name_ok()``, ``dm_device()``
      - Up to 7 bytes
@@ -496,9 +483,11 @@ policy digests and key derivations of :src:`rust/src/util/tpm_wire/`,
 the eventlog of :src:`rust/src/util/eventlog/`, the site configuration
 of :src:`rust/src/util/config.rs`, the kernel's build ID and release
 match of :src:`rust/src/util/kernel_build_id.rs` and
-:src:`rust/src/util/kernel_release.rs`, and the registry source and tree
-lines of :src:`rust/src/util/bpm_source_config.rs`, whose CBMC proofs
-went with the C they proved when the modules moved to Rust; and how
+:src:`rust/src/util/kernel_release.rs`, the registry source and tree
+lines of :src:`rust/src/util/bpm_source_config.rs`, and the bootstrap
+file and config root event of :src:`rust/src/util/image_bootstrap.rs`
+and :src:`rust/src/util/config_measure.rs`, whose CBMC proofs went with
+the C they proved when the modules moved to Rust; and how
 ``json_parse()`` dispatches objects, arrays and maps to their schemas,
 the OTLP headers a configuration adds, the registry references and URLs,
 the kernel configuration the tree selectors read, the tree log, the

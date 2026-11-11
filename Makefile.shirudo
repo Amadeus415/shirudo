@@ -242,7 +242,6 @@ UTIL_SRCS := \
     util/bpm_tree.c \
     util/bpm_tree_state.c \
     util/bpm_state.c \
-    util/image_bootstrap.c \
     util/image_cache.c \
     util/image_config.c \
     util/image_runtime.c \
@@ -251,7 +250,6 @@ UTIL_SRCS := \
     util/config_image.c \
     util/dm_verity.c \
     util/config_update.c \
-    util/config_measure.c \
     util/config_attest.c \
     util/report.c \
     util/malloc.c \
@@ -722,7 +720,7 @@ testing/helper/test-harden: testing/helper/test-harden.c util/harden.o util/log.
 # The Rust library resolves config_load(), called by tpm.o.
 # The register code pulls in the eventlog, which pulls in the seal
 # label writer and the JSON codec.
-REGISTER_OBJS := util/config_attest.o util/config_update.o util/config_measure.o util/config_image.o \
+REGISTER_OBJS := util/config_attest.o util/config_update.o util/config_image.o \
                  util/chain.o util/tpm.o \
                  util/timefmt.o util/upatch.o \
                  util/hex.o util/crypto_openssl.o util/string.o \
@@ -903,7 +901,7 @@ testing/helper/test-config-image: testing/helper/test-config-image.c \
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl
 
 testing/helper/test-config-update: testing/helper/test-config-update.c \
-		util/config_update.o util/config_measure.o util/config_image.o \
+		util/config_update.o util/config_image.o \
 		$(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
@@ -919,8 +917,7 @@ testing/helper/test-image-keys: testing/helper/test-image-keys.c \
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
 testing/helper/test-image-config: testing/helper/test-image-config.c \
-		util/image_bootstrap.o util/hex.o util/config_measure.o \
-		util/crypto_openssl.o util/image_config.o \
+		util/hex.o util/crypto_openssl.o util/image_config.o \
 		util/io.o util/seal.o util/log.o util/malloc.o \
 		util/string.o $(RUST_LIB)
 	@printf '  CC      $@\n'
@@ -1085,7 +1082,7 @@ testing/fuzz/fuzz-attest: testing/fuzz/fuzz-attest.c $(FUZZ_BASE) \
                           util/timefmt.c \
                           util/crypto_openssl.c util/io.c $(FUZZ_SEAL) \
                           util/config_attest.c util/config_update.c \
-                          util/config_measure.c util/initrd.c util/identity.c \
+                          util/initrd.c util/identity.c \
                           util/keyring.c util/version_id.c util/upatch.c \
                           $(LIBBPF_A)
 testing/fuzz/fuzz-attest: FUZZ_CFLAGS += $(TSS2_CFLAGS) $(LIBELF_CFLAGS)
@@ -1129,13 +1126,12 @@ testing/fuzz/fuzz-registry-auth: testing/fuzz/fuzz-registry-auth.c \
 testing/fuzz/fuzz-config: testing/fuzz/fuzz-config.c $(FUZZ_BASE) \
                           $(FUZZ_CONFIG) util/seal.c util/io.c
 testing/fuzz/fuzz-image: testing/fuzz/fuzz-image.c $(FUZZ_BASE) \
-                         util/image_bootstrap.c util/config_image.c \
-                         util/config_measure.c util/crypto_openssl.c \
+                         util/config_image.c util/crypto_openssl.c \
                          util/io.c util/paths.c \
                          $(FUZZ_SEAL)
 testing/fuzz/fuzz-config-update: testing/fuzz/fuzz-config-update.c \
                                  $(FUZZ_BASE) util/config_update.c \
-                                 util/config_measure.c testing/fuzz/chain.c \
+                                 testing/fuzz/chain.c \
                                  util/crypto_openssl.c util/io.c $(FUZZ_SEAL)
 FUZZ_TREE_STATE := util/bpm_tree_state.c util/bpm_tree.c util/upatch.c \
                    util/io.c $(FUZZ_SEAL) \
