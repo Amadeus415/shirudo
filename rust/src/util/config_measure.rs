@@ -7,7 +7,7 @@
 use core::ffi::c_int;
 
 use crate::errno::EINVAL;
-use crate::sys::crypto::sha256_buffer;
+use crate::util::crypto_openssl::sha256_buffer;
 
 /// `enum config_event_kind`.
 pub(crate) const EVENT_BOOT: c_int = 1;
