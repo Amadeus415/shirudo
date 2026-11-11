@@ -247,7 +247,6 @@ UTIL_SRCS := \
     util/config_update.c \
     util/config_attest.c \
     util/malloc.c \
-    util/sysinfo.c \
     util/seal.c \
     util/serializer.c \
     util/upatch_maps.c \

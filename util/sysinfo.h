@@ -2,7 +2,8 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * The host overview of `status --include-system`, without a subprocess.
+ * The host overview of `status --include-system`, without a subprocess,
+ * which rust/src/util/sysinfo.rs gathers.
  */
 
 #ifndef SHIRUDO_SYSINFO_H
