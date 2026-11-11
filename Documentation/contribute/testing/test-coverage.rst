@@ -475,7 +475,8 @@ signed config image.
      - The repository update unit and timer and their package
        scriptlets, as text
    * - ``t7005-bpm-publish``
-     - ``bpm build``, ``bpm push`` with a signed index, ``bpm tree
+     - ``bpm build`` and the ``fixes`` lists it takes and refuses,
+       ``bpm push`` with a signed index, ``bpm tree
        append`` and its refusal of an XDP device class two upatches of
        a tree select, A-to-B tree signing-key rotation with explicit
        predecessor verification

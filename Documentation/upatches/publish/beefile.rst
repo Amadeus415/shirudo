@@ -41,6 +41,8 @@ A Beefile is a small subset of TOML, read line by line.
 
 ``bpm build`` reports every error in the file, of syntax or of content,
 as ``bpm build: <file> is not a valid Beefile``, without a line number.
+For a ``fixes`` it refuses, a ``Beefile: fixes ...`` line before that one
+says what is wrong with the list.
 
 Keys
 ----
@@ -277,6 +279,23 @@ tree operation.
      - no
      - The member that a ``delete`` publishes. Default:
        ``unload_target``.
+   * - ``fixes``
+     - array of strings
+     - no
+     - The IDs of the advisories the upatch fixes, such as
+       ``fixes = ["EXAMPLE-0101"]``: 1 to 16 IDs, each once and of 1 to
+       255 bytes of letters, digits, ``.``, ``_``, ``:`` and ``-``. The
+       key may appear once.
+
+``fixes`` is a convention of the keepalive backend, which reads it to say
+which nodes are exposed to an advisory. Nodes ignore it: it selects
+nothing, and no target reads, checks or measures it. ``bpm build``
+checks the form of each ID, not that the advisory exists, and refuses a
+list that breaks the rules above, an empty list and a value that is not
+an array of strings. It keeps the Beefile as written; the order of the
+IDs does not matter, because the list is published in byte order.
+Publishing it comes with ``bpm tree append``, which does not write it
+yet.
 
 ``[upatches.tree.selector]``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -371,6 +390,8 @@ Limits and reserved names
      - 16
    * - values per selector key
      - 16
+   * - IDs in ``fixes``
+     - 16, of 255 bytes each
    * - keys in each of ``kconfig`` and ``labels``
      - 64
    * - length of a string in a selector or command

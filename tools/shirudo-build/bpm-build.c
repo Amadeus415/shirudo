@@ -298,6 +298,70 @@ static int build_parse_selector_kv(const char *key, const char *value,
 	return 0;
 }
 
+static bool build_fix_id_ok(const char *id)
+{
+	const char *p;
+
+	for (p = id; *p; p++) {
+		if (!(*p >= 'A' && *p <= 'Z') && !(*p >= 'a' && *p <= 'z') &&
+		    !(*p >= '0' && *p <= '9') && !strchr("._:-", *p))
+			return false;
+	}
+	return true;
+}
+
+static int build_fix_id_compare(const void *a, const void *b)
+{
+	return strcmp(a, b);
+}
+
+/*
+ * fixes of [upatches.tree]: the advisory IDs the keepalive backend reads
+ * from the publication. Kept in byte order, the order they are published
+ * in.
+ */
+static int build_parse_fixes(const char *value, struct bpm_build_tree *t)
+{
+	int ret;
+
+	if (t->n_fixes) {
+		pr_err("Beefile: fixes is given twice in one [upatches.tree]");
+		return -EINVAL;
+	}
+	ret = build_parse_string_array(value, t->fixes, BPM_BUILD_MAX_FIXES,
+				       &t->n_fixes);
+	if (ret == -E2BIG) {
+		pr_err("Beefile: fixes holds more than %d IDs",
+		       BPM_BUILD_MAX_FIXES);
+		return ret;
+	}
+	if (ret) {
+		pr_err("Beefile: fixes is not an array of 1 to %d strings of at most %d bytes",
+		       BPM_BUILD_MAX_FIXES, TREE_STRING_MAX - 1);
+		return ret;
+	}
+	for (int i = 0; i < t->n_fixes; i++) {
+		if (!t->fixes[i][0]) {
+			pr_err("Beefile: fixes holds an empty ID");
+			return -EINVAL;
+		}
+		if (!build_fix_id_ok(t->fixes[i])) {
+			pr_err("Beefile: ID %d of fixes has a character outside [A-Za-z0-9._:-]",
+			       i + 1);
+			return -EINVAL;
+		}
+	}
+	qsort(t->fixes, (size_t)t->n_fixes, sizeof(t->fixes[0]),
+	      build_fix_id_compare);
+	for (int i = 1; i < t->n_fixes; i++) {
+		if (!strcmp(t->fixes[i - 1], t->fixes[i])) {
+			pr_err("Beefile: fixes holds %s twice", t->fixes[i]);
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
 static bool build_name_ok(const char *s)
 {
 	const __u8 *p = (const __u8 *)s;
@@ -600,6 +664,10 @@ static int build_parse_spec(struct bpm_build_spec *spec, char *body)
 			} else if (!strcmp(key, "unload_artifact")) {
 				dst = t->unload_artifact;
 				cap = sizeof(t->unload_artifact);
+			} else if (!strcmp(key, "fixes")) {
+				if (build_parse_fixes(value, t))
+					return -EINVAL;
+				continue;
 			} else {
 				continue;
 			}

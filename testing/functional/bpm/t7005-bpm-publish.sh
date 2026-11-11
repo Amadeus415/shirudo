@@ -143,6 +143,64 @@ test_expect_success 'bpm build refuses a tree selector or a target spelled anoth
 	done
 '
 
+# fixes names the advisories an upatch fixes, for the keepalive backend.
+# $1 is the package directory under $WORK, $2 the value of the key.
+fixes_package() {
+	mkdir -p "$WORK/$1" &&
+	cp "$WORK/pkg/t7005.bpf.c" "$WORK/$1/" &&
+	ln -s "$REPO/vendor" "$WORK/$1/vendor" &&
+	ln -s "$REPO/bpf" "$WORK/$1/bpf" &&
+	printf '[package]\nname = "t7005"\n\n[[upatches]]\nsource = "t7005.bpf.c"\n\n[upatches.tree]\nid = "t7005"\nfixes = %s\n' \
+		"$2" >"$WORK/$1/Beefile"
+}
+# $1 is the case, $2 the value, $3 what the refusal says.
+fixes_refused() {
+	fixes_package "fixes/$1" "$2" &&
+	( cd "$WORK" && ! "$S" bpm build "fixes/$1" --version 8.0.0 \
+		--keys-dir "$WORK/keys" ) 2>"$WORK/fixes/$1.err" &&
+	grep -q "Beefile: $3" "$WORK/fixes/$1.err" &&
+	grep -q "is not a valid Beefile" "$WORK/fixes/$1.err" &&
+	! test -e "$WORK/t7005-8.0.0.bee"
+}
+# An array of $1 IDs, and one ID of $1 bytes.
+fixes_ids() {
+	python3 -c 'import sys; print("[" + ", ".join("\"ID-%d\"" % i for i in range(int(sys.argv[1]))) + "]")' "$1"
+}
+fixes_long() {
+	python3 -c 'import sys; print("[\"" + "A" * int(sys.argv[1]) + "\"]")' "$1"
+}
+
+test_expect_success 'bpm build takes fixes of 1 to 16 IDs of 1 to 255 bytes' '
+	fixes_package fixes/ok "[\"EXAMPLE-0101\", \"a.B_c:9-\"]" &&
+	( cd "$WORK" && "$S" bpm build fixes/ok --version 8.1.0 \
+		--keys-dir "$WORK/keys" ) >&2 &&
+	tar -xzOf "$WORK/t7005-8.1.0.bee" t7005-8.1.0/Beefile |
+		cmp - "$WORK/fixes/ok/Beefile" &&
+	fixes_package fixes/max "$(fixes_ids 16)" &&
+	( cd "$WORK" && "$S" bpm build fixes/max --version 8.2.0 \
+		--keys-dir "$WORK/keys" ) >&2 &&
+	fixes_package fixes/long "$(fixes_long 255)" &&
+	( cd "$WORK" && "$S" bpm build fixes/long --version 8.3.0 \
+		--keys-dir "$WORK/keys" ) >&2 &&
+	test -s "$WORK/t7005-8.2.0.bee" && test -s "$WORK/t7005-8.3.0.bee"
+'
+
+test_expect_success 'bpm build refuses a malformed fixes' '
+	fixes_refused many "$(fixes_ids 17)" "fixes holds more than 16 IDs" &&
+	fixes_refused dup "[\"B\", \"A\", \"B\"]" "fixes holds B twice" &&
+	fixes_refused empty-id "[\"A\", \"\"]" "fixes holds an empty ID" &&
+	fixes_refused char "[\"A\", \"CVE 1\"]" "ID 2 of fixes has a character outside" &&
+	fixes_refused slash "[\"a/b\"]" "ID 1 of fixes has a character outside" &&
+	fixes_refused escape "[\"A\\n\"]" "ID 1 of fixes has a character outside" &&
+	fixes_refused empty "[]" "fixes is not an array of 1 to 16 strings" &&
+	fixes_refused string "\"EXAMPLE-0101\"" "fixes is not an array of 1 to 16 strings" &&
+	fixes_refused number "[1]" "fixes is not an array of 1 to 16 strings" &&
+	fixes_refused bare "7" "fixes is not an array of 1 to 16 strings" &&
+	fixes_refused toolong "$(fixes_long 256)" "fixes is not an array of 1 to 16 strings" &&
+	fixes_refused twice "[\"A\"]
+fixes = [\"B\"]" "fixes is given twice"
+'
+
 PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 REG="$WORK/registry"
 python3 ./helper/test-oci-registry.py --root "$REG" --port "$PORT" --writable \

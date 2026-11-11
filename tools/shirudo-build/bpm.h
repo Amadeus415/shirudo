@@ -22,6 +22,7 @@
 #define BPM_BUILD_MAX_RODATA 16
 #define BPM_BUILD_MAX_COMMAND_ARGS 16
 #define BPM_BUILD_MAX_POLICIES 64
+#define BPM_BUILD_MAX_FIXES 16
 
 struct bpm_build_policy {
 	char id[UPATCH_POLICY_NAME_MAX];
@@ -53,13 +54,15 @@ struct bpm_build_file {
  * Optional [upatches.tree] table. Publication metadata read by `bpm tree
  * append` on the operator; the target consumes the signed publication and
  * never sees the Beefile. The selector lives on the heap because it is
- * large and rarely present.
+ * large and rarely present. fixes holds the advisory IDs in byte order.
  */
 struct bpm_build_tree {
 	bool present;
 	char id[UPATCH_NAME_MAX];
 	char load_artifact[PATH_MAX];
 	char unload_artifact[PATH_MAX];
+	char fixes[BPM_BUILD_MAX_FIXES][TREE_STRING_MAX];
+	int n_fixes;
 	struct tree_selector *selector;
 };
 
