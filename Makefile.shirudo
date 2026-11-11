@@ -334,12 +334,19 @@ BUILD_SRCS := \
     tools/shirudo-build/vouch.c \
     tools/shirudo-build/image.c
 
+# shirudo-quote-check is a backend's program: it checks keepalive quotes
+# with the TPM parsers of util/ and is never linked into shirudo.
+QUOTE_CHECK_SRCS := \
+    tools/quote-check/quote-check.c \
+    tools/quote-check/row.c
+
 # ----- derived names ----------------------------------------------
 
 UTIL_OBJS    := $(foreach s,$(UTIL_SRCS),$(call obj,$(s:.c=.o)))
 BUILTIN_OBJS := $(foreach s,$(BUILTIN_SRCS),$(call obj,$(s:.c=.o)))
 BPF_OBJS     := $(BPF_SRCS:.c=.bpf.o)
 BUILD_OBJS   := $(foreach s,$(BUILD_SRCS),$(call obj,$(s:.c=.o)))
+QUOTE_CHECK_OBJS := $(foreach s,$(QUOTE_CHECK_SRCS),$(call obj,$(s:.c=.o)))
 
 MAIN_OBJ     := $(call obj,shirudo.o)
 VERSION_OBJ  := $(call obj,util/version_id.o)
@@ -349,13 +356,13 @@ VERSION_OBJ  := $(call obj,util/version_id.o)
 # whose size grew in a header but whose .c was not re-touched, producing
 # an ABI mismatch and memory corruption at runtime.
 DEP_OBJS := $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) \
-            $(BUILD_OBJS)
+            $(BUILD_OBJS) $(QUOTE_CHECK_OBJS)
 DEPS     := $(DEP_OBJS:.o=.d)
 
 # ----- top-level goals --------------------------------------------
 
 .PHONY: all install install-common install-target install-operator clean distclean \
-		test-helpers verity-test-helpers unit-tests \
+		test-helpers verity-test-helpers unit-tests quote-check \
         bpf libbpf
 
 all: shirudo
@@ -363,6 +370,8 @@ all: shirudo
 # shirudo-build is built only when explicitly requested or on the
 # operator install target.
 shirudo-build: tools/shirudo-build/shirudo-build
+
+quote-check: tools/quote-check/shirudo-quote-check
 
 # ----- phase 1: vendored libbpf and the vmlinux.h generator -------
 
@@ -503,6 +512,14 @@ tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o util/config_image.o
 	$(Q)$(LD) $(CFLAGS) $(HARDEN_LDFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ \
 	    $(STATIC_LIBS) $(DYNAMIC_LIBS)
 
+tools/quote-check/shirudo-quote-check: $(QUOTE_CHECK_OBJS) util/tpm_wire.o \
+                                       util/crypto_openssl.o util/hex.o \
+                                       util/json.o util/io.o util/seal.o \
+                                       util/log.o util/malloc.o util/string.o
+	@printf '  LD      $@\n'
+	$(Q)$(LD) $(CFLAGS) $(HARDEN_LDFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ \
+	    $(LIBCRYPTO_LIBS)
+
 # ----- install ----------------------------------------------------
 
 # The reboot-persistence units, with @bindir@ resolved to the install path.
@@ -597,11 +614,14 @@ install-target: shirudo-target install-common systemd/shirudo.service \
 	$(Q)install -m 0644 systemd/90-shirudo-xdp-reconcile.rules \
 	    $(DESTDIR)$(udevrulesdir)/
 
-install-operator: install shirudo-build $(VMLINUX_H) $(BPF_LIBBPF_HEADERS) $(BPF_LIB_HEADERS)
+install-operator: install shirudo-build quote-check $(VMLINUX_H) $(BPF_LIBBPF_HEADERS) $(BPF_LIB_HEADERS)
 	@printf '  INSTALL $(DESTDIR)$(libexecdir)/shirudo/shirudo-build\n'
 	$(Q)install -d $(DESTDIR)$(libexecdir)/shirudo
 	$(Q)install -m 0755 tools/shirudo-build/shirudo-build \
 	    $(DESTDIR)$(libexecdir)/shirudo/shirudo-build
+	@printf '  INSTALL $(DESTDIR)$(bindir)/shirudo-quote-check\n'
+	$(Q)install -m 0755 tools/quote-check/shirudo-quote-check \
+	    $(DESTDIR)$(bindir)/shirudo-quote-check
 	$(Q)install -d $(DESTDIR)$(libexecdir)/shirudo/gen-image
 	$(Q)install -m 0755 tools/gen-image/shirudo-gen-* \
 	    $(DESTDIR)$(libexecdir)/shirudo/gen-image/
@@ -974,11 +994,16 @@ $(UNIT_LIB): $(UTIL_OBJS) $(VERSION_OBJ)
 	$(Q)rm -f $@
 	$(Q)$(AR) rcs $@ $^
 
+# The quote checker's rows are no util module: its suite links the
+# object the program is built from.
+build/unit/quote_check: UNIT_OBJS := tools/quote-check/row.o
+build/unit/quote_check: tools/quote-check/row.o
+
 build/unit/%: testing/unit/%.c testing/unit/unit.c testing/unit/unit.h \
 		$(UNIT_LIB) $(LIBBPF_A)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) -Itesting/unit -o $@ $< testing/unit/unit.c \
-		$(UNIT_LIB) $(LIBBPF_A) $(DYNAMIC_LIBS)
+		$(UNIT_OBJS) $(UNIT_LIB) $(LIBBPF_A) $(DYNAMIC_LIBS)
 
 build/unit/curl: LDFLAGS += -Wl,--wrap=curl_slist_free_all
 
@@ -999,7 +1024,8 @@ unit-tests: $(UNIT_TESTS)
 # compiler would. sparse predefines no __FLT_EVAL_METHOD__, which
 # glibc's <math.h> tests, so -Wundef is the compiler's to check.
 SPARSE_TYPES_H ?= /usr/include/linux/types.h
-SPARSE_SRCS    := shirudo.c $(BUILTIN_SRCS) $(UTIL_SRCS) $(BUILD_SRCS)
+SPARSE_SRCS    := shirudo.c $(BUILTIN_SRCS) $(UTIL_SRCS) $(BUILD_SRCS) \
+                  $(QUOTE_CHECK_SRCS)
 
 .PHONY: sparse
 sparse:
@@ -1151,8 +1177,9 @@ fuzz-targets: $(FUZZ_TARGETS)
 
 clean:
 	$(Q)rm -f shirudo shirudo-target tools/shirudo-build/shirudo-build $(TEST_HELPERS)
+	$(Q)rm -f tools/quote-check/shirudo-quote-check
 	$(Q)rm -f $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) \
-	          $(BUILD_OBJS) $(VERSION_OBJ) util/version_id.c
+	          $(BUILD_OBJS) $(QUOTE_CHECK_OBJS) $(VERSION_OBJ) util/version_id.c
 	$(Q)rm -rf build/target build/unit
 	$(Q)rm -f $(DEPS) testing/helper/*.d
 	$(Q)rm -f $(BPF_OBJS) $(VMLINUX_H) systemd/shirudo.service \

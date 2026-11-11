@@ -588,8 +588,11 @@ The unit suites in :src:`testing/unit/` cover 28 of the modules in
 ``paths``, ``string``, ``sysinfo``, ``upatch``, ``upatch_decode``,
 ``upatch_pins``, ``upatch_resolve``, ``upatch_verify`` and ``xdp``, and
 ``overflow`` the arithmetic of
-:src:`include/shirudo/overflow.h`. The other modules
-are reached through the test helpers, the fuzz targets and the binaries
+:src:`include/shirudo/overflow.h`. ``quote_check`` covers the rows of
+``shirudo-quote-check`` in :src:`tools/quote-check/row.c`, on quotes a
+software P-256 key signs: every reject reason, the signer's qualified
+name, the empty PCR selection and the base64 of each field. The other
+modules are reached through the test helpers, the fuzz targets and the binaries
 the functional tests run.
 
 .. list-table::

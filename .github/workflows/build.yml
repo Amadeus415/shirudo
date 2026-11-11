@@ -52,10 +52,12 @@ jobs:
             . build/vm-toolchain.env
             make -j4 CC=${{ matrix.cc }}
             make CC=${{ matrix.cc }} shirudo-build
+            make CC=${{ matrix.cc }} quote-check
             make -C testing CC=${{ matrix.cc }} test-helpers
             make -C testing CC=${{ matrix.cc }} unit
             sh .github/scripts/check-operator-linkage.sh shirudo \
-              tools/shirudo-build/shirudo-build
+              tools/shirudo-build/shirudo-build \
+              tools/quote-check/shirudo-quote-check
 
   btf:
     name: bpf-next BTF

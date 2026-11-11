@@ -48,7 +48,8 @@ target)
 operator)
 	pkg=shirudo-operator
 	other=shirudo-target
-	bins="$stage/usr/bin/shirudo $stage/usr/libexec/shirudo/shirudo-build"
+	bins="$stage/usr/bin/shirudo $stage/usr/libexec/shirudo/shirudo-build
+	      $stage/usr/bin/shirudo-quote-check"
 	short="signed-BPF lockdown LSM platform (operator tools)"
 	;;
 *)
@@ -97,7 +98,8 @@ mkdir -p "$stage/DEBIAN"
 " compiles and CMS-signs .upatch artifacts. It is for the machine that holds" \
 " the private signing key and produces artifacts for direct target loading;" \
 " it does not install the" \
-" target systemd units."
+" target systemd units. It also installs shirudo-quote-check, which checks" \
+" keepalive quotes for a telemetry backend."
 	fi
 } > "$stage/DEBIAN/control"
 

@@ -54,8 +54,10 @@ signs off.
 .github/scripts/check-sparse.sh
 .github/scripts/check-spdx.sh
 make -C Documentation check         # DOCS_CONTAINER=0 without podman or docker
-make -B && make -B shirudo-build && make -B -f Makefile.shirudo test-helpers
+make -B && make -B shirudo-build && make -B quote-check &&
+	make -B -f Makefile.shirudo test-helpers
 make -B CC=clang && make -B CC=clang shirudo-build &&
+	make -B CC=clang quote-check &&
 	make -B -f Makefile.shirudo CC=clang test-helpers
 make tests VM=0 SANITIZE=address,undefined           # CC=gcc and CC=clang,
                                                      # one worktree each

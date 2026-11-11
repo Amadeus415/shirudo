@@ -312,10 +312,14 @@ Other make targets
    * - ``make install-target``
      - Installs the static target binary as ``shirudo``, the units and
        timers, the dracut module and ``shirudo-gen-initrd``.
+   * - ``make quote-check``
+     - Builds ``tools/quote-check/shirudo-quote-check``, the program a
+       telemetry backend runs on keepalive quotes. See
+       :doc:`/reference/cli/quote-check`.
    * - ``make install-operator``
      - Installs the operator binary, the helper under
-       ``$(libexecdir)/shirudo``, the image scripts, ``vmlinux.h`` and
-       the BPF headers.
+       ``$(libexecdir)/shirudo``, ``shirudo-quote-check``, the image
+       scripts, ``vmlinux.h`` and the BPF headers.
    * - ``DESTDIR=<dir>``, ``prefix=<dir>``, ``bindir=<dir>``,
        ``libexecdir=<dir>``, ``systemdunitdir=<dir>``
      - Override the install paths. The unit and dracut directories are
@@ -374,6 +378,10 @@ Project layout
      - The operator-only helper: compile, sign, unload directives,
        image signing, ``keys vouch``, ``bpm build``, ``push``,
        ``tree append`` and ``config update``.
+   * - :src:`tools/quote-check/`
+     - ``shirudo-quote-check``, a program of its own that checks
+       keepalive quotes with the TPM parsers of :src:`util/tpm_wire.c`.
+       No other binary links it.
    * - :src:`tools/gen-image/`
      - ``shirudo-gen-image``, ``shirudo-gen-runtime`` and
        ``shirudo-gen-verity``, which make the runtime and config images,
@@ -454,7 +462,8 @@ the commit at ``HEAD`` alone without them.
        `Coccinelle rules`_.
    * - ``build-commits.sh <range>``
      - Builds every commit on its own: ``make``, ``make
-       shirudo-build`` and ``make -C testing test-helpers``. It
+       shirudo-build``, ``make quote-check`` and ``make -C testing
+       test-helpers``. It
        refuses to start with uncommitted changes and checks out each
        commit in the working tree.
    * - ``install-clang.sh [<package>...]``

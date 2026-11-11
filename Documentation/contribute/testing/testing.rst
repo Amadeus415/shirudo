@@ -708,7 +708,10 @@ A case left out of the table is an unused static function, which fails
 the build. Each case runs in a child process with a 60-second limit, so
 a crash, a sanitizer report or a hang fails that case alone.
 ``unit_skip()`` skips a case with a reason. The suite links the util
-objects from an archive and needs no build rule of its own.
+objects from an archive and needs no build rule of its own. A suite for
+code outside :src:`util/`, as ``quote_check`` is for
+:src:`tools/quote-check/row.c`, names the object it links in
+``UNIT_OBJS`` in :src:`Makefile.shirudo`.
 
 Write a shell test
 ~~~~~~~~~~~~~~~~~~

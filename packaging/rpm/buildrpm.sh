@@ -105,7 +105,8 @@ dirs=$(cd "$stage" && find . -mindepth 1 -type d -path '*/shirudo*' | sed 's#^\.
 "the operator-side tooling: the shirudo binary plus shirudo-build, which" \
 "compiles and CMS-signs .upatch artifacts. It is for the machine that holds" \
 "the private signing key and produces artifacts for direct target loading;" \
-"it does not install the target systemd units."
+"it does not install the target systemd units. It also installs" \
+"shirudo-quote-check, which checks keepalive quotes for a telemetry backend."
 	fi
 	printf '\n%%install\n'
 	printf 'cp -a %s/. %%{buildroot}/\n' "$stage"

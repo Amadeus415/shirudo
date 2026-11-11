@@ -51,7 +51,7 @@ export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdi
        systemdunitdir udevrulesdir dracutmodulesdir SHIRUDO_TARGET_PKG_CONFIG_PATH \
        SHIRUDO_TARGET_STATIC_LIBDIR
 
-.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build docs bpf-deps install install-target install-operator clean distclean config tests proofs proofs-cbmc proofs-lean4 sparse tags cscope
+.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build quote-check docs bpf-deps install install-target install-operator clean distclean config tests proofs proofs-cbmc proofs-lean4 sparse tags cscope
 
 all: config
 	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=operator CONFIG_MK=config.mk all
@@ -88,6 +88,7 @@ help:
 	@printf '%s\n' \
 	  'shirudo make targets:' \
 	  '  Build: make, make target, make target-deps, make bpf-deps, make install' \
+	  '  Operator tools: make shirudo-build, make quote-check' \
 	  '  Local stack: make stack-up, make oci, make telemetry, make vm, make stack-down' \
 	  '  Checks: make sparse' \
 	  '  Source index: make tags (ctags), make cscope' \
@@ -100,6 +101,9 @@ help:
 
 shirudo-build:
 	+$(Q)$(MAKE) -C tools/shirudo-build
+
+quote-check:
+	+$(Q)$(MAKE) -C tools/quote-check
 
 sparse: config
 	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=operator CONFIG_MK=config.mk sparse

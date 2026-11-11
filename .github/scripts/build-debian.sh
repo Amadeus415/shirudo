@@ -52,6 +52,8 @@ cc --version | head -n 1
 export BPF_VMLINUX_BTF="$btf"
 make -j"$(nproc)"
 make shirudo-build
+make quote-check
 make -C testing unit
 sh .github/scripts/check-operator-linkage.sh shirudo \
-	tools/shirudo-build/shirudo-build
+	tools/shirudo-build/shirudo-build \
+	tools/quote-check/shirudo-quote-check

@@ -5,7 +5,8 @@
 # .github/scripts/build-commits.sh -- build every commit in a range on its
 # own, oldest first, so that the history bisects as
 # Documentation/contribute/code/contributing.rst asks: the binary, the
-# shirudo-build helper and the test helpers. The first commit that does
+# shirudo-build helper, the quote checker and the test helpers. The first
+# commit that does
 # not build is named and the ones after it are not tried.
 #
 #   .github/scripts/build-commits.sh [<rev-list arguments>]
@@ -46,7 +47,9 @@ for c in $commits; do
 		printf '==== [%d/%d] %s\n' "$i" "$n" "$(describe "$c")"
 	fi
 	git checkout -q "$c"
+	# A commit from before the quote checker has no target for it.
 	if ! { make -j"$(nproc)" && make shirudo-build &&
+	       { ! grep -q '^quote-check:' Makefile || make quote-check; } &&
 	       make -C testing test-helpers; }; then
 		if [ -n "${GITHUB_ACTIONS:-}" ]; then
 			printf '::endgroup::\n'

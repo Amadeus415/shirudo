@@ -42,6 +42,8 @@ Packages
      - Operator host
      - - ``/usr/bin/shirudo``, linked against the host's shared libraries
        - the helper ``/usr/libexec/shirudo/shirudo-build``
+       - ``/usr/bin/shirudo-quote-check``, which checks keepalive quotes
+         for a telemetry backend
        - the image generators ``shirudo-gen-image``,
          ``shirudo-gen-runtime`` and ``shirudo-gen-verity`` under
          ``/usr/libexec/shirudo/gen-image/``

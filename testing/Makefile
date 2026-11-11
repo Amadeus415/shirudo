@@ -333,6 +333,7 @@ BUILD_LOCK := $(ROOT)/build/.testing-build.lock
 
 build-operator: build-unit
 	+$(Q)flock $(BUILD_LOCK) $(MAKE) -C $(ROOT) shirudo-build
+	+$(Q)flock $(BUILD_LOCK) $(MAKE) -C $(ROOT) quote-check
 	+$(Q)flock $(BUILD_LOCK) $(MAKE) -C $(ROOT) -f Makefile.shirudo test-helpers
 
 build-unit:

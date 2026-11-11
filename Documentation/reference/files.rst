@@ -61,6 +61,12 @@ Operator host
      - none
      - The compiler ``shirudo-build`` executes for ``.bpf.c`` input,
        clang 23.
+   * - ``$(bindir)/shirudo-quote-check``
+     - operator package, ``make install-operator``
+     - ``0755``
+     - Checks keepalive quotes for a telemetry backend. It reads standard
+       input alone and writes no file. See
+       :doc:`/reference/cli/quote-check`.
    * - ``/tmp/shirudo-build-XXXXXX.bpf.o``
      - ``build``
      - none

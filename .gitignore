@@ -18,6 +18,7 @@
 /shirudo-operator-*.rpm
 /*.spdx.json
 /tools/shirudo-build/shirudo-build
+/tools/quote-check/shirudo-quote-check
 *.o
 *.d
 *.a
