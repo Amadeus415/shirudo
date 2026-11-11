@@ -260,15 +260,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - Accepts exactly the version 1 SHA-256 layout with 4096-byte blocks,
        a 32-byte salt and 1 to 2^28 data blocks; the hash tree's size
        by dm-verity's own formula; nothing changed on refusal
-   * - ``config-auth``
-     - ``set_owner_auth()``
-     - Values of 0 to 16 bytes
-     - A passphrase as it stands, ``hex:`` digits as the bytes they spell;
-       a refusal keeps the value before
-   * - ``config-hosts``
-     - ``tls_classical_hosts_valid()``
-     - Values of 0 to 7 bytes
-     - Empty, or DNS names apart by commas
    * - ``config-update-follows``
      - ``event_follows()`` and ``same_event()`` of :src:`util/config_update.c`
      - Every record ``record_decode()`` accepts, and the zeroed one before
@@ -518,8 +509,9 @@ client of :src:`rust/src/util/bpm_oci/`, the package reader of
 :src:`rust/src/util/bpm_package/`, its tar headers, member paths,
 version order and upatch member names included, the TPM structures,
 policy digests and key derivations of :src:`rust/src/util/tpm_wire/`,
-and the eventlog of :src:`rust/src/util/eventlog/`, whose CBMC proofs
-went with the C they proved when the modules moved to Rust; and how
+the eventlog of :src:`rust/src/util/eventlog/` and the site
+configuration of :src:`rust/src/util/config.rs`, whose CBMC proofs went
+with the C they proved when the modules moved to Rust; and how
 ``json_parse()`` dispatches objects, arrays and maps to their schemas,
 the OTLP headers a configuration adds, the registry references and URLs,
 the kernel configuration the tree selectors read, the tree log, the
