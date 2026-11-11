@@ -53,6 +53,9 @@ signs off.
 ```sh
 .github/scripts/check-sparse.sh
 .github/scripts/check-spdx.sh
+cargo fmt --check --manifest-path rust/Cargo.toml
+cargo clippy --release --offline --locked --manifest-path rust/Cargo.toml \
+	--target-dir build/rust -- -D warnings
 make -C Documentation check         # DOCS_CONTAINER=0 without podman or docker
 make -B && make -B shirudo-build && make -B -f Makefile.shirudo test-helpers
 make -B CC=clang && make -B CC=clang shirudo-build &&

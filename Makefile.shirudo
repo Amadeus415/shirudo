@@ -265,7 +265,6 @@ UTIL_SRCS := \
     util/report.c \
     util/malloc.c \
     util/sysinfo.c \
-    util/similar.c \
     util/help.c \
     util/timefmt.c \
     util/conditions.c \
@@ -350,7 +349,7 @@ DEPS     := $(DEP_OBJS:.o=.d)
 
 .PHONY: all install install-common install-target install-operator clean distclean \
 		test-helpers verity-test-helpers unit-tests \
-        bpf libbpf
+        bpf libbpf rust
 
 all: shirudo
 
@@ -372,6 +371,32 @@ $(LIBBPF_A): $(LIBBPF_SRCS)
 	@printf '  LIBBPF\n'
 	$(Q)$(MAKE) -C $(LIBBPF_VENDOR) CC="$(CC)" Q="$(Q)" \
 		EXTRA_CFLAGS="$(WERROR_CFLAGS)"
+
+# The Rust library, which replaces C modules one at a time behind their
+# headers. Every binary that links util objects links it too, after
+# them. The crate takes core and alloc alone, no crates and no std, so
+# that cargo builds offline from the lock file and the target carries no
+# runtime it does not use; what core refers to of the unwinder comes
+# from libgcc_eh, linked in, as libgcc_s is not a library an operator
+# binary may link.
+CARGO       ?= cargo
+RUST_DIR    := rust
+RUST_TARGET := build/rust
+RUST_LIB    := $(RUST_TARGET)/release/libshirudo_rs.a
+RUST_SRCS   := $(shell find $(RUST_DIR)/src -name '*.rs') \
+               $(RUST_DIR)/Cargo.toml $(RUST_DIR)/Cargo.lock
+RUST_LDLIBS := -static-libgcc
+RUSTFLAGS_WERROR := $(if $(filter 1,$(WERROR)),-D warnings)
+
+rust: $(RUST_LIB)
+
+$(RUST_LIB): $(RUST_SRCS)
+	@printf '  CARGO   $@\n'
+	$(Q)RUSTFLAGS="$(RUSTFLAGS_WERROR)" \
+	    CARGO_PROFILE_RELEASE_DEBUG=$(if $(DEBUG_CFLAGS),true,false) \
+	    $(CARGO) build --quiet --release --locked --offline \
+	    --manifest-path $(RUST_DIR)/Cargo.toml --target-dir $(RUST_TARGET)
+	$(Q)touch $@
 
 # Build-time only; links the vendored libbpf and dumps BTF as C.
 $(VMLINUX_GEN): tools/gen-vmlinux-h/gen-vmlinux-h.c $(LIBBPF_A)
@@ -454,21 +479,23 @@ util/version_id.c:
 
 # ----- phase 5: link ---------------------------------------------
 
-shirudo: $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A)
+shirudo: $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A) \
+         $(RUST_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(LD) $(CFLAGS) $(HARDEN_LDFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ \
 	    $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) \
-	    $(STATIC_LIBS) $(DYNAMIC_LIBS)
+	    $(RUST_LIB) $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
 
 shirudo-target: $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A) \
+                $(RUST_LIB) \
                 Makefile.shirudo $(CONFIG_MK_DEP) .github/scripts/check-static-target.sh
 	@printf '  LD      $@ (static PIE)\n'
 	$(Q)$(LD) $(CFLAGS) $(TARGET_TLS_CFLAGS) \
 	    $(HARDEN_STATIC_PIE_LDFLAGS) $(LDFLAGS) \
 	    -static-pie -static-libgcc -o $@ \
 	    $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) \
-	    $(STATIC_LIBS) $(TARGET_TLS_STATIC_LINK_LIBS) \
-	    $(TARGET_STATIC_RUNTIME_LINK_LIBS)
+	    $(RUST_LIB) $(STATIC_LIBS) $(TARGET_TLS_STATIC_LINK_LIBS) \
+	    $(TARGET_STATIC_RUNTIME_LINK_LIBS) $(RUST_LDLIBS)
 	$(Q)sh .github/scripts/check-static-target.sh $@ || \
 	    { rm -f $@; exit 1; }
 
@@ -491,10 +518,10 @@ tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o util/config_image.o
                                    util/bpm_oci.o util/bpm_package.o \
                                    util/upatch_rodata.o \
                                    util/bpm_tree.o $(VERSION_OBJ) \
-                                   $(LIBBPF_A)
+                                   $(LIBBPF_A) $(RUST_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(LD) $(CFLAGS) $(HARDEN_LDFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ \
-	    $(STATIC_LIBS) $(DYNAMIC_LIBS)
+	    $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
 
 # ----- install ----------------------------------------------------
 
@@ -630,14 +657,15 @@ endif
 
 build/verity-tests/shirudo-image-fault: testing/helper/image-fault.c \
 		testing/helper/image-fault.h \
-		$(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A)
+		$(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A) \
+		$(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) \
 		$(VERITY_TEST_LDFLAGS) -o $@ $(filter-out %.h,$^) \
 		-Wl,--wrap=main,--wrap=Esys_PCR_Extend \
 		-Wl,--wrap=config_root_begin,--wrap=config_root_end \
-		$(STATIC_LIBS) $(VERITY_TEST_LIBS)
+		$(STATIC_LIBS) $(VERITY_TEST_LIBS) $(RUST_LDLIBS)
 
 verity-test-helpers: $(VERITY_TEST_HELPERS) build/verity-tests/shirudo-image-fault
 
@@ -720,12 +748,12 @@ testing/helper/test-nv-writer: testing/helper/test-nv-writer.c $(REGISTER_OBJS)
 testing/helper/test-keyring-seal: testing/helper/test-keyring-seal.c \
 		testing/helper/keyring-seal.h builtin-init.c \
 		$(filter-out $(call obj,builtin-init.o),$(BUILTIN_OBJS)) \
-		$(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A)
+		$(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< \
 		$(filter %.o %.a,$^) \
 		-Wl,--wrap=keyring_bpf_add_cert -Wl,--wrap=keyring_bpf_seal \
-		$(STATIC_LIBS) $(DYNAMIC_LIBS)
+		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
 
 testing/helper/test-tpm-preopened: testing/helper/test-tpm-preopened.c \
                                  $(TPM_CLIENT_SRCS) $(REGISTER_OBJS)
@@ -761,9 +789,9 @@ testing/helper/test-register: testing/helper/test-register.c util/attest.o util/
 		-Wl,--wrap=enforcement_active
 
 testing/helper/test-register-cli: testing/helper/test-register-cli.c \
-		$(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A)
+		$(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
 
 testing/helper/tpmsim-cmd: testing/helper/tpmsim-cmd.c
 	@printf '  CC      $@\n'
@@ -904,22 +932,22 @@ testing/helper/test-image-config: testing/helper/test-image-config.c \
 
 testing/helper/test-image-cli: testing/helper/test-image-cli.c builtin-bpm.c \
 		$(filter-out $(call obj,builtin-bpm.o),$(BUILTIN_OBJS)) \
-		$(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A)
+		$(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ \
 		$(filter-out builtin-bpm.c,$^) \
 		-Wl,--wrap=bpm_tree_fetch_publication \
-		$(STATIC_LIBS) $(DYNAMIC_LIBS)
+		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
 
 testing/helper/test-image-cleanup: testing/helper/test-image-cleanup.c \
 		testing/helper/image-cleanup.h util/image_runtime.c $(BUILTIN_OBJS) \
 		$(filter-out $(call obj,util/image_runtime.o),$(UTIL_OBJS)) \
-		$(VERSION_OBJ) $(LIBBPF_A)
+		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ \
 		$(filter-out %.h util/image_runtime.c,$^) \
 		-Wl,--wrap=dm_verity_remove,--wrap=nanosleep \
-		$(STATIC_LIBS) $(DYNAMIC_LIBS)
+		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
 
 testing/helper/test-mode-objects: testing/helper/test-mode-objects.c \
 		$(call obj,util/loader.o) $(LIBBPF_A)
@@ -948,10 +976,11 @@ $(UNIT_LIB): $(UTIL_OBJS) $(VERSION_OBJ)
 	$(Q)$(AR) rcs $@ $^
 
 build/unit/%: testing/unit/%.c testing/unit/unit.c testing/unit/unit.h \
-		$(UNIT_LIB) $(LIBBPF_A)
+		$(UNIT_LIB) $(LIBBPF_A) $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -Itesting/unit -o $@ $< testing/unit/unit.c \
-		$(UNIT_LIB) $(LIBBPF_A) $(DYNAMIC_LIBS)
+		-Wl,--start-group $(UNIT_LIB) $(RUST_LIB) -Wl,--end-group \
+		$(LIBBPF_A) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
 
 unit-tests: $(UNIT_TESTS)
 
@@ -1122,7 +1151,7 @@ clean:
 	$(Q)rm -f shirudo shirudo-target tools/shirudo-build/shirudo-build $(TEST_HELPERS)
 	$(Q)rm -f $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) \
 	          $(BUILD_OBJS) $(VERSION_OBJ) util/version_id.c
-	$(Q)rm -rf build/target build/unit
+	$(Q)rm -rf build/target build/unit $(RUST_TARGET)
 	$(Q)rm -f $(DEPS) testing/helper/*.d
 	$(Q)rm -f $(BPF_OBJS) $(VMLINUX_H) systemd/shirudo.service \
 	    systemd/shirudo-initrd.service \
