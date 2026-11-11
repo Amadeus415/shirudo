@@ -24,7 +24,6 @@ upatch-btf		-I ../../../vendor/libbpf/include/uapi -I ../../../vendor/libbpf --u
 upatch-btf-int		-I ../../../vendor/libbpf/include/uapi -I ../../../vendor/libbpf --unwind 2 --unwindset btf_integer.0:65
 upatch-rodata		-I ../../../vendor/libbpf/include/uapi -I ../../../vendor/libbpf --refine-arithmetic --object-bits 12 --max-field-sensitivity-array-size 32 --unwind 25 --unwindset memcpy.0:49,strlen.0:18,strcmp.0:18,strnlen.0:18 LEN=6,8,24
 string-number-model	--unwind 6
-measured-fold-model	--unwind 7
 bpm-tree-follows	--unwind 4
 bpm-tree-sync-model	--unwind 60 --max-field-sensitivity-array-size 257 LEN=0-2
 attest-fields		--unwind 18 LEN=0-16

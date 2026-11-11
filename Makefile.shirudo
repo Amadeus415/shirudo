@@ -217,7 +217,6 @@ CLANG_BPF := $(CLANG) -target bpf -mcpu=v4 -fno-jump-tables -O2 -g -Wall -Wextra
 UTIL_SRCS := \
     util/loader.c \
     util/upatch.c \
-    util/measured.c \
     util/identity.c \
     util/tamper.c \
     util/paths.c \
