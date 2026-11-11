@@ -245,7 +245,6 @@ UTIL_SRCS := \
     util/upatch_rodata.c \
     util/upatch_decode.c \
     util/upatch_maps_otel.c \
-    util/elf_target.c \
     util/upatch_resolve.c
 
 BUILTIN_GENKEY_SRC := builtin-genkey.c
@@ -485,7 +484,7 @@ tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o \
                                    util/log.o util/loader.o \
                                    util/io.o util/malloc.o util/paths.o \
                                    util/upatch.o \
-                                   util/elf_target.o util/hex.o util/keys.o \
+                                   util/hex.o util/keys.o \
                                    util/seal.o util/string.o \
                                    util/upatch_rodata.o \
                                    util/bpm_tree.o $(VERSION_OBJ) \
@@ -1069,8 +1068,7 @@ testing/fuzz/fuzz-eventlog: testing/fuzz/fuzz-eventlog.c $(FUZZ_BASE) \
                             $(FUZZ_SEAL) util/io.c \
                             testing/fuzz/chain.c
 testing/fuzz/fuzz-kernel: testing/fuzz/fuzz-kernel.c $(FUZZ_BASE)
-testing/fuzz/fuzz-elf: testing/fuzz/fuzz-elf.c $(FUZZ_BASE) \
-                       util/elf_target.c $(LIBBPF_A)
+testing/fuzz/fuzz-elf: testing/fuzz/fuzz-elf.c $(FUZZ_BASE) $(LIBBPF_A)
 testing/fuzz/fuzz-elf: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-elf: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS)
 testing/fuzz/fuzz-serializer: testing/fuzz/fuzz-serializer.c $(FUZZ_BASE) \
