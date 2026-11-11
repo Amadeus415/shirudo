@@ -234,11 +234,8 @@ UTIL_SRCS := \
     util/upatch_maps_otel.c \
     util/upatch_resolve.c
 
-BUILTIN_GENKEY_SRC := builtin-genkey.c
-
 BUILTIN_SRCS := \
     builtin-init.c \
-    $(BUILTIN_GENKEY_SRC) \
     builtin-status.c \
     builtin-keys.c \
     builtin-image.c \
