@@ -314,8 +314,16 @@ Other make targets
        timers, the dracut module and ``shirudo-gen-initrd``.
    * - ``make quote-check``
      - Builds ``tools/quote-check/shirudo-quote-check``, the program a
-       telemetry backend runs on keepalive quotes. See
-       :doc:`/reference/cli/quote-check`.
+       telemetry backend runs on keepalive quotes, as a static PIE in
+       either profile. The link needs the static archives of the C
+       library and of ``libcrypto`` with those
+       ``pkg-config --static --libs libcrypto`` names: on Ubuntu 26.04,
+       ``libzstd-dev`` and ``libjitterentropy3-dev`` beside
+       ``libssl-dev`` and ``zlib1g-dev``. CI installs them with
+       :src:`.github/scripts/install-static-libcrypto-deps.sh`, which
+       reads that list. A ``SANITIZE=`` build links it
+       against the shared libraries, because the sanitizer runtimes do
+       not link statically. See :doc:`/reference/cli/quote-check`.
    * - ``make install-operator``
      - Installs the operator binary, the helper under
        ``$(libexecdir)/shirudo``, ``shirudo-quote-check``, the image

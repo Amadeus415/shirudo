@@ -35,6 +35,7 @@ openssl_ready() {
 	[ -f "$OPENSSL_STAMP" ] &&
 		[ -x "$OPENSSL_PREFIX/bin/openssl" ] &&
 		[ -s "$OPENSSL_PREFIX/lib/libcrypto.so.3" ] &&
+		[ -s "$OPENSSL_PREFIX/lib/libcrypto.a" ] &&
 		[ -s "$OPENSSL_PREFIX/lib/libssl.so.3" ] || return 1
 
 	version=$(LD_LIBRARY_PATH="$OPENSSL_PREFIX/lib" \

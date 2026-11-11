@@ -121,7 +121,8 @@ jobs:
             apt-get install -y /host/shirudo-operator_*.deb
 
             sh .github/scripts/check-operator-linkage.sh /usr/bin/shirudo \
-              /usr/libexec/shirudo/shirudo-build \
+              /usr/libexec/shirudo/shirudo-build
+            sh .github/scripts/check-static-target.sh \
               /usr/bin/shirudo-quote-check
 
             /usr/bin/shirudo genkey
@@ -384,7 +385,8 @@ jobs:
           rpm -q shirudo-operator clang
           rpm -qV shirudo-operator
           sh .github/scripts/check-operator-linkage.sh /usr/bin/shirudo \
-            /usr/libexec/shirudo/shirudo-build \
+            /usr/libexec/shirudo/shirudo-build
+          sh .github/scripts/check-static-target.sh \
             /usr/bin/shirudo-quote-check
           shirudo genkey
           rm -rf /tmp/shirudo-smoke && mkdir -p /tmp/shirudo-smoke

@@ -49,5 +49,7 @@ apt-get install -y --no-install-recommends \
 	jq \
 	git
 
+sh .github/scripts/install-static-libcrypto-deps.sh
+
 git config --global --add safe.directory /host
 sh .github/scripts/lvh-target-deps.sh

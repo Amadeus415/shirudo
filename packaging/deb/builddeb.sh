@@ -48,8 +48,7 @@ target)
 operator)
 	pkg=shirudo-operator
 	other=shirudo-target
-	bins="$stage/usr/bin/shirudo $stage/usr/libexec/shirudo/shirudo-build
-	      $stage/usr/bin/shirudo-quote-check"
+	bins="$stage/usr/bin/shirudo $stage/usr/libexec/shirudo/shirudo-build"
 	short="signed-BPF lockdown LSM platform (operator tools)"
 	;;
 *)

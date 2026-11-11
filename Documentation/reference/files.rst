@@ -64,8 +64,8 @@ Operator host
    * - ``$(bindir)/shirudo-quote-check``
      - operator package, ``make install-operator``
      - ``0755``
-     - Checks keepalive quotes for a telemetry backend. It reads standard
-       input alone and writes no file. See
+     - Checks keepalive quotes for a telemetry backend. A static PIE.
+       It reads standard input alone and writes no file. See
        :doc:`/reference/cli/quote-check`.
    * - ``/tmp/shirudo-build-XXXXXX.bpf.o``
      - ``build``

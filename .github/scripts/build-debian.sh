@@ -44,6 +44,7 @@ apt-get install -y --no-install-recommends \
 	libtss2-dev \
 	zlib1g-dev
 sh .github/scripts/install-clang.sh
+sh .github/scripts/install-static-libcrypto-deps.sh
 
 git config --global --add safe.directory "$PWD"
 uname -m
@@ -55,5 +56,6 @@ make shirudo-build
 make quote-check
 make -C testing unit
 sh .github/scripts/check-operator-linkage.sh shirudo \
-	tools/shirudo-build/shirudo-build \
+	tools/shirudo-build/shirudo-build
+sh .github/scripts/check-static-target.sh \
 	tools/quote-check/shirudo-quote-check

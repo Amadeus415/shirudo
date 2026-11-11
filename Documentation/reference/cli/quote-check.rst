@@ -19,6 +19,11 @@ Runs on: a backend host, installed by the operator package as
 keeps no state, holds no key list and opens no connection. Changes
 measured state: no.
 
+The program is a static PIE: it needs no shared library and no dynamic
+loader, unlike the other programs of the operator package. Copy the one
+file to where the backend runs it, into a database container for one,
+and it runs there whatever C library and OpenSSL that system has.
+
 Usage
 -----
 

@@ -512,13 +512,25 @@ tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o util/config_image.o
 	$(Q)$(LD) $(CFLAGS) $(HARDEN_LDFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ \
 	    $(STATIC_LIBS) $(DYNAMIC_LIBS)
 
+# A backend runs the checker where it does not choose the libraries, as
+# a function inside a database container for one, so it is a static PIE
+# whatever the profile. The sanitizer runtimes do not link statically.
+PKG_CONFIG ?= pkg-config
+ifeq ($(SANITIZE),)
+QUOTE_CHECK_LDFLAGS := $(HARDEN_STATIC_PIE_LDFLAGS) -static-pie -static-libgcc
+QUOTE_CHECK_LIBS := $(shell $(PKG_CONFIG) --static --libs libcrypto 2>/dev/null)
+else
+QUOTE_CHECK_LDFLAGS := $(HARDEN_LDFLAGS)
+QUOTE_CHECK_LIBS := $(LIBCRYPTO_LIBS)
+endif
+
 tools/quote-check/shirudo-quote-check: $(QUOTE_CHECK_OBJS) util/tpm_wire.o \
                                        util/crypto_openssl.o util/hex.o \
                                        util/json.o util/io.o util/seal.o \
                                        util/log.o util/malloc.o util/string.o
 	@printf '  LD      $@\n'
-	$(Q)$(LD) $(CFLAGS) $(HARDEN_LDFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ \
-	    $(LIBCRYPTO_LIBS)
+	$(Q)$(LD) $(CFLAGS) $(QUOTE_CHECK_LDFLAGS) $(LDFLAGS) -o $@ $^ \
+	    $(QUOTE_CHECK_LIBS)
 
 # ----- install ----------------------------------------------------
 

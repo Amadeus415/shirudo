@@ -316,7 +316,8 @@ one usually still compiles and passes tests.
 ## Building, testing, packaging
 
 - `make` builds the operator binary, `make shirudo-build` the helper,
-  `make quote-check` the backend's quote checker `shirudo-quote-check`
+  `make quote-check` the backend's quote checker `shirudo-quote-check`,
+  a static PIE in either profile,
   and `make target` the fully static PIE target profile (`make target-deps`
   builds OpenSSL, libcurl and tpm2-tss from source first). A checkout
   used in place of an installed operator package names the helper with
