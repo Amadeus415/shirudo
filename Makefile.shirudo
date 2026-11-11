@@ -242,8 +242,6 @@ UTIL_SRCS := \
     util/bpm_tree.c \
     util/bpm_tree_state.c \
     util/bpm_state.c \
-    util/kernel_build_id.c \
-    util/kernel_release.c \
     util/image_bootstrap.c \
     util/image_cache.c \
     util/image_config.c \
@@ -1097,8 +1095,7 @@ testing/fuzz/fuzz-eventlog: testing/fuzz/fuzz-eventlog.c $(FUZZ_BASE) \
                             util/timefmt.c util/upatch.c \
                             $(FUZZ_SEAL) util/io.c util/crypto_openssl.c \
                             testing/fuzz/chain.c
-testing/fuzz/fuzz-kernel: testing/fuzz/fuzz-kernel.c $(FUZZ_BASE) \
-                          util/kernel_build_id.c
+testing/fuzz/fuzz-kernel: testing/fuzz/fuzz-kernel.c $(FUZZ_BASE)
 testing/fuzz/fuzz-elf: testing/fuzz/fuzz-elf.c $(FUZZ_BASE) \
                        util/elf_target.c $(LIBBPF_A)
 testing/fuzz/fuzz-elf: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
@@ -1144,7 +1141,6 @@ testing/fuzz/fuzz-config-update: testing/fuzz/fuzz-config-update.c \
                                  util/crypto_openssl.c util/io.c $(FUZZ_SEAL)
 FUZZ_TREE_STATE := util/bpm_tree_state.c util/bpm_tree.c util/upatch.c \
                    util/io.c $(FUZZ_SEAL) \
-                   util/kernel_build_id.c util/kernel_release.c \
                    util/crypto_openssl.c testing/fuzz/chain.c
 testing/fuzz/fuzz-tree-state: testing/fuzz/fuzz-tree-state.c $(FUZZ_BASE) \
                               $(FUZZ_TREE_STATE)

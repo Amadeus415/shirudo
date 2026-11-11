@@ -286,17 +286,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - Up to 7 bytes
      - A name of 1 to 127 of ``[A-Za-z0-9._-]``, not ``.`` or ``..``; a
        device as decimal major and minor
-   * - ``kernel-notes``
-     - ``kernel_build_id_from_notes()``
-     - Notes of 0 to 24, 28, 32, 36 and 40 bytes
-     - Reads nothing past the notes; a build ID of 1 to 64 lowercase hex
-       digits that is the first GNU build ID note's, or empty, and none
-       from a section whose one note is another
-   * - ``kernel-release``
-     - ``kernel_release_prefix_matches()``
-     - Releases and prefixes up to 8 bytes
-     - Matches exactly where the prefix ends with the release or before a
-       ``.`` or ``-``
    * - ``log-escape``
      - ``escape()`` of :src:`util/log.c`
      - Messages of 0 to 5 bytes, every buffer size
@@ -509,13 +498,15 @@ client of :src:`rust/src/util/bpm_oci/`, the package reader of
 :src:`rust/src/util/bpm_package/`, its tar headers, member paths,
 version order and upatch member names included, the TPM structures,
 policy digests and key derivations of :src:`rust/src/util/tpm_wire/`,
-the eventlog of :src:`rust/src/util/eventlog/` and the site
-configuration of :src:`rust/src/util/config.rs`, whose CBMC proofs went
-with the C they proved when the modules moved to Rust; and how
-``json_parse()`` dispatches objects, arrays and maps to their schemas,
-the OTLP headers a configuration adds, the registry references and URLs,
-the kernel configuration the tree selectors read, the tree log, the
-evidence document beyond its PCRs, the config update record, the site
+the eventlog of :src:`rust/src/util/eventlog/`, the site configuration
+of :src:`rust/src/util/config.rs`, and the kernel's build ID and release
+match of :src:`rust/src/util/kernel_build_id.rs` and
+:src:`rust/src/util/kernel_release.rs`, whose CBMC proofs went with the
+C they proved when the modules moved to Rust; and how ``json_parse()``
+dispatches objects, arrays and maps to their schemas, the OTLP headers a
+configuration adds, the registry references and URLs, the kernel
+configuration the tree selectors read, the tree log, the evidence
+document beyond its PCRs, the config update record, the site
 configuration file and the config image's settings and tree. The
 ``.upatch`` reader and the tree reader are covered part by part, as the
 table shows; what joins those parts has no proof.

@@ -34,8 +34,6 @@ config-update-follows	--unwind 33
 image-bootstrap		--unwind 12 --unwindset bootstrap_parse.0:2,hex_decode.0:1 LEN=0-8
 image-path		--unwind 11
 dm-names		--unwind 10
-kernel-notes		--unwind 1 --unwindset kernel_build_id_from_notes.0:5,hex_encode.0:29,strnlen.0:58,harness.0:58,first_note.0:29,memcmp.0:5 LEN=0-24,28,32,36,40
-kernel-release		--unwind 10
 log-escape		--unwind 7 LEN=0-5
 otel-header-fields	-I ../../../vendor/libbpf -I ../../../vendor/libbpf/include/uapi -D__NO_CTYPE --unwind 34 --unwindset strchr.0:17 LEN=32
 otel-retry-after	-I ../../../vendor/libbpf -I ../../../vendor/libbpf/include/uapi -D__NO_CTYPE --unwind 1 --unwindset response_header.0:33,response_header.1:33,otel_retry_after.0:33,otel_retry_after.1:33,delay.0:33,strlen.0:34,strncasecmp.0:13 LEN=32
