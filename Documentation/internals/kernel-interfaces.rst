@@ -65,8 +65,8 @@ kernel is admitted by the ABI check below, not by its release string.
 Signing ABI check
 -----------------
 
-``kernel_abi_check()`` (:src:`util/kernel_abi.c`) reads the running kernel's
-BTF and requires:
+``kernel_abi_check()`` (:src:`rust/src/util/kernel_abi.rs`) reads the
+running kernel's BTF and requires:
 
 .. list-table::
    :header-rows: 1

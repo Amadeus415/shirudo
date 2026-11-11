@@ -220,7 +220,6 @@ UTIL_SRCS := \
     util/identity.c \
     util/tamper.c \
     util/paths.c \
-    util/kernel_abi.c \
     util/log.c \
     util/hex.c \
     util/string.c \
