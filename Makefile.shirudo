@@ -247,7 +247,6 @@ UTIL_SRCS := \
     util/image_runtime.c \
     util/image_guards.c \
     util/image_keys.c \
-    util/config_image.c \
     util/dm_verity.c \
     util/config_update.c \
     util/config_attest.c \
@@ -501,7 +500,7 @@ build/target/util/loader.o: $(BPF_OBJS)
 # --unload directive emission path), and the OCI client for the
 # operator-only `bpm build|push|tree append`. Not linked into the core
 # shirudo binary.
-tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o util/config_image.o \
+tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o \
                                    util/log.o util/loader.o \
                                    util/io.o util/malloc.o util/paths.o \
                                    util/image_config.o util/upatch.o util/timefmt.o \
@@ -720,7 +719,7 @@ testing/helper/test-harden: testing/helper/test-harden.c util/harden.o util/log.
 # The Rust library resolves config_load(), called by tpm.o.
 # The register code pulls in the eventlog, which pulls in the seal
 # label writer and the JSON codec.
-REGISTER_OBJS := util/config_attest.o util/config_update.o util/config_image.o \
+REGISTER_OBJS := util/config_attest.o util/config_update.o \
                  util/chain.o util/tpm.o \
                  util/timefmt.o util/upatch.o \
                  util/hex.o util/crypto_openssl.o util/string.o \
@@ -894,14 +893,14 @@ testing/end2end/policy-exec: testing/end2end/policy_exec.c
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 testing/helper/test-config-image: testing/helper/test-config-image.c \
-		util/config_image.o util/crypto_openssl.o util/malloc.o \
+		util/crypto_openssl.o util/malloc.o \
 		util/io.o util/seal.o util/hex.o util/log.o \
-		util/string.o
+		util/string.o $(RUST_LIB)
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-config-update: testing/helper/test-config-update.c \
-		util/config_update.o util/config_image.o \
+		util/config_update.o \
 		$(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
@@ -1126,7 +1125,7 @@ testing/fuzz/fuzz-registry-auth: testing/fuzz/fuzz-registry-auth.c \
 testing/fuzz/fuzz-config: testing/fuzz/fuzz-config.c $(FUZZ_BASE) \
                           $(FUZZ_CONFIG) util/seal.c util/io.c
 testing/fuzz/fuzz-image: testing/fuzz/fuzz-image.c $(FUZZ_BASE) \
-                         util/config_image.c util/crypto_openssl.c \
+                         util/crypto_openssl.c \
                          util/io.c util/paths.c \
                          $(FUZZ_SEAL)
 testing/fuzz/fuzz-config-update: testing/fuzz/fuzz-config-update.c \

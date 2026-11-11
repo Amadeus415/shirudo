@@ -249,12 +249,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - The set holds a name with a payload exactly as the Lean model
        ``Shirudo.UpatchLoad`` folds the records, and never with the empty
        payload of a missing xattr
-   * - ``config-image``
-     - ``config_image_read_header()``
-     - Hash files of 0, 511, 512 and 4096 bytes
-     - Accepts exactly the version 1 SHA-256 layout with 4096-byte blocks,
-       a 32-byte salt and 1 to 2^28 data blocks; the hash tree's size
-       by dm-verity's own formula; nothing changed on refusal
    * - ``config-update-follows``
      - ``event_follows()`` and ``same_event()`` of :src:`util/config_update.c`
      - Every record ``record_decode()`` accepts, and the zeroed one before
@@ -484,10 +478,11 @@ the eventlog of :src:`rust/src/util/eventlog/`, the site configuration
 of :src:`rust/src/util/config.rs`, the kernel's build ID and release
 match of :src:`rust/src/util/kernel_build_id.rs` and
 :src:`rust/src/util/kernel_release.rs`, the registry source and tree
-lines of :src:`rust/src/util/bpm_source_config.rs`, and the bootstrap
-file and config root event of :src:`rust/src/util/image_bootstrap.rs`
-and :src:`rust/src/util/config_measure.rs`, whose CBMC proofs went with
-the C they proved when the modules moved to Rust; and how
+lines of :src:`rust/src/util/bpm_source_config.rs`, the bootstrap file
+and config root event of :src:`rust/src/util/image_bootstrap.rs` and
+:src:`rust/src/util/config_measure.rs`, and the config image's
+superblock of :src:`rust/src/util/config_image.rs`, whose CBMC proofs
+went with the C they proved when the modules moved to Rust; and how
 ``json_parse()`` dispatches objects, arrays and maps to their schemas,
 the OTLP headers a configuration adds, the registry references and URLs,
 the kernel configuration the tree selectors read, the tree log, the
