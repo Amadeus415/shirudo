@@ -254,11 +254,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - The set holds a name with a payload exactly as the Lean model
        ``Shirudo.UpatchLoad`` folds the records, and never with the empty
        payload of a missing xattr
-   * - ``eventlog-records``
-     - ``log_records()``
-     - Logs of 0 to 32 bytes
-     - Refuses exactly a log with a NUL; keeps whole lines unchanged up
-       to the last newline, cutting only a torn last line
    * - ``config-image``
      - ``config_image_read_header()``
      - Hash files of 0, 511, 512 and 4096 bytes
@@ -521,17 +516,17 @@ The fuzz targets in :doc:`test-coverage` cover these parsers; no proof
 does: the JSON reader and writer of :src:`rust/src/util/json/`, the OCI
 client of :src:`rust/src/util/bpm_oci/`, the package reader of
 :src:`rust/src/util/bpm_package/`, its tar headers, member paths,
-version order and upatch member names included, and the TPM structures,
+version order and upatch member names included, the TPM structures,
 policy digests and key derivations of :src:`rust/src/util/tpm_wire/`,
-whose CBMC proofs went with the C they proved when the modules moved to
-Rust; and how ``json_parse()`` dispatches objects, arrays and maps to
-their schemas, the OTLP headers a configuration adds, the registry
-references and URLs, the kernel configuration the tree selectors read,
-the tree log, the eventlog's lines, the evidence document beyond its
-PCRs, the config update record, the site configuration file and the
-config image's settings and tree. The ``.upatch`` reader and the tree
-reader are covered part by part, as the table shows; what joins those
-parts has no proof.
+and the eventlog of :src:`rust/src/util/eventlog/`, whose CBMC proofs
+went with the C they proved when the modules moved to Rust; and how
+``json_parse()`` dispatches objects, arrays and maps to their schemas,
+the OTLP headers a configuration adds, the registry references and URLs,
+the kernel configuration the tree selectors read, the tree log, the
+evidence document beyond its PCRs, the config update record, the site
+configuration file and the config image's settings and tree. The
+``.upatch`` reader and the tree reader are covered part by part, as the
+table shows; what joins those parts has no proof.
 
 Within the ``.upatch`` reader, the proofs cover its parts but not their
 composition: ``upatch_parse()`` and ``upatch_open_memory()`` join the

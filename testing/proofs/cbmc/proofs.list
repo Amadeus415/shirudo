@@ -29,7 +29,6 @@ bpm-tree-follows	--unwind 4
 bpm-tree-sync-model	--unwind 60 --max-field-sensitivity-array-size 257 LEN=0-2
 attest-fields		--unwind 18 LEN=0-16
 attest-pcr		--unwind 1 --unwindset harness.0:65,hex_decode.0:33,strlen.0:66 --no-array-field-sensitivity
-eventlog-records	--unwind 34 LEN=0-32
 config-image		--unwind 6 --unwindset memcmp.0:89,harness.0:33 LEN=0,511,512,4096
 config-auth		--unwind 18 LEN=0-16
 config-hosts		--unwind 9 LEN=0-7
