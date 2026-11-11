@@ -235,7 +235,6 @@ UTIL_SRCS := \
     util/log.c \
     util/io.c \
     util/tpm.c \
-    util/tpm_wire.c \
     util/attest.c \
     util/chain.c \
     util/hex.c \
@@ -729,7 +728,7 @@ testing/helper/test-harden: testing/helper/test-harden.c util/harden.o util/log.
 # The register code pulls in the eventlog, which pulls in the seal
 # label writer and the JSON codec.
 REGISTER_OBJS := util/config_attest.o util/config_update.o util/config_measure.o util/config_image.o \
-                 util/chain.o util/tpm.o util/tpm_wire.o util/eventlog.o \
+                 util/chain.o util/tpm.o util/eventlog.o \
                  util/timefmt.o util/upatch.o \
                  util/hex.o util/crypto_openssl.o util/string.o \
                  util/io.o util/seal.o util/config.o util/image_config.o \
@@ -776,11 +775,11 @@ testing/helper/test-eventlog: testing/helper/test-eventlog.c $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
-testing/helper/test-tpm-wire: testing/helper/test-tpm-wire.c util/tpm_wire.o util/hex.o \
+testing/helper/test-tpm-wire: testing/helper/test-tpm-wire.c util/hex.o \
                         util/crypto_openssl.o util/io.o util/seal.o util/malloc.o util/log.o \
-                        util/string.o
+                        util/string.o $(RUST_LIB)
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-register: testing/helper/test-register.c util/attest.o util/keyring.o \
                         util/upatch.o $(TPM_CLIENT_SRCS) $(REGISTER_OBJS)
@@ -1084,11 +1083,10 @@ testing/fuzz/fuzz-bpm-tar: testing/fuzz/fuzz-bpm-tar.c $(FUZZ_BASE) \
 testing/fuzz/fuzz-bpm-package: testing/fuzz/fuzz-bpm-package.c $(FUZZ_BASE) \
                                $(FUZZ_PACKAGE)
 testing/fuzz/fuzz-tpm-wire: testing/fuzz/fuzz-tpm-wire.c $(FUZZ_BASE) \
-                            util/tpm_wire.c util/crypto_openssl.c util/io.c \
-                            $(FUZZ_SEAL)
+                            util/crypto_openssl.c util/io.c $(FUZZ_SEAL)
 testing/fuzz/fuzz-attest: testing/fuzz/fuzz-attest.c $(FUZZ_BASE) \
                           util/attest.c util/chain.c util/nv_writer.c util/tpm.c \
-                          util/tpm_wire.c util/eventlog.c util/timefmt.c \
+                          util/eventlog.c util/timefmt.c \
                           util/crypto_openssl.c util/io.c $(FUZZ_SEAL) \
                           util/config_attest.c util/config_update.c \
                           util/config_measure.c util/initrd.c util/identity.c \

@@ -228,43 +228,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - Headers up to 32 bytes, dates modelled
      - A delay is at most 30 seconds, the value itself when shorter; a
        header line read only within itself
-   * - ``tpm-reader``
-     - The TPM reader primitives of :src:`util/tpm_wire.c`: ``get8()``
-       to ``get64()``, ``get2b()``, ``get2b_fixed()``, ``get_name()``
-     - Every reader state over an input of any size
-     - Every read stays inside what is left, and what is left still ends
-       at the input's end; a sized field lies inside the input and its
-       bound; a name is at most 34 bytes
-   * - ``tpm-signature``
-     - ``tpm_ecdsa_signature_parse()``
-     - Every input
-     - Accepts exactly ECDSA over SHA-256 with 32-byte r and s, in 72
-       bytes, and returns those bytes
-   * - ``tpm-attest``
-     - ``tpm_attest_parse()``
-     - Every input; takes about 8 minutes
-     - Starts with ``TPM_GENERATED``; names fit 34 bytes; extra data of
-       at most 64 bytes inside the input; a quote spans the input with a
-       24-bit PCR mask; an NV certification ends with its data, at most
-       2048 bytes
-   * - ``tpm-public``
-     - ``tpm_public_parse()``, ``tpm_ecc_public_parse()``
-     - Every input; takes about 5 minutes and 7 GB
-     - Accepts only the key shapes shirudo uses, P-256 or RSA-2048 with a
-       256-byte modulus, each spanning exactly the input
-   * - ``tpm-digest``
-     - The policy, name and cpHash digests of :src:`util/tpm_wire.c`,
-       the register's policy, ``tpm_writer_auth_hash()``
-     - Names of any length, every PCR mask, up to 24 PCR values, SHA-256
-       as any result
-     - Each reads only whole inputs and writes only its output; an object
-       name has a public area of 4 bytes or more; a writer's
-       authorization takes a nonce of 1 to 64 bytes
-   * - ``tpm-kdf``
-     - ``tpm_kdfa()``, ``tpm_kdfe()``, ``tpm_credential_protect()``
-     - Labels up to 66 bytes, outputs up to 64, any context
-     - Reads and writes only what it is given; an oversized context or
-       party is refused
    * - ``attest-fields``
      - ``record_word()``
      - Up to 16 characters
@@ -556,18 +519,19 @@ Not covered yet
 
 The fuzz targets in :doc:`test-coverage` cover these parsers; no proof
 does: the JSON reader and writer of :src:`rust/src/util/json/`, the OCI
-client of :src:`rust/src/util/bpm_oci/` and the package reader of
+client of :src:`rust/src/util/bpm_oci/`, the package reader of
 :src:`rust/src/util/bpm_package/`, its tar headers, member paths,
-version order and upatch member names included, whose CBMC proofs went
-with the C they proved when the modules moved to Rust; and how
-``json_parse()`` dispatches objects, arrays and maps to their schemas,
-the OTLP headers a configuration adds, the registry references and
-URLs, the kernel configuration the tree selectors read, the tree log,
-the eventlog's lines, the evidence document beyond its PCRs, the config
-update record, the site configuration file and the config image's
-settings and tree. The ``.upatch`` reader, the TPM structures and the
-tree reader are covered part by part, as the table shows; what joins
-those parts has no proof.
+version order and upatch member names included, and the TPM structures,
+policy digests and key derivations of :src:`rust/src/util/tpm_wire/`,
+whose CBMC proofs went with the C they proved when the modules moved to
+Rust; and how ``json_parse()`` dispatches objects, arrays and maps to
+their schemas, the OTLP headers a configuration adds, the registry
+references and URLs, the kernel configuration the tree selectors read,
+the tree log, the eventlog's lines, the evidence document beyond its
+PCRs, the config update record, the site configuration file and the
+config image's settings and tree. The ``.upatch`` reader and the tree
+reader are covered part by part, as the table shows; what joins those
+parts has no proof.
 
 Within the ``.upatch`` reader, the proofs cover its parts but not their
 composition: ``upatch_parse()`` and ``upatch_open_memory()`` join the

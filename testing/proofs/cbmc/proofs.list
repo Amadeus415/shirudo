@@ -27,12 +27,6 @@ string-number-model	--unwind 6
 measured-fold-model	--unwind 7
 bpm-tree-follows	--unwind 4
 bpm-tree-sync-model	--unwind 60 --max-field-sensitivity-array-size 257 LEN=0-2
-tpm-reader		--unwind 1
-tpm-signature		--unwind 1 --unwindset bytes_at.0:33
-tpm-attest		--unwind 1 --unwindset memcpy.0:35
-tpm-public		--unwind 1
-tpm-digest		--unwind 2 --object-bits 12
-tpm-kdf			--unwind 3 --unwindset strlen.0:68 --object-bits 12 -DLABEL_MAX=66 -DOUT_MAX=64
 attest-fields		--unwind 18 LEN=0-16
 attest-pcr		--unwind 1 --unwindset harness.0:65,hex_decode.0:33,strlen.0:66 --no-array-field-sensitivity
 eventlog-records	--unwind 34 LEN=0-32
