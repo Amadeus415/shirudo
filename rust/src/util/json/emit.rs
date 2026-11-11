@@ -81,6 +81,12 @@ impl JsonEmit {
         self.err
     }
 
+    /// Stop the emitter with `err`, over any error before it, as a C
+    /// caller's `e->err = err` does.
+    pub(crate) fn set_err(&mut self, err: c_int) {
+        self.err = err;
+    }
+
     /// The bytes written so far, before the NUL that ends them.
     pub(crate) fn written(&self) -> usize {
         self.len
@@ -319,7 +325,7 @@ impl JsonEmit {
         self.put_raw(value);
     }
 
-    fn raw(&mut self, value: &[u8]) {
+    pub(crate) fn raw(&mut self, value: &[u8]) {
         self.sep();
         self.put_raw(value);
     }

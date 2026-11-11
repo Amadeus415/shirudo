@@ -6,8 +6,6 @@ string-copy		--unwind 10
 string-suffix		--unwind 8
 string-sanitize		--unwind 8 LEN=0-6
 hex			--unwind 12
-attest-pcrs		--unwind 9
-attest-name-digest	--unwind 72 LEN=64-70
 paths-bpffs-name	--unwind 18
 upatch-header		--unwind 2 --unwindset memchr.0:257
 upatch-decoders		--unwind 2 --unwindset memchr.0:65,parse_decoders.0:3,harness.0:3
@@ -25,8 +23,6 @@ upatch-rodata		-I ../../../vendor/libbpf/include/uapi -I ../../../vendor/libbpf 
 string-number-model	--unwind 6
 bpm-tree-follows	--unwind 4
 bpm-tree-sync-model	--unwind 60 --max-field-sensitivity-array-size 257 LEN=0-2
-attest-fields		--unwind 18 LEN=0-16
-attest-pcr		--unwind 1 --unwindset harness.0:65,hex_decode.0:33,strlen.0:66 --no-array-field-sensitivity
 dm-names		--unwind 10
 log-escape		--unwind 7 LEN=0-5
 otel-header-fields	-I ../../../vendor/libbpf -I ../../../vendor/libbpf/include/uapi -D__NO_CTYPE --unwind 34 --unwindset strchr.0:17 LEN=32

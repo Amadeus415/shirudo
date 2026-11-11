@@ -74,18 +74,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - Up to 8 bytes, strings up to 17 characters, counts and capacities
        up to 8 and past ``SIZE_MAX / 2``
      - The result and the bytes of the Lean model ``Shirudo.Hex``
-   * - ``attest-pcrs``
-     - ``attest_parse_pcrs()``, ``attest_parse_pcr_value()``
-     - Up to 6 bytes
-     - A list is accepted exactly when it is decimal PCRs 0 to 23 apart
-       by single commas, into the mask of those PCRs; a value exactly
-       after a PCR to 23 and an equals sign
-   * - ``attest-name-digest``
-     - ``attest_parse_name_digest()``
-     - Lengths 64 to 70
-     - Accepted exactly when a name of a byte or more runs to the first
-       equals sign and 64 hex digits follow, into that name and their
-       value
    * - ``paths-bpffs-name``
      - ``upatch_bpffs_name()``, ``upatch_name_from_bpffs()``
      - Names up to 4 bytes, pin names up to 8
@@ -219,15 +207,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - Headers up to 32 bytes, dates modelled
      - A delay is at most 30 seconds, the value itself when shorter; a
        header line read only within itself
-   * - ``attest-fields``
-     - ``record_word()``
-     - Up to 16 characters
-     - Passes exactly ``[a-z_]``
-   * - ``attest-pcr``
-     - ``on_pcr()`` of the evidence parser
-     - Every index and 64-byte value text
-     - Stores only PCRs 0 to 23 and marks exactly that one, from 64 hex
-       digits; a refusal marks nothing
    * - ``dm-names``
      - ``dm_name_ok()``, ``dm_device()``
      - Up to 7 bytes

@@ -222,7 +222,6 @@ UTIL_SRCS := \
     util/paths.c \
     util/kernel_abi.c \
     util/log.c \
-    util/attest.c \
     util/hex.c \
     util/string.c \
     util/bpm_tree.c \
@@ -742,8 +741,8 @@ testing/helper/test-tpm-wire: testing/helper/test-tpm-wire.c util/hex.o \
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
 
-testing/helper/test-register: testing/helper/test-register.c util/attest.o \
-                        util/upatch.o $(TPM_CLIENT_SRCS) $(REGISTER_OBJS)
+testing/helper/test-register: testing/helper/test-register.c util/upatch.o \
+                        $(TPM_CLIENT_SRCS) $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $(filter-out %.h,$^) $(REGISTER_LIBS) \
 		-Wl,--wrap=enforcement_active
@@ -872,7 +871,7 @@ testing/helper/test-config-update: testing/helper/test-config-update.c \
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
 testing/helper/test-config-attest: testing/helper/test-config-attest.c \
-		util/attest.o util/upatch.o $(REGISTER_OBJS)
+		util/upatch.o $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
@@ -1045,7 +1044,6 @@ testing/fuzz/fuzz-bpm-package: testing/fuzz/fuzz-bpm-package.c $(FUZZ_BASE) \
 testing/fuzz/fuzz-tpm-wire: testing/fuzz/fuzz-tpm-wire.c $(FUZZ_BASE) \
                             $(FUZZ_SEAL)
 testing/fuzz/fuzz-attest: testing/fuzz/fuzz-attest.c $(FUZZ_BASE) \
-                          util/attest.c \
                           $(FUZZ_SEAL) \
                           util/identity.c \
                           util/version_id.c util/upatch.c \
