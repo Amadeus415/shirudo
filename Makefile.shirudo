@@ -242,7 +242,6 @@ UTIL_SRCS := \
     util/string.c \
     util/bpm_tree.c \
     util/bpm_tree_state.c \
-    util/bpm_package.c \
     util/bpm_state.c \
     util/kernel_build_id.c \
     util/kernel_release.c \
@@ -517,7 +516,6 @@ tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o util/config_image.o
                                    util/elf_target.o util/hex.o util/keys.o \
                                    util/seal.o util/harden.o util/string.o \
                                    util/crypto_openssl.o util/tls_openssl.o \
-                                   util/bpm_package.o \
                                    util/upatch_rodata.o \
                                    util/bpm_tree.o $(VERSION_OBJ) \
                                    $(LIBBPF_A) $(RUST_LIB)
@@ -1052,14 +1050,15 @@ FUZZ_LIBS := $(RUST_FUZZ_LIB) $(LIBCRYPTO_LIBS) $(LIBSSL_LIBS) \
 # The coverage tables of the Rust library hold on to every function in
 # it, so each target links the C those functions call.
 FUZZ_RUST_C := util/io.c util/seal.c util/config.c util/image_config.c \
-               util/crypto_openssl.c util/tls_openssl.c
+               util/crypto_openssl.c util/tls_openssl.c util/bpm_tree.c \
+               util/upatch.c
 FUZZ_BASE := util/string.c util/hex.c util/malloc.c testing/fuzz/log.c \
              $(FUZZ_RUST_C)
 FUZZ_CONFIG := util/config.c util/image_config.c
 FUZZ_SEAL := util/seal.c $(FUZZ_CONFIG)
 FUZZ_OCI := util/io.c $(FUZZ_SEAL) util/crypto_openssl.c \
             util/tls_openssl.c
-FUZZ_PACKAGE := util/bpm_package.c util/bpm_tree.c util/upatch.c $(FUZZ_OCI)
+FUZZ_PACKAGE := util/bpm_tree.c util/upatch.c $(FUZZ_OCI)
 
 FUZZ_TARGETS := $(patsubst %.c,%,$(wildcard testing/fuzz/fuzz-*.c))
 
