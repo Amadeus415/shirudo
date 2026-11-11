@@ -102,8 +102,9 @@ helpers to use.
   the C file goes in the same commit. The crate is `no_std`: core and
   alloc alone, no crates, and the C library through `extern` declarations
   as the C uses it. It builds with `panic = "abort"`, overflow checks and
-  LTO, and every `unsafe` block says why it is sound in a `// SAFETY:`
-  comment, which clippy enforces. The BPF side stays in C.
+  LTO, allocates through a global allocator that zeroes and scrubs as
+  `util/malloc.c` does, and every `unsafe` block says why it is sound in
+  a `// SAFETY:` comment, which clippy enforces. The BPF side stays in C.
 - C, no C++. Zero-initialise with `= {}`. Integers are `__u8` to
   `__u64` and `__s8` to `__s64`; a system header that uses `uint8_t` and
   its kin goes above the first shirudo header, which poisons them.
@@ -112,7 +113,7 @@ helpers to use.
   for sizes, `strscpy()` and `strsprintf()` with their `-E2BIG`
   checked, the `xmalloc()` family, `min()` and `max()`,
   `memzero_explicit()` and `memneq_explicit()` for secrets,
-  `util/json.c` for all JSON and `pr_*()` for all logging. The libc names
+  `util/json.h` for all JSON and `pr_*()` for all logging. The libc names
   they replace are poisoned. Code that a second place needs moves into
   `util/` with unit cases rather than being copied.
 - `ret` names a return code and `err` an errno kept beside the value a

@@ -83,7 +83,7 @@ gigabytes is one to reshape, not to wait for.
   symbolic, and a heap object of symbolic size blows up memory: give an
   allocation a fixed size the harness bounds. A write through a pointer
   into a big struct becomes an update of all of it; index the member in
-  place, as `sep()` of `util/json.c` does.
+  place.
 - `proof.h` models `vsnprintf()` for `%s` and `%d`, `%u`, `%x` with a zero
   flag, a width and `ll`, and fails a proof on any other conversion;
   CBMC does not promote variadic arguments, so the model reads each by

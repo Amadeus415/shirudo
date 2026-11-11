@@ -1045,8 +1045,7 @@ revocation does not reach tree publications (U13).
    ``bpm-oci-descriptor``, ``bpm-semver-model``, ``Shirudo.SemVer``,
    ``Shirudo.ArchivePath``, ``bpm-archive-path-model``,
    ``Shirudo.JsonString``, ``Shirudo.TreeSync``, ``bpm-tree-follows``,
-   ``bpm-tree-sync-model``, ``bpm-tree-reader``, ``json-string``,
-   ``json-limits``
+   ``bpm-tree-sync-model``, ``bpm-tree-reader``
 :Residual: R8, R9, U3, U4, U13, U15
 
 T8 Quantum-capable adversaries against the trust anchor
