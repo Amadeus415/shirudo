@@ -238,7 +238,6 @@ UTIL_SRCS := \
     util/string.c \
     util/bpm_tree.c \
     util/bpm_tree_state.c \
-    util/bpm_state.c \
     util/image_cache.c \
     util/image_config.c \
     util/image_runtime.c \
