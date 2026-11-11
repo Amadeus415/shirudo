@@ -13,7 +13,7 @@ that root on the target cannot rewrite or append to, and the TPM signs
 that register on request. This page explains the register, its write
 policy and binding, the events and the eventlog, the evidence, what the
 operator's verifier computes, the separate config PCR, and the limits.
-:src:`util/chain.c`, :src:`rust/src/util/tpm.rs`,
+:src:`rust/src/util/chain.rs`, :src:`rust/src/util/tpm.rs`,
 :src:`rust/src/util/tpm_wire/`, :src:`rust/src/util/eventlog/` and
 :src:`util/attest.c` are the reference.
 
@@ -236,9 +236,11 @@ upatch names of every length ``upatch_name_valid()`` takes and every
 sequence number, and that the ``init`` listing spells one set of distinct
 names whatever order ``qsort()`` leaves. With the register's fold, equal
 registers then come from the same events in the same order unless
-SHA-256 collides among the strings the two histories hash. CBMC shows
-that :src:`util/chain.c` hashes exactly the bytes the model encodes. The
-proofs are in :doc:`/contribute/testing/proof-coverage`.
+SHA-256 collides among the strings the two histories hash. A CBMC
+harness showed that ``util/chain.c`` hashed exactly the bytes the model
+encodes; it went with that file when the code moved to
+:src:`rust/src/util/chain.rs`. The proofs are in
+:doc:`/contribute/testing/proof-coverage`.
 
 Eventlog
 --------

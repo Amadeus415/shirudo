@@ -2,17 +2,18 @@
 -- Copyright (c) 2026 Authors of shirudo
 
 /-!
-The measurement register of util/chain.c. Each upatch state change
-extends it as `H(register ‖ event)`, the way a TPM extends a PCR, with an
-event that hashes a domain-separating tag and its payload. `attest verify`
-replays the eventlog and compares the result with the register the TPM
-signed. Assuming `H` is collision resistant, modelled as injective on
-(register, event) pairs and never yielding the initial value, and the
-tagged encoding of events likewise, equal registers mean the target
-measured exactly the events the log shows, in that order.
+The measurement register of rust/src/util/chain.rs. Each upatch state
+change extends it as `H(register ‖ event)`, the way a TPM extends a PCR,
+with an event that hashes a domain-separating tag and its payload.
+`attest verify` replays the eventlog and compares the result with the
+register the TPM signed. Assuming `H` is collision resistant, modelled as
+injective on (register, event) pairs and never yielding the initial
+value, and the tagged encoding of events likewise, equal registers mean
+the target measured exactly the events the log shows, in that order.
 `register_injective_on` asks the same of `H` only on the pairs the two
 sequences fold, which a real hash can meet; `Shirudo.Events` proves the
-encodings of util/chain.c injective and builds the end theorem on it.
+encodings of rust/src/util/chain.rs injective and builds the end theorem
+on it.
 -/
 
 namespace Shirudo.Chain

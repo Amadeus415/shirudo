@@ -225,7 +225,6 @@ UTIL_SRCS := \
     util/log.c \
     util/io.c \
     util/attest.c \
-    util/chain.c \
     util/hex.c \
     util/string.c \
     util/bpm_tree.c \
@@ -688,14 +687,13 @@ testing/helper/test-harden: testing/helper/test-harden.c util/log.o \
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LIBCRYPTO_LIBS) $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
 
-# chain.o's read/extend paths reference the TPM client (libtss2), which
-# the Rust library holds, so the symbols must resolve even for a
-# helper that never extends.
-# util/malloc.o brings in x*/libc_free that chain.o uses.
+# The register, in the Rust library, reads and extends through the TPM
+# client (libtss2), so the symbols must resolve even for a helper that
+# never extends.
+# util/malloc.o brings in x*/libc_free that the Rust library uses.
 # The register code pulls in the eventlog, which pulls in the seal
 # label writer and the JSON codec.
 REGISTER_OBJS := util/config_update.o \
-                 util/chain.o \
                  util/upatch.o \
                  util/hex.o util/string.o \
                  util/io.o util/seal.o \
@@ -1051,7 +1049,7 @@ testing/fuzz/fuzz-bpm-package: testing/fuzz/fuzz-bpm-package.c $(FUZZ_BASE) \
 testing/fuzz/fuzz-tpm-wire: testing/fuzz/fuzz-tpm-wire.c $(FUZZ_BASE) \
                             util/io.c $(FUZZ_SEAL)
 testing/fuzz/fuzz-attest: testing/fuzz/fuzz-attest.c $(FUZZ_BASE) \
-                          util/attest.c util/chain.c \
+                          util/attest.c \
                           util/io.c $(FUZZ_SEAL) \
                           util/config_update.c \
                           util/identity.c \
@@ -1061,8 +1059,7 @@ testing/fuzz/fuzz-attest: FUZZ_CFLAGS += $(TSS2_CFLAGS) $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-attest: FUZZ_LIBS += $(TSS2_LIBS) $(LIBBPF_A) $(LIBELF_LIBS) $(ZLIB_LIBS)
 testing/fuzz/fuzz-eventlog: testing/fuzz/fuzz-eventlog.c $(FUZZ_BASE) \
                             util/upatch.c \
-                            $(FUZZ_SEAL) util/io.c \
-                            testing/fuzz/chain.c
+                            $(FUZZ_SEAL) util/io.c
 testing/fuzz/fuzz-kernel: testing/fuzz/fuzz-kernel.c $(FUZZ_BASE)
 testing/fuzz/fuzz-elf: testing/fuzz/fuzz-elf.c $(FUZZ_BASE) $(LIBBPF_A)
 testing/fuzz/fuzz-elf: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
@@ -1101,11 +1098,9 @@ testing/fuzz/fuzz-image: testing/fuzz/fuzz-image.c $(FUZZ_BASE) \
                          $(FUZZ_SEAL)
 testing/fuzz/fuzz-config-update: testing/fuzz/fuzz-config-update.c \
                                  $(FUZZ_BASE) util/config_update.c \
-                                 testing/fuzz/chain.c \
                                  util/io.c $(FUZZ_SEAL)
 FUZZ_TREE_STATE := util/bpm_tree.c util/upatch.c \
-                   util/io.c $(FUZZ_SEAL) \
-                   testing/fuzz/chain.c
+                   util/io.c $(FUZZ_SEAL)
 testing/fuzz/fuzz-tree-state: testing/fuzz/fuzz-tree-state.c $(FUZZ_BASE) \
                               $(FUZZ_TREE_STATE)
 testing/fuzz/fuzz-kconfig: testing/fuzz/fuzz-kconfig.c $(FUZZ_BASE) \

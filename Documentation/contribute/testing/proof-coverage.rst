@@ -232,16 +232,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - Every index and 64-byte value text
      - Stores only PCRs 0 to 23 and marks exactly that one, from 64 hex
        digits; a refusal marks nothing
-   * - ``chain-events``
-     - ``chain_upatch_event()``, ``chain_key_event()``,
-       ``chain_tree_event()``, ``chain_fold()``, ``chain_init_event()`` of
-       an empty set
-     - Names of 0 to 8 and 255 to 257 bytes; every payload, digest,
-       sequence number and register
-     - SHA-256 is given exactly the bytes of the Lean model
-       ``Shirudo.Events``: the tag and its NUL, then the fixed fields, the
-       name cut at 256 bytes and the sequence number most significant byte
-       first; the event is the digest, or zeros with the error
    * - ``measured-fold-model``
      - ``measured_event()``, ``measured_holds()``
      - Every sequence of up to six init, load and unload records over two
@@ -288,7 +278,7 @@ the model follows the C.
        spell, or ``-ERANGE`` exactly when it passes ``max``
      - ``max`` fits a ``__u64``
      - CBMC, ``string-number-model``, up to 4 bytes
-   * - ``Shirudo.Chain``, the register of :src:`util/chain.c`
+   * - ``Shirudo.Chain``, the register of :src:`rust/src/util/chain.rs`
      - ``register_injective``, ``register_tagged_injective``: equal
        registers come from the same events, tagged the same, in the same
        order; ``register_injective_on``: the same with the hash injective
@@ -299,7 +289,8 @@ the model follows the C.
        initial value; ``register_tagged_injective`` also takes the tagged
        encoding as injective, which ``Shirudo.Events`` proves
      - Review
-   * - ``Shirudo.Events``, the event encodings of :src:`util/chain.c`
+   * - ``Shirudo.Events``, the event encodings of
+       :src:`rust/src/util/chain.rs`
      - ``bytes_injective``: two admitted events hash the same bytes only
        when they are the same event; ``listing_injective``: the init
        event's listing spells one set while no name holds a newline;
@@ -312,8 +303,9 @@ the model follows the C.
      - SHA-256 maps no two different strings the two histories hash to one
        digest and none to 32 zero bytes; names ``upatch_name_valid()``
        accepts of at most 256 bytes; sequence numbers of a ``__s64``
-     - CBMC, ``chain-events``, names of up to 8 and of 255 to 257 bytes;
-       the listing of a non-empty set and the NV extend by review
+     - Review of the listing of a non-empty set and the NV extend; the
+       CBMC harness of the rest, ``chain-events``, went with
+       ``util/chain.c`` in the port to Rust
    * - ``Shirudo.Measured``, ``measured_event()`` of :src:`util/measured.c`
      - ``holds_iff``: ``measured_holds()`` finds a name and payload exactly
        when the last init, load or unload bearing on the name is its load
