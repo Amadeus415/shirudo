@@ -74,10 +74,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - Up to 8 bytes, strings up to 17 characters, counts and capacities
        up to 8 and past ``SIZE_MAX / 2``
      - The result and the bytes of the Lean model ``Shirudo.Hex``
-   * - ``io-lines``
-     - ``lines_len()``
-     - Up to 8 bytes
-     - Ends at a newline or is 0, with no newline behind it
    * - ``attest-pcrs``
      - ``attest_parse_pcrs()``, ``attest_parse_pcr_value()``
      - Up to 6 bytes

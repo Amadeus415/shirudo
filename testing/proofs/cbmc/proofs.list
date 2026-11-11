@@ -6,7 +6,6 @@ string-copy		--unwind 10
 string-suffix		--unwind 8
 string-sanitize		--unwind 8 LEN=0-6
 hex			--unwind 12
-io-lines		--unwind 10
 attest-pcrs		--unwind 9
 attest-name-digest	--unwind 72 LEN=64-70
 paths-bpffs-name	--unwind 18
