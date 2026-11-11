@@ -71,7 +71,7 @@ Run the proofs
    .. code-block:: console
 
       $ make proofs-lean4
-      $ make proofs-cbmc PROOFS="string-number upatch-header"
+      $ make proofs-cbmc PROOFS="string-number log-escape"
 
 3. Read why a CBMC proof failed:
 

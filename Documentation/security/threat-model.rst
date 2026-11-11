@@ -873,10 +873,6 @@ other.
 :Counters: ``PinXattr`` for a forged payload binding; none for a
    modified loader, which the kernel refuses first
 :Tests: ``t3104``, ``t6117``, ``t6138``
-:Proofs: ``upatch-header``, ``upatch-signed-sections``,
-   ``upatch-signed-name``, ``upatch-name``, ``upatch-prog-specs``,
-   ``upatch-prog-uprobes``, ``upatch-decoders``,
-   ``upatch-policy-labels``
 :Residual: R1, R16
 
 .. _tm-t5:

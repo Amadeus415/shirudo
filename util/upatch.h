@@ -2,7 +2,8 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * .upatch container parser. On-disk layout in <shirudo/upatch.h>.
+ * .upatch container parser, which rust/src/util/upatch.rs implements.
+ * On-disk layout in <shirudo/upatch.h>.
  */
 
 #ifndef SHIRUDO_UTIL_UPATCH_H

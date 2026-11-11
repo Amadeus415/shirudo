@@ -7,19 +7,9 @@ string-suffix		--unwind 8
 string-sanitize		--unwind 8 LEN=0-6
 hex			--unwind 12
 paths-bpffs-name	--unwind 18
-upatch-header		--unwind 2 --unwindset memchr.0:257
-upatch-decoders		--unwind 2 --unwindset memchr.0:65,parse_decoders.0:3,harness.0:3
-upatch-policy-labels	--unwind 3 LEN=0,19,20,4187,4188,4189,8356
-upatch-name		--unwind 33
-upatch-signed-sections	--refine-arithmetic --unwind 2 --unwindset parse_signed_sections.0:4,parse_decoders.0:0,parse_policy_labels.0:0 LEN=15,16,40,64
-upatch-signed-name	--refine-arithmetic --unwind 2 --unwindset parse_signed_sections.0:2,parse_decoders.0:2,parse_policy_labels.0:0 LEN=288
-upatch-prog-specs	--refine-arithmetic --memory-leak-check --malloc-may-fail --malloc-fail-null --unwind 3 --unwindset memchr.0:129,strchr.0:129,strnlen.0:1,strlen.0:1,prog_specs_parse.2:0,prog_specs_parse.3:0,uprobe_valid.0:1 LEN=3,15,16,176
-upatch-prog-uprobes	--memory-leak-check --malloc-may-fail --malloc-fail-null --unwind 3 --unwindset memchr.0:129,strchr.0:129,strnlen.0:12,strlen.0:12,prog_specs_parse.2:3,prog_specs_parse.3:2,uprobe_valid.0:3 LEN=226
 upatch-loader		-I ../../../vendor/libbpf/include/uapi -I ../../../vendor/libbpf --unwind 50 LEN=4,5,25,49
-upatch-rodata-btf	-I ../../../vendor/libbpf/include/uapi -I ../../../vendor/libbpf --refine-arithmetic --object-bits 10 --unwind 16 LEN=4,10,15
 upatch-btf		-I ../../../vendor/libbpf/include/uapi -I ../../../vendor/libbpf --unwind 6 --unwindset btf_decl_printable.0:33,btf_name_printable.0:7,btf_unwrap.0:9
 upatch-btf-int		-I ../../../vendor/libbpf/include/uapi -I ../../../vendor/libbpf --unwind 2 --unwindset btf_integer.0:65
-upatch-rodata		-I ../../../vendor/libbpf/include/uapi -I ../../../vendor/libbpf --refine-arithmetic --object-bits 12 --max-field-sensitivity-array-size 32 --unwind 25 --unwindset memcpy.0:49,strlen.0:18,strcmp.0:18,strnlen.0:18 LEN=6,8,24
 string-number-model	--unwind 6
 bpm-tree-follows	--unwind 4
 bpm-tree-sync-model	--unwind 60 --max-field-sensitivity-array-size 257 LEN=0-2
