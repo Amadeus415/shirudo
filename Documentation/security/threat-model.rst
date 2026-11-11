@@ -1041,8 +1041,7 @@ revocation does not reach tree publications (U13).
 :Tests: ``t7005``, ``t7101``, ``t7102``, ``t7103``, ``t7104``,
    ``t7105``, ``t8005``
 :Proofs: ``bpm-tar-header``, ``bpm-tar-octal``, ``bpm-archive-path``,
-   ``bpm-oci-challenge``, ``bpm-oci-token``, ``bpm-oci-header``,
-   ``bpm-oci-descriptor``, ``bpm-semver-model``, ``Shirudo.SemVer``,
+   ``bpm-semver-model``, ``Shirudo.SemVer``,
    ``Shirudo.ArchivePath``, ``bpm-archive-path-model``,
    ``Shirudo.JsonString``, ``Shirudo.TreeSync``, ``bpm-tree-follows``,
    ``bpm-tree-sync-model``, ``bpm-tree-reader``

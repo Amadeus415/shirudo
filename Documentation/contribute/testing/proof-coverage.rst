@@ -116,10 +116,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - Names of 0 to 10 bytes
      - A name passes exactly when it cannot leave its directory; a member
        exactly when it is the path below the one top directory
-   * - ``bpm-names``
-     - ``bpm_name_ok()``, ``bpm_version_ok()``, ``bpm_package_name_ok()``
-     - Up to 129 bytes, past the 128-byte limit
-     - Exactly the character, length and first-character rules
    * - ``bpm-archive-path-model``
      - ``bpm_archive_rel_ok()``, ``package_member_name_ok()``
      - Names of lengths 0 to 10, members up to 3 bytes
@@ -149,32 +145,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
        ``prerelease_compare()``
      - Every pair of strings up to 9 bytes
      - The sign of the Lean model ``Shirudo.SemVer``
-   * - ``bpm-oci-challenge``
-     - ``parse_challenge()``
-     - ``WWW-Authenticate`` values up to 17 bytes
-     - Outputs terminated in their buffers; only ``Bearer`` with a realm;
-       each value a quoted value of the header
-   * - ``bpm-oci-token``
-     - ``token_from_body()``
-     - Answers up to 17 bytes
-     - Nothing written on refusal; a token without controls, quotes or
-       backslashes, quoted in the answer under ``token`` or
-       ``access_token``
-   * - ``bpm-oci-header``
-     - ``bpm_header()``
-     - Header lines up to 20 bytes, NULs included
-     - The whole line taken; values terminated, without a leading blank,
-       a media type without parameters, a location without CR or LF
-   * - ``bpm-oci-descriptor``
-     - ``on_descriptor()``, ``on_index_entry()``
-     - Any descriptor or index entry, into an empty or a full table
-     - Kept exactly when whole, with a ``sha256:`` digest of 64 digits,
-       and with room; copied as read; a refusal not counted
-   * - ``bpm-oci-strings``
-     - ``bpm_trim()``, ``bpm_copy_string()``, ``bpm_digest_matches()``
-     - Strings up to 6 bytes, buffers up to 4
-     - Terminated, what fits; a digest matches exactly ``sha256:`` and its
-       hex in either case
    * - ``bpm-source-config``
      - ``bpm_parse_source_line()``, ``bpm_parse_tree_line()``
      - Lines up to 12 bytes
@@ -634,8 +604,10 @@ Not covered yet
 ---------------
 
 The fuzz targets in :doc:`test-coverage` cover these parsers; no proof
-does: the JSON reader and writer of :src:`rust/src/util/json/`, whose
-CBMC proofs went with the C they proved when the module moved to Rust,
+does: the JSON reader and writer of :src:`rust/src/util/json/` and the
+OCI client of :src:`rust/src/util/bpm_oci/`, whose CBMC proofs went
+with the C they proved when the modules moved to Rust, among them the
+one that also held ``on_index_entry()`` of :src:`util/bpm_package.c`,
 how ``json_parse()`` dispatches objects, arrays and maps to their
 schemas, the OTLP headers a configuration adds, the walk over a
 package's tar members, the registry references and URLs, the kernel

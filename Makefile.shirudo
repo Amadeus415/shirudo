@@ -242,7 +242,6 @@ UTIL_SRCS := \
     util/string.c \
     util/bpm_tree.c \
     util/bpm_tree_state.c \
-    util/bpm_oci.c \
     util/bpm_package.c \
     util/bpm_state.c \
     util/kernel_build_id.c \
@@ -385,6 +384,10 @@ RUST_LIB    := $(RUST_TARGET)/release/libshirudo_rs.a
 RUST_SRCS   := $(shell find $(RUST_DIR)/src -name '*.rs') \
                $(RUST_DIR)/Cargo.toml $(RUST_DIR)/Cargo.lock
 RUST_LDLIBS := -static-libgcc
+# LTO leaves one object in the archive, which a test linking a few util
+# objects pulls in whole: the sections it does not reach go, and with
+# them the references to C it does not link.
+RUST_TEST_LDLIBS := $(RUST_LDLIBS) -Wl,--gc-sections
 RUSTFLAGS_WERROR := $(if $(filter 1,$(WERROR)),-D warnings)
 
 rust: $(RUST_LIB)
@@ -514,7 +517,7 @@ tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o util/config_image.o
                                    util/elf_target.o util/hex.o util/keys.o \
                                    util/seal.o util/harden.o util/string.o \
                                    util/crypto_openssl.o util/tls_openssl.o \
-                                   util/bpm_oci.o util/bpm_package.o \
+                                   util/bpm_package.o \
                                    util/upatch_rodata.o \
                                    util/bpm_tree.o $(VERSION_OBJ) \
                                    $(LIBBPF_A) $(RUST_LIB)
@@ -664,7 +667,7 @@ build/verity-tests/shirudo-image-fault: testing/helper/image-fault.c \
 		$(VERITY_TEST_LDFLAGS) -o $@ $(filter-out %.h,$^) \
 		-Wl,--wrap=main,--wrap=Esys_PCR_Extend \
 		-Wl,--wrap=config_root_begin,--wrap=config_root_end \
-		$(STATIC_LIBS) $(VERITY_TEST_LIBS) $(RUST_LDLIBS)
+		$(STATIC_LIBS) $(VERITY_TEST_LIBS) $(RUST_TEST_LDLIBS)
 
 verity-test-helpers: $(VERITY_TEST_HELPERS) build/verity-tests/shirudo-image-fault
 
@@ -736,7 +739,7 @@ REGISTER_OBJS := util/config_attest.o util/config_update.o util/config_measure.o
                  util/initrd.o util/nv_writer.o util/identity.o \
                  $(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
 REGISTER_LIBS := $(LIBCRYPTO_LIBS) $(LIBSSL_LIBS) $(TSS2_LIBS) \
-                 $(LIBBPF_A) $(LIBELF_LIBS) $(ZLIB_LIBS) $(RUST_LDLIBS)
+                 $(LIBBPF_A) $(LIBELF_LIBS) $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
 
 TPM_CLIENT_SRCS := testing/helper/tpm-client.c testing/helper/tpm-session.h
 
@@ -752,7 +755,7 @@ testing/helper/test-keyring-seal: testing/helper/test-keyring-seal.c \
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< \
 		$(filter %.o %.a,$^) \
 		-Wl,--wrap=keyring_bpf_add_cert -Wl,--wrap=keyring_bpf_seal \
-		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
+		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-tpm-preopened: testing/helper/test-tpm-preopened.c \
                                  $(TPM_CLIENT_SRCS) $(REGISTER_OBJS)
@@ -790,7 +793,7 @@ testing/helper/test-register: testing/helper/test-register.c util/attest.o util/
 testing/helper/test-register-cli: testing/helper/test-register-cli.c \
 		$(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/tpmsim-cmd: testing/helper/tpmsim-cmd.c
 	@printf '  CC      $@\n'
@@ -851,7 +854,7 @@ testing/helper/test-otel-map: testing/helper/test-otel-map.c util/upatch_maps.o 
                         util/io.o util/malloc.o $(LIBBPF_A) util/hex.o util/timefmt.o \
                         $(RUST_LIB)
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_LDLIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-map-types: testing/helper/test-upatch-map-types.c
 	@printf '  CC      $@\n'
@@ -872,20 +875,20 @@ testing/helper/test-upatch-serializer-pages: testing/helper/test-upatch-serializ
                                        util/log.o util/hex.o util/timefmt.o \
                                        $(RUST_LIB)
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-rodata: testing/helper/test-upatch-rodata.c \
                                util/upatch.o util/seal.o \
                                util/string.o util/malloc.o util/io.o \
                                util/log.o util/hex.o $(RUST_LIB)
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-decode: testing/helper/test-upatch-decode.c \
 			      util/upatch_decode.o util/upatch.o util/malloc.o util/hex.o \
 			      util/string.o util/seal.o util/io.o util/log.o $(RUST_LIB)
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_LDLIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-exec-churn: testing/helper/test-exec-churn.c util/io.o util/seal.o util/malloc.o \
                                  util/log.o util/string.o
@@ -938,7 +941,7 @@ testing/helper/test-image-cli: testing/helper/test-image-cli.c builtin-bpm.c \
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ \
 		$(filter-out builtin-bpm.c,$^) \
 		-Wl,--wrap=bpm_tree_fetch_publication \
-		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
+		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-image-cleanup: testing/helper/test-image-cleanup.c \
 		testing/helper/image-cleanup.h util/image_runtime.c $(BUILTIN_OBJS) \
@@ -948,7 +951,7 @@ testing/helper/test-image-cleanup: testing/helper/test-image-cleanup.c \
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ \
 		$(filter-out %.h util/image_runtime.c,$^) \
 		-Wl,--wrap=dm_verity_remove,--wrap=nanosleep \
-		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
+		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-mode-objects: testing/helper/test-mode-objects.c \
 		$(call obj,util/loader.o) $(LIBBPF_A)
@@ -981,7 +984,7 @@ build/unit/%: testing/unit/%.c testing/unit/unit.c testing/unit/unit.h \
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -Itesting/unit -o $@ $< testing/unit/unit.c \
 		-Wl,--start-group $(UNIT_LIB) $(RUST_LIB) -Wl,--end-group \
-		$(LIBBPF_A) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
+		$(LIBBPF_A) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 unit-tests: $(UNIT_TESTS)
 
@@ -1045,11 +1048,16 @@ $(RUST_FUZZ_LIB): $(RUST_SRCS)
 	$(Q)touch $@
 
 FUZZ_LIBS := $(RUST_FUZZ_LIB) $(LIBCRYPTO_LIBS) $(LIBSSL_LIBS) \
-             $(LIBCURL_LIBS) $(ZLIB_LIBS) $(RUST_LDLIBS)
-FUZZ_BASE := util/string.c util/hex.c util/malloc.c testing/fuzz/log.c
+             $(LIBCURL_LIBS) $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
+# The coverage tables of the Rust library hold on to every function in
+# it, so each target links the C those functions call.
+FUZZ_RUST_C := util/io.c util/seal.c util/config.c util/image_config.c \
+               util/crypto_openssl.c util/tls_openssl.c
+FUZZ_BASE := util/string.c util/hex.c util/malloc.c testing/fuzz/log.c \
+             $(FUZZ_RUST_C)
 FUZZ_CONFIG := util/config.c util/image_config.c
 FUZZ_SEAL := util/seal.c $(FUZZ_CONFIG)
-FUZZ_OCI := util/bpm_oci.c util/io.c $(FUZZ_SEAL) util/crypto_openssl.c \
+FUZZ_OCI := util/io.c $(FUZZ_SEAL) util/crypto_openssl.c \
             util/tls_openssl.c
 FUZZ_PACKAGE := util/bpm_package.c util/bpm_tree.c util/upatch.c $(FUZZ_OCI)
 
@@ -1149,7 +1157,6 @@ testing/fuzz/fuzz-kconfig: testing/fuzz/fuzz-kconfig.c $(FUZZ_BASE) \
 
 # A target that reaches static parsers includes their source, which it
 # then depends on without linking it a second time.
-testing/fuzz/fuzz-oci-http: FUZZ_INCLUDED := util/bpm_oci.c
 testing/fuzz/fuzz-tree-state testing/fuzz/fuzz-kconfig: \
 	FUZZ_INCLUDED := util/bpm_tree_state.c
 testing/fuzz/fuzz-otel: FUZZ_INCLUDED := util/upatch_maps_otel.c
