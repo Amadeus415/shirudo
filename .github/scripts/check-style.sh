@@ -181,8 +181,7 @@ locate_checkpatch() {
 # string, a comment or the #pragma GCC poison that refuses them, in the
 # form checkpatch reports in, and in userspace one that names unsigned
 # char, short, int or long. Those stay where an interface fixes them: BPF
-# programs spell hook arguments as the kernel's prototypes do,
-# util/elf_target.c hands libbpf the unsigned long ** it takes, and
+# programs spell hook arguments as the kernel's prototypes do, and
 # util/sign.c is vendored. A call to strtoul() and its kin or atoi() is
 # reported too, outside the tests: a number is parsed with parse_u64() and
 # its kin from <shirudo/string.h>, which take a length, read nothing past
@@ -197,7 +196,7 @@ check_spellings() {
 	awk '
 	function c_names_kept(f) {
 		return f ~ /^(bpf|upatches)\// || f ~ /\.bpf\.c$/ ||
-		       f == "util/elf_target.c" || f == "util/sign.c"
+		       f == "util/sign.c"
 	}
 	function parsers_kept(f) {
 		return f ~ /^(bpf|upatches|testing)\// || f ~ /\.bpf\.c$/
