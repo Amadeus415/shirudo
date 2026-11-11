@@ -256,8 +256,7 @@ UTIL_SRCS := \
     util/upatch_decode.c \
     util/upatch_maps_otel.c \
     util/elf_target.c \
-    util/upatch_resolve.c \
-    util/upatch_table.c
+    util/upatch_resolve.c
 
 BUILTIN_GENKEY_SRC := builtin-genkey.c
 
