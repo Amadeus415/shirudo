@@ -207,11 +207,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - Headers up to 32 bytes, dates modelled
      - A delay is at most 30 seconds, the value itself when shorter; a
        header line read only within itself
-   * - ``dm-names``
-     - ``dm_name_ok()``, ``dm_device()``
-     - Up to 7 bytes
-     - A name of 1 to 127 of ``[A-Za-z0-9._-]``, not ``.`` or ``..``; a
-       device as decimal major and minor
    * - ``log-escape``
      - ``escape()`` of :src:`util/log.c`
      - Messages of 0 to 5 bytes, every buffer size
