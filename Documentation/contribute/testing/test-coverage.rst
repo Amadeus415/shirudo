@@ -428,7 +428,8 @@ signed config image.
    * - ``t6118-foreign-entries``
      - Entries root brings into sealed directories
    * - ``t6119-perf-attach``
-     - ``PERF_EVENT_IOC_SET_BPF``
+     - ``PERF_EVENT_IOC_SET_BPF``, and a kprobe multi link of root's own
+       for a loaded upatch's program
    * - ``t6120-umount-above``
      - Unmounts above the bpffs, by subtree and by propagation
    * - ``t6121-bpffs-entries``

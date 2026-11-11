@@ -168,6 +168,104 @@ static int expect_uprobe(const struct upatch *u, __u32 kind,
 	return cursor == end ? 0 : fail("trailing uprobe metadata");
 }
 
+/* names is the expected list in signed order, joined by commas. */
+static int expect_kprobe_multi(const struct upatch *u, __u32 kind, const char *names)
+{
+	struct upatch_kprobe_targets targets;
+	struct upatch_kprobe_target record;
+	struct upatch_prog_metadata md;
+	struct upatch_prog_entry prog;
+	size_t names_len = strlen(names) + 1;
+	const __u8 *raw, *cursor;
+	__u32 nr_syms = 1, len;
+	size_t i;
+
+	if (u->hdr.nr_progs != 1)
+		return fail("unexpected metadata prog count");
+	raw = upatch_signed_attach(u, &len);
+	if (!raw || len != sizeof(md) + sizeof(prog) + sizeof(targets) + sizeof(record) + names_len)
+		return fail("kprobe multi metadata length mismatch");
+	memcpy(&md, raw, sizeof(md));
+	memcpy(&prog, raw + sizeof(md), sizeof(prog));
+	if (le32_to_cpu(prog.role) != UPATCH_PROG_ROLE_ATTACH ||
+	    le32_to_cpu(prog.kind) != kind || prog.offset || prog.target[0])
+		return fail("kprobe multi program entry mismatch");
+	cursor = raw + sizeof(md) + sizeof(prog);
+	memcpy(&targets, cursor, sizeof(targets));
+	cursor += sizeof(targets);
+	if (le32_to_cpu(targets.magic) != UPATCH_KPROBE_TARGET_MAGIC ||
+	    le32_to_cpu(targets.version) != UPATCH_KPROBE_TARGET_VERSION ||
+	    le32_to_cpu(targets.nr_targets) != 1 || targets.reserved)
+		return fail("kprobe multi target header mismatch");
+	memcpy(&record, cursor, sizeof(record));
+	cursor += sizeof(record);
+	for (i = 0; names[i]; i++)
+		nr_syms += names[i] == ',';
+	if (le32_to_cpu(record.prog_idx) != 0 || le32_to_cpu(record.nr_syms) != nr_syms ||
+	    le32_to_cpu(record.syms_len) != names_len)
+		return fail("kprobe multi target record mismatch");
+	for (i = 0; i < names_len; i++) {
+		char want = names[i] == ',' ? '\0' : names[i];
+
+		if ((char)cursor[i] != want)
+			return fail("kprobe multi names mismatch");
+	}
+	return 0;
+}
+
+/* names is the expected list in sorted order, joined by commas. */
+static bool kprobe_names_match(const struct prog_spec *s, const char *names)
+{
+	const char *want = names;
+	__u32 i;
+
+	for (i = 0; i < s->nr_kprobe_syms; i++) {
+		size_t len;
+
+		if (i && *want++ != ',')
+			return false;
+		len = strlen(s->kprobe_syms[i]);
+		if (strnlen(want, len) < len || memcmp(want, s->kprobe_syms[i], len) ||
+		    (want[len] && want[len] != ','))
+			return false;
+		want += len;
+	}
+	return s->nr_kprobe_syms && !*want;
+}
+
+/* Reads back an upatch of one uprobe and one kprobe multi program. */
+static int expect_uprobe_and_kprobe_multi(const struct upatch *u, const char *path,
+					  const char *names)
+{
+	const struct prog_spec *uprobe = NULL, *kprobe = NULL;
+	struct prog_spec *specs = NULL;
+	const void *attach;
+	__u32 len, i;
+	int ret;
+
+	if (u->hdr.nr_progs != 2)
+		return fail("unexpected metadata prog count");
+	attach = upatch_signed_attach(u, &len);
+	if (!attach)
+		return fail("missing signed metadata");
+	if (prog_specs_parse(attach, len, u->hdr.nr_maps, u->hdr.nr_progs, &specs))
+		return fail("the reader refuses the metadata");
+	for (i = 0; i < u->hdr.nr_progs; i++) {
+		if (kind_is_uprobe_single(specs[i].kind))
+			uprobe = &specs[i];
+		else if (kind_is_kprobe_multi(specs[i].kind))
+			kprobe = &specs[i];
+	}
+	if (!uprobe || !uprobe->uprobe_path || strcmp(uprobe->uprobe_path, path))
+		ret = fail("uprobe target mismatch");
+	else if (!kprobe || !kprobe_names_match(kprobe, names))
+		ret = fail("kprobe multi names mismatch");
+	else
+		ret = 0;
+	prog_specs_free(specs, u->hdr.nr_progs);
+	return ret;
+}
+
 static int expect_policy_labels(const struct upatch *u)
 {
 	static const char *const policies[] = {
@@ -214,8 +312,8 @@ int main(int argc, char **argv)
 	const char *mode = "serializer";
 	int ret;
 
-	if (argc != 2 && argc != 3 && argc != 4 && argc != 6)
-		return fail("usage: test-upatch-prog-metadata <file.upatch> [mode [path pattern count]]");
+	if (argc < 2 || argc > 6)
+		return fail("usage: test-upatch-prog-metadata <file.upatch> [mode [names | path names | path pattern count]]");
 	if (argc >= 3)
 		mode = argv[2];
 
@@ -283,6 +381,12 @@ int main(int argc, char **argv)
 			ret = expect_uprobe(&u, kind, argv[3], argv[4], entry_offset, 1, &first);
 		if (!ret)
 			printf("%llu\n", first);
+	} else if (strcmp(mode, "kprobe-multi") == 0 && argc == 4) {
+		ret = expect_kprobe_multi(&u, UPATCH_ATTACH_KPROBE_MULTI, argv[3]);
+	} else if (strcmp(mode, "kretprobe-multi") == 0 && argc == 4) {
+		ret = expect_kprobe_multi(&u, UPATCH_ATTACH_KRETPROBE_MULTI, argv[3]);
+	} else if (strcmp(mode, "uprobe-kprobe-multi") == 0 && argc == 5) {
+		ret = expect_uprobe_and_kprobe_multi(&u, argv[3], argv[4]);
 	} else if (strcmp(mode, "policy-labels") == 0 && argc == 3) {
 		ret = expect_policy_labels(&u);
 	} else {

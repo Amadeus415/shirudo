@@ -6,6 +6,7 @@
  * own through PERF_EVENT_IOC_SET_BPF, the legacy attach path that
  * never passes through bpf(). The event is a uprobe on this executable,
  * which needs no kprobe support; whether it fires is beside the point.
+ * With --kprobe-multi, create a kprobe multi link for the program instead.
  * Prints "attached" or "errno=<n>". No libbpf.
  */
 
@@ -101,6 +102,31 @@ static int find_prog(const char *want, __u32 *id_out)
 	}
 }
 
+static int link_kprobe_multi(const char *want)
+{
+	const char *sym = "vfs_read";
+	union bpf_attr attr = {};
+	__u32 id = 0;
+	int prog_fd, link_fd;
+
+	prog_fd = find_prog(want, &id);
+	if (prog_fd < 0) {
+		fprintf(stderr, "no loaded kprobe-type program\n");
+		return 2;
+	}
+	attr.link_create.prog_fd = (__u32)prog_fd;
+	attr.link_create.attach_type = BPF_TRACE_KPROBE_MULTI;
+	attr.link_create.kprobe_multi.syms = (__u64)(size_t)&sym;
+	attr.link_create.kprobe_multi.cnt = 1;
+	link_fd = (int)bpf(BPF_LINK_CREATE, &attr);
+	if (link_fd >= 0) {
+		printf("attached prog_id=%u\n", id);
+		return 0;
+	}
+	printf("errno=%d\n", errno);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	struct perf_event_attr pe;
@@ -110,6 +136,8 @@ int main(int argc, char **argv)
 	long off;
 	int type, prog_fd, perf_fd;
 
+	if (argc == 3 && !strcmp(argv[1], "--kprobe-multi"))
+		return link_kprobe_multi(argv[2]);
 	type = uprobe_type();
 	if (type < 0) {
 		fprintf(stderr, "no uprobe PMU\n");

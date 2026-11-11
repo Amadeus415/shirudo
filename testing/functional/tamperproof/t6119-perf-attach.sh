@@ -7,7 +7,10 @@
 # root's to reach by id, and the ioctl would bind it to a perf event of
 # root's own, a probe where its signer never meant it to run. The
 # file_ioctl hook keeps the ioctl to shirudo, counted as PerfAttach; the
-# upatch's own link is untouched. Needs the uprobe PMU, not kprobes.
+# upatch's own link is untouched. Needs the uprobe PMU.
+# A kprobe multi link of root's own for such a program goes through
+# bpf(), where the same kind of attach is refused and counted as
+# ProgAttach; that case needs CONFIG_FPROBE, which the test kernel has.
 
 cd "$(dirname "$0")/../.."
 . ./integration-lib.sh
@@ -25,10 +28,22 @@ UNLOAD="$FIXTURES/$NAME.unload.upatch"
 TARGET="$FIXTURES/shirudo-test-uprobe-target"
 RUNTIME=/tmp/shirudo-test-uprobe-target
 PIN="/run/shirudo/bpffs/upatches/$NAME/link"
-for f in "$LOAD" "$UNLOAD" "$TARGET"; do
-	[ -s "$f" ] || test_skip_all "missing uprobe fixture $f"
+KM_NAME=shirudo-test-kprobe-multi
+KM_LOAD="$FIXTURES/$KM_NAME.upatch"
+KM_UNLOAD="$FIXTURES/$KM_NAME.unload.upatch"
+KM_DIR="/run/shirudo/bpffs/upatches/$KM_NAME"
+for f in "$LOAD" "$UNLOAD" "$TARGET" "$KM_LOAD" "$KM_UNLOAD"; do
+	[ -s "$f" ] || test_skip_all "missing fixture $f"
 done
-trap 'if [ -e "$PIN" ]; then "$SHIRUDO_BIN" upatch unload "$UNLOAD" --no-precheck >/dev/null 2>&1 || true; fi' EXIT
+cleanup() {
+	if [ -e "$PIN" ]; then
+		"$SHIRUDO_BIN" upatch unload "$UNLOAD" --no-precheck >/dev/null 2>&1 || true
+	fi
+	if [ -e "$KM_DIR/link_0" ]; then
+		"$SHIRUDO_BIN" upatch unload "$KM_UNLOAD" --no-precheck >/dev/null 2>&1 || true
+	fi
+}
+trap cleanup EXIT
 
 # The counter $1 from status --json.
 counter() {
@@ -47,6 +62,23 @@ test_expect_success 'root cannot bind the loaded program to a perf event of its 
 	[ "$(./$H probe)" = "errno=13" ] &&
 	[ "$(counter PerfAttach)" -gt "$before" ] &&
 	[ -e "$PIN" ]
+'
+
+test_expect_success 'the kprobe multi upatch loads' '
+	"$SHIRUDO_BIN" upatch load "$KM_LOAD" --no-precheck >/dev/null &&
+	[ -e "$KM_DIR/link_0" ]
+'
+
+test_expect_success 'root cannot create a kprobe multi link for a loaded program' '
+	before=$(counter ProgAttach) &&
+	[ "$(./$H --kprobe-multi km_entry)" = "errno=13" ] &&
+	[ "$(counter ProgAttach)" -gt "$before" ] &&
+	[ -e "$KM_DIR/link_0" ]
+'
+
+test_expect_success 'the kprobe multi upatch unloads' '
+	"$SHIRUDO_BIN" upatch unload "$KM_UNLOAD" --no-precheck >/dev/null &&
+	[ ! -e "$KM_DIR/link_0" ]
 '
 
 test_done
