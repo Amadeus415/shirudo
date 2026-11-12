@@ -15,7 +15,9 @@ own.
 
 This is a do-it-yourself example to get started from, not an
 integration that shirudo ships or maintains. Adapt retention, access
-control and sizing to your deployment.
+control and sizing to your deployment. To check the keepalives' quotes
+and compare each target with its upatch tree as well, start from the
+:doc:`keepalive-backend` instead.
 
 Before you begin
 ----------------
@@ -143,10 +145,10 @@ from Grafana with its ClickHouse data source or from any tool that can
 run SQL. :doc:`/operate/run/telemetry` explains each signal under what
 to alert on.
 
-#. Find targets that stopped sending keepalives. Five minutes covers
-   several keepalive intervals and the 30 seconds a keepalive may wait
-   for the config operation lock; a target whose tree syncs run for
-   longer needs a longer threshold:
+#. Find targets that stopped sending keepalives. Ten minutes covers
+   several keepalive intervals and a tree sync of a few minutes, which
+   holds the config operation lock that a keepalive waits for; a target
+   whose tree syncs run for longer needs a longer threshold:
 
    .. code-block:: sql
 
@@ -155,7 +157,7 @@ to alert on.
       FROM shirudo.otel_logs
       WHERE ServiceName = 'shirudo' AND EventName = 'shirudo.keepalive'
       GROUP BY host
-      HAVING last_seen < now() - INTERVAL 5 MINUTE;
+      HAVING last_seen < now() - INTERVAL 10 MINUTE;
 
 #. Find targets that reported a verdict other than ``ok`` in the last
    five minutes:
@@ -199,5 +201,7 @@ Next steps
 - :doc:`/upatches/write/decoders` to turn a map into log records or
   metrics
 - :doc:`grafana` to chart the same data
+- :doc:`keepalive-backend` to check the quotes and the tree state the
+  keepalives report
 - :doc:`/concepts/background/siem-export` for how the records reach a
   backend and what to build on them

@@ -637,6 +637,25 @@ The host side writes to ``build/test-vm/end2end/``. The guest reaches
 the registry and collector through QEMU's address for the host. ClickHouse
 is available to the collector on the test's Docker network.
 
+``t9107`` runs the reference keepalive backend, which lives in a
+repository of its own, ``shirudo-dev/backend``. ``host.sh`` finds it
+through ``BACKEND_DIR``: a directory, relative to the checkout when the
+path is relative, ``../backend`` by default, or a git URL, which it
+clones into ``build/test-vm/end2end/backend``. It starts a ClickHouse of
+the backend's own on ``http://127.0.0.1:18125``, with the backend's schema
+and ``shirudo-quote-check`` as ``tpm_quote_check``, and a collector with
+the backend's configuration on ``https://127.0.0.1:14320``. It publishes
+the example tree of :src:`testing/fixtures/keepalive/` signed with the
+operator key and loads it with the backend's tree ingest job, which runs
+``bpm tree show``. In the guest, ``t9107`` sends the example keepalives
+with their recorded quotes through that collector and queries
+ClickHouse, both through QEMU's address for the host. Without
+``BACKEND_DIR`` and without ``../backend``, ``t9107`` skips:
+
+.. code-block:: console
+
+   # make -C testing end2end BACKEND_DIR=/path/to/backend
+
 Select test scripts
 ~~~~~~~~~~~~~~~~~~~
 

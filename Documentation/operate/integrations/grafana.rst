@@ -154,7 +154,7 @@ on.
               expr: |
                 sum by (host_name) (count_over_time({service_name="shirudo"} |= `"schema":"shirudo.keepalive/1"` [1d]))
                 unless
-                sum by (host_name) (count_over_time({service_name="shirudo"} |= `"schema":"shirudo.keepalive/1"` [5m]))
+                sum by (host_name) (count_over_time({service_name="shirudo"} |= `"schema":"shirudo.keepalive/1"` [10m]))
             - alert: ShirudoTargetNotOk
               expr: |
                 sum by (host_name) (count_over_time({service_name="shirudo"} |= `"schema":"shirudo.keepalive/1"` | json verdict="verdict" | verdict != "ok" [5m])) > 0
@@ -167,10 +167,10 @@ on.
                 ) > 1
 
    ``ShirudoTargetSilent`` fires for a target that sent keepalives in
-   the last day but none in the last five minutes, which covers several
-   keepalive intervals and the 30 seconds a keepalive may wait for the
-   config operation lock; a target whose tree syncs run for longer needs
-   a longer window. A target silent for longer than a day drops out of
+   the last day but none in the last ten minutes, which covers several
+   keepalive intervals and a tree sync of a few minutes, which holds the
+   config operation lock that a keepalive waits for; a target whose tree
+   syncs run for longer needs a longer window. A target silent for longer than a day drops out of
    the rule. ``ShirudoTargetNotOk`` fires for a verdict other than
    ``ok`` in the last five minutes. ``ShirudoTamperAttempts`` counts the
    different lists of counters, ``tamper``, in the keepalives of one

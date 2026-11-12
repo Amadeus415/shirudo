@@ -24,6 +24,10 @@ make -C testing fuzz [FUZZ_SECONDS=60]
 make -C testing help
 ```
 
+The end2end tier runs t9107 against the keepalive backend that
+`BACKEND_DIR` names, a checkout or a git URL, `../backend` by default;
+without one t9107 skips, so say so when reporting the tier.
+
 Host tests run as they are. A target test, `t?1??`, runs in a fresh VM
 per family, which needs KVM, an unlimited `ulimit -l`, the test kernel
 and the bundle, but not root; see

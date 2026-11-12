@@ -109,16 +109,16 @@ the number of results is greater than zero.
 :doc:`/operate/run/telemetry` explains each signal under what to alert
 on.
 
-#. Find targets that stopped sending. Five minutes covers several
-   keepalive intervals and the 30 seconds a keepalive may wait for the
-   config operation lock; a target whose tree syncs run for longer needs
-   a longer threshold:
+#. Find targets that stopped sending. Ten minutes covers several
+   keepalive intervals and a tree sync of a few minutes, which holds the
+   config operation lock that a keepalive waits for; a target whose tree
+   syncs run for longer needs a longer threshold:
 
    .. code-block:: text
 
       | tstats latest(_time) AS last_seen
           WHERE index=shirudo sourcetype=shirudo earliest=-1d BY host
-      | where last_seen < relative_time(now(), "-5m")
+      | where last_seen < relative_time(now(), "-10m")
 
    A target silent for longer than a day drops out of the search.
 

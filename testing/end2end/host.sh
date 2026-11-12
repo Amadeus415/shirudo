@@ -15,6 +15,8 @@ TLS_DIR=$HOST_PRIVATE_DIR/end2end-tls
 REGISTRY=127.0.0.1:15443
 COLLECTOR=127.0.0.1:14318
 CLICKHOUSE=127.0.0.1:18123
+BACKEND_COLLECTOR=127.0.0.1:14320
+BACKEND_CLICKHOUSE=127.0.0.1:18125
 . "$REPO/testing/vm/stack-lib.sh"
 STACK_NAME=shirudo-end2end
 STACK_PERSIST=0
@@ -25,6 +27,8 @@ VM_NAME=${VM_NAME:-end2end-$$}
 export VM_NAME
 RESULT=$REPO/build/test-vm/vms/$VM_NAME-end2end/result/end2end
 POLICY_FIXTURE=$TEST_VM_HOST_BUNDLE/fixtures/shirudo-test-policy-exec-graph.upatch
+CHECKER=$REPO/tools/quote-check/shirudo-quote-check
+KEEPALIVE=$REPO/testing/fixtures/keepalive
 
 say() { printf 'end2end: %s\n' "$*"; }
 die() { printf 'end2end: %s\n' "$*" >&2; exit 1; }
@@ -32,6 +36,81 @@ die() { printf 'end2end: %s\n' "$*" >&2; exit 1; }
 down() {
 	stack_down
 	rm -rf -- "$TLS_DIR"
+}
+
+# The keepalive backend t9107 runs against, in $BACKEND: BACKEND_DIR, a
+# directory relative to the checkout or a git URL cloned into $W, by
+# default ../backend. Without the variable and without that directory
+# there is none, and t9107 skips.
+backend_find() {
+	case "${BACKEND_DIR-}" in
+	"")
+		[ -d ../backend ] || return 1
+		BACKEND=$(cd ../backend && pwd) ;;
+	*://* | *@*:*)
+		git clone --quiet --depth 1 "$BACKEND_DIR" "$W/backend" ||
+			die "cannot clone BACKEND_DIR $BACKEND_DIR"
+		BACKEND=$W/backend ;;
+	*)
+		[ -d "$BACKEND_DIR" ] || die "BACKEND_DIR is no directory: $BACKEND_DIR"
+		BACKEND=$(cd "$BACKEND_DIR" && pwd) ;;
+	esac
+	[ -f "$BACKEND/otelcol.yaml" ] && [ -x "$BACKEND/jobs/tree-ingest" ] ||
+		die "no keepalive backend in $BACKEND"
+}
+
+# Publish the example tree of the keepalive fixtures, signed with the
+# operator key, at oci://$REGISTRY/$1:stable. Its operations name
+# artifacts that do not exist, so bpm tree append cannot write it: the
+# document and its signature take the place of those of a publication
+# append made. Prints the manifest digest.
+publish_document() {
+	"$S" bpm tree append "$BEE" "oci://$REGISTRY/$1" --keys-dir "$KEYS" \
+		>/dev/null &&
+	openssl cms -sign -binary -md sha512 -in "$KEEPALIVE/tree-1.1.0.json" \
+		-signer "$KEYS/cert.der" -inkey "$KEYS/signing_key.pem" \
+		-outform DER -out "$W/tree-1.1.0.sig" -nosmimecap -nocerts -keyid &&
+	python3 - "$REGISTRY" "$W/ca.pem" "$1" "$KEEPALIVE/tree-1.1.0.json" \
+		"$W/tree-1.1.0.sig" <<'PY'
+import hashlib, json, ssl, sys, urllib.request
+
+registry, ca, repository, document, signature = sys.argv[1:6]
+ctx = ssl.create_default_context(cafile=ca)
+base = f"https://{registry}/v2/{repository}"
+MANIFEST = "application/vnd.oci.image.manifest.v1+json"
+LAYERS = {"application/vnd.shirudo.upatch.tree.v1+json": document,
+          "application/vnd.shirudo.upatch.tree.signature.v1": signature}
+
+
+def call(method, url, body=None, headers=None):
+    request = urllib.request.Request(url, data=body, method=method,
+                                     headers=headers or {})
+    return urllib.request.urlopen(request, context=ctx)
+
+
+def push(body):
+    digest = "sha256:" + hashlib.sha256(body).hexdigest()
+    with call("POST", f"{base}/blobs/uploads/") as response:
+        location = response.headers["Location"]
+    if location.startswith("/"):
+        location = f"https://{registry}{location}"
+    separator = "&" if "?" in location else "?"
+    call("PUT", f"{location}{separator}digest={digest}", body,
+         {"Content-Type": "application/octet-stream"}).close()
+    return digest
+
+
+with call("GET", f"{base}/manifests/stable", headers={"Accept": MANIFEST}) as r:
+    manifest = json.load(r)
+for layer in manifest["layers"]:
+    body = open(LAYERS[layer["mediaType"]], "rb").read()
+    layer["digest"] = push(body)
+    layer["size"] = len(body)
+raw = json.dumps(manifest, separators=(",", ":")).encode()
+call("PUT", f"{base}/manifests/stable", raw,
+     {"Content-Type": manifest.get("mediaType", MANIFEST)}).close()
+print("sha256:" + hashlib.sha256(raw).hexdigest())
+PY
 }
 
 command -v docker >/dev/null 2>&1 || die "docker is required"
@@ -81,6 +160,24 @@ tar -xzf "$BEE" -C "$W/pkg"
 "$S" upatch info --json "$POLICY_FIXTURE" |
 	python3 -c 'import json, sys; print(json.load(sys.stdin)["payload_sha256"])' \
 	>"$W/policy-payload"
+
+if backend_find; then
+	say "the keepalive backend of $BACKEND loads the example tree"
+	[ -x "$CHECKER" ] || die "no quote checker: $CHECKER"
+	stack_backend "$BACKEND" "$CHECKER" ||
+		die "the keepalive backend did not come up"
+	publish_document shirudo/fleet-base >"$W/backend-tree.digest" ||
+		die "cannot publish the example tree"
+	CLICKHOUSE_CLIENT="docker exec -i $STACK_NAME-backend-clickhouse clickhouse-client" \
+		SHIRUDO="$S" "$BACKEND/jobs/tree-ingest" --cert "$KEYS/cert.der" \
+		"oci://$REGISTRY/shirudo/fleet-base" >"$W/tree-ingest.out" 2>&1 || {
+		cat "$W/tree-ingest.out" >&2
+		rm -f "$W/backend-tree.digest"
+		die "the tree ingest job did not load the example tree"
+	}
+else
+	say "no keepalive backend at ../backend and no BACKEND_DIR: t9107 skips"
+fi
 
 say "the target, in $VM_NAME-end2end"
 "$@"

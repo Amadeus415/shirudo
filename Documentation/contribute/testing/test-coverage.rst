@@ -607,6 +607,14 @@ signed config image.
        0x1 to exec 0x2, and denies 0x1 and socket policy B from execing
        unlabeled files; socket-storage bits allow 127.0.0.1 for policy A
        and deny it for B; final evidence includes the loaded policy upatch
+   * - ``t9107-keepalive-backend``
+     - The keepalive backend that ``BACKEND_DIR`` names: its tree ingest
+       job loads the example publication through ``bpm tree show``, the
+       example keepalives of node A and node B with their recorded quotes
+       pass its collector and ``shirudo-quote-check``, and
+       ``node_status`` gives the example's results; a body altered in
+       transit is ``body_mismatch``, a replayed record collapses and an
+       older one does not become the latest
 
 Unit suites and fuzz targets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -777,9 +785,9 @@ Coverage by area
        inheritance: ``t6141``, ``t6142``
    * - Telemetry
      - ``t4006``, ``t4104``, ``t6139``, ``t7109``, ``t8001`` to
-       ``t8006``, ``t8101`` to ``t8106``, ``t9101`` to ``t9105``. Fuzz:
-       ``otel``, ``quote-check``, ``serializer``. Unit: ``keepalive``,
-       ``keepalive_quote``, ``sysinfo``
+       ``t8006``, ``t8101`` to ``t8106``, ``t9101`` to ``t9105``,
+       ``t9107``. Fuzz: ``otel``, ``quote-check``, ``serializer``.
+       Unit: ``keepalive``, ``keepalive_quote``, ``sysinfo``
    * - Decoders
      - ``t3002``, ``t8102``, ``t9101``. Fuzz: ``decoder``
    * - Tamper counters

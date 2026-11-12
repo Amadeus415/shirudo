@@ -107,9 +107,10 @@ keepalive of every target it knows against the current time. It knows
 the targets that reported within a longer window, such as a day, so a
 target silent for longer drops out of the alert. A
 keepalive runs a minute after the previous run ends and may wait up to
-30 seconds for the config operation lock, so five minutes without one
-spans several missed intervals. A tree sync holds that lock for as long
-as it runs, so a target whose syncs take minutes needs a longer
+30 seconds for the config operation lock. A tree sync holds that lock
+for as long as it runs, and a keepalive that cannot take it sends
+nothing, so ten minutes without one spans several missed intervals and
+a sync of a few minutes. A target whose syncs take longer needs a longer
 window.
 
 A verdict other than ``ok`` is the second. The keepalive's severity

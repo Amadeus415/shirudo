@@ -13,7 +13,9 @@ target that goes silent, reports a verdict other than ``ok`` or counts
 tamper attempts. Adapt them to your deployment.
 
 Splunk and Elastic Security are SIEMs, ClickHouse keeps records for
-analysis in SQL, and Grafana charts them from Loki and Prometheus.
+analysis in SQL, and Grafana charts them from Loki and Prometheus. The
+keepalive backend builds on ClickHouse to check every keepalive's quote
+and each target's state against its upatch tree.
 
 Targets speak OTLP over HTTP with JSON bodies and TLS 1.3 with a hybrid
 post-quantum key exchange, and nothing else. Each page puts an
@@ -29,6 +31,7 @@ post-quantum support.
    elasticsearch
    grafana
    splunk
+   keepalive-backend
 
 :doc:`/concepts/background/siem-export` explains how the records reach a
 backend and what to build on them.

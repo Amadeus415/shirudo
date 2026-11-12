@@ -150,17 +150,17 @@ rows. In Elastic Security, use the query in a detection rule of type
 ES|QL instead. :doc:`/operate/run/telemetry` explains each signal under
 what to alert on.
 
-#. Find targets that stopped sending keepalives. Five minutes covers
-   several keepalive intervals and the 30 seconds a keepalive may wait
-   for the config operation lock; a target whose tree syncs run for
-   longer needs a longer threshold:
+#. Find targets that stopped sending keepalives. Ten minutes covers
+   several keepalive intervals and a tree sync of a few minutes, which
+   holds the config operation lock that a keepalive waits for; a target
+   whose tree syncs run for longer needs a longer threshold:
 
    .. code-block:: text
 
       FROM logs-generic.otel-default
       | WHERE event_name == "shirudo.keepalive" AND @timestamp > NOW() - 1 day
       | STATS last_seen = MAX(@timestamp) BY host.name
-      | WHERE last_seen < NOW() - 5 minutes
+      | WHERE last_seen < NOW() - 10 minutes
 
    A target silent for longer than a day drops out of the query.
 

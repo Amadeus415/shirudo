@@ -92,11 +92,72 @@ stack_telemetry()
 		"https://$COLLECTOR/v1/logs"
 }
 
+stack_backend_client()
+{
+	docker exec -i "$STACK_NAME-backend-clickhouse" clickhouse-client "$@"
+}
+
+# The keepalive backend of directory $1 beside the telemetry stack: a
+# ClickHouse of its own on $BACKEND_CLICKHOUSE with the backend's schema
+# and the quote checker $2 as tpm_quote_check, as its README installs
+# them, and a collector on $BACKEND_COLLECTOR with its configuration.
+stack_backend()
+{
+	backend=$1
+	checker=$2
+	container=$STACK_NAME-backend-clickhouse
+	docker network inspect "$STACK_NAME" >/dev/null 2>&1 ||
+		docker network create "$STACK_NAME" >/dev/null
+	stack_run "$container" --network "$STACK_NAME" \
+		--network-alias backend-clickhouse -p "$BACKEND_CLICKHOUSE:8123" \
+		-e CLICKHOUSE_SKIP_USER_SETUP=1 "$CLICKHOUSE_IMAGE"
+	attempt=0
+	until stack_backend_client --query 'SELECT 1' >/dev/null 2>&1; do
+		attempt=$((attempt + 1))
+		[ "$attempt" -lt 150 ] || return 1
+		sleep 0.2
+	done
+	docker exec "$container" mkdir -p /var/lib/clickhouse/user_scripts &&
+	docker cp "$checker" \
+		"$container:/var/lib/clickhouse/user_scripts/shirudo-quote-check" &&
+	docker exec "$container" \
+		chmod 0755 /var/lib/clickhouse/user_scripts/shirudo-quote-check &&
+	docker cp "$backend/clickhouse/tpm_quote_check_function.xml" \
+		"$container:/etc/clickhouse-server/tpm_quote_check_function.xml" &&
+	stack_backend_client --query 'SYSTEM RELOAD FUNCTIONS' || return 1
+	attempt=0
+	until stack_backend_client --query "SELECT name FROM system.functions
+		WHERE name = 'tpm_quote_check'" 2>/dev/null | grep -q .; do
+		attempt=$((attempt + 1))
+		[ "$attempt" -lt 150 ] || return 1
+		sleep 0.2
+	done
+	for file in "$backend"/sql/*.sql; do
+		stack_backend_client <"$file" || return 1
+	done
+	"$backend/sql/apply-retention.sh" docker exec -i "$container" \
+		clickhouse-client >/dev/null || return 1
+	stack_run "$STACK_NAME-backend-collector" --network "$STACK_NAME" \
+		-p "$BACKEND_COLLECTOR:4318" -v "$TLS_DIR:/certs:ro" \
+		-e CLICKHOUSE_ENDPOINT=tcp://backend-clickhouse:9000 \
+		-v "$backend/otelcol.yaml:/etc/otelcol-contrib/config.yaml:ro" \
+		"$COLLECTOR_IMAGE"
+	stack_wait_https -X POST -H 'Content-Type: application/json' -d '{}' \
+		"https://$BACKEND_COLLECTOR/v1/logs"
+}
+
 stack_down()
 {
 	docker logs "$STACK_NAME-collector" >"$W/collector.log" 2>&1 || true
 	docker logs "$STACK_NAME-clickhouse" >"$W/clickhouse.log" 2>&1 || true
+	for part in collector clickhouse; do
+		docker container inspect "$STACK_NAME-backend-$part" \
+			>/dev/null 2>&1 || continue
+		docker logs "$STACK_NAME-backend-$part" \
+			>"$W/backend-$part.log" 2>&1 || true
+	done
 	docker rm -fv "$STACK_NAME-registry" "$STACK_NAME-collector" \
-		"$STACK_NAME-clickhouse" >/dev/null 2>&1 || true
+		"$STACK_NAME-clickhouse" "$STACK_NAME-backend-collector" \
+		"$STACK_NAME-backend-clickhouse" >/dev/null 2>&1 || true
 	docker network rm "$STACK_NAME" >/dev/null 2>&1 || true
 }
