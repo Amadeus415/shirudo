@@ -788,6 +788,19 @@ Add a fixture or a helper
   helper that a target test runs also goes in the list of helpers that
   :src:`testing/vm/build-bundle.sh` copies into the bundle. A Python
   helper needs none of this.
+- The keepalive bodies in :src:`testing/fixtures/keepalive/` carry real
+  quotes in ``quotes.tsv``: per row the body's file name, then the
+  ``attest``, ``sig``, ``ak`` and ``body_sha256`` columns of
+  ``shirudo-quote-check``, so ``cut -f2-`` feeds the checker. A change
+  to a node body fails ``t4006`` until
+  :src:`testing/helper/capture-keepalive-quotes.sh` rebuilds the file.
+  It quotes each body with ``test-keepalive-quote`` under the libtpms
+  simulator, as ``status --otel`` quotes its own, with one TPM state
+  for node A and another for node B; it needs no root and no VM, only
+  ``make -C testing test-helpers`` with libtpms installed. Each run
+  starts from fresh TPM states, so both the quotes and the two
+  attestation keys change; a state directory named as its second
+  argument keeps the keys.
 - A fuzz target goes in ``testing/fuzz/fuzz-<name>.c`` with a seed
   corpus in ``testing/fuzz/corpus/<name>/`` and a rule in
   :src:`Makefile.shirudo` that names the sources it links.

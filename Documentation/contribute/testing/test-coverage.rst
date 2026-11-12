@@ -261,6 +261,14 @@ signed config image.
        An unsalted negative control accepts a forged acknowledgment
        with an empty or SHA-256 response HMAC; malformed lengths are refused.
        Salted sessions reject it and leave the real measured value unchanged
+   * - ``t4006-keepalive-quotes``
+     - The quotes of :src:`testing/fixtures/keepalive/quotes.tsv`: each
+       row's ``body_sha256`` is SHA-256 of its body file, and fails on
+       a body altered by one byte; every row verifies under
+       ``shirudo-quote-check`` without a TPM, node A's rows under one
+       key and node B's under another; a quote over an altered body is
+       ``body_mismatch``; with the libtpms simulator built, the capture
+       script rebuilds a file that verifies
    * - ``t4101-initrd``
      - The production configuration: ``init`` from the initrd, adoption,
        PCR 11 after the binding, pins under ``/run``
@@ -761,9 +769,9 @@ Coverage by area
        Unauthorized policy-xattr changes: ``t6111``. Task and socket
        inheritance: ``t6141``, ``t6142``
    * - Telemetry
-     - ``t4104``, ``t6139``, ``t7109``, ``t8001`` to ``t8006``,
-       ``t8101`` to ``t8106``, ``t9101`` to ``t9105``. Fuzz: ``otel``,
-       ``quote-check``, ``serializer``. Unit: ``keepalive``,
+     - ``t4006``, ``t4104``, ``t6139``, ``t7109``, ``t8001`` to
+       ``t8006``, ``t8101`` to ``t8106``, ``t9101`` to ``t9105``. Fuzz:
+       ``otel``, ``quote-check``, ``serializer``. Unit: ``keepalive``,
        ``keepalive_quote``, ``sysinfo``
    * - Decoders
      - ``t3002``, ``t8102``, ``t9101``. Fuzz: ``decoder``
