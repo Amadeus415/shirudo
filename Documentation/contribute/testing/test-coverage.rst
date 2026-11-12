@@ -271,6 +271,11 @@ signed config image.
      - The ``tpm_command`` guard: root without authority cannot extend
        the register, through inherited and nonblocking descriptors
        too
+   * - ``t4104-keepalive-quote``
+     - The keepalive quote under ``shirudo-quote-check``: it covers the
+       body, its signer is the attestation key of ``attest`` under the
+       endorsement hierarchy, a later quote has a later clock, and a
+       body altered by one byte is ``body_mismatch``
 
 ``image`` (5)
 ~~~~~~~~~~~~~
@@ -552,6 +557,10 @@ signed config image.
        export
    * - ``t8105-export-tls``
      - CA and client certificate selection, the S3 CA
+   * - ``t8106-status-otel-quote``
+     - ``status --otel`` on a target: one record, the body as a string
+       with its keys in order, the quote as the one attribute and the
+       severity of the verdict
 
 ``end2end`` (9)
 ~~~~~~~~~~~~~~~
@@ -720,7 +729,7 @@ Coverage by area
        ``t6125``, ``t6128``, ``t6143``, ``t6144``. Unit: ``chain``
    * - Attestation
      - ``t2003``, ``t2005``, ``t4003``, ``t4004``, ``t4102``,
-       ``t9105``. Fuzz: ``attest``, ``tpm-wire``
+       ``t4104``, ``t9105``. Fuzz: ``attest``, ``tpm-wire``
    * - Eventlog
      - ``t4002``, ``t4102``, ``t5007``, ``t6114``, ``t6128``. Fuzz:
        ``eventlog``. Unit: ``eventlog``, ``io``
@@ -749,8 +758,8 @@ Coverage by area
        Unauthorized policy-xattr changes: ``t6111``. Task and socket
        inheritance: ``t6141``, ``t6142``
    * - Telemetry
-     - ``t6139``, ``t7109``, ``t8001`` to ``t8006``, ``t8101`` to
-       ``t8105``, ``t9101`` to ``t9105``. Fuzz: ``otel``,
+     - ``t4104``, ``t6139``, ``t7109``, ``t8001`` to ``t8006``,
+       ``t8101`` to ``t8106``, ``t9101`` to ``t9105``. Fuzz: ``otel``,
        ``quote-check``, ``serializer``. Unit: ``keepalive``,
        ``sysinfo``
    * - Decoders

@@ -337,7 +337,8 @@ static void print_system_human(const struct sysinfo *si)
 
 static const struct help_item status_options[] = {
 	{ "--json",             "print the report as one JSON document" },
-	{ "--otel",             "send the JSON report as an OTLP keepalive log" },
+	{ "--otel",             "quote the keepalive body with the TPM and send "
+				"it as an OTLP log" },
 	{ "--keepalive",        "print the keepalive body, unquoted and unsent" },
 	{ "--check",            "exit 1 when the verdict is tampered" },
 	{ "--show-full",        "print every section, folded or not, and the "
@@ -630,31 +631,31 @@ static __u32 keepalive_flags(const struct chain_status *cst, int tamper_rc,
 }
 
 /*
- * The keepalive body, printed rather than quoted and sent. A tree state
- * that cannot be read is a node that follows no tree.
+ * The keepalive body, with its length in *len. A tree state that cannot
+ * be read is a node that follows no tree.
  */
 static noinline_for_stack int
-print_keepalive(const struct conditions_input *cin,
-		const struct chain_status *cst,
-		const struct tamper_counts *tamper, int tamper_rc,
-		const char *config_root_hex)
+keepalive_body(const struct conditions_input *cin,
+	       const struct chain_status *cst,
+	       const struct tamper_counts *tamper, int tamper_rc,
+	       const char *config_root_hex, char body[KEEPALIVE_BODY_MAX],
+	       size_t *len)
 {
 	struct condition conds[CONDITIONS_MAX];
 	struct keepalive_input in = {};
 	struct keepalive_view v = {};
-	char body[KEEPALIVE_BODY_MAX];
 	struct sysinfo_image img;
 	struct tree_state state;
 	struct sysinfo si = {};
 	int state_rc, ret;
 	__u32 flags = 0;
-	size_t nc, len;
+	size_t nc;
 
 	ret = keepalive_snapshot(&keepalive_ops, &v, &state, &state_rc,
 				 &flags);
 	if (ret) {
 		pr_err("status: read the keepalive inputs: %s", strerror(-ret));
-		return 1;
+		return ret;
 	}
 	sysinfo_gather(&si);
 	sysinfo_image_read(&img);
@@ -686,13 +687,118 @@ print_keepalive(const struct conditions_input *cin,
 		in.projection_root = state.projection_root;
 		in.mask = v.outcomes_rc ? NULL : v.mask;
 	}
-	ret = keepalive_emit(&in, body, sizeof(body), &len);
-	if (ret) {
+	ret = keepalive_emit(&in, body, KEEPALIVE_BODY_MAX, len);
+	if (ret)
 		pr_err("status: build the keepalive body: %s", strerror(-ret));
-		return 1;
+	return ret;
+}
+
+#define BASE64_SIZE(n)		(4 * (((n) + 2) / 3) + 1)
+#define KEEPALIVE_QUOTE_MAX	(sizeof("attest=;sig=;ak=") +		\
+				 BASE64_SIZE(TPM_ATTEST_MAX) +		\
+				 BASE64_SIZE(TPM_SIGNATURE_MAX) +	\
+				 BASE64_SIZE(TPM_PUBLIC_MAX))
+
+/* attest=<TPMS_ATTEST>;sig=<TPMT_SIGNATURE>;ak=<TPMT_PUBLIC>, in base64. */
+static noinline_for_stack int
+keepalive_quote_format(const struct tpm_attestation *att,
+		       const struct tpm_key *ak, char *out, size_t cap)
+{
+	char attest[BASE64_SIZE(TPM_ATTEST_MAX)];
+	char sig[BASE64_SIZE(TPM_SIGNATURE_MAX)];
+	char public[BASE64_SIZE(TPM_PUBLIC_MAX)];
+	int ret;
+
+	ret = base64_encode(att->attest, att->attest_len, attest,
+			    sizeof(attest));
+	if (!ret)
+		ret = base64_encode(att->signature, att->signature_len, sig,
+				    sizeof(sig));
+	if (!ret)
+		ret = base64_encode(ak->public, ak->public_len, public,
+				    sizeof(public));
+	if (!ret)
+		ret = strsprintf(out, cap, "attest=%s;sig=%s;ak=%s", attest,
+				 sig, public);
+	return min(ret, 0);
+}
+
+/*
+ * The attestation key quotes the SHA-256 of the body over no PCR, which
+ * tells a keepalive quote from one of attest. The key is created for
+ * this quote and flushed after it.
+ */
+static noinline_for_stack int
+keepalive_quote(const char *body, size_t len, char *quote, size_t cap)
+{
+	struct tpm_key ak = { .handle = 0 };
+	struct tpm_attestation att = {};
+	__u8 digest[CRYPTO_SHA256_LEN];
+	struct tpm *tpm = NULL;
+	int ret;
+
+	ret = sha256_buffer(body, len, digest);
+	if (ret)
+		return ret;
+	ret = tpm_open(&tpm);
+	if (ret)
+		return -ENXIO;
+	ret = tpm_ak_create(tpm, &ak);
+	if (!ret)
+		ret = tpm_quote(tpm, &ak, digest, sizeof(digest), 0, &att);
+	if (!ret)
+		ret = keepalive_quote_format(&att, &ak, quote, cap);
+	tpm_key_flush(tpm, &ak);
+	tpm_close(tpm);
+	return ret;
+}
+
+/*
+ * One OTLP log: the body as a string and its quote as the one attribute.
+ * Without a quote nothing is sent: the backend has no use for a
+ * keepalive it cannot check.
+ */
+static int send_keepalive(const struct otel_opts *opts, const char *verdict,
+			  const char *body, size_t len)
+{
+	char quote[KEEPALIVE_QUOTE_MAX];
+	const char *severity_text;
+	int severity, ret;
+
+	ret = keepalive_quote(body, len, quote, sizeof(quote));
+	if (ret) {
+		pr_err("status: quote the keepalive: %s; nothing is sent",
+		       strerror(-ret));
+		return ret;
 	}
-	printf("%s\n", body);
-	return 0;
+	severity = status_otel_severity(verdict, &severity_text);
+	ret = otel_send_log_string(opts, "shirudo.keepalive",
+				   "shirudo.keepalive", severity,
+				   severity_text, body, len, "shirudo.quote",
+				   quote);
+	if (ret)
+		pr_err("status: send the keepalive: %s", strerror(-ret));
+	return ret;
+}
+
+/* Prints the body, or with opts quotes it and sends it there. */
+static noinline_for_stack int
+status_keepalive(const struct conditions_input *cin,
+		 const struct chain_status *cst,
+		 const struct tamper_counts *tamper, int tamper_rc,
+		 const char *config_root_hex, const struct otel_opts *opts)
+{
+	char body[KEEPALIVE_BODY_MAX];
+	size_t len;
+
+	if (keepalive_body(cin, cst, tamper, tamper_rc, config_root_hex, body,
+			   &len))
+		return 1;
+	if (!opts) {
+		printf("%s\n", body);
+		return 0;
+	}
+	return send_keepalive(opts, status_verdict(cin), body, len) ? 1 : 0;
 }
 
 #define STATUS_SUBJECT_MAX	256
@@ -1043,7 +1149,6 @@ static void print_keyring_serials(const struct status_keyring *k)
 
 int cmd_status(int argc, const char **argv)
 {
-	bool json = false;
 	bool json_stdout = false, otel = false, keepalive = false;
 	bool include_system = false, include_eventlog = false;
 	bool show_full = false, check = false;
@@ -1078,7 +1183,6 @@ int cmd_status(int argc, const char **argv)
 	int chain_rc = 0, ev_rc = -ENOENT;
 	int match = -1;		/* -1 unknown, 0 mismatch, 1 match */
 	int n_ups, i, fd, ret = 0;
-	const char *otel_status = NULL;
 	bool otel_endpoint_configured = false;
 	char unmeasured_names[UNMEASURED_NAMES] = "";
 	char xdp_tampered_names[UNMEASURED_NAMES] = "";
@@ -1132,7 +1236,6 @@ int cmd_status(int argc, const char **argv)
 		usage();
 		return 2;
 	}
-	json = json_stdout || otel;
 	if (otel) {
 		int err = config_load(&otel_cfg);
 
@@ -1297,10 +1400,15 @@ int cmd_status(int argc, const char **argv)
 	cin.xdp_coverage_rc = xdp_coverage_rc;
 	keyring_cond_input(&cin, &bpf, &dmv);
 
-	if (keepalive) {
-		ret = print_keepalive(&cin, &cst, &tamper, tamper_rc,
-				      config_state ? NULL : config_root_hex);
-	} else if (json) {
+	if (keepalive || (otel && otel_endpoint_configured))
+		ret = status_keepalive(&cin, &cst, &tamper, tamper_rc,
+				       config_state ? NULL : config_root_hex,
+				       otel ? &otel_opts : NULL);
+	if (otel && !otel_endpoint_configured && config_state &&
+	    config_state != -ENODEV)
+		pr_warn("status: no keepalive is sent: with the config activation %s, no export endpoint is known, since a config image is used only when its activation record vouches for it; OTEL_EXPORTER_OTLP_ENDPOINT in /etc/shirudo/map-export.env still names one",
+			config_state == -EINPROGRESS ? "pending" : "unverifiable");
+	if (json_stdout) {
 		struct json_emit e;
 
 		/*
@@ -1338,9 +1446,7 @@ int cmd_status(int argc, const char **argv)
 			struct condition conds[CONDITIONS_MAX];
 			size_t nc, ci;
 
-			otel_status = status_verdict(&cin);
-			json_kv_string(&e, "status",
-				       otel_status);
+			json_kv_string(&e, "status", status_verdict(&cin));
 			status_reason(&cin, reason, sizeof(reason));
 			if (reason[0])
 				json_kv_string(&e, "reason", reason);
@@ -1523,40 +1629,9 @@ int cmd_status(int argc, const char **argv)
 				strerror(-e.err));
 			ret = 1;
 		} else {
-			if (otel && otel_endpoint_configured) {
-				__s64 refused = tamper_rc == 0 ?
-						  (__s64)tamper.total : -1;
-				const char *severity_text;
-				int severity_number;
-				int err;
-
-				severity_number =
-					status_otel_severity(otel_status,
-							     &severity_text);
-				err = otel_send_log_json(&otel_opts,
-							 "shirudo.keepalive",
-							 "shirudo.keepalive",
-							 severity_number,
-							 severity_text,
-							 otel_status,
-							 shirudo_version_id,
-							refused, json_buf,
-							strlen(json_buf));
-				if (err) {
-					pr_err("status: OTEL export failed: %s",
-					       strerror(-err));
-					ret = 1;
-				}
-			}
-			if (otel && !otel_endpoint_configured && config_state &&
-			    config_state != -ENODEV)
-				pr_warn("status: no keepalive is sent: with the config activation %s, no export endpoint is known, since a config image is used only when its activation record vouches for it; OTEL_EXPORTER_OTLP_ENDPOINT in /etc/shirudo/map-export.env still names one",
-					config_state == -EINPROGRESS ?
-					"pending" : "unverifiable");
-			if (json_stdout)
-				printf("%s\n", json_buf);
+			printf("%s\n", json_buf);
 		}
-	} else {
+	} else if (!keepalive && !otel) {
 		struct condition conds[CONDITIONS_MAX];
 		struct upatch_table_row *rows = NULL;
 		bool keyrings_open, tpm_open;

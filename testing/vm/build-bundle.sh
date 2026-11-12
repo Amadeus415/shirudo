@@ -322,6 +322,7 @@ jobs=$(nproc)
 log "building host shirudo payload and test helpers"
 make -C "$REPO_ROOT" -j"$jobs" all
 make -C "$REPO_ROOT" -j"$jobs" shirudo-build
+make -C "$REPO_ROOT" -j"$jobs" quote-check
 make -C "$REPO_ROOT/testing" -j"$jobs" test-helpers
 
 TMP_DIR="$(mktemp -d "${BUNDLE_DIR}.tmp.XXXXXX")"
@@ -370,6 +371,9 @@ testing/end2end/policy-exec
 testing/helper/otel-mock.py
 testing/helper/test-oci-registry.py
 EOF
+# The backend's quote checker, a static PIE, checks the quotes of t4104.
+install -m 0755 "$REPO_ROOT/tools/quote-check/shirudo-quote-check" \
+	"$TMP_DIR/test-helpers/testing/helper/shirudo-quote-check"
 
 # A second TPM for t6125: the host's emulator and the libraries of its own.
 if swtpm="$(command -v swtpm)"; then

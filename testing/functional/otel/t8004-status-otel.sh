@@ -8,51 +8,54 @@ cd "$(dirname "$0")/../.."
 S=../shirudo
 H=helper/test-otel-map
 
-test_expect_success 'status --otel sends a structured keepalive log' '
-	work=$(mktemp -d)
+# No TPM answers here: the keepalive cannot be quoted.
+export SHIRUDO_TPM_TCTI=device:/nonexistent/tpm
+
+# A sink on an ephemeral port; its pid is in $work/sink.pid.
+sink() {
+	rm -f "$work/port"
 	python3 helper/otel-mock.py success "$work/port" "$work/body" \
 		"$work/meta" &
-	server=$!
-	trap "kill $server 2>/dev/null || true; wait $server 2>/dev/null || true; rm -rf $work" EXIT
+	echo "$!" >"$work/sink.pid"
 	i=0
 	while test ! -s "$work/port" && test "$i" -lt 100; do
 		sleep .02
 		i=$((i + 1))
 	done
-	port=$(cat "$work/port") &&
-	OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="http://127.0.0.1:$port/v1/logs" \
-		"$S" status --otel >"$work/stdout" 2>"$work/stderr" &&
-	wait "$server" &&
-	test ! -s "$work/stdout" &&
-	python3 - "$work/body" "$work/meta" <<"PY"
-import json
-import sys
-
-doc = json.load(open(sys.argv[1]))
-meta = json.load(open(sys.argv[2]))
-record = doc["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0]
-values = {
-    item["key"]: item["value"]
-    for item in record["body"]["kvlistValue"]["values"]
+	test -s "$work/port"
 }
-assert meta["path"] == "/v1/logs"
-assert record["eventName"] == "shirudo.keepalive"
-assert {"schema", "status", "conditions", "tpm"} <= values.keys()
-assert values["tpm"]["kvlistValue"]
-status = values["status"]["stringValue"]
-severity = {
-    "ok": (9, "INFO"),
-    "degraded": (13, "WARN"),
-    "init-pending": (13, "WARN"),
-    "reboot-pending": (13, "WARN"),
-    "lsm-off": (17, "ERROR"),
-    "tampered": (17, "ERROR"),
-}[status]
-assert (record["severityNumber"], record["severityText"]) == severity
-attrs = {item["key"]: item["value"] for item in record["attributes"]}
-assert "shirudo.status" in attrs
-assert "shirudo.version_id" in attrs
+
+test_expect_success 'status --keepalive prints the body with its keys in order' '
+	work=$(mktemp -d) &&
+	"$S" status --keepalive >"$work/body" 2>"$work/stderr" &&
+	python3 - "$work/body" <<"PY" &&
+import json, sys
+
+KEYS = ["schema", "boot_id", "version_id", "config_root", "kernel_release",
+        "image_id", "image_version", "image_root", "verdict", "cond",
+        "flags", "tamper", "tree_id", "generation", "base_seq", "last_seq",
+        "base_root", "projection_root", "mask", "set_sha256", "count",
+        "not_ok"]
+text = open(sys.argv[1]).read()
+assert text.endswith("}\n") and text.count("\n") == 1, text
+pairs = json.loads(text, object_pairs_hook=list)
+assert [k for k, _ in pairs] == KEYS, pairs
+assert dict(pairs)["schema"] == "shirudo.keepalive/1"
 PY
+	rm -rf "$work"
+'
+
+test_expect_success 'status --otel without a TPM sends nothing and fails' '
+	work=$(mktemp -d) &&
+	sink &&
+	port=$(cat "$work/port") &&
+	! OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="http://127.0.0.1:$port/v1/logs" \
+		"$S" status --otel >"$work/stdout" 2>"$work/stderr" &&
+	test ! -s "$work/stdout" &&
+	grep -q "nothing is sent" "$work/stderr" &&
+	test ! -e "$work/body" &&
+	kill "$(cat "$work/sink.pid")" &&
+	rm -rf "$work"
 '
 
 test_expect_success 'keepalive status severities and structured body are deterministic' '
@@ -125,22 +128,15 @@ PY
 	rm -rf "$work"
 '
 
-test_expect_success 'status --json --otel keeps JSON output available' '
-	work=$(mktemp -d)
-	python3 helper/otel-mock.py success "$work/port" "$work/body" \
-		"$work/meta" &
-	server=$!
-	trap "kill $server 2>/dev/null || true; wait $server 2>/dev/null || true; rm -rf $work" EXIT
-	i=0
-	while test ! -s "$work/port" && test "$i" -lt 100; do
-		sleep .02
-		i=$((i + 1))
-	done
+test_expect_success 'status --json --otel prints the report when the keepalive fails' '
+	work=$(mktemp -d) &&
+	sink &&
 	port=$(cat "$work/port") &&
-	OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="http://127.0.0.1:$port/v1/logs" \
+	! OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="http://127.0.0.1:$port/v1/logs" \
 		"$S" status --json --otel >"$work/stdout" 2>"$work/stderr" &&
-	wait "$server" &&
-	python3 - "$work/stdout" <<"PY"
+	test ! -e "$work/body" &&
+	kill "$(cat "$work/sink.pid")" &&
+	python3 - "$work/stdout" <<"PY" &&
 import json
 import sys
 
@@ -150,6 +146,7 @@ assert "status" in doc
 assert "tpm" in doc
 assert "tamper_attempts" in doc
 PY
+	rm -rf "$work"
 '
 
 test_expect_success 'status --otel without an endpoint does not send' '

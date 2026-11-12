@@ -4,7 +4,8 @@
 #
 # t8005 -- outbound TLS policy: every libcurl client shirudo opens requires
 # TLS 1.3 and a hybrid ML-KEM key exchange, nothing classical. Drives the
-# OTLP log exporter (`shirudo status --otel`) against local servers: a
+# OTLP log exporter, as the keepalive of `shirudo status --otel` uses it,
+# through `test-otel-map send-keepalive` against local servers: a
 # TLS 1.2-only HTTPS server, which must be refused before any request
 # reaches it; an `openssl s_server` limited to X25519, which must also be
 # refused; and an `openssl s_server` with handshake tracing, which must
@@ -14,11 +15,11 @@
 cd "$(dirname "$0")/../.."
 . ./test-lib.sh
 
-S=${SHIRUDO:-../shirudo}
+H=helper/test-otel-map
 
 command -v openssl >/dev/null 2>&1 || test_skip_all "no openssl"
 command -v python3 >/dev/null 2>&1 || test_skip_all "no python3"
-[ -x "$S" ] || test_skip_all "shirudo not built"
+[ -x "$H" ] || test_skip_all "test-otel-map not built"
 
 WORK=$(mktemp -d)
 # s_server has usually exited on its own by now; under set -e a failed
@@ -31,6 +32,7 @@ cleanup() {
 	rm -rf "$WORK"
 }
 trap cleanup EXIT HUP INT TERM
+printf '{"schema":"shirudo.keepalive/1"}' >"$WORK/body"
 
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
 	-subj /CN=localhost -addext 'subjectAltName=IP:127.0.0.1,DNS:localhost' \
@@ -79,10 +81,10 @@ sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$1" 2
 # The exporter is the TLS client under test; the test certificate is its
 # trust anchor so the policy, not certificate verification, decides.
 export_status() {
-	OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="https://127.0.0.1:$1/v1/logs" \
 	OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE="$WORK/cert.pem" \
 	OTEL_EXPORTER_OTLP_LOGS_TIMEOUT=3000 \
-		timeout 60 "$S" status --otel >/dev/null 2>"$WORK/client.err"
+		timeout 60 "$H" send-keepalive "https://127.0.0.1:$1/v1/logs" ok \
+		"$WORK/body" quote >/dev/null 2>"$WORK/client.err"
 }
 
 port12=$(free_port)
@@ -93,7 +95,6 @@ wait_for_port "$port12" || test_skip_all "TLS 1.2 test server did not start"
 
 test_expect_success 'a TLS 1.2-only collector is refused before any request is sent' '
 	! export_status "$port12" &&
-	grep -q "OTEL export failed" "$WORK/client.err" &&
 	! test -e "$WORK/seen"
 '
 
@@ -111,7 +112,6 @@ if openssl list -tls1_3 -tls-groups 2>/dev/null | grep -qi 'X25519MLKEM768'; the
 
 	test_expect_success 'a TLS 1.3 server offering only classical X25519 is refused' '
 		! export_status "$portx" &&
-		grep -q "OTEL export failed" "$WORK/client.err" &&
 		! grep -q "ServerHello, Length" "$WORK/trace-x25519.log"
 	'
 
