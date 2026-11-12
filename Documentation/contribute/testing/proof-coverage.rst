@@ -402,6 +402,15 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - Every sequence of up to 4 calls, every depth
      - Valid JSON by a byte-level recognizer; a comma only after a
        member; ``-E2BIG`` past the deepest level
+   * - ``keepalive-emit``
+     - ``keepalive_emit()``
+     - Three fixed bodies, without a tree, with a tree and nothing else
+       that may be null, and with every value, each with a last number
+       of up to 4 digits in a buffer that holds 0 to 3 of them; rooms of
+       0, 1 and 208 bytes; a missing string and a bad hash
+     - One JSON object of 22 members by a byte-level recognizer,
+       terminated in the buffer; ``-E2BIG`` exactly when the number
+       does not fit, ``-EINVAL`` for the bad inputs, and no body then
    * - ``otel-header-fields``
      - The OTLP header checks and ``percent_decode()``
      - Strings up to 32 bytes

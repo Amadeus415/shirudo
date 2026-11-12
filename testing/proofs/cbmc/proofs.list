@@ -55,6 +55,7 @@ log-escape		--unwind 7 LEN=0-5
 json-emit-string	--unwind 5 --unwindset json_string.0:27,put_string_n.0:5,put_raw.0:7,well_formed.0:27,replaced.0:5,memchr.0:9,memcmp.0:13 LEN=0-4
 json-emit-buffer	--unwind 1 --unwindset json_raw_value.0:5,harness.0:5 --malloc-may-fail --malloc-fail-null LEN=0-4
 json-emit-nest		--object-bits 12 --unwind 1 --unwindset json_text.0:57,sequences.0:4,sequences.1:5,any_depth.0:4,any_depth.1:4,strcmp.0:12,memchr.0:9,put_string_n.0:2,put_string_n.1:2,put_raw.0:8,json_kv_raw.0:3,json_raw_value.0:3,json_raw.0:5,strlen.0:3,vsnprintf.2:5,vsnprintf.0:2,format_number.0:3,format_number.2:5,format_number.3:3
+keepalive-emit		-I ../../.. --object-bits 12 --unwind 1 --unwindset json_members.0:833,power_of_ten.0:6,put_string_n.0:5,put_string_n.1:66,put_raw.0:7,strlen.0:66,is_hash.0:66,kv_tamper.0:38,kv_no_tree.0:8,json_raw_value.0:6,vsnprintf.2:4,vsnprintf.0:2,format_number.0:6,format_number.2:5,format_number.3:6 LEN=0-3
 json-string		--unwind 5 --unwindset json_string.0:7,parse_string.0:5,parse_string.1:7,memchr.0:9,memcmp.0:7,harness.0:8 LEN=0-6
 json-escape		--unwind 5 --unwindset parse_string.0:4,memcmp.0:9
 json-roundtrip		--unwind 1 --unwindset put_string_n.0:5,put_string_n.1:5,put_raw.0:7,vsnprintf.2:4,vsnprintf.0:2,format_number.0:3,format_number.2:5,format_number.3:3,parse_string.1:6,parse_string.0:4,hex4.0:5,utf8_width.0:4,memcmp.0:5 LEN=0-4
