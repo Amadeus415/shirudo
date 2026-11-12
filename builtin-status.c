@@ -42,6 +42,7 @@
 #include "util/json.h"
 #include "util/identity.h"
 #include "util/keepalive.h"
+#include "util/keepalive_quote.h"
 #include "util/image_bootstrap.h"
 #include "util/image_runtime.h"
 #include "util/keyring.h"
@@ -690,66 +691,6 @@ keepalive_body(const struct conditions_input *cin,
 	ret = keepalive_emit(&in, body, KEEPALIVE_BODY_MAX, len);
 	if (ret)
 		pr_err("status: build the keepalive body: %s", strerror(-ret));
-	return ret;
-}
-
-#define BASE64_SIZE(n)		(4 * (((n) + 2) / 3) + 1)
-#define KEEPALIVE_QUOTE_MAX	(sizeof("attest=;sig=;ak=") +		\
-				 BASE64_SIZE(TPM_ATTEST_MAX) +		\
-				 BASE64_SIZE(TPM_SIGNATURE_MAX) +	\
-				 BASE64_SIZE(TPM_PUBLIC_MAX))
-
-/* attest=<TPMS_ATTEST>;sig=<TPMT_SIGNATURE>;ak=<TPMT_PUBLIC>, in base64. */
-static noinline_for_stack int
-keepalive_quote_format(const struct tpm_attestation *att,
-		       const struct tpm_key *ak, char *out, size_t cap)
-{
-	char attest[BASE64_SIZE(TPM_ATTEST_MAX)];
-	char sig[BASE64_SIZE(TPM_SIGNATURE_MAX)];
-	char public[BASE64_SIZE(TPM_PUBLIC_MAX)];
-	int ret;
-
-	ret = base64_encode(att->attest, att->attest_len, attest,
-			    sizeof(attest));
-	if (!ret)
-		ret = base64_encode(att->signature, att->signature_len, sig,
-				    sizeof(sig));
-	if (!ret)
-		ret = base64_encode(ak->public, ak->public_len, public,
-				    sizeof(public));
-	if (!ret)
-		ret = strsprintf(out, cap, "attest=%s;sig=%s;ak=%s", attest,
-				 sig, public);
-	return min(ret, 0);
-}
-
-/*
- * The attestation key quotes the SHA-256 of the body over no PCR, which
- * tells a keepalive quote from one of attest. The key is created for
- * this quote and flushed after it.
- */
-static noinline_for_stack int
-keepalive_quote(const char *body, size_t len, char *quote, size_t cap)
-{
-	struct tpm_key ak = { .handle = 0 };
-	struct tpm_attestation att = {};
-	__u8 digest[CRYPTO_SHA256_LEN];
-	struct tpm *tpm = NULL;
-	int ret;
-
-	ret = sha256_buffer(body, len, digest);
-	if (ret)
-		return ret;
-	ret = tpm_open(&tpm);
-	if (ret)
-		return -ENXIO;
-	ret = tpm_ak_create(tpm, &ak);
-	if (!ret)
-		ret = tpm_quote(tpm, &ak, digest, sizeof(digest), 0, &att);
-	if (!ret)
-		ret = keepalive_quote_format(&att, &ak, quote, cap);
-	tpm_key_flush(tpm, &ak);
-	tpm_close(tpm);
 	return ret;
 }
 

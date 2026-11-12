@@ -596,12 +596,13 @@ signed config image.
 Unit suites and fuzz targets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The unit suites in :src:`testing/unit/` cover 28 of the modules in
+The unit suites in :src:`testing/unit/` cover 29 of the modules in
 :src:`util/`: ``attest``, ``bpm_oci``, ``bpm_package``, ``bpm_state``,
 ``bpm_tree``, ``bpm_tree_overlap``, ``bpm_tree_state``, ``chain``,
 ``conditions``,
 ``eventlog``, ``format``, ``hex``, ``io``, ``json``, ``kernel_abi``,
-``keepalive``, ``kernel_build_id``, ``kernel_release``, ``measured``,
+``keepalive``, ``keepalive_quote``, ``kernel_build_id``,
+``kernel_release``, ``measured``,
 ``paths``, ``string``, ``sysinfo``, ``upatch``, ``upatch_decode``,
 ``upatch_pins``, ``upatch_resolve``, ``upatch_verify`` and ``xdp``, and
 ``overflow`` the arithmetic of
@@ -763,7 +764,7 @@ Coverage by area
      - ``t4104``, ``t6139``, ``t7109``, ``t8001`` to ``t8006``,
        ``t8101`` to ``t8106``, ``t9101`` to ``t9105``. Fuzz: ``otel``,
        ``quote-check``, ``serializer``. Unit: ``keepalive``,
-       ``sysinfo``
+       ``keepalive_quote``, ``sysinfo``
    * - Decoders
      - ``t3002``, ``t8102``, ``t9101``. Fuzz: ``decoder``
    * - Tamper counters
@@ -1002,7 +1003,7 @@ Parsers and units
 
 - The dm-verity superblock check in :src:`util/config_image.c` has no
   fuzz target. ``t5001`` covers truncation and unsupported fields.
-- 40 of the 68 modules in :src:`util/` have no unit suite of their own.
+- 40 of the 69 modules in :src:`util/` have no unit suite of their own.
 
 Related
 -------
