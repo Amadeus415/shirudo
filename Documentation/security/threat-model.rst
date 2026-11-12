@@ -42,7 +42,7 @@ Every entry has a stable ID that commits, issues and other pages cite:
      - Threats shirudo addresses, each with a fact box.
    * - R1 to R23
      - Residual risks: known and bounded limits of the mechanisms.
-   * - U1 to U19
+   * - U1 to U20
      - Threats to resolve: gaps in the code that are not closed yet.
    * - D1 to D9
      - Deferred mitigations that are in scope.
@@ -1818,6 +1818,25 @@ U19 A decoder cannot name a long upatch
       handles a longer name is a code-path reading, not reproduced.
    :Meanwhile: Keep the names of upatches that carry decoders at 63
       characters or fewer.
+
+U20 The keepalive reports only the last 512 tree operations
+   :Affects: The keepalive body (``base_seq``, ``base_root``, ``mask``)
+      and what a backend can check of a node's loaded set.
+   :Consequence: The body gives the node's outcome for each operation
+      of a window of at most 512 operations up to the head of its tree.
+      A backend that first hears from a node after the tree has grown
+      past that window never learns which earlier operations the node
+      applied. It can check that each window continues the last one
+      and compare the node with nodes of the same labels, but not which
+      upatches added before the window the node should run, so it
+      cannot check ``set_sha256`` against them. Every node that joins a
+      tree of more than 512 operations is in that case. The node keeps
+      every outcome in ``upatch-tree/outcomes``; only the body leaves
+      them out.
+   :Status: Confirmed in code.
+   :Meanwhile: Compare such a node with its peers, and attest it with
+      ``shirudo attest`` when its set matters: the register measures
+      every upatch it loaded. See :doc:`/operate/run/attest`.
 
 Deferred mitigations
 --------------------
