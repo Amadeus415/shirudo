@@ -6,7 +6,7 @@ Description=shirudo: periodically export target status keepalive
 
 [Timer]
 OnBootSec=5s
-OnUnitInactiveSec=5s
+OnUnitInactiveSec=60s
 AccuracySec=1s
 Unit=shirudo-keepalive.service
 

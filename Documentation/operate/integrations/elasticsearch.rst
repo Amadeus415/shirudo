@@ -26,8 +26,8 @@ Before you begin
   built with Go 1.24 or later. The contrib distribution includes the
   Elasticsearch exporter; Go 1.24 offers the hybrid key exchange the
   targets require.
-- Elasticsearch 9.4 or later, whose ES|QL has the ``FIRST`` and ``LAST``
-  functions that the alert on tamper attempts uses, and Kibana.
+- Elasticsearch 9.4 or later, whose ES|QL has the ``LAST`` function
+  that the query of the last verdict uses, and Kibana.
 
 The exporter's log and metric support is beta.
 
@@ -87,9 +87,15 @@ The exporter writes in its default ``otel`` mapping mode: log records go
 to the data stream ``logs-generic.otel-default`` and metrics to
 ``metrics-generic.otel-default``. A document keeps the OTLP layout, with
 the attributes under ``attributes``, the resource attributes under
-``resource.attributes`` and a structured body under ``body.structured``.
-Elasticsearch's OpenTelemetry templates also offer each attribute under
-its own name, so ``host.name`` and ``shirudo.status`` work in queries.
+``resource.attributes``, a string body under ``body.text`` and a
+structured body under ``body.structured``. Elasticsearch's OpenTelemetry
+templates also offer each attribute under its own name, so ``host.name``
+works in queries.
+
+A keepalive's body is a string, the JSON object the target's TPM quoted,
+so it lands in ``body.text``. The queries below take the keys they need
+out of it with ``GROK``; :doc:`/reference/cli/status` lists the keys,
+which always come in the same order.
 
 Check the data
 --------------
@@ -100,12 +106,13 @@ Check the data
 
       FROM logs-generic.otel-default
       | WHERE event_name == "shirudo.keepalive"
+      | GROK body.text "\"verdict\":\"%{DATA:verdict}\""
       | SORT @timestamp DESC
-      | KEEP @timestamp, host.name, shirudo.status, shirudo.tamper_attempts
+      | KEEP @timestamp, host.name, verdict, body.text
       | LIMIT 10
 
-   A target sends a keepalive every few seconds, so each target shows up
-   within a minute of the restart.
+   A target sends a keepalive every minute, so each target shows up
+   within a minute or two of the restart.
 
 #. Show the last verdict of every target and when it last reported:
 
@@ -113,7 +120,8 @@ Check the data
 
       FROM logs-generic.otel-default
       | WHERE event_name == "shirudo.keepalive"
-      | STATS status = LAST(shirudo.status, @timestamp),
+      | GROK body.text "\"verdict\":\"%{DATA:verdict}\""
+      | STATS verdict = LAST(verdict, @timestamp),
               last_seen = MAX(@timestamp) BY host.name
       | SORT last_seen
 
@@ -142,16 +150,17 @@ rows. In Elastic Security, use the query in a detection rule of type
 ES|QL instead. :doc:`/operate/run/telemetry` explains each signal under
 what to alert on.
 
-#. Find targets that stopped sending keepalives. Two minutes covers
+#. Find targets that stopped sending keepalives. Five minutes covers
    several keepalive intervals and the 30 seconds a keepalive may wait
-   for the config operation lock:
+   for the config operation lock; a target whose tree syncs run for
+   longer needs a longer threshold:
 
    .. code-block:: text
 
       FROM logs-generic.otel-default
       | WHERE event_name == "shirudo.keepalive" AND @timestamp > NOW() - 1 day
       | STATS last_seen = MAX(@timestamp) BY host.name
-      | WHERE last_seen < NOW() - 2 minutes
+      | WHERE last_seen < NOW() - 5 minutes
 
    A target silent for longer than a day drops out of the query.
 
@@ -162,8 +171,9 @@ what to alert on.
 
       FROM logs-generic.otel-default
       | WHERE event_name == "shirudo.keepalive" AND @timestamp > NOW() - 5 minutes
-          AND shirudo.status != "ok"
-      | STATS reports = COUNT(*) BY host.name, shirudo.status
+      | GROK body.text "\"verdict\":\"%{DATA:verdict}\""
+      | WHERE verdict != "ok"
+      | STATS reports = COUNT(*) BY host.name, verdict
 
 #. Find targets whose guards refused operations in the last ten
    minutes:
@@ -172,15 +182,15 @@ what to alert on.
 
       FROM logs-generic.otel-default
       | WHERE event_name == "shirudo.keepalive" AND @timestamp > NOW() - 10 minutes
-          AND shirudo.tamper_attempts IS NOT NULL
-      | STATS first_count = FIRST(shirudo.tamper_attempts, @timestamp),
-              last_count = LAST(shirudo.tamper_attempts, @timestamp) BY host.name
-      | EVAL new_attempts = last_count - first_count
-      | WHERE new_attempts > 0
+      | GROK body.text "\"boot_id\":\"%{DATA:boot_id}\""
+      | GROK body.text "\"tamper\":%{DATA:tamper},\"tree_id\""
+      | STATS counts = COUNT_DISTINCT(tamper) BY host.name, boot_id
+      | WHERE counts > 1
 
-   The query subtracts the earliest count in the window from the latest.
-   The counters start at zero each boot, so a reboot in the window gives
-   a negative difference and no row.
+   ``tamper`` lists every counter since boot. The counters only grow
+   within a boot and start at zero at the next, so more than one list in
+   the keepalives of one ``boot_id`` means a counter rose, and a reboot
+   in the window reports nothing.
 
 Next steps
 ----------

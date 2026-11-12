@@ -45,21 +45,23 @@ The target keeps no spool. A map export that fails loses what the map
 collected in that interval, and a keepalive that fails leaves a gap
 until the next one. The collector's sending queue is the only buffer on
 the way. A collector can also filter or rewrite records before export,
-for example to drop the kernel configuration from keepalives, as
-:doc:`/operate/run/telemetry` shows.
+but it must leave a keepalive's body as it arrived: its quote covers
+those exact bytes.
 
 Where the fields land
 ---------------------
 
 Every record carries the resource attribute ``host.name``, which names
 the target. The event name tells a keepalive, ``shirudo.keepalive``,
-from a map snapshot, ``shirudo.bpf.map.snapshot``. The record's
-attributes hold the few fields worth filtering and alerting on, among
-them ``shirudo.status`` and ``shirudo.tamper_attempts`` on a keepalive.
-The body holds the whole document: the ``shirudo status --json`` report,
-or what a map's decoder returned.
+from a map snapshot, ``shirudo.bpf.map.snapshot``. A map snapshot's
+attributes name its upatch and map, and its body holds what the map's
+decoder returned. A keepalive's body is a string, the compact JSON
+status record that the target's TPM quoted, with the verdict, the
+conditions and the tamper counters among its keys
+(:doc:`/reference/cli/status`). Its one attribute is the quote.
 
-Each exporter keeps that split in its own way:
+Each exporter keeps the body in its own way, and each backend reads the
+keys of a keepalive out of it with a function of its own:
 
 .. list-table::
    :header-rows: 1
@@ -71,26 +73,25 @@ Each exporter keeps that split in its own way:
      - Body
    * - ClickHouse
      - ``ResourceAttributes['host.name']``
-     - ``LogAttributes['shirudo.status']``
+     - ``JSONExtractString(Body, 'verdict')``
      - ``Body``, as JSON text
    * - Elasticsearch
      - ``host.name``
-     - ``shirudo.status``
-     - ``body.structured``
+     - ``GROK`` on ``body.text``
+     - ``body.text`` for a keepalive, ``body.structured`` for a snapshot
    * - Loki
      - Label ``host_name``
-     - Structured metadata ``shirudo_status``
+     - The ``json`` parser on the log line
      - Log line
    * - Splunk
      - ``host``
-     - Indexed field ``shirudo.status``
+     - ``rex`` on the event
      - Event
 
 Loki makes ``host_name`` a label only when configured to, as
-:doc:`/operate/integrations/grafana` shows. Rules work best on the
-attributes, which every backend keeps as fields of their own, while the
-body is large, stored as text by some backends and refused above a size
-limit by others.
+:doc:`/operate/integrations/grafana` shows. The keys of a keepalive
+always come in the same order and its body is about a kilobyte, so a
+pattern finds a key in it as reliably as a JSON parser does.
 
 What to detect
 --------------
@@ -105,22 +106,23 @@ match an event that does not exist, so the query compares the last
 keepalive of every target it knows against the current time. It knows
 the targets that reported within a longer window, such as a day, so a
 target silent for longer drops out of the alert. A
-keepalive runs five seconds after the previous run ends and may wait up
-to 30 seconds for the config operation lock, so two minutes without one
-spans several missed intervals.
+keepalive runs a minute after the previous run ends and may wait up to
+30 seconds for the config operation lock, so five minutes without one
+spans several missed intervals. A tree sync holds that lock for as long
+as it runs, so a target whose syncs take minutes needs a longer
+window.
 
 A verdict other than ``ok`` is the second. The keepalive's severity
 follows the verdict, ``WARN`` or ``ERROR``, so a rule on severity
 catches the same records.
 
-A rise of ``shirudo.tamper_attempts`` is the third. The attribute counts
-the refusals of the guards since boot, so a rise means something on the
-target tried an operation the guards refused. The counters start at
-zero each boot. A rule that took the largest count in a window minus the
-smallest would fire on every reboot. The examples subtract the earliest
-count from the latest instead, which a reboot makes negative. The price
-is that a rise close to a reboot can go unreported; the count in each
-keepalive still shows it.
+A rise of a tamper counter is the third. The body's ``tamper`` lists
+every counter of the guards' refusals since boot, so a change means
+something on the target tried an operation the guards refused. The
+counters start at zero each boot. A rule that compared any two
+keepalives of a target would fire on every reboot, so the examples
+compare only the keepalives of one ``boot_id``, within which the
+counters only grow.
 
 Map snapshots carry what upatches observe, such as the programs that
 ``kernel-obs`` saw run. Their fields depend on the upatch's decoder, so
@@ -130,23 +132,23 @@ record join it to events from other sources.
 Volume
 ------
 
-The keepalive's body includes the system section, and with it the
-kernel configuration, so a keepalive from a distribution kernel is a
-few hundred kilobytes. At one keepalive every five seconds that adds up
-to several gigabytes a day for each target. That matters to a SIEM
-priced or capped by ingested volume, and to backends that limit the size
-of a record or the rate of a stream. Dropping the kernel configuration
-at the collector cuts a keepalive to a few kilobytes, and
-``kernel_release`` and ``kernel_build_id`` still name the kernel.
+A keepalive's body is about a kilobyte, and with its quote and resource
+attributes a record is about two. At one keepalive a minute that adds up
+to a few megabytes a day for each target. Map snapshots are what a SIEM
+priced or capped by ingested volume, or a backend that limits the size
+of a record or the rate of a stream, has to size for: their volume
+depends on the loaded upatches and their decoders.
 
 Limits
 ------
 
-Telemetry is the target's own account of itself. It is not signed and
-not bound to the TPM, and root on a target can stop it or send a
-keepalive that reports ``ok`` with no refusals. A SIEM alert on a
-keepalive tells you where to look. The silence alert catches a target
-whose export was stopped, but not one whose root sends forged
+Telemetry is the target's own account of itself. A keepalive's quote
+shows that its body is unchanged since the target's attestation key
+signed it, but not that the key lives in a genuine TPM, and root on a
+target can stop the keepalive or have the TPM quote a body that reports
+``ok`` with no refusals. Map snapshots are not signed at all. A SIEM
+alert on a keepalive tells you where to look. The silence alert catches
+a target whose export was stopped, but not one whose root sends forged
 keepalives instead.
 
 Evidence of what a target runs is the TPM-signed record that ``shirudo

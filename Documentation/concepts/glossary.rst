@@ -182,11 +182,12 @@ it.
 
    keepalive
       An OTLP log record named ``shirudo.keepalive`` that carries a
-      target's status. ``shirudo-keepalive.timer`` runs ``shirudo status
-      --otel --include-system`` about every five seconds, which sends one
-      when an OTLP endpoint is configured. A missing keepalive tells a
-      collector that a target stopped reporting; a present one is still
-      the target's own account. See :doc:`/operate/run/telemetry`.
+      target's status record and the TPM quote of it.
+      ``shirudo-keepalive.timer`` runs ``shirudo status --otel`` about
+      every minute, which sends one when an OTLP endpoint is configured
+      and the TPM quotes. A missing keepalive tells a collector that a
+      target stopped reporting; a present one is still the target's own
+      account. See :doc:`/operate/run/telemetry`.
 
    load artifact
       A ``.upatch`` file that installs an upatch: a header with the name

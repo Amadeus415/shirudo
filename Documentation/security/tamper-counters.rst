@@ -283,10 +283,10 @@ count and its meaning. It prints ``none`` when every counter is zero,
 in ``counters``, so a collector's keys stay the same from one record to
 the next. The value is ``null`` before ``init`` has pinned the map.
 
-The keepalive, ``shirudo status --otel``, sends the same status as an
-OTLP log record and adds the total as the attribute
-``shirudo.tamper_attempts``. The attribute is absent when the counters
-cannot be read.
+The keepalive, ``shirudo status --otel``, carries every counter in the
+``tamper`` list of its body, zeros included and in the order of this
+page, and the TPM quotes the body. The list is ``null``, and bit 3 of
+the body's ``flags`` set, when the counters cannot be read.
 
 What a non-zero counter means
 -----------------------------

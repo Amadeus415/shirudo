@@ -243,6 +243,24 @@ would read it once, at the price of a change to the node's parser and
 to the ``bpm-tree-reader`` and ``bpm-tree-sync-model`` proofs that
 include it; it is left for later.
 
+A keepalive key for each run
+----------------------------
+
+``status --otel`` creates the attestation key it quotes the keepalive
+with at every run, with ``TPM2_CreatePrimary`` under the endorsement
+hierarchy, and flushes it after the quote. The key comes from a fixed
+template, so every run gets the same key and the backend the same name;
+nothing about it is kept on the target between runs.
+
+The cost is a primary key derivation once a minute, which a slow
+hardware TPM can take hundreds of milliseconds for
+(:doc:`/operate/plan/overhead`). The optimisation to take up if that
+cost matters is to keep the key under a persistent handle,
+``TPM2_EvictControl`` once and a lookup at every run. The rule against
+a persistent index concerns the measurement register and does not
+forbid it, but it adds TPM state that outlives a boot: a handle to
+allocate, to find taken, and to clear on decommission.
+
 Related
 -------
 

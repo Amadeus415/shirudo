@@ -406,12 +406,14 @@ Export every map to the configured destinations, as
 
    target# shirudo upatch map --all
 
-Send a keepalive and print it with :doc:`cli/status`. Nothing is sent
-without a configured endpoint:
+Print the keepalive body, then quote it and send it, with
+:doc:`cli/status`. Nothing is sent without a configured endpoint or a
+TPM that quotes:
 
 .. code-block:: console
 
-   target# shirudo status --otel --include-system --json
+   target# shirudo status --keepalive
+   target# shirudo status --otel
 
 Developing shirudo
 ------------------

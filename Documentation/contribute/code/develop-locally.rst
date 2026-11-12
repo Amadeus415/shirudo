@@ -235,7 +235,7 @@ from the config the target runs, and activate it.
    The services read ``/etc/shirudo/bpm/environment``. Your shell needs
    the variable as well.
 
-8. Check the collector's terminal. Every five seconds, the target's
+8. Check the collector's terminal. Every minute, the target's
    keepalive timer sends a record with ``EventName:
    shirudo.keepalive``.
 

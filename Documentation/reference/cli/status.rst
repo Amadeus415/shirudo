@@ -9,7 +9,8 @@ shirudo status
 ==============
 
 Report the local readiness and state of this host, and optionally send the
-report as an OTLP keepalive or print the keepalive body.
+keepalive, the status record the TPM quotes, as an OTLP log, or print
+its body.
 
 Runs on: any host, and on a target as root with the runtime binary. It is the
 only command that runs while a config activation is pending or cannot be
@@ -76,18 +77,27 @@ key that holds each one, the TPM measurement state and the assets under
 sections that stayed folded. :doc:`/operate/run/read-status` explains
 each field and :doc:`/reference/formats/status-json` the JSON document.
 
-With ``--otel``, ``status`` builds the JSON report and sends it as one
-OTLP log record named ``shirudo.keepalive``, only when an endpoint is
-configured: ``map_export.otel_endpoint``, else
+With ``--otel``, ``status`` sends the keepalive, only when an endpoint
+is configured: ``map_export.otel_endpoint``, else
 ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT``, else
-``OTEL_EXPORTER_OTLP_ENDPOINT``. Without an endpoint it sends nothing and
-says nothing, except while a config activation is pending or unverifiable,
-when it prints a warning. ``--otel`` alone prints nothing on standard
-output. Add ``--json`` to print the document too.
+``OTEL_EXPORTER_OTLP_ENDPOINT``. It builds the keepalive body described
+below, has the TPM's attestation key quote the SHA-256 of the body, and
+sends one OTLP log record named ``shirudo.keepalive`` with the body as a
+string and the quote as its one attribute, ``shirudo.quote``
+(:doc:`/reference/formats/otlp`). The attestation key is the one
+:doc:`attest` uses, created for the quote and flushed after it. When no
+TPM answers or the quote fails, ``status`` sends nothing, says why on
+standard error and exits 1: a keepalive without a quote is worth nothing
+to the backend. Without an endpoint it sends nothing, quotes nothing and
+says nothing, except while a config activation is pending or
+unverifiable, when it prints a warning. ``--otel`` alone prints nothing
+on standard output. Add ``--json`` to print the JSON report too; it is
+the full document, not the keepalive body, and ``--include-system`` and
+``--include-eventlog`` change only it.
 
 With ``--keepalive``, ``status`` prints the keepalive body, the compact
-status record a node's TPM is to quote, as one line on standard output.
-It neither quotes nor sends it and needs no TPM, so an operator can see
+status record a node's TPM quotes, as one line on standard output. It
+neither quotes nor sends it and needs no TPM, so an operator can see
 what a node reports. The body has 22 keys in a fixed order: ``schema``
 (``shirudo.keepalive/1``), ``boot_id``, ``version_id``, ``config_root``,
 ``kernel_release``, ``image_id``, ``image_version``, ``image_root``,
@@ -99,6 +109,13 @@ A key that does not apply is ``null``:
 - ``config_root`` unless the selected config is active;
 - the seven tree keys, ``tree_id`` to ``mask``, when the node follows no
   tree or its tree state cannot be read.
+
+``cond`` holds two bits per condition, condition *i* of the order above
+at bits ``2i`` and ``2i+1``, ``LsmAttached`` first and ``XdpCovered``
+last: ``00`` not evaluated, ``01`` ``OK``, ``10`` ``WARN``, ``11``
+``ALERT``. All seven ``OK`` is ``5461``. ``tamper`` lists every counter
+of :doc:`/security/tamper-counters`, zeros included, in the order of
+that page.
 
 ``mask`` holds two bits per operation from ``base_seq + 1`` to the head
 of the recorded publication, read from the outcomes record of
@@ -143,7 +160,7 @@ The bits of ``flags``:
 ``status`` holds the config operation lock for its whole run, as every
 target command does, a ``bpm tree sync`` included. It therefore never
 reads a tree a sync is changing: while one runs, ``status`` waits up to
-30 seconds for the lock and then fails, and no body is printed. A sync
+30 seconds for the lock and then fails, and no body is printed or sent. A sync
 writes ``pending.json`` before it loads or unloads anything and removes
 it only after ``state.json`` has the new ``last_seq``, so bit 4 says a
 sync stopped in the middle of an operation and the next sync completes
@@ -174,7 +191,8 @@ Options
    * - ``--otel``
      - none
      - off
-     - Send the JSON report as an OTLP keepalive log record.
+     - Quote the keepalive body with the TPM and send it as an OTLP log
+       record.
    * - ``--keepalive``
      - none
      - off
@@ -218,7 +236,8 @@ reads ``.status`` and the conditions from the JSON document.
      - The report was produced.
    * - 1
      - With ``--check``: the verdict is ``tampered``. With ``--otel``:
-       the configuration cannot be loaded or the OTLP request failed.
+       the configuration cannot be loaded, the body cannot be built, no
+       TPM answered, the quote failed or the OTLP request failed.
        With ``--json``: the document does not fit the output buffer.
        With ``--keepalive``: the body cannot be built. Also an allocation
        failure.
@@ -234,13 +253,13 @@ Files and environment
   ``/var/lib/shirudo/eventlog``, ``/var/lib/shirudo/keys``, the config
   certificate the runtime image's bootstrap names and the config
   activation records
-- With ``--keepalive``: ``state.json``, ``pending.json``, ``outcomes``,
+- With ``--keepalive`` or ``--otel``: ``state.json``, ``pending.json``, ``outcomes``,
   ``tree-eventlog`` and ``status/`` under
   ``/var/lib/shirudo/bpm/upatch-tree``, ``/etc/os-release`` (else
   ``/usr/lib/os-release``), ``/proc/cmdline`` and
   ``/proc/sys/kernel/random/boot_id``
-- With ``--otel``: ``map_export.*`` and the ``OTEL_EXPORTER_OTLP_*``
-  variables (see :doc:`/reference/environment`).
+- With ``--otel``: the TPM, ``map_export.*`` and the
+  ``OTEL_EXPORTER_OTLP_*`` variables (see :doc:`/reference/environment`).
   ``shirudo-keepalive.service`` reads them from
   ``/etc/shirudo/map-export.env``
 

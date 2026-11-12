@@ -60,7 +60,8 @@ What shirudo provides
    * - Attempts leave a trace
      - Guards count their refusals in a frozen map that ``shirudo
        status`` and the keepalive report.
-     - Some refusals move no counter; telemetry is not authenticated.
+     - Some refusals move no counter; telemetry is the target's own
+       account.
      - :ref:`T10 <tm-t10>`, R17
    * - Delivered content is authentic
      - Indexes, tree publications and configs are signed; the kernel

@@ -8,9 +8,10 @@
 status JSON
 ===========
 
-``shirudo status --json`` prints one JSON object on one line. The same
-object is the body of the status keepalive that ``status --otel``
-sends, see :doc:`otlp`. Options and exit status are in
+``shirudo status --json`` prints one JSON object on one line. The
+status keepalive that ``status --otel`` sends carries a smaller record,
+the keepalive body that ``status --keepalive`` prints, see :doc:`otlp`.
+Options, exit status and the keys of the keepalive body are in
 :doc:`/reference/cli/status`. How to read a report is in
 :doc:`/operate/run/read-status`.
 
@@ -682,8 +683,9 @@ Optional blocks
 ``status`` sizes its output buffer from the options, the eventlog size
 and the number of loaded upatches, at most 8 MiB. A document that does
 not fit is not printed: ``status`` writes ``status: json encode failed:
-<reason>`` to standard error, nothing to standard output, sends no
-keepalive and exits 1.
+<reason>`` to standard error, nothing to standard output, and exits 1.
+With ``--otel`` the keepalive is sent all the same: it does not carry
+this document.
 
 Fields to alert on
 ------------------

@@ -273,7 +273,7 @@ the initrd, from the binary the UKI authenticates.
 
       [Service]
       ExecStart=
-      ExecStart=/run/shirudo/runtime/usr/bin/shirudo status --otel --include-system
+      ExecStart=/run/shirudo/runtime/usr/bin/shirudo status --otel
 
 3. Write ``/etc/systemd/system/shirudo-map-export.service.d/runtime.conf``:
 

@@ -11,4 +11,4 @@ SyslogIdentifier=shirudo
 LimitMEMLOCK=infinity
 TimeoutStartSec=2min
 EnvironmentFile=-/etc/shirudo/map-export.env
-ExecStart=@bindir@/shirudo status --otel --include-system
+ExecStart=@bindir@/shirudo status --otel

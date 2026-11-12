@@ -82,7 +82,7 @@ done
 sudo tee /etc/systemd/system/shirudo-keepalive.service.d/runtime.conf >/dev/null <<'EOF'
 [Service]
 ExecStart=
-ExecStart=/run/shirudo/runtime/usr/bin/shirudo status --otel --include-system
+ExecStart=/run/shirudo/runtime/usr/bin/shirudo status --otel
 EOF
 sudo tee /etc/systemd/system/shirudo-map-export.service.d/runtime.conf >/dev/null <<'EOF'
 [Service]

@@ -186,8 +186,8 @@ Agentless target
 A target runs no daemon and listens on no socket. Every operation is a
 one-shot command, started by root or by a systemd unit, that does its work
 and exits: ``init`` at boot from the initrd and again from the root file
-system, package and tree updates every minute, and map export and status
-keepalives every five seconds.
+system, package and tree updates and status keepalives every minute,
+and map export every five seconds.
 :doc:`/reference/systemd-units` lists the units and timers.
 
 What must outlive a command is pinned in the private bpffs, and what must

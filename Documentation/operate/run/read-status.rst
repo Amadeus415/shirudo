@@ -768,15 +768,17 @@ Monitor with ``status --json``
 ------------------------------
 
 ``status --json`` prints the same data as one JSON document. The
-keepalive timer sends it to your collector, see
-:doc:`/operate/run/telemetry`.
+keepalive timer sends a compact record of it, the keepalive body that
+``status --keepalive`` prints, to your collector with the TPM's quote,
+see :doc:`/operate/run/telemetry`.
 
 .. warning::
 
    ``shirudo status`` exits 0 whatever the verdict, ``tampered``
    included, unless you pass ``--check``, which exits 1 on ``tampered``
    and 0 on every other verdict. It exits 1 also when it cannot load its
-   configuration, runs out of memory or fails to send a keepalive, and 2
+   configuration, runs out of memory, or cannot quote or send a
+   keepalive, and 2
    on a usage error or an invalid ``map_export`` setting. Alert on the
    ``status`` field of the JSON document, not on the exit code.
 

@@ -69,9 +69,11 @@ Set up the exporter
    The exporter takes each event's host from the ``host.name`` resource
    attribute, so every event carries the name of the target that sent
    it. The record's body becomes the event, and its attributes become
-   indexed fields under their own names, ``shirudo.status`` and
-   ``shirudo.tamper_attempts`` among them, next to ``otel.log.name``
-   for the event name.
+   indexed fields under their own names, next to ``otel.log.name`` for
+   the event name. A keepalive's body is a string, the JSON object the
+   target's TPM quoted, so the event is that text, and the searches
+   below take the keys they need out of it with ``rex``;
+   :doc:`/reference/cli/status` lists the keys.
 
 #. Restart the collector.
 
@@ -84,8 +86,8 @@ Check the data
 
       index=shirudo sourcetype=shirudo host=<target>
 
-   A target sends a keepalive every few seconds, so each target shows up
-   within a minute of the restart.
+   A target sends a keepalive every minute, so each target shows up
+   within a minute or two of the restart.
 
 #. List when each target last reported:
 
@@ -107,15 +109,16 @@ the number of results is greater than zero.
 :doc:`/operate/run/telemetry` explains each signal under what to alert
 on.
 
-#. Find targets that stopped sending. Two minutes covers several
+#. Find targets that stopped sending. Five minutes covers several
    keepalive intervals and the 30 seconds a keepalive may wait for the
-   config operation lock:
+   config operation lock; a target whose tree syncs run for longer needs
+   a longer threshold:
 
    .. code-block:: text
 
       | tstats latest(_time) AS last_seen
           WHERE index=shirudo sourcetype=shirudo earliest=-1d BY host
-      | where last_seen < relative_time(now(), "-2m")
+      | where last_seen < relative_time(now(), "-5m")
 
    A target silent for longer than a day drops out of the search.
 
@@ -124,26 +127,26 @@ on.
 
    .. code-block:: text
 
-      index=shirudo sourcetype=shirudo shirudo.status!=ok earliest=-5m
-      | stats count AS reports BY host, shirudo.status
-
-   ``!=`` matches only events that carry the field, so map snapshots
-   do not match.
+      index=shirudo sourcetype=shirudo otel.log.name=shirudo.keepalive earliest=-5m
+      | rex "\"verdict\":\"(?<verdict>[^\"]+)\""
+      | where verdict != "ok"
+      | stats count AS reports BY host, verdict
 
 #. Find targets whose guards refused operations in the last ten
    minutes:
 
    .. code-block:: text
 
-      index=shirudo sourcetype=shirudo shirudo.tamper_attempts=* earliest=-10m
-      | stats earliest(shirudo.tamper_attempts) AS first_count,
-              latest(shirudo.tamper_attempts) AS last_count BY host
-      | eval new_attempts = last_count - first_count
-      | where new_attempts > 0
+      index=shirudo sourcetype=shirudo otel.log.name=shirudo.keepalive earliest=-10m
+      | rex "\"boot_id\":\"(?<boot_id>[^\"]+)\""
+      | rex "\"tamper\":(?<tamper>\[[^\]]*\]|null)"
+      | stats dc(tamper) AS counts BY host, boot_id
+      | where counts > 1
 
-   The search subtracts the earliest count in the window from the
-   latest. The counters start at zero each boot, so a reboot in the
-   window gives a negative difference and no row.
+   ``tamper`` lists every counter since boot. The counters only grow
+   within a boot and start at zero at the next, so more than one list in
+   the keepalives of one ``boot_id`` means a counter rose, and a reboot
+   in the window reports nothing.
 
 Next steps
 ----------

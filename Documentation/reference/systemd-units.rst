@@ -32,7 +32,7 @@ Units
        runtime drop-in
      - ``sysinit.target``, once per boot
    * - ``shirudo-keepalive.service``
-     - ``@bindir@/shirudo status --otel --include-system``
+     - ``@bindir@/shirudo status --otel``
      - ``shirudo-keepalive.timer``
    * - ``shirudo-xdp-reconcile.service``
      - ``@bindir@/shirudo upatch reconcile``
@@ -180,7 +180,7 @@ shirudo-keepalive.service
    * - Setting
      - Value
    * - ``ExecStart``
-     - ``@bindir@/shirudo status --otel --include-system``
+     - ``@bindir@/shirudo status --otel``
    * - ``EnvironmentFile``
      - ``-/etc/shirudo/map-export.env`` (optional)
    * - ``After``
@@ -192,7 +192,9 @@ shirudo-keepalive.service
 
 The keepalive is sent only when ``map_export.otel_endpoint``,
 ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`` or ``OTEL_EXPORTER_OTLP_ENDPOINT``
-names an endpoint. See :doc:`/reference/formats/otlp`.
+names an endpoint, and only with its TPM quote: a run whose TPM does not
+answer or does not quote fails and sends nothing. See
+:doc:`/reference/formats/otlp`.
 
 A keepalive and a ``bpm tree sync`` do not run at once. Every target
 command holds the config operation lock for its whole run, and a sync
@@ -330,7 +332,7 @@ Timers
    * - Timer
      - Schedule
    * - ``shirudo-keepalive.timer``
-     - ``OnBootSec=5s``, ``OnUnitInactiveSec=5s``, ``AccuracySec=1s``
+     - ``OnBootSec=5s``, ``OnUnitInactiveSec=60s``, ``AccuracySec=1s``
    * - ``shirudo-xdp-reconcile.timer``
      - ``OnBootSec=5s``, ``OnUnitInactiveSec=60s``, ``AccuracySec=1s``
    * - ``shirudo-map-export.timer``

@@ -91,21 +91,24 @@ Check the data
 
       SELECT Timestamp,
              ResourceAttributes['host.name'] AS host,
-             LogAttributes['shirudo.status'] AS status
+             JSONExtractString(Body, 'verdict') AS verdict
       FROM shirudo.otel_logs
       WHERE ServiceName = 'shirudo' AND EventName = 'shirudo.keepalive'
       ORDER BY Timestamp DESC
       LIMIT 10;
 
-   A target sends a keepalive every few seconds, so each target shows up
-   within a minute of the restart.
+   ``Body`` holds the keepalive body, the JSON string the target's TPM
+   quoted, and the queries read its keys with ``JSONExtract`` and its
+   kin. :doc:`/reference/cli/status` lists the keys. A target sends a
+   keepalive every minute, so each target shows up within a minute or
+   two of the restart.
 
 #. Show the last verdict of every target and when it last reported:
 
    .. code-block:: sql
 
       SELECT ResourceAttributes['host.name'] AS host,
-             argMax(LogAttributes['shirudo.status'], Timestamp) AS status,
+             argMax(JSONExtractString(Body, 'verdict'), Timestamp) AS verdict,
              max(Timestamp) AS last_seen
       FROM shirudo.otel_logs
       WHERE ServiceName = 'shirudo' AND EventName = 'shirudo.keepalive'
@@ -113,7 +116,7 @@ Check the data
       ORDER BY last_seen;
 
    A target at the top whose ``last_seen`` falls behind has stopped
-   sending, and a ``status`` other than ``ok`` needs a look, as
+   sending, and a ``verdict`` other than ``ok`` needs a look, as
    :doc:`/operate/run/telemetry` describes under what to alert on.
 
 #. Read the map snapshots of one upatch:
@@ -140,9 +143,10 @@ from Grafana with its ClickHouse data source or from any tool that can
 run SQL. :doc:`/operate/run/telemetry` explains each signal under what
 to alert on.
 
-#. Find targets that stopped sending keepalives. Two minutes covers
+#. Find targets that stopped sending keepalives. Five minutes covers
    several keepalive intervals and the 30 seconds a keepalive may wait
-   for the config operation lock:
+   for the config operation lock; a target whose tree syncs run for
+   longer needs a longer threshold:
 
    .. code-block:: sql
 
@@ -151,7 +155,7 @@ to alert on.
       FROM shirudo.otel_logs
       WHERE ServiceName = 'shirudo' AND EventName = 'shirudo.keepalive'
       GROUP BY host
-      HAVING last_seen < now() - INTERVAL 2 MINUTE;
+      HAVING last_seen < now() - INTERVAL 5 MINUTE;
 
 #. Find targets that reported a verdict other than ``ok`` in the last
    five minutes:
@@ -159,13 +163,13 @@ to alert on.
    .. code-block:: sql
 
       SELECT ResourceAttributes['host.name'] AS host,
-             LogAttributes['shirudo.status'] AS status,
+             JSONExtractString(Body, 'verdict') AS verdict,
              max(Timestamp) AS last_seen
       FROM shirudo.otel_logs
       WHERE ServiceName = 'shirudo' AND EventName = 'shirudo.keepalive'
         AND Timestamp > now() - INTERVAL 5 MINUTE
-        AND LogAttributes['shirudo.status'] != 'ok'
-      GROUP BY host, status;
+        AND verdict != 'ok'
+      GROUP BY host, verdict;
 
 #. Find targets whose guards refused operations in the last ten
    minutes:
@@ -173,20 +177,20 @@ to alert on.
    .. code-block:: sql
 
       SELECT ResourceAttributes['host.name'] AS host,
-             argMax(toInt64OrZero(LogAttributes['shirudo.tamper_attempts']), Timestamp)
-             - argMin(toInt64OrZero(LogAttributes['shirudo.tamper_attempts']), Timestamp)
+             JSONExtractString(Body, 'boot_id') AS boot,
+             max(arraySum(JSONExtract(Body, 'tamper', 'Array(UInt64)')))
+             - min(arraySum(JSONExtract(Body, 'tamper', 'Array(UInt64)')))
                AS new_attempts
       FROM shirudo.otel_logs
       WHERE ServiceName = 'shirudo' AND EventName = 'shirudo.keepalive'
         AND Timestamp > now() - INTERVAL 10 MINUTE
-      GROUP BY host
+      GROUP BY host, boot
       HAVING new_attempts > 0;
 
-   The query subtracts the earliest count in the window from the latest.
-   The counters start at zero each boot, so a target that rebooted in
-   the window yields a negative difference and no row, where the
-   difference between the largest and smallest count would report every
-   reboot.
+   ``tamper`` lists every counter, so their sum is the number of
+   refusals since boot. The counters only grow within a boot and start
+   at zero at the next, so the query compares the keepalives of one boot,
+   ``boot_id``, and a reboot in the window reports nothing.
 
 Next steps
 ----------

@@ -374,7 +374,10 @@ Assets
      - The config signature (T11).
    * - Status, reports and telemetry
      - The target's output and the collector
-     - Nothing. They are the target's own account (R17).
+     - Nothing for reports and map snapshots. A keepalive's body is quoted
+       by the TPM's attestation key, which shows it unchanged on the way
+       but not that the key is a TPM's. All of them are the target's own
+       account (R17).
 
 .. _tm-trust-boundaries:
 
@@ -471,8 +474,10 @@ ADV-D, network and registry
 ADV-E, malicious collector
    Receives keepalives and map snapshots. It can refuse or delay them
    and put a short error message into the target's log. It cannot
-   change enforcement or state. What it receives is unauthenticated
-   (R17).
+   change enforcement or state. A map snapshot it receives is
+   unauthenticated; a keepalive it changes no longer matches its quote,
+   but it can replay an old one to a backend that does not order them
+   by the quote's clock (R17).
 
 ADV-F, holder of a compromised or revoked signing key
    Its blast radius: every target whose ``.bpf`` keyring holds the key
@@ -1154,8 +1159,8 @@ point counts what it lets through: a signal to an authorized task from
 a task without authority (``SealSignal``, T3). Only the
 hooks add to it, and no task resets it from userspace. ``shirudo
 status`` lists the counters that are not zero with their meaning,
-``status --json`` carries them all, and the keepalive carries the total
-as the attribute ``shirudo.tamper_attempts``.
+``status --json`` carries them all, and so does the keepalive body,
+which the TPM quotes, in its ``tamper`` list.
 
 A counter is evidence of an attempt, not of a compromise. Some
 refusals move no counter: the kernel's signature errors, the guards of
@@ -1511,12 +1516,20 @@ R16 Any artifact ever signed loads at any time
    way to retire one artifact is to revoke the key that signed it.
 
 R17 Telemetry has no proof of origin
-   Keepalives, map snapshots and the tamper counters they carry are
-   unsigned and not bound to the TPM. ``host.name`` is the target's
-   host name, and the credentials come from files root reads.
-   ``map_export.otel_insecure`` turns certificate verification off.
-   Root can withhold, drain or forge telemetry. Only ``attest verify``
-   is evidence.
+   Map snapshots are unsigned and not bound to the TPM. A keepalive
+   carries a quote of the SHA-256 of its body by the attestation key of
+   ``attest``, created for each keepalive, over no PCR, and
+   ``shirudo-quote-check`` verifies it without a TPM. A quote that
+   checks proves that the body is unchanged since that key signed it,
+   and its clock orders the keepalives of one key. It does not prove
+   that the key lives in a genuine TPM: only ``attest challenge`` ties
+   the key to an endorsement key, and a backend treats every node as
+   ``untrusted`` until a future workflow does that. Nor does it vouch
+   for the body: root on the target can have the TPM quote a body of
+   its own. ``host.name`` is the target's host name, and the
+   credentials come from files root reads. ``map_export.otel_insecure``
+   turns certificate verification off. Root can withhold, drain or
+   forge telemetry. Only ``attest verify`` is evidence.
 
 R18 BPF outside the gates
    ``lsm/bpf`` and ``lsm/bpf_prog_load`` admit every call whose
