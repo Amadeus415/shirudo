@@ -50,7 +50,7 @@ static void usage(FILE *fp)
 		"                [--key <signing_key.pem>] [--cert <cert.der>]\n"
 		"\n"
 		"  shirudo-build image build <filesystem.img> -o <prefix> ...\n"
-		"  shirudo-build bpm <build|push|tree append> ...\n"
+		"  shirudo-build bpm <build|push|tree append|tree show> ...\n"
 		"  shirudo-build keys vouch <cert.der> [-o <file>] ...\n"
 		"\n"
 		"<input> is .bpf.c (compiled via clang) or .bpf.o.\n"
@@ -75,7 +75,7 @@ static void usage(FILE *fp)
 		"                  file that is removed). Reports every emitted\n"
 		"                  path on stdout. A debugging aid.\n"
 		"bpm: the operator-only package commands (`shirudo bpm build`,\n"
-		"     `push`, `tree append`); see `shirudo-build bpm --help`.\n",
+		"     `push`, `tree append`, `tree show`); see `shirudo-build bpm --help`.\n",
 		KEYS_DIR_ENV, KEYS_DIR_ENV,
 		SIGNING_KEY_PATH, KEYS_DIR_ENV,
 		CERT_PATH, VMLINUX_PATH);

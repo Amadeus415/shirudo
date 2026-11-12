@@ -361,7 +361,7 @@ it.
    ``shirudo-build``
       The operator-only helper that the core ``shirudo`` binary executes
       for ``build``, ``bpm build``, ``bpm push``, ``bpm tree append``,
-      ``bpm config update``, ``image build``, ``image verify`` and ``keys
+      ``bpm tree show``, ``bpm config update``, ``image build``, ``image verify`` and ``keys
       vouch``. It links the signer, runs clang and runs ``veritysetup``.
       The operator package installs it and the target package does not.
       See :doc:`/concepts/operator-and-target`.

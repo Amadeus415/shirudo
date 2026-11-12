@@ -375,7 +375,8 @@ every verdict, ``tampered`` included. Parse ``.status`` of
      - 0, also when no tree is configured; 1 on failure and for an
        unknown option; 2 for too many arguments or a ``--report`` path
        that is too long.
-   * - ``bpm build``, ``bpm config update``, ``bpm tree append``
+   * - ``bpm build``, ``bpm config update``, ``bpm tree append``,
+       ``bpm tree show``
      - 0; 1 on failure and for a usage error; 127 when the helper is
        missing.
    * - ``bpm push``

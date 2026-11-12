@@ -157,9 +157,13 @@ _shirudo()
 		elif [[ $sub == build ]]; then
 			COMPREPLY=( $(compgen -d -- "$cur") )
 		elif [[ $sub == tree && cword -eq 3 ]]; then
-			COMPREPLY=( $(compgen -W "sync append" -- "$cur") )
+			COMPREPLY=( $(compgen -W "sync append show" -- "$cur") )
 		elif [[ $sub == tree && ${COMP_WORDS[3]} == sync && $cur == -* ]]; then
 			COMPREPLY=( $(compgen -W "--dry-run --report" -- "$cur") )
+		elif [[ $sub == tree && ${COMP_WORDS[3]} == show && $prev == --cert ]]; then
+			COMPREPLY=( $(compgen -f -- "$cur") )
+		elif [[ $sub == tree && ${COMP_WORDS[3]} == show && $cur == -* ]]; then
+			COMPREPLY=( $(compgen -W "--cert --reference" -- "$cur") )
 		elif [[ $sub == tree && ${COMP_WORDS[3]} == append && $prev == --previous-cert ]]; then
 			COMPREPLY=( $(compgen -f -- "$cur") )
 		elif [[ $sub == tree && ${COMP_WORDS[3]} == append && $cur == -* ]]; then

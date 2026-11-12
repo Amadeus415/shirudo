@@ -1,6 +1,6 @@
 ---
 name: upatch
-description: Write, build, sign, inspect and package a shirudo upatch. Covers the BPF C program written for the target kernels' preemption model and at a low cost on machines large and small, `shirudo build` for a .upatch and its unload directive, the Beefile and `shirudo bpm build` for a .bee package, `bpm info` to inspect one, `bpm push` and `bpm tree append` to publish, and loading it on a test target. Use when asked to create, change or ship an upatch or a bpm package, or to reproduce a failed upatch build or load.
+description: Write, build, sign, inspect and package a shirudo upatch. Covers the BPF C program written for the target kernels' preemption model and at a low cost on machines large and small, `shirudo build` for a .upatch and its unload directive, the Beefile and `shirudo bpm build` for a .bee package, `bpm info` to inspect one, `bpm push` and `bpm tree append` to publish, `bpm tree show` to read a publication back, and loading it on a test target. Use when asked to create, change or ship an upatch or a bpm package, or to reproduce a failed upatch build or load.
 ---
 
 # Upatch
@@ -133,6 +133,7 @@ the `.rodata` a rodata entry wrote, the quickest check of a generator.
 ```sh
 shirudo bpm push <name>-<version>.bee oci://<registry>/<namespace>/<repo> --keys-dir <keys>
 shirudo bpm tree append <name>-<version>.bee oci://<registry>/<repository> [<append-options>]
+shirudo bpm tree show oci://<registry>/<repository> --cert <keys>/cert.der [--reference <ref>]
 ```
 
 `push` signs the namespace's index along with the package. Pass
@@ -142,7 +143,11 @@ append` adds a load or delete operation to a signed upatch tree that
 targets sync; `Documentation/reference/cli/bpm.rst` lists its options.
 It refuses an `add` whose XDP programs select a device class another
 upatch of the tree selects on the same nodes: give each class to one
-upatch, or the two entries selectors that exclude each other.
+upatch, or the two entries selectors that exclude each other. `tree
+show` prints the publication verified as a target verifies it, as
+`{"manifest_digest":...,"document":...}` with the signed document
+verbatim, `fixes` included: the check that an append published what
+was meant.
 
 ## Load it on a target
 

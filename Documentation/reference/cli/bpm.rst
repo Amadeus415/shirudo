@@ -30,6 +30,8 @@ Usage
    shirudo bpm repo update [<source>]
    shirudo bpm tree sync [--dry-run] [--report <path> | --report=<path>]
    shirudo bpm tree append <package> oci://<registry>/<repository> [<append-options>]
+   shirudo bpm tree show oci://<registry>/<repository> (--cert <certificate> | --cert=<certificate>)
+                         [--reference <reference> | --reference=<reference>]
    shirudo bpm key (add | fingerprint) <certificate | package | oci-reference>
    shirudo bpm key list [--json]
    shirudo bpm pull oci://<registry>/<repository>:<tag>
@@ -80,7 +82,7 @@ Usage
      - target
      - yes
      - yes
-   * - ``tree append``
+   * - ``tree append``, ``tree show``
      - operator host, helper
      - no
      - no
@@ -113,8 +115,8 @@ The lock is ``/var/lib/shirudo/locks/bpm.lock``. A locked subcommand waits
 for it. The helper subcommands execute ``shirudo-build`` (see
 :doc:`shirudo`). ``shirudo bpm --help`` and ``--list-cmds`` show ``build``
 and ``push`` only where the helper resolves. Elsewhere they are unknown
-subcommands. ``config update`` and ``tree append`` always execute the
-helper and fail with 127 without it.
+subcommands. ``config update``, ``tree append`` and ``tree show`` always
+execute the helper and fail with 127 without it.
 
 Subcommand names after ``bpm`` and ``bpm key`` may be abbreviated (see
 :doc:`shirudo`). The words after ``config``, ``repo`` and ``tree`` may
@@ -261,6 +263,34 @@ published, when the existing publication holds a ``fixes`` list
 the publication at <repository>:<reference> has a fixes list bpm tree
 append would not write, so it cannot carry it into the next
 generation``.
+
+tree show
+---------
+
+``tree show`` fetches the tree publication at ``<repository>:<reference>``
+(``reference`` defaults to ``stable``) and verifies it as ``tree sync``
+does, against the certificate ``--cert`` names instead of a config
+image: each layer against its descriptor, the signature, then the tree
+ID, the sequence numbers and each operation's digest. It reads no node
+state and writes nothing. It prints one JSON object and a newline:
+
+.. code-block:: none
+
+   {"manifest_digest":"sha256:<hex>","document":<document>}
+
+``manifest_digest`` is the digest of the publication's manifest, and
+``document`` the signed document's bytes as published, not emitted
+again, so keys a node ignores, such as ``fixes``, appear as signed. The
+document may hold newlines; read the output as a JSON value, not as a
+line.
+
+A refusal prints ``bpm tree show: <error>`` with the errno ``tree sync``
+reports for the same publication: ``Key was rejected by service`` for a
+signature that does not verify under the certificate, a layer that does
+not match its digest or an operation digest that does not match its
+operation, ``No such file or directory`` for a reference that does not
+exist, and ``Invalid argument`` for a document that is not a tree
+publication.
 
 key
 ---
@@ -410,8 +440,8 @@ Exit status
      - Success, or ``tree sync`` without a configured tree.
    * - 1
      - Failure, printed as ``bpm <action>: <error>``. Also the usage
-       errors of ``build``, ``config update``, ``tree append`` and
-       ``tree sync``, and ``config register add`` or ``remove`` and
+       errors of ``build``, ``config update``, ``tree append``,
+       ``tree show`` and ``tree sync``, and ``config register add`` or ``remove`` and
        ``key add`` on a target with a config image.
    * - 2
      - A usage error of the other subcommands, an unknown subcommand, and
@@ -468,6 +498,13 @@ Preview a tree sync:
 .. code-block:: console
 
    target# shirudo bpm tree sync --dry-run --report=/tmp/tree.json
+
+Print the tree publication a target would sync, verified with the
+operator certificate:
+
+.. code-block:: console
+
+   operator$ shirudo bpm tree show oci://quay.io/example/tree --cert ~/shirudo-keys/cert.der
 
 Print the fingerprint of the certificate a package carries:
 

@@ -53,7 +53,8 @@ shirudo-build helper
 The code that signs artifacts is not in the core ``shirudo`` binary.
 Every operator command except ``genkey`` and the offline ``attest``
 commands executes a separate helper, ``shirudo-build``: ``build``, ``bpm
-build``, ``bpm push``, ``bpm tree append``, ``bpm config update``, ``image
+build``, ``bpm push``, ``bpm tree append``, ``bpm tree show``, ``bpm
+config update``, ``image
 build``, ``image verify`` and ``keys vouch``. The helper links the
 signer, runs clang to compile BPF and runs ``veritysetup`` to build and
 check images. The core binary finds it through ``SHIRUDO_BUILD``, then

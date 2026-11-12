@@ -332,6 +332,7 @@ BUILD_SRCS := \
     tools/shirudo-build/vmlinux.c \
     tools/shirudo-build/bpm-build.c \
     tools/shirudo-build/bpm-publish.c \
+    tools/shirudo-build/bpm-show.c \
     tools/shirudo-build/vouch.c \
     tools/shirudo-build/image.c
 
@@ -495,8 +496,8 @@ build/target/util/loader.o: $(BPF_OBJS)
 # shirudo-build links util/sign.c (CMS signer) plus a subset of util,
 # util/loader.o for its .incbin of bpf/unload.bpf.o (used by the
 # --unload directive emission path), and the OCI client for the
-# operator-only `bpm build|push|tree append`. Not linked into the core
-# shirudo binary.
+# operator-only `bpm build|push|tree append|tree show`. Not linked into
+# the core shirudo binary.
 tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o util/config_image.o \
                                    util/log.o util/json.o util/loader.o \
                                    util/io.o util/malloc.o util/paths.o util/config.o \

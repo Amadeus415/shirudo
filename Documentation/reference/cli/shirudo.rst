@@ -50,7 +50,7 @@ Commands
        :doc:`upatch-info`, :doc:`upatch-get`, :doc:`upatch-map`.
    * - :doc:`bpm`
      - target, and the operator host for ``build``, ``push``,
-       ``tree append`` and ``config update``
+       ``tree append``, ``tree show`` and ``config update``
      - Install, upgrade and remove signed packages. Build and publish
        them.
    * - :doc:`image`
@@ -118,7 +118,8 @@ An unknown name prints ``'<input>' is not a shirudo command.``, a list of
 similar names, and exits with 1. The subcommands of ``upatch``, ``keys``,
 ``attest``, ``bpm`` and ``bpm key`` resolve the same way. The subcommands
 of ``image``, the actions of ``bpm config register`` and the words
-``repo update``, ``tree sync`` and ``tree append`` must be spelled out.
+``repo update``, ``tree sync``, ``tree append`` and ``tree show`` must be
+spelled out.
 
 ``shirudo --list-cmds`` and ``shirudo help --list-cmds`` print the
 command names one per line. Bash completion reads them from there.
@@ -204,7 +205,8 @@ Operator helper
 ~~~~~~~~~~~~~~~
 
 ``build``, ``keys vouch``, ``image build``, ``image verify``, ``bpm
-build``, ``bpm push``, ``bpm tree append`` and ``bpm config update`` run
+build``, ``bpm push``, ``bpm tree append``, ``bpm tree show`` and ``bpm
+config update`` run
 in the separate ``shirudo-build`` binary, which the operator package
 installs. ``shirudo`` executes the first of:
 

@@ -2313,11 +2313,13 @@ static void bpm_tree_usage(void)
 {
 	fprintf(stderr,
 		"usage: shirudo bpm tree sync [--dry-run] [--report=<path>]\n"
-		"       shirudo bpm tree append <package-file> <repository> [options]\n\n"
-		"sync applies the configured tree on a target. append is operator-only:\n"
-		"it runs in shirudo-build and publishes the [upatches.tree] entries of a\n"
-		"built package as the next operations of the signed tree; see\n"
-		"`shirudo bpm tree append --help` where the operator package is installed.\n");
+		"       shirudo bpm tree append <package-file> <repository> [options]\n"
+		"       shirudo bpm tree show <repository> --cert <file> [--reference <ref>]\n\n"
+		"sync applies the configured tree on a target. append and show are\n"
+		"operator-only and run in shirudo-build: append publishes the\n"
+		"[upatches.tree] entries of a built package as the next operations of the\n"
+		"signed tree, show prints a verified publication; see their --help where\n"
+		"the operator package is installed.\n");
 }
 
 static int remove_tree_entry(const char *path, const struct stat *st,
@@ -2809,7 +2811,8 @@ int cmd_bpm(int argc, const char **argv)
 		bpm_tree_usage();
 		return argc < 3 ? 2 : 0;
 	}
-	if (!strcmp(sub, "tree") && !strcmp(argv[2], "append"))
+	if (!strcmp(sub, "tree") &&
+	    (!strcmp(argv[2], "append") || !strcmp(argv[2], "show")))
 		return bpm_exec_operator(sub, argc, argv);
 	if (!strcmp(sub, "tree") && strcmp(argv[2], "sync")) {
 		bpm_tree_usage();

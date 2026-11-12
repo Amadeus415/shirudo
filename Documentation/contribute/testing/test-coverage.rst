@@ -501,6 +501,12 @@ signed config image.
        after ``artifact`` and outside ``operation_digest``, none on a
        ``delete``, carries every earlier operation's list into the next
        generation, and refuses to carry a list it would not write
+   * - ``t7008-bpm-tree-show``
+     - ``bpm tree show`` prints the manifest digest and the signed
+       document verbatim, ``fixes`` included, refuses a signature by
+       another key, a wrong certificate, a tampered layer and a document
+       ``tree sync`` would refuse with the errno sync reports, and
+       writes nothing to the registry
    * - ``t7101-bpm-tree``
      - Tree sync with a selector
    * - ``t7102-bpm-tree-sequential``
@@ -758,7 +764,7 @@ Coverage by area
        ``oci-http``, ``oci-manifest``, ``oci-ref``, ``registry-auth``. Unit:
        ``bpm_oci``, ``bpm_package``
    * - upatch tree
-     - ``t3011``, ``t5004``, ``t7005``, ``t7007``, ``t7101``,
+     - ``t3011``, ``t5004``, ``t7005``, ``t7007``, ``t7008``, ``t7101``,
        ``t7102``, ``t7103``, ``t7104``, ``t7105``, ``t7106``,
        ``t7107``, ``t7109``, ``t9105``. Fuzz: ``tree``,
        ``tree-state``, ``kconfig``. Unit: ``bpm_tree``,

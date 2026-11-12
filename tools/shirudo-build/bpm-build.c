@@ -2347,7 +2347,8 @@ static void bpm_usage(FILE *fp)
 		"                         [--rodata-input <name>=<path>]...\n"
 		"       shirudo bpm push <package-file> <repository> [--keys-dir <dir> |\n"
 		"                        --index-cert <cert.der> --index-key <key.pem>]\n"
-		"       shirudo bpm tree append <package-file> <repository> [options]\n\n"
+		"       shirudo bpm tree append <package-file> <repository> [options]\n"
+		"       shirudo bpm tree show <repository> --cert <cert.der> [--reference <ref>]\n\n"
 		"Operator-only BPM commands, implemented in shirudo-build and reached\n"
 		"through `shirudo bpm`. Each accepts --help.\n");
 }

@@ -99,8 +99,9 @@ shirudo and shirudo-build
 Registry access
 ---------------
 
-Read by the target's ``bpm`` commands and by ``shirudo-build bpm push``
-and ``shirudo-build bpm tree append``. Honored on a target.
+Read by the target's ``bpm`` commands and by ``shirudo-build bpm push``,
+``shirudo-build bpm tree append`` and ``shirudo-build bpm tree show``.
+Honored on a target.
 
 .. list-table::
    :header-rows: 1

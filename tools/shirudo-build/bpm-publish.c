@@ -1286,6 +1286,8 @@ int build_bpm_tree(int argc, char **argv)
 {
 	int ret;
 
+	if (argc >= 2 && !strcmp(argv[1], "show"))
+		return build_bpm_tree_show(argc - 1, argv + 1);
 	if (argc < 2 || strcmp(argv[1], "append")) {
 		tree_append_usage();
 		return argc >= 2 && build_is_help(argv[1]) ? 0 : 2;

@@ -108,6 +108,7 @@ bool bpm_fix_id_ok(const char *id);
 int build_bpm(int argc, char **argv);
 int build_bpm_push(int argc, char **argv);
 int build_bpm_tree(int argc, char **argv);
+int build_bpm_tree_show(int argc, char **argv);
 bool build_is_help(const char *arg);
 
 int build_check_keys(const char *pkey, const char *cert);
