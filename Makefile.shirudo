@@ -1167,6 +1167,9 @@ testing/fuzz/fuzz-tree-state: testing/fuzz/fuzz-tree-state.c $(FUZZ_BASE) \
                               $(FUZZ_TREE_STATE)
 testing/fuzz/fuzz-kconfig: testing/fuzz/fuzz-kconfig.c $(FUZZ_BASE) \
                            $(FUZZ_TREE_STATE)
+testing/fuzz/fuzz-quote-check: testing/fuzz/fuzz-quote-check.c $(FUZZ_BASE) \
+                               tools/quote-check/row.c util/tpm_wire.c \
+                               util/crypto_openssl.c util/io.c util/seal.c
 
 # A target that reaches static parsers includes their source, which it
 # then depends on without linking it a second time.

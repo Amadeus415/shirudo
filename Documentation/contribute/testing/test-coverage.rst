@@ -642,6 +642,9 @@ the functional tests run.
      - OTLP collector responses and ``OTEL_EXPORTER_OTLP_HEADERS``
    * - ``prog-metadata``
      - A load upatch's program metadata
+   * - ``quote-check``
+     - A row of ``shirudo-quote-check``: a keepalive quote and the
+       digest of its body
    * - ``registry-auth``
      - The container auth file
    * - ``rodata``
@@ -741,8 +744,8 @@ Coverage by area
        inheritance: ``t6141``, ``t6142``
    * - Telemetry
      - ``t6139``, ``t8001`` to ``t8006``, ``t8101`` to ``t8105``,
-       ``t9101`` to ``t9105``. Fuzz: ``otel``, ``serializer``. Unit:
-       ``sysinfo``
+       ``t9101`` to ``t9105``. Fuzz: ``otel``, ``quote-check``,
+       ``serializer``. Unit: ``sysinfo``
    * - Decoders
      - ``t3002``, ``t8102``, ``t9101``. Fuzz: ``decoder``
    * - Tamper counters

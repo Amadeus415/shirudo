@@ -775,7 +775,8 @@ schemas, the OTLP headers a configuration adds, the walk over a
 package's tar members, the registry references and URLs, the kernel
 configuration the tree selectors read, the tree log, the eventlog's
 lines, the evidence document beyond its PCRs, the config update record,
-the site configuration file and the config image's settings and tree.
+the site configuration file, the config image's settings and tree and
+the fields of a ``shirudo-quote-check`` row.
 The ``.upatch`` reader, the TPM structures and the package, index and
 tree readers are covered part by part, as the table shows; what joins
 those parts has no proof.
