@@ -190,6 +190,10 @@ struct upatch_decoder_blob {
 #define UPATCH_UPROBE_PATH_MAX	4096u
 #define UPATCH_BUILD_ID_MAX	64u
 #define UPATCH_UPROBE_OFFSETS_MAX	(1u << 20)
+#define UPATCH_KPROBE_TARGET_MAGIC	0x534b5055u /* "UPKS" le */
+#define UPATCH_KPROBE_TARGET_VERSION	1u
+#define UPATCH_KPROBE_SYM_MAX		512u		/* KSYM_NAME_LEN */
+#define UPATCH_KPROBE_SYMS_MAX		(1u << 20)	/* MAX_KPROBE_MULTI_CNT */
 
 enum upatch_attach_kind {
 	UPATCH_ATTACH_RAW_TRACEPOINT = 0,
@@ -204,6 +208,8 @@ enum upatch_attach_kind {
 	UPATCH_ATTACH_URETPROBE_MULTI = 9,
 	UPATCH_ATTACH_UPROBE = 10,
 	UPATCH_ATTACH_URETPROBE = 11,
+	UPATCH_ATTACH_KPROBE_MULTI = 12,
+	UPATCH_ATTACH_KRETPROBE_MULTI = 13,
 };
 
 /* Bit 4 is not a class: loopback has no native XDP, so nothing selects it. */
@@ -266,6 +272,25 @@ struct upatch_uprobe_target {
 	__le32		path_len;
 	__le32		build_id_len;
 	__le32		nr_offsets;
+};
+
+/*
+ * One UPKS block follows the UPUT block, or the fixed entries when there
+ * is none. It is required when any program has a kprobe multi attach kind
+ * and absent otherwise. Each record is followed by syms_len bytes holding
+ * nr_syms NUL-terminated names in strictly ascending strcmp() order.
+ */
+struct upatch_kprobe_targets {
+	__le32		magic;		/* UPATCH_KPROBE_TARGET_MAGIC */
+	__le32		version;	/* UPATCH_KPROBE_TARGET_VERSION */
+	__le32		nr_targets;
+	__le32		reserved;
+};
+
+struct upatch_kprobe_target {
+	__le32		prog_idx;
+	__le32		nr_syms;
+	__le32		syms_len;
 };
 
 

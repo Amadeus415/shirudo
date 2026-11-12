@@ -585,6 +585,9 @@ void prog_specs_free(struct prog_spec *specs, __u32 nr_progs)
 		xfree(specs[i].uprobe_offsets,
 		      (size_t)specs[i].nr_uprobe_offsets *
 		      sizeof(*specs[i].uprobe_offsets));
+		xfree(specs[i].kprobe_sym_buf, specs[i].kprobe_sym_buf_len);
+		xfree(specs[i].kprobe_syms, (size_t)specs[i].nr_kprobe_syms *
+		      sizeof(*specs[i].kprobe_syms));
 	}
 	xfree(specs, (size_t)nr_progs * sizeof(*specs));
 }
@@ -597,6 +600,21 @@ __u32 prog_specs_xdp_classes(const struct prog_spec *specs, __u32 nr_progs)
 		if (specs[i].kind == UPATCH_ATTACH_XDP)
 			classes |= specs[i].device_classes;
 	return classes;
+}
+
+bool kprobe_sym_valid(const char *sym, size_t len)
+{
+	size_t i;
+
+	if (!len || len >= UPATCH_KPROBE_SYM_MAX)
+		return false;
+	for (i = 0; i < len; i++) {
+		__u8 c = (__u8)sym[i];
+
+		if (c <= ' ' || c >= 0x7f || c == ',' || c == '*' || c == '?' || c == '|')
+			return false;
+	}
+	return true;
 }
 
 static int parse_uprobe_targets(const __u8 **pos, const __u8 *end, struct prog_spec *specs,
@@ -669,10 +687,88 @@ static int parse_uprobe_targets(const __u8 **pos, const __u8 *end, struct prog_s
 	return 0;
 }
 
+/* The caller's prog_specs_free() releases what a failure leaves in spec. */
+static int parse_kprobe_syms(const __u8 *syms, __u32 syms_len, __u32 nr_syms,
+			     struct prog_spec *spec)
+{
+	size_t off = 0;
+	__u32 i;
+
+	spec->kprobe_sym_buf = xmalloc(syms_len);
+	if (!spec->kprobe_sym_buf)
+		return -ENOMEM;
+	spec->kprobe_sym_buf_len = syms_len;
+	memcpy(spec->kprobe_sym_buf, syms, syms_len);
+	spec->kprobe_syms = xcalloc(nr_syms, sizeof(*spec->kprobe_syms));
+	if (!spec->kprobe_syms)
+		return -ENOMEM;
+	spec->nr_kprobe_syms = nr_syms;
+
+	for (i = 0; i < nr_syms; i++) {
+		const char *name = spec->kprobe_sym_buf + off;
+		const char *nul;
+
+		if (off >= syms_len)
+			return -EINVAL;
+		nul = memchr(name, '\0', syms_len - off);
+		if (!nul || !kprobe_sym_valid(name, (size_t)(nul - name)))
+			return -EINVAL;
+		if (i && strcmp(spec->kprobe_syms[i - 1], name) >= 0)
+			return -EINVAL;
+		spec->kprobe_syms[i] = name;
+		off += (size_t)(nul - name) + 1;
+	}
+	return off == syms_len ? 0 : -EINVAL;
+}
+
+static int parse_kprobe_targets(const __u8 **pos, const __u8 *end, struct prog_spec *specs,
+				__u32 nr_progs, __u32 nr_kprobe_multis)
+{
+	struct upatch_kprobe_targets targets;
+	const __u8 *cursor = *pos;
+	__u32 i;
+
+	if ((size_t)(end - cursor) < sizeof(targets))
+		return -EINVAL;
+	memcpy(&targets, cursor, sizeof(targets));
+	cursor += sizeof(targets);
+	if (le32_to_cpu(targets.magic) != UPATCH_KPROBE_TARGET_MAGIC ||
+	    le32_to_cpu(targets.version) != UPATCH_KPROBE_TARGET_VERSION ||
+	    le32_to_cpu(targets.reserved) != 0 ||
+	    le32_to_cpu(targets.nr_targets) != nr_kprobe_multis)
+		return -EINVAL;
+
+	for (i = 0; i < nr_kprobe_multis; i++) {
+		struct upatch_kprobe_target record;
+		__u32 prog_idx, nr_syms, syms_len;
+		int ret;
+
+		if ((size_t)(end - cursor) < sizeof(record))
+			return -EINVAL;
+		memcpy(&record, cursor, sizeof(record));
+		cursor += sizeof(record);
+		prog_idx = le32_to_cpu(record.prog_idx);
+		nr_syms = le32_to_cpu(record.nr_syms);
+		syms_len = le32_to_cpu(record.syms_len);
+		if (prog_idx >= nr_progs || !kind_is_kprobe_multi(specs[prog_idx].kind) ||
+		    specs[prog_idx].kprobe_syms || nr_syms == 0 ||
+		    nr_syms > UPATCH_KPROBE_SYMS_MAX || syms_len / 2 < nr_syms ||
+		    (size_t)(end - cursor) < syms_len)
+			return -EINVAL;
+		ret = parse_kprobe_syms(cursor, syms_len, nr_syms, &specs[prog_idx]);
+		if (ret)
+			return ret;
+		cursor += syms_len;
+	}
+	*pos = cursor;
+	return 0;
+}
+
 int prog_specs_parse(const void *metadata, __u32 metadata_len,
 		     __u32 nr_maps, __u32 nr_progs, struct prog_spec **out)
 {
-	__u32 magic, version, count, i, nr_uprobes = 0, xdp_classes = 0;
+	__u32 magic, version, count, i, nr_uprobes = 0, nr_kprobe_multis = 0;
+	__u32 xdp_classes = 0;
 	const struct upatch_prog_entry empty = {};
 	struct upatch_prog_metadata md;
 	struct prog_spec *specs = NULL;
@@ -784,6 +880,13 @@ int prog_specs_parse(const void *metadata, __u32 metadata_len,
 			xdp_classes |= spec->device_classes;
 			spec->kind = kind;
 			continue;
+		case UPATCH_ATTACH_KPROBE_MULTI:
+		case UPATCH_ATTACH_KRETPROBE_MULTI:
+			spec->kind = kind;
+			if (prog.target[0] || prog.offset)
+				goto out;
+			nr_kprobe_multis++;
+			continue;
 		default:
 			goto out;
 		}
@@ -806,6 +909,11 @@ int prog_specs_parse(const void *metadata, __u32 metadata_len,
 	end = (const __u8 *)metadata + metadata_len;
 	if (nr_uprobes) {
 		ret = parse_uprobe_targets(&cursor, end, specs, nr_progs, nr_uprobes);
+		if (ret)
+			goto out;
+	}
+	if (nr_kprobe_multis) {
+		ret = parse_kprobe_targets(&cursor, end, specs, nr_progs, nr_kprobe_multis);
 		if (ret)
 			goto out;
 	}

@@ -158,6 +158,10 @@ struct prog_spec {
 	__u32 build_id_len;
 	__u64 *uprobe_offsets;
 	__u32 nr_uprobe_offsets;
+	char *kprobe_sym_buf;
+	size_t kprobe_sym_buf_len;
+	const char **kprobe_syms;
+	__u32 nr_kprobe_syms;
 	int target_fd;
 	struct stat target_stat;
 };
@@ -177,6 +181,18 @@ static inline bool kind_has_uprobe_target(__u32 kind)
 {
 	return kind_is_uprobe_multi(kind) || kind_is_uprobe_single(kind);
 }
+
+static inline bool kind_is_kprobe_multi(__u32 kind)
+{
+	return kind == UPATCH_ATTACH_KPROBE_MULTI || kind == UPATCH_ATTACH_KRETPROBE_MULTI;
+}
+
+/*
+ * Whether the len bytes at sym can be one name of a kprobe multi target:
+ * 1 to UPATCH_KPROBE_SYM_MAX - 1 printable ASCII bytes, none of them a
+ * space or one of the list and glob characters ",*?|".
+ */
+bool kprobe_sym_valid(const char *sym, size_t len);
 
 /*
  * The attach metadata of a load upatch, parsed strictly into one spec

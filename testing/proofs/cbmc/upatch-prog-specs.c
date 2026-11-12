@@ -6,8 +6,9 @@
  * length proofs.list names, with as many programs as it has room for:
  * prog_specs_parse() reads nothing outside it, gives every program a known
  * role and kind with terminated names, every uprobe an absolute path and
- * rising offsets, every XDP program known device classes, and frees all it
- * took on refusal, as prog_specs_free() does.
+ * rising offsets, every kprobe multi program terminated, strictly rising
+ * names in its buffer, every XDP program known device classes, and frees
+ * all it took on refusal, as prog_specs_free() does.
  */
 
 #include "proof.h"
@@ -56,14 +57,33 @@ static void uprobe_valid(const struct prog_spec *s)
 				 s->uprobe_offsets[j], "rising offsets");
 }
 
+static void kprobe_multi_valid(const struct prog_spec *s)
+{
+	__u32 i;
+
+	__CPROVER_assert(s->nr_kprobe_syms && s->kprobe_syms &&
+			 s->nr_kprobe_syms <= UPATCH_KPROBE_SYMS_MAX, "names within the limit");
+	for (i = 0; i < s->nr_kprobe_syms; i++) {
+		size_t off = (size_t)(s->kprobe_syms[i] - s->kprobe_sym_buf);
+
+		__CPROVER_assert(off < s->kprobe_sym_buf_len &&
+				 terminated(s->kprobe_syms[i], s->kprobe_sym_buf_len - off),
+				 "a terminated name in the buffer");
+		__CPROVER_assert(!i || strcmp(s->kprobe_syms[i - 1], s->kprobe_syms[i]) < 0,
+				 "rising names");
+	}
+}
+
 static void attach_valid(const struct prog_spec *s)
 {
 	__CPROVER_assert(!s->map[0], "no map");
-	__CPROVER_assert(s->kind <= UPATCH_ATTACH_URETPROBE, "a known attach kind");
+	__CPROVER_assert(s->kind <= UPATCH_ATTACH_KRETPROBE_MULTI, "a known attach kind");
 	if (s->kind == UPATCH_ATTACH_XDP)
 		__CPROVER_assert(s->device_classes &&
 				 !(s->device_classes & ~(__u32)UPATCH_XDP_ALL),
 				 "known device classes");
+	if (kind_is_kprobe_multi(s->kind))
+		kprobe_multi_valid(s);
 	if (!needs_target(s->kind)) {
 		__CPROVER_assert(!s->target[0] && !s->offset,
 				 "no target or offset");
@@ -88,6 +108,9 @@ static void spec_valid(const struct prog_spec *s)
 	if (s->kind != UPATCH_ATTACH_XDP)
 		__CPROVER_assert(!s->device_classes,
 				 "device classes for XDP alone");
+	if (!kind_is_kprobe_multi(s->kind))
+		__CPROVER_assert(!s->kprobe_syms && !s->kprobe_sym_buf,
+				 "kprobe names for kprobe multi alone");
 	switch (s->role) {
 	case UPATCH_PROG_ROLE_ATTACH:
 		attach_valid(s);

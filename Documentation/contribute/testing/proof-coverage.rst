@@ -554,8 +554,9 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
        allocation allowed to fail
      - A refusal leaves nothing allocated and ``*out`` NULL; an accepted
        program has a known role and kind, a terminated target and map,
-       uprobe fields only on a uprobe, and device classes, set and
-       within the known mask, only on XDP
+       uprobe fields only on a uprobe, kprobe names only on a kprobe
+       multi program, and device classes, set and within the known
+       mask, only on XDP
    * - ``upatch-prog-uprobes``
      - What ``prog_specs_parse()`` makes of a uprobe target block
      - One program and one record in 226 bytes, the table's program
@@ -574,6 +575,12 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
        absolute path of its stated length without a NUL, one offset for a
        single uprobe, a build ID of 1 to 64 bytes, offsets non-empty and
        strictly rising, everything freed
+   * - ``upatch-prog-kprobes``
+     - The kprobe multi target records of ``prog_specs_parse()``
+     - One program and one record in 206 to 210 bytes, 2 to 6 bytes of
+       names
+     - At least one name, each terminated inside the record's buffer,
+       the names strictly rising, everything freed
    * - ``upatch-loader``
      - ``loader_lddw()``, ``sys_bpf_call()``, ``map_create_slot()``,
        ``map_update_slot()``, ``loader_store_source()``
