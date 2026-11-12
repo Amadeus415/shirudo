@@ -402,7 +402,7 @@ worker per available CPU reported by ``nproc``. Each worker builds a load
 artifact and its matching unload artifact. The ordinary fixture builders, including
 the policy and observability fixtures, and the independent unload artifacts
 also build in CPU-sized batches. Payload hashes are read after their builders
-finish, and the tree test registry is generated after its unload artifact.
+finish, and the tree test registry is generated after its unload artifacts.
 
 Boot an interactive VM
 ~~~~~~~~~~~~~~~~~~~~~~

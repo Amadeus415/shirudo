@@ -405,6 +405,11 @@ Disk writes
 - ``bpm upgrade`` rewrites ``bpm/state.json`` with ``fsync()`` every
   minute, also when nothing changed. ``bpm repo update`` rewrites the
   cached index of every repository.
+- ``bpm tree sync`` rewrites ``bpm/upatch-tree/state.json`` with
+  ``fsync()`` twice every minute with a tree configured, also when
+  nothing changed, and appends a line of about 220 bytes to
+  ``bpm/upatch-tree/outcomes`` with ``fsync()`` for every new tree
+  operation. It reads that file three times at the start of a sync.
 - shirudo appends every eventlog record with ``fsync()``.
 - Map export creates an empty lock file for every map it exports in
   ``/var/lib/shirudo/locks``, named by the kernel's map ID. Map IDs change

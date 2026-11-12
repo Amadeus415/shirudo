@@ -14,7 +14,10 @@
  * Strings are of one byte, as sync only compares them; hashes, hex and paths
  * are stubs the model does not depend on. The functions after the stubs
  * restate the Lean definitions: checked() is Checked, follows() Follows,
- * recover() recover and run() run, with its loop.
+ * recover() recover and run() run, with its loop. An outcome line carries
+ * more here than in the Lean model: its code, 1 or 3 by what the install or
+ * the pins say, and the history root, a fold the sync starts from the root
+ * its record holds at the cursor.
  */
 
 /* As proof.h, before the system headers can include <ctype.h>. */
@@ -38,9 +41,15 @@
 int tree_operation_validate(const struct tree_operation *op);
 #include "../../../builtin-bpm.c"
 
-enum { W_PENDING, W_MEASURE, W_APPEND, W_STATE, W_UNLINK };
+enum {
+	W_PENDING, W_MEASURE, W_APPEND, W_STATE, W_UNLINK, W_OUTCOME,
+	W_TRUNCATE,
+};
 
-/* A write and what it carries: the operation, seq, digest or root, state. */
+/*
+ * A write and what it carries: the operation, seq, digest or root, state,
+ * and for an outcome line its code and the history root.
+ */
 struct write {
 	int		kind;
 	int		op;
@@ -49,9 +58,14 @@ struct write {
 	__s64		generation;
 	char		manifest[2];
 	char		tree_id[2];
+	__s64		head_seq;
+	__s64		base_seq;
+	int		outcome;
+	__u8		h[32];
 };
 
-#define MAX_WRITES	(4 + 5 * LEN)
+/* The cut, recovery's append, lines, state and unlink, the record, the loop. */
+#define MAX_WRITES	(8 + 7 * LEN)
 
 static struct write want[MAX_WRITES];
 static int n_got, n_want;
@@ -68,6 +82,11 @@ static struct tree_operation ops[LEN ? LEN : 1];
 static struct tree_publication fetched;
 static char fetched_manifest[2];
 static bool sel_match[LEN ? LEN : 1], sel_fail[LEN ? LEN : 1];
+/* The history root the record holds at the cursor, and what an install finds. */
+static __u8 disk_history[32];
+static bool op_add[LEN ? LEN : 1], module_absent[LEN ? LEN : 1];
+static bool pins_loaded;
+static int installing = -1;
 static __s64 measure_seq;
 static __u8 measure_d[32];
 
@@ -129,6 +148,13 @@ static void model_hash(const __u8 *a, const __u8 *b, __u8 *out)
 {
 	for (int i = 0; i < 32; i++)
 		out[i] = (__u8)((a[i] * 3 + b[i] + 1) & 0xff);
+}
+
+/* As model_hash(), and another function of the two, as the tag makes it. */
+static void model_history(const __u8 *a, const __u8 *b, __u8 *out)
+{
+	for (int i = 0; i < 32; i++)
+		out[i] = (__u8)((a[i] * 5 + b[i] + 7) & 0xff);
 }
 
 static void digest_of(const char *s, __u8 out[32])
@@ -359,8 +385,60 @@ int tree_state_write(const struct tree_state *s)
 	hex_decode(s->projection_root, w.d, 32);
 	copy_short(w.manifest, s->manifest_digest);
 	copy_short(w.tree_id, s->tree_id);
+	w.head_seq = s->head_seq;
+	w.base_seq = s->segment_base_seq;
 	record(&w);
 	return 0;
+}
+
+int tree_outcomes_truncate(__s64 last_seq)
+{
+	struct write w = { .kind = W_TRUNCATE, .seq = last_seq };
+
+	if (fail_here())
+		return -EIO;
+	record(&w);
+	return 0;
+}
+
+int tree_outcomes_check(__s64 last_seq)
+{
+	return fail_here() ? -EBADMSG : 0;
+}
+
+int tree_outcomes_read(__s64 from, __s64 to, __u8 *codes,
+		       __u8 projection_root[32], __u8 history_root[32])
+{
+	__CPROVER_assert(from == to && !codes,
+			 "the roots at the cursor are what sync reads");
+	memcpy(history_root, disk_history, 32);
+	return fail_here() ? -EIO : 0;
+}
+
+int chain_history_step(const __u8 prev[32], const __u8 operation_digest[32],
+		       __u8 out[32])
+{
+	model_history(prev, operation_digest, out);
+	return fail_here() ? -EIO : 0;
+}
+
+int tree_outcome_append(__s64 seq, enum tree_outcome outcome,
+			const __u8 projection_root[32],
+			const __u8 history_root[32])
+{
+	struct write w = { .kind = W_OUTCOME, .seq = seq, .outcome = outcome };
+
+	if (fail_here())
+		return -EIO;
+	memcpy(w.d, projection_root, 32);
+	memcpy(w.h, history_root, 32);
+	record(&w);
+	return 0;
+}
+
+bool upatch_loaded_pins(const char *name)
+{
+	return pins_loaded;
 }
 
 int tree_pending_write(const struct tree_operation *op)
@@ -369,6 +447,7 @@ int tree_pending_write(const struct tree_operation *op)
 
 	if (fail_here())
 		return -EIO;
+	installing = w.op;
 	record(&w);
 	return 0;
 }
@@ -455,13 +534,17 @@ void upatch_close(struct upatch *u)
 {
 }
 
+/* The operation pending.json names is the one sync installs. */
 int upatch_install(const char *path)
 {
 	int ret;
 
-	__CPROVER_assume(ret == 0 || ret == UPATCH_INSTALL_TARGET_MISSING ||
-			 ret == 1 || ret == -EIO);
-	if (ret && ret != UPATCH_INSTALL_TARGET_MISSING)
+	__CPROVER_assert(installing >= 0 && installing < LEN,
+			 "an install follows its pending record");
+	if (installing >= 0 && installing < LEN && module_absent[installing])
+		return UPATCH_INSTALL_TARGET_MISSING;
+	__CPROVER_assume(ret == 0 || ret == 1 || ret == -EIO);
+	if (ret)
 		failed = true;
 	return ret;
 }
@@ -587,6 +670,10 @@ struct mstate {
 	__s64		last_seq;
 	__u8		root[32];
 	char		manifest[2];
+	__s64		head_seq;
+	__s64		base_seq;
+	/* Not in state.json: the history root sync holds at last_seq. */
+	__u8		hist[32];
 };
 
 static void want_write(int kind, int op, __s64 seq, const __u8 *d,
@@ -610,7 +697,34 @@ static void want_write(int kind, int op, __s64 seq, const __u8 *d,
 		want[index].manifest[1] = '\0';
 		want[index].tree_id[0] = st->tree_id[0];
 		want[index].tree_id[1] = '\0';
+		want[index].head_seq = st->head_seq;
+		want[index].base_seq = st->base_seq;
 	}
+}
+
+/* The line of seq: its code and the roots after it. */
+static void want_outcome(__s64 seq, int outcome, const __u8 *root,
+			 const __u8 *hist)
+{
+	int index;
+
+	__CPROVER_assert(n_want < MAX_WRITES, "expected write log fits");
+	index = n_want++;
+	want[index].kind = W_OUTCOME;
+	want[index].seq = seq;
+	want[index].outcome = outcome;
+	for (int i = 0; i < 32; i++)
+		want[index].d[i] = root[i];
+	for (int i = 0; i < 32; i++)
+		want[index].h[i] = hist[i];
+}
+
+static bool same_history(const struct write *actual, int index)
+{
+	for (int i = 0; i < 32; i++)
+		if (actual->h[i] != want[index].h[i])
+			return false;
+	return true;
 }
 
 static bool same_digest(const struct write *actual, int index)
@@ -640,7 +754,15 @@ static bool same_write(const struct write *a, int index)
 		       a->manifest[0] == want[index].manifest[0] &&
 		       a->manifest[1] == want[index].manifest[1] &&
 		       a->tree_id[0] == want[index].tree_id[0] &&
-		       a->tree_id[1] == want[index].tree_id[1];
+		       a->tree_id[1] == want[index].tree_id[1] &&
+		       a->head_seq == want[index].head_seq &&
+		       a->base_seq == want[index].base_seq;
+	case W_OUTCOME:
+		return a->seq == want[index].seq &&
+		       a->outcome == want[index].outcome &&
+		       same_digest(a, index) && same_history(a, index);
+	case W_TRUNCATE:
+		return a->seq == want[index].seq;
 	default:
 		return true;
 	}
@@ -674,6 +796,37 @@ static bool follows(const struct mstate *s)
 	       s->last_seq <= fetched.head_seq;
 }
 
+/*
+ * What recovery writes once the pending operation is applied and its line
+ * is in the tree eventlog: a line for each operation the stopped sync passed
+ * over, the operation's own, the state and the unlink.
+ */
+static void want_recovered(struct mstate *st, const struct tree_operation *o,
+			   const __u8 *d, const __u8 *next)
+{
+	int index = op_of(o);
+	__u8 passed[32];
+
+	for (int i = 0; i < fetched.n_operations; i++) {
+		if (ops[i].seq >= o->seq)
+			break;
+		if (ops[i].seq <= st->last_seq)
+			continue;
+		digest_of(ops[i].operation_digest, passed);
+		model_history(st->hist, passed, st->hist);
+		want_outcome(ops[i].seq, TREE_OUTCOME_UNMATCHED, st->root,
+			     st->hist);
+	}
+	model_history(st->hist, d, st->hist);
+	want_outcome(o->seq, index >= 0 && op_add[index] && !pins_loaded ?
+		     TREE_OUTCOME_MODULE_ABSENT : TREE_OUTCOME_APPLIED,
+		     next, st->hist);
+	memcpy(st->root, next, 32);
+	st->last_seq = o->seq;
+	want_write(W_STATE, 0, 0, NULL, st);
+	want_write(W_UNLINK, 0, 0, NULL, NULL);
+}
+
 /* false for a refusal before it writes anything. */
 static bool recover(struct mstate *st)
 {
@@ -702,10 +855,7 @@ static bool recover(struct mstate *st)
 	if (replay_kind == 1)
 		return false;
 	if (replay_kind == 2 && !memcmp(replay_root, next, 32)) {
-		memcpy(st->root, next, 32);
-		st->last_seq = o->seq;
-		want_write(W_STATE, 0, 0, NULL, st);
-		want_write(W_UNLINK, 0, 0, NULL, NULL);
+		want_recovered(st, o, d, next);
 		return true;
 	}
 	if (replay_kind == 2 && memcmp(replay_root, st->root, 32))
@@ -713,10 +863,7 @@ static bool recover(struct mstate *st)
 	if (!measured)
 		return true;
 	want_write(W_APPEND, op_of(o), o->seq, next, NULL);
-	memcpy(st->root, next, 32);
-	st->last_seq = o->seq;
-	want_write(W_STATE, 0, 0, NULL, st);
-	want_write(W_UNLINK, 0, 0, NULL, NULL);
+	want_recovered(st, o, d, next);
 	return true;
 }
 
@@ -734,26 +881,42 @@ static void run(void)
 		st.root[i] = have_state ? (__u8)disk_state.projection_root[i] : '0';
 	st.manifest[0] = have_state ? disk_state.manifest_digest[0] : '\0';
 	st.manifest[1] = '\0';
-	if (!checked() || !follows(have_state ? &st : NULL) || !recover(&st))
+	st.head_seq = have_state ? disk_state.head_seq : 0;
+	st.base_seq = have_state ? disk_state.segment_base_seq : 0;
+	memcpy(st.hist, disk_history, 32);
+	if (!checked() || !follows(have_state ? &st : NULL))
 		return;
+	want_write(W_TRUNCATE, 0, st.last_seq, NULL, NULL);
+	if (!recover(&st))
+		return;
+	st.generation = fetched.generation;
+	copy_short(st.manifest, fetched_manifest);
+	st.head_seq = fetched.head_seq;
+	st.base_seq = fetched.base_seq;
+	want_write(W_STATE, 0, 0, NULL, &st);
 	for (int i = 0; i < fetched.n_operations; i++) {
 		if (ops[i].seq <= st.last_seq)
 			continue;
+		digest_of(ops[i].operation_digest, d);
 		if (!sel_match[i]) {
+			model_history(st.hist, d, st.hist);
+			want_outcome(ops[i].seq, TREE_OUTCOME_UNMATCHED,
+				     st.root, st.hist);
 			st.last_seq = ops[i].seq;
 			continue;
 		}
-		digest_of(ops[i].operation_digest, d);
 		want_write(W_PENDING, i, 0, NULL, NULL);
 		want_write(W_MEASURE, i, ops[i].seq, d, NULL);
 		model_hash(st.root, d, st.root);
 		want_write(W_APPEND, i, ops[i].seq, st.root, NULL);
+		model_history(st.hist, d, st.hist);
+		want_outcome(ops[i].seq, op_add[i] && module_absent[i] ?
+			     TREE_OUTCOME_MODULE_ABSENT : TREE_OUTCOME_APPLIED,
+			     st.root, st.hist);
 		st.last_seq = ops[i].seq;
 		want_write(W_STATE, 0, 0, NULL, &st);
 		want_write(W_UNLINK, 0, 0, NULL, NULL);
 	}
-	st.generation = fetched.generation;
-	copy_short(st.manifest, fetched_manifest);
 	want_write(W_STATE, 0, 0, NULL, &st);
 }
 
@@ -787,7 +950,7 @@ static void any_publication(void)
 	fetched = pub;
 	for (int i = 0; i < LEN; i++) {
 		struct tree_operation *o = &ops[i];
-		bool add, match, fail;
+		bool add, match, fail, absent;
 		__s64 seq;
 
 		__CPROVER_assume(seq > 0 && (!i || seq - 1 == ops[i - 1].seq));
@@ -801,6 +964,8 @@ static void any_publication(void)
 		any_name(o->artifact.payload_sha256, false);
 		sel_match[i] = match;
 		sel_fail[i] = fail;
+		op_add[i] = add;
+		module_absent[i] = absent;
 	}
 	any_name(fetched_manifest, false);
 }
@@ -811,22 +976,26 @@ static void any_publication(void)
  */
 static void any_node(void)
 {
-	bool state_there, pending_there, op_measured;
-	__s64 generation, last_seq, seq;
+	bool state_there, pending_there, op_measured, loaded;
+	__s64 generation, last_seq, seq, head_seq, base_seq;
 	char tree, manifest, id, digest;
 	int replay;
 
 	have_state = state_there;
 	have_pending = pending_there;
 	measured = op_measured;
+	pins_loaded = loaded;
 	disk_state.tree_id[0] = state_there ? tree : '\0';
 	disk_state.manifest_digest[0] = state_there ? manifest : '\0';
 	disk_state.generation = state_there ? generation : 0;
 	disk_state.last_seq = state_there ? last_seq : 0;
+	disk_state.head_seq = state_there ? head_seq : 0;
+	disk_state.segment_base_seq = state_there ? base_seq : 0;
 	for (int i = 0; i < 32; i++) {
-		__u8 b;
+		__u8 b, h;
 
 		disk_state.projection_root[i] = state_there ? (char)b : '\0';
+		disk_history[i] = h;
 	}
 	__CPROVER_assume(seq > 0 && id && digest);
 	disk_pending.seq = pending_there ? seq : 0;

@@ -178,16 +178,24 @@ reading its options.
 #. It fetches the publication and checks its tree ID, generation, parent
    and sequence numbers against the state in
    ``/var/lib/shirudo/bpm/upatch-tree/state.json``.
+#. It drops from ``upatch-tree/outcomes`` what a sync that stopped left
+   past the recorded ``last_seq``, refuses a record that does not cover
+   it, completes an operation that sync left in progress, and records
+   the publication in ``state.json``.
 #. For each new operation whose selector matches the node labels
    (``etc/shirudo/node.labels`` of the config image, or
    ``/etc/shirudo/node.labels``), it fetches and verifies the artifact,
    loads (``add``) or unloads (``delete``) it, extends the register with
-   a tree event and records the new projection root.
+   a tree event and records the new projection root. Every new
+   operation, matched or not, gets its line in ``outcomes``.
 #. It prints a JSON report to standard output, or to ``--report``.
 
-With ``--dry-run``, it reports which operations would apply and changes
-nothing. An ``add`` whose kprobe target module is not loaded is skipped
-and recorded as ``skipped: module not loaded``.
+With ``--dry-run``, it reports which operations would apply and applies
+none: it neither records the publication nor writes a line for a new
+operation, but it still drops the leftovers in ``outcomes`` and
+completes an operation left in progress. An ``add`` whose kprobe target
+module is not loaded is skipped and recorded as ``skipped: module not
+loaded``.
 
 tree append
 -----------

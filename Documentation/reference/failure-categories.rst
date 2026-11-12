@@ -611,9 +611,13 @@ rc=<rc> (<strerror>)`` and exits 1:
    * - ``operation_validate``
      - An operation of the publication is malformed or its digest does
        not match.
+   * - ``outcomes_check``
+     - The ``outcomes`` record does not cover the recorded ``last_seq``:
+       it is missing, has a gap or a malformed line, or ends early
+       (``EBADMSG``), or it cannot be read or cut. Nothing is applied.
    * - ``pending_recovery``
      - An interrupted operation cannot be reconciled with the tree
-       eventlog.
+       eventlog, or its ``outcomes`` lines or state cannot be written.
    * - ``selector_evaluate``
      - The selector cannot be evaluated: the node labels or the kernel
        config cannot be read. The cursor stays on the operation.
@@ -635,8 +639,13 @@ rc=<rc> (<strerror>)`` and exits 1:
      - The register extend failed.
    * - ``tree_event_append``
      - The tree eventlog record cannot be appended.
-   * - ``tree_state_commit``, ``tree_state_commit_final``
-     - ``state.json`` cannot be written.
+   * - ``tree_outcome_append``
+     - The operation's ``outcomes`` line cannot be appended. The cursor
+       stays before the operation.
+   * - ``tree_state_commit_accept``, ``tree_state_commit``,
+       ``tree_state_commit_final``
+     - ``state.json`` cannot be written: when the publication is
+       recorded, after an operation, or at the end of the sync.
    * - ``tree_status_write``
      - The per-operation status file cannot be written.
 

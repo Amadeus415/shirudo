@@ -210,11 +210,15 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - ``cmd_bpm_tree_sync()``, ``tree_recover_pending()``,
        ``tree_publication_check()``, ``tree_publication_follows()``
      - The full command with 0 or 1 operation, every pending state,
-       selector answer and first failing I/O call, or no failure.
-       Names have one byte and the previous root has 32 symbolic bytes.
-     - Writes match the Lean model ``Shirudo.TreeSync`` in order;
-       nothing is written after a failure and every expected write
-       happens when nothing fails
+       selector answer, install answer and first failing I/O call, or no
+       failure. Names have one byte, and the previous root and the
+       history root the outcomes record holds at the cursor have 32
+       symbolic bytes each.
+     - Writes match the Lean model ``Shirudo.TreeSync`` in order, the
+       cut of the outcomes record, each outcome line with its code and
+       both roots, and the state written at acceptance with the
+       publication's head and base included; nothing is written after a
+       failure and every expected write happens when nothing fails
    * - ``bpm-tree-sync-application``
      - ``cmd_bpm_tree_sync()``
      - Two operations with no pending record; every selector answer
@@ -231,11 +235,14 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
    * - ``bpm-tree-recovery-model``
      - ``tree_recover_pending()``
      - Publications with 0 to 2 operations, a matching or unrelated
-       pending record, each TPM replay class, the measured flag and
-       every first failing I/O call. The previous root has all 32
-       symbolic bytes.
-     - The return decision, ordered writes, cursor, tree ID, manifest
-       and both projection roots match the independent recovery model
+       pending record, each TPM replay class, the measured flag,
+       whether the upatch is loaded and every first failing I/O call.
+       The previous root and the history root have all 32 symbolic
+       bytes.
+     - The return decision, ordered writes, the outcome lines of the
+       operations passed over and of the pending one, cursor, tree ID,
+       manifest, recorded head and base, both projection roots and the
+       history root match the independent recovery model
    * - ``bpm-upatch-member``
      - ``bpm_upatch_member()``, ``bpm_upatch_pair()``
      - Lengths 0 to 18
@@ -733,11 +740,18 @@ the model follows the C.
        between an append and its commit; ``applied_signed``,
        ``applied_consistent``: an applied operation is one of a signed
        publication of the tree, and that of every one when the signer never
-       gives a number two operations
+       gives a number two operations; ``outcomes_cover``,
+       ``outcomes_fixed``, ``lastSeq_le_head``: the outcomes record has a
+       line for every operation from 1 to the cursor, in order, no line
+       at or below the cursor ever changes, and the cursor never passes
+       the head of the recorded publication
      - A manifest digest names one publication; the hash is injective on
        (root, digest) and never 64 zeros; only sync writes the tree files,
        each write whole, one sync at a time; the unlink of ``pending.json``
-       succeeds; an extend and its eventlog record are one write
+       succeeds; an extend and its eventlog record are one write. An
+       outcome line holds whether the selector matched, not which of 1
+       and 3, and no history root; the check that the record covers the
+       cursor is a theorem, not a branch of the model
      - CBMC: ``bpm-tree-follows`` for ``tree_publication_follows()``,
        ``bpm-tree-sync-model`` and its two-operation variants for
        sync writes, ``bpm-tree-recovery-model`` for pending recovery;

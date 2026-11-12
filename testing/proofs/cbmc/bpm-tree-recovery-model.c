@@ -30,12 +30,17 @@ static void recovery_start(struct tree_state *actual, struct mstate *model)
 	model->last_seq = have_state ? disk_state.last_seq : 0;
 	model->manifest[0] = have_state ? disk_state.manifest_digest[0] : '\0';
 	model->manifest[1] = '\0';
-	for (int i = 0; i < 32; i++)
+	model->head_seq = have_state ? disk_state.head_seq : 0;
+	model->base_seq = have_state ? disk_state.segment_base_seq : 0;
+	for (int i = 0; i < 32; i++) {
 		model->root[i] = have_state ?
 				 (__u8)disk_state.projection_root[i] : '0';
+		model->hist[i] = disk_history[i];
+	}
 }
 
 static void recovery_state_matches(const struct tree_state *actual,
+				   const __u8 *history,
 				   const struct mstate *model)
 {
 	bool tpm_root_set = !have_state ||
@@ -51,10 +56,15 @@ static void recovery_state_matches(const struct tree_state *actual,
 	__CPROVER_assert(actual->manifest_digest[0] == model->manifest[0] &&
 			 actual->manifest_digest[1] == model->manifest[1],
 			 "recovery keeps the manifest");
+	__CPROVER_assert(actual->head_seq == model->head_seq &&
+			 actual->segment_base_seq == model->base_seq,
+			 "recovery keeps the recorded head and base");
 	for (int i = 0; i < 32; i++) {
 		__CPROVER_assert((__u8)actual->projection_root[i] ==
 				 model->root[i],
 				 "recovery records the expected root bytes");
+		__CPROVER_assert(history[i] == model->hist[i],
+				 "recovery leaves the history root at the cursor");
 		if (tpm_root_set)
 			__CPROVER_assert((__u8)actual->projection_root_tpm[i] ==
 					 model->root[i],
@@ -66,6 +76,7 @@ void harness(void)
 {
 	struct tree_state actual = {};
 	struct mstate model = {};
+	__u8 history[32];
 	__u32 first_failure;
 	bool model_ok;
 	int ret;
@@ -76,12 +87,13 @@ void harness(void)
 	__CPROVER_assume(checked());
 	any_replay_root();
 	recovery_start(&actual, &model);
+	memcpy(history, disk_history, sizeof(history));
 	model_ok = recover(&model);
-	ret = tree_recover_pending(&fetched, &actual);
+	ret = tree_recover_pending(&fetched, &actual, history);
 	__CPROVER_assert(failed || (ret == 0) == model_ok,
 			 "recovery accepts the same pending state as the model");
 	__CPROVER_assert(failed || n_got == n_want,
 			 "recovery makes every expected write");
 	if (!failed && model_ok)
-		recovery_state_matches(&actual, &model);
+		recovery_state_matches(&actual, history, &model);
 }

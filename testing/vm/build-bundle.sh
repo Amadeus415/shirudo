@@ -448,7 +448,7 @@ build_tree_test_registry()
 	local payloads="$FIXTURE_WORK/tree-payload"
 	local reference
 
-	# One append-only tree that t7101 to t7104 walk in order:
+	# One append-only tree that t7101 to t7106 walk in order:
 	# the tree state a target writes is sealed, so no test can start
 	# over, and each generation extends the one before it.
 	python3 - "$registry_dir" \
@@ -456,7 +456,10 @@ build_tree_test_registry()
 		"$TMP_DIR/fixtures/shirudo-test-tree-skip.upatch" \
 		"$TMP_DIR/fixtures/shirudo-test-tree-match.unload.upatch" \
 		"$payloads" "$tree_match_payload" "$tree_skip_payload" \
-		"$tree_match_unload_payload" "$TEST_VM_ARCH" <<'PY'
+		"$tree_match_unload_payload" "$TEST_VM_ARCH" \
+		"$TMP_DIR/fixtures/shirudo-test-tree-skip.unload.upatch" \
+		"$TMP_DIR/fixtures/shirudo-test-uprobe-multi.upatch" \
+		"$tree_skip_unload_payload" "$uprobe_payload" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -465,6 +468,8 @@ import sys
 registry, match_path, skip_path, match_unload_path, payloads = \
     map(pathlib.Path, sys.argv[1:6])
 match_payload, skip_payload, match_unload_payload, node_arch = sys.argv[6:10]
+skip_unload_path, absent_path = map(pathlib.Path, sys.argv[10:12])
+skip_unload_payload, absent_payload = sys.argv[12:14]
 
 
 def digest(body):
@@ -527,6 +532,12 @@ match_unload_artifact = artifact("shirudo/tree-match-unload",
                                  match_unload_path,
                                  "shirudo-test-tree-match.unload.upatch",
                                  match_unload_payload)
+skip_unload_artifact = artifact("shirudo/tree-skip-unload", skip_unload_path,
+                                "shirudo-test-tree-skip.unload.upatch",
+                                skip_unload_payload)
+# Its uprobe target is a file the bpm family's VM does not have.
+absent_artifact = artifact("shirudo/tree-absent", absent_path,
+                           "shirudo-test-uprobe-multi.upatch", absent_payload)
 
 this_node = {"architecture": [node_arch], "labels": {"env": ["tree-test"]}}
 other_node = {"architecture": [node_arch],
@@ -544,11 +555,20 @@ operations = [
               match_unload_artifact, op="delete"),
     # t7105 loads this upatch by hand first.
     operation(7, "shirudo-test-tree-match", this_node, match_artifact),
+    # t7106: an outcome of each kind, an operation after one without a
+    # match for the sync it stops, and an artifact no test fetched yet.
+    operation(8, "shirudo-test-tree-match", this_node, match_artifact),
+    operation(9, "shirudo-test-tree-skip", other_node, skip_artifact),
+    operation(10, "shirudo-test-uprobe-multi", this_node, absent_artifact),
+    operation(11, "shirudo-test-tree-match", other_node, match_artifact),
+    operation(12, "shirudo-test-tree-skip", this_node, skip_artifact),
+    operation(13, "shirudo-test-tree-skip", this_node, skip_unload_artifact,
+              op="delete"),
 ]
-references = ("stable", "updated", "deleted", "restored", "kconfig",
-              "reloaded")
-for generation, reference in enumerate(references, start=1):
-    head = generation + 1
+heads = {"stable": 2, "updated": 3, "deleted": 4, "restored": 5,
+         "kconfig": 6, "reloaded": 7, "outcomes": 10, "stopped": 12,
+         "fetched": 13}
+for generation, (reference, head) in enumerate(heads.items(), start=1):
     publication = {
         "schema": 1,
         "tree_id": "shirudo-test-tree",
@@ -562,7 +582,8 @@ for generation, reference in enumerate(references, start=1):
                      .encode())
 PY
 
-	for reference in stable updated deleted restored kconfig reloaded; do
+	for reference in stable updated deleted restored kconfig reloaded \
+			 outcomes stopped fetched; do
 		openssl cms -sign -binary -md sha512 \
 			-in "$payloads-$reference.json" \
 			-signer "$FIXTURE_WORK/trusted/cert.der" \
@@ -591,7 +612,7 @@ def write(path, body):
 
 
 for reference in ("stable", "updated", "deleted", "restored", "kconfig",
-                  "reloaded"):
+                  "reloaded", "outcomes", "stopped", "fetched"):
     stem = payloads.name + "-" + reference
     payload = payloads.with_name(stem + ".json").read_bytes()
     signature = payloads.with_name(stem + ".sig").read_bytes()
@@ -866,6 +887,9 @@ wait_fixture_jobs
 
 tree_match_unload_payload="$($REPO_ROOT/shirudo upatch info \
 	"$TMP_DIR/fixtures/shirudo-test-tree-match.unload.upatch" --json |
+	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
+tree_skip_unload_payload="$($REPO_ROOT/shirudo upatch info \
+	"$TMP_DIR/fixtures/shirudo-test-tree-skip.unload.upatch" --json |
 	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
 build_tree_test_registry
 

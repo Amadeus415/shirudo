@@ -166,12 +166,18 @@ the label as foreign. In the initrd, ``init`` binds
    * - ``bpm/upatch-tree/state.json``
      - ``bpm tree sync``
      - ``0600``
-     - Tree cursor: tree id, generation, last sequence number,
-       projection root, manifest digest.
+     - Tree cursor: tree id, last sequence number and projection root,
+       and the generation, manifest digest and head of the publication
+       the target last accepted.
    * - ``bpm/upatch-tree/tree-eventlog``
      - ``bpm tree sync``
      - ``0600``
      - Append-only record of applied tree operations.
+   * - ``bpm/upatch-tree/outcomes``
+     - ``bpm tree sync``
+     - ``0600``
+     - One line for every tree operation the target processed, applied
+       or not, with its outcome and the roots after it. Never pruned.
    * - ``bpm/upatch-tree/pending.json``
      - ``bpm tree sync``
      - ``0600``

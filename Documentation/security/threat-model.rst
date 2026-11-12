@@ -1022,7 +1022,10 @@ it against the active config's non-revoked BPF signer set. Every
 member must also be present in the sealed ``.bpf`` keyring. A publication
 carries a digest for each operation, is the one the target recorded or
 has a higher generation, and names its parent, which the target
-compares when the generation is exactly one higher. A delete applies
+compares when the generation is exactly one higher. The target records
+a publication when it accepts it, before it applies the first new
+operation, so one it stopped in the middle of is not followed by an
+older one. A delete applies
 the signed unload directive whose name equals the operation's id.
 
 The transport is TLS 1.3 only, with the hybrid groups
@@ -1044,7 +1047,7 @@ and tree signatures accept algorithms other than ML-DSA (U4).
 :Refusal: the ``bpm`` command fails and installs nothing
 :Counters: none
 :Tests: ``t7005``, ``t7101``, ``t7102``, ``t7103``, ``t7104``,
-   ``t7105``, ``t8005``
+   ``t7105``, ``t7106``, ``t8005``
 :Proofs: ``bpm-tar-header``, ``bpm-tar-octal``, ``bpm-archive-path``,
    ``bpm-oci-challenge``, ``bpm-oci-token``, ``bpm-oci-header``,
    ``bpm-oci-descriptor``, ``bpm-semver-model``, ``Shirudo.SemVer``,

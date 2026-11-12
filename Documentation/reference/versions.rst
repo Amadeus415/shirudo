@@ -203,7 +203,8 @@ State the target keeps for itself:
      - Refused as malformed (``EBADMSG``). The active config can then
        not be verified, and commands stop with ``shirudo: image state:``
        and the error.
-   * - ``state.json`` and ``pending.json`` of the upatch tree
+   * - ``state.json`` and ``pending.json`` of the upatch tree and the
+       lines of its ``outcomes``
      - 1
      - Refused by ``bpm tree sync``.
 
