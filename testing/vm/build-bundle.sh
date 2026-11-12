@@ -448,7 +448,7 @@ build_tree_test_registry()
 	local payloads="$FIXTURE_WORK/tree-payload"
 	local reference
 
-	# One append-only tree that t7101 to t7106 walk in order:
+	# One append-only tree that t7101 to t7107 walk in order:
 	# the tree state a target writes is sealed, so no test can start
 	# over, and each generation extends the one before it.
 	python3 - "$registry_dir" \
@@ -511,7 +511,9 @@ def artifact(repository, path, title, payload_sha256):
     }
 
 
-def operation(seq, name, selector, artifact_info, op="add"):
+# fixes, when given, goes where a publisher writes it: after the artifact,
+# outside the digest.
+def operation(seq, name, selector, artifact_info, op="add", fixes=None):
     unsigned = {
         "seq": seq,
         "op": op,
@@ -521,7 +523,10 @@ def operation(seq, name, selector, artifact_info, op="add"):
     }
     operation_digest = digest(json.dumps(unsigned, separators=(",", ":"))
                               .encode())
-    return dict(unsigned, operation_digest=operation_digest)
+    published = dict(unsigned)
+    if fixes is not None:
+        published["fixes"] = fixes
+    return dict(published, operation_digest=operation_digest)
 
 
 match_artifact = artifact("shirudo/tree-match", match_path,
@@ -564,10 +569,20 @@ operations = [
     operation(12, "shirudo-test-tree-skip", this_node, skip_artifact),
     operation(13, "shirudo-test-tree-skip", this_node, skip_unload_artifact,
               op="delete"),
+    # t7107: fixes as a publisher writes it, then fixes no publisher
+    # writes, on a delete and on an operation without a match.
+    operation(14, "shirudo-test-tree-skip", this_node, skip_artifact,
+              fixes=["EXAMPLE-0101"]),
+    operation(15, "shirudo-test-tree-skip", this_node, skip_unload_artifact,
+              op="delete",
+              fixes={"not": ["an", "array"], "n": [1, None, "\u0007"]}),
+    operation(16, "shirudo-test-tree-match", other_node, match_artifact,
+              fixes=["", "B", "A", "A", "x y\n"] +
+                    ["ID-%d" % i for i in range(17)]),
 ]
 heads = {"stable": 2, "updated": 3, "deleted": 4, "restored": 5,
          "kconfig": 6, "reloaded": 7, "outcomes": 10, "stopped": 12,
-         "fetched": 13}
+         "fetched": 13, "fixes": 16}
 for generation, (reference, head) in enumerate(heads.items(), start=1):
     publication = {
         "schema": 1,
@@ -583,7 +598,7 @@ for generation, (reference, head) in enumerate(heads.items(), start=1):
 PY
 
 	for reference in stable updated deleted restored kconfig reloaded \
-			 outcomes stopped fetched; do
+			 outcomes stopped fetched fixes; do
 		openssl cms -sign -binary -md sha512 \
 			-in "$payloads-$reference.json" \
 			-signer "$FIXTURE_WORK/trusted/cert.der" \
@@ -612,7 +627,7 @@ def write(path, body):
 
 
 for reference in ("stable", "updated", "deleted", "restored", "kconfig",
-                  "reloaded", "outcomes", "stopped", "fetched"):
+                  "reloaded", "outcomes", "stopped", "fetched", "fixes"):
     stem = payloads.name + "-" + reference
     payload = payloads.with_name(stem + ".json").read_bytes()
     signature = payloads.with_name(stem + ".sig").read_bytes()

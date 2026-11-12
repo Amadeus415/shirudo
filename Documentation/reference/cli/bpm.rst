@@ -254,6 +254,14 @@ shared classes, and nothing is published.
   the registry, so the append fails when one of them cannot be fetched.
   Two upatches of the package being appended are compared as well.
 
+An ``add`` carries the entry's ``fixes``, a ``delete`` none, and every
+earlier operation keeps its own. The append is refused, and nothing is
+published, when the existing publication holds a ``fixes`` list
+``bpm tree append`` would not write; the message is ``bpm tree append:
+the publication at <repository>:<reference> has a fixes list bpm tree
+append would not write, so it cannot carry it into the next
+generation``.
+
 key
 ---
 

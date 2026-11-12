@@ -7,6 +7,7 @@
 #include <shirudo/string.h>
 
 #include "bpm_tree.h"
+#include "json.h"
 #include "malloc.h"
 #include "unit.h"
 
@@ -79,13 +80,109 @@ static void publication_reads_back(void)
 	ASSERT_EQ(tree_operation_digest(op, op->operation_digest), 0);
 	ASSERT_EQ(tree_publication_append(&pub, op), 0);
 	pub.head_seq = 1;
-	ASSERT_EQ(tree_emit_publication(&pub, &doc, &len), 0);
+	ASSERT_EQ(tree_emit_publication(&pub, NULL, &doc, &len), 0);
 	ASSERT_EQ(tree_parse(doc, len, &back), 0);
 	EXPECT_EQ(back.schema, 1);
 	ASSERT_EQ(back.n_operations, 1);
 	ASSERT_EQ(tree_operation_digest(&back.operations[0], again), 0);
 	EXPECT_STREQ(again, op->operation_digest);
 	EXPECT_STREQ(back.operations[0].selector.labels[0].values[0], "a b");
+	xfree(doc, len);
+	tree_publication_free(&pub);
+	tree_publication_free(&back);
+	tree_selector_free(&op->selector);
+	xfree(op, sizeof(*op));
+}
+
+/* Keys past the emitter's bound, as a publisher's fixes can be. */
+static int emit_fixes(struct json_emit *e, int index, void *ctx)
+{
+	char id[201];
+
+	if (ctx)
+		return -EIO;
+	memset(id, 'A' + index, sizeof(id) - 1);
+	id[sizeof(id) - 1] = '\0';
+	json_arr_open(e, "fixes");
+	for (int i = 0; i < 64; i++)
+		json_str(e, id);
+	json_arr_close(e);
+	return 0;
+}
+
+/*
+ * A key the publisher adds goes after the artifact and before the
+ * digest, which does not cover it, and the node reads past it.
+ */
+static void publication_carries_keys_outside_the_digest(void)
+{
+	struct tree_publication pub = { .schema = 1, .generation = 1 };
+	struct tree_emit_extra extra = { emit_fixes, NULL };
+	struct tree_publication back = {};
+	struct tree_operation *op = operation();
+	char *doc = NULL, again[72];
+	const char *fixes, *digest;
+	size_t len = 0;
+
+	set(pub.tree_id, sizeof(pub.tree_id), "t");
+	ASSERT_EQ(tree_operation_digest(op, op->operation_digest), 0);
+	ASSERT_EQ(tree_publication_append(&pub, op), 0);
+	pub.head_seq = 1;
+	ASSERT_EQ(tree_emit_publication(&pub, &extra, &doc, &len), 0);
+	EXPECT_GT(len, 64 * 200);
+	fixes = strstr(doc, "},\"fixes\":[\"AAAA");
+	digest = strstr(doc, "\"],\"operation_digest\":");
+	EXPECT_TRUE(fixes && digest && fixes < digest);
+	ASSERT_EQ(tree_parse(doc, len, &back), 0);
+	ASSERT_EQ(back.n_operations, 1);
+	ASSERT_EQ(tree_operation_digest(&back.operations[0], again), 0);
+	EXPECT_STREQ(again, op->operation_digest);
+	EXPECT_STREQ(back.operations[0].operation_digest, op->operation_digest);
+	xfree(doc, len);
+	doc = NULL;
+	extra.ctx = &extra;
+	EXPECT_EQ(tree_emit_publication(&pub, &extra, &doc, &len), -EIO);
+	EXPECT_FALSE(doc);
+	tree_publication_free(&pub);
+	tree_publication_free(&back);
+	tree_selector_free(&op->selector);
+	xfree(op, sizeof(*op));
+}
+
+/* A malformed fixes, which no publisher writes, the node reads past. */
+static int emit_malformed_fixes(struct json_emit *e, int index, void *ctx)
+{
+	json_obj_open_key(e, "fixes");
+	json_arr_open(e, "n");
+	json_raw_value(e, "null", 4);
+	json_str(e, "\a");
+	json_arr_close(e);
+	json_obj_close(e);
+	json_arr_open(e, "fixes");
+	json_str(e, "");
+	json_arr_close(e);
+	return 0;
+}
+
+static void publication_reads_past_malformed_fixes(void)
+{
+	struct tree_emit_extra extra = { emit_malformed_fixes, NULL };
+	struct tree_publication pub = { .schema = 1, .generation = 1 };
+	struct tree_publication back = {};
+	struct tree_operation *op = operation();
+	char *doc = NULL;
+	size_t len = 0;
+
+	set(pub.tree_id, sizeof(pub.tree_id), "t");
+	ASSERT_EQ(tree_operation_digest(op, op->operation_digest), 0);
+	ASSERT_EQ(tree_publication_append(&pub, op), 0);
+	pub.head_seq = 1;
+	ASSERT_EQ(tree_emit_publication(&pub, &extra, &doc, &len), 0);
+	EXPECT_TRUE(strstr(doc, "\"fixes\":{\"n\":[null,\"\\u0007\"]}"));
+	ASSERT_EQ(tree_parse(doc, len, &back), 0);
+	EXPECT_EQ(tree_publication_check(&back), 0);
+	ASSERT_EQ(back.n_operations, 1);
+	EXPECT_EQ(tree_operation_validate(&back.operations[0]), 0);
 	xfree(doc, len);
 	tree_publication_free(&pub);
 	tree_publication_free(&back);
@@ -182,6 +279,8 @@ static void publication_follows_the_recorded_state(void)
 static const struct unit_case cases[] = {
 	UNIT_CASE(operation_takes_no_control_character),
 	UNIT_CASE(publication_reads_back),
+	UNIT_CASE(publication_carries_keys_outside_the_digest),
+	UNIT_CASE(publication_reads_past_malformed_fixes),
 	UNIT_CASE(operation_validates_against_its_digest),
 	UNIT_CASE(publication_runs_from_base_to_head),
 	UNIT_CASE(publication_follows_the_recorded_state),

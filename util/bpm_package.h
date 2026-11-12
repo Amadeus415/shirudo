@@ -100,7 +100,15 @@ int bpm_pkg_load_info(const char *archive, struct bpm_package_info *info);
  * layer against its descriptor and the payload against trusted, or
  * cert_path when trusted is NULL, and
  * parse it. -ENOENT when the reference does not exist yet.
+ * bpm_tree_fetch_document() stops before the parse and hands over the
+ * checked bytes, which the caller frees with bpm_buffer_free().
  */
+int bpm_tree_fetch_document(struct bpm_oci_client *c,
+			    const char *repository, const char *reference,
+			    const char *cert_path,
+			    const struct trusted_set *trusted,
+			    struct bpm_buffer *payload,
+			    char *manifest_digest, size_t digest_sz);
 int bpm_tree_fetch_publication(struct bpm_oci_client *c,
 			       const char *repository, const char *reference,
 			       const char *cert_path,

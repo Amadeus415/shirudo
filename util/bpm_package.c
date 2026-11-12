@@ -892,15 +892,14 @@ out:
 	return ret;
 }
 
-int bpm_tree_fetch_publication(struct bpm_oci_client *c,
-			       const char *repository,
-			       const char *reference,
-			       const char *cert_path,
-			       const struct trusted_set *trusted,
-			       struct tree_publication *pub,
-			       char *manifest_digest, size_t digest_sz)
+int bpm_tree_fetch_document(struct bpm_oci_client *c,
+			    const char *repository, const char *reference,
+			    const char *cert_path,
+			    const struct trusted_set *trusted,
+			    struct bpm_buffer *payload,
+			    char *manifest_digest, size_t digest_sz)
 {
-	struct bpm_buffer manifest = {}, payload = {}, sig = {};
+	struct bpm_buffer manifest = {}, sig = {};
 	struct bpm_descriptor *layers = NULL;
 	char url[PATH_MAX], hex[65];
 	int nl = 0, ret;
@@ -933,19 +932,40 @@ int bpm_tree_fetch_publication(struct bpm_oci_client *c,
 	if (ret)
 		goto out;
 	ret = bpm_oci_get_signed(c, repository, layers, nl, BPM_TREE_MEDIA,
-				 BPM_TREE_SIG_MEDIA, &payload, &sig);
+				 BPM_TREE_SIG_MEDIA, payload, &sig);
 	if (ret)
 		goto out;
-	ret = trusted ? keys_verify_signature(trusted, payload.data, payload.len,
-					      sig.data, sig.len, NULL) :
-	      bpm_verify_cms(payload.data, payload.len, sig.data, sig.len, cert_path);
-	if (ret)
-		goto out;
-	ret = tree_parse((const char *)payload.data, payload.len, pub);
+	ret = trusted ? keys_verify_signature(trusted, payload->data,
+					      payload->len, sig.data, sig.len,
+					      NULL) :
+	      bpm_verify_cms(payload->data, payload->len, sig.data, sig.len,
+			     cert_path);
 out:
+	if (ret)
+		bpm_buffer_free(payload);
 	xfree(layers, BPM_MAX_ENTRIES * sizeof(*layers));
 	bpm_buffer_free(&manifest);
-	bpm_buffer_free(&payload);
 	bpm_buffer_free(&sig);
+	return ret;
+}
+
+int bpm_tree_fetch_publication(struct bpm_oci_client *c,
+			       const char *repository,
+			       const char *reference,
+			       const char *cert_path,
+			       const struct trusted_set *trusted,
+			       struct tree_publication *pub,
+			       char *manifest_digest, size_t digest_sz)
+{
+	struct bpm_buffer payload = {};
+	int ret;
+
+	ret = bpm_tree_fetch_document(c, repository, reference, cert_path,
+				      trusted, &payload, manifest_digest,
+				      digest_sz);
+	if (ret)
+		return ret;
+	ret = tree_parse((const char *)payload.data, payload.len, pub);
+	bpm_buffer_free(&payload);
 	return ret;
 }

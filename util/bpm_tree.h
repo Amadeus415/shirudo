@@ -112,10 +112,20 @@ void tree_publication_free(struct tree_publication *pub);
  * ("sha256:" + 64 hex) over an operation without its digest field, and
  * the publication document. The emitted document is xmalloc'd; release
  * it with xfree(out, out_len).
+ *
+ * extra, NULL for none, adds keys to the operation at index of
+ * pub->operations after its artifact, outside the operation digest: the
+ * publisher's fixes, which no node reads.
  */
+struct tree_emit_extra {
+	int	(*operation)(struct json_emit *e, int index, void *ctx);
+	void	*ctx;
+};
+
 int tree_operation_digest(const struct tree_operation *op,
 			  char out[72]);
 int tree_emit_publication(const struct tree_publication *pub,
+			  const struct tree_emit_extra *extra,
 			  char **out, size_t *out_len);
 
 /*

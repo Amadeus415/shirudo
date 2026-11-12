@@ -483,6 +483,11 @@ signed config image.
    * - ``t7006-policy-labels``
      - Beefile policy declarations are serialized into the signed
        upatch section
+   * - ``t7007-bpm-tree-fixes``
+     - ``bpm tree append`` writes ``fixes`` on an ``add`` in byte order,
+       after ``artifact`` and outside ``operation_digest``, none on a
+       ``delete``, carries every earlier operation's list into the next
+       generation, and refuses to carry a list it would not write
    * - ``t7101-bpm-tree``
      - Tree sync with a selector
    * - ``t7102-bpm-tree-sequential``
@@ -502,6 +507,11 @@ signed config image.
        accepted publication on record after a sync that failed at a
        fetch; the record agrees with the tree eventlog and the
        operations' digests throughout
+   * - ``t7107-bpm-tree-fixes-ignored``
+     - A publication whose operations carry ``fixes``, well-formed and
+       malformed, on an ``add``, a ``delete`` and an operation without a
+       match, syncs with the outcomes, state and tree eventlog of the
+       same operations without it
 
 ``otel`` (8)
 ~~~~~~~~~~~~
@@ -716,8 +726,9 @@ Coverage by area
        ``oci-http``, ``oci-manifest``, ``oci-ref``, ``registry-auth``. Unit:
        ``bpm_oci``, ``bpm_package``
    * - upatch tree
-     - ``t3011``, ``t5004``, ``t7005``, ``t7101``, ``t7102``,
-       ``t7103``, ``t7104``, ``t7105``, ``t7106``, ``t9105``. Fuzz: ``tree``,
+     - ``t3011``, ``t5004``, ``t7005``, ``t7007``, ``t7101``,
+       ``t7102``, ``t7103``, ``t7104``, ``t7105``, ``t7106``,
+       ``t7107``, ``t9105``. Fuzz: ``tree``,
        ``tree-state``, ``kconfig``. Unit: ``bpm_tree``,
        ``bpm_tree_overlap``, ``bpm_tree_state``, ``kernel_build_id``,
        ``kernel_release``
@@ -780,7 +791,8 @@ The threats are those of :doc:`/security/threat-model`.
      - ``t1006``, ``t4101``, ``t6115``, ``t6126``
    * - T7 The delivery path
      - ``t7002``, ``t7003``, ``t7005``, ``t7101``, ``t7102``,
-       ``t7103``, ``t7104``, ``t7105``, ``t7106``, ``t8005``, ``t9105``
+       ``t7103``, ``t7104``, ``t7105``, ``t7106``, ``t7107``, ``t8005``,
+       ``t9105``
    * - T8 Quantum-capable adversaries
      - ``t2001``, ``t2002``, ``t5001``, ``t8005``
    * - T9 A target lying about its state

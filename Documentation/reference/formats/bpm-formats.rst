@@ -404,6 +404,7 @@ Operation
                  "manifest_digest": "sha256:<hex>",
                  "layer_digest": "sha256:<hex>",
                  "payload_sha256": "sha256:<hex>"},
+    "fixes": ["<advisory-id>", ...],
     "operation_digest": "sha256:<hex>"}
 
 .. list-table::
@@ -429,6 +430,19 @@ Operation
      - Digest of the ``.upatch`` layer.
    * - ``artifact.payload_sha256``
      - ``sha256:`` and the artifact's header ``payload_sha256``.
+   * - ``fixes``
+     - Optional, on an ``add`` only: the IDs of the advisories the upatch
+       fixes, 1 to 16 strings of 1 to 255 bytes of letters, digits,
+       ``.``, ``_``, ``:`` and ``-``, each once, in byte order. A
+       convention of the keepalive backend, not of shirudo: the CMS
+       signature covers it, the operation digest does not, and the target
+       never reads, checks or measures it, so a malformed one never makes
+       a node refuse the publication. ``bpm tree append`` writes it after
+       ``artifact`` from the Beefile's ``fixes``
+       (:doc:`/upatches/publish/beefile`), leaves it out when the list is
+       empty, carries every earlier operation's list into the next
+       generation unchanged, and refuses to append to a publication whose
+       list breaks these rules.
    * - ``operation_digest``
      - ``sha256:`` and the SHA-256 of the canonical operation, see
        `Operation digest`_.
@@ -479,7 +493,7 @@ Operation digest
 ~~~~~~~~~~~~~~~~
 
 ``operation_digest`` is the SHA-256 of the compact JSON of the operation
-without ``operation_digest``, in this form:
+without ``operation_digest`` and ``fixes``, in this form:
 
 - Keys in the order ``seq``, ``op``, ``id``, ``selector``, ``artifact``.
 - ``selector`` keys in byte order: ``architecture``, ``kconfig``,

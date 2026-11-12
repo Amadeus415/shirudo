@@ -294,8 +294,9 @@ checks the form of each ID, not that the advisory exists, and refuses a
 list that breaks the rules above, an empty list and a value that is not
 an array of strings. It keeps the Beefile as written; the order of the
 IDs does not matter, because the list is published in byte order.
-Publishing it comes with ``bpm tree append``, which does not write it
-yet.
+``bpm tree append`` writes it on the operation it publishes as an
+``add``, outside the operation digest, and never on a ``delete``
+(:doc:`publishing`).
 
 ``[upatches.tree.selector]``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~

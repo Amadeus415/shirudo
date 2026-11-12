@@ -1026,7 +1026,10 @@ compares when the generation is exactly one higher. The target records
 a publication when it accepts it, before it applies the first new
 operation, so one it stopped in the middle of is not followed by an
 older one. A delete applies
-the signed unload directive whose name equals the operation's id.
+the signed unload directive whose name equals the operation's id. An
+operation's ``fixes``, which the backend reads and the operation digest
+does not cover, the target's parser skips: a malformed one cannot make
+it refuse a publication.
 
 The transport is TLS 1.3 only, with the hybrid groups
 ``X25519MLKEM768`` and ``SecP256r1MLKEM768`` and certificate
@@ -1047,7 +1050,7 @@ and tree signatures accept algorithms other than ML-DSA (U4).
 :Refusal: the ``bpm`` command fails and installs nothing
 :Counters: none
 :Tests: ``t7005``, ``t7101``, ``t7102``, ``t7103``, ``t7104``,
-   ``t7105``, ``t7106``, ``t8005``
+   ``t7105``, ``t7106``, ``t7107``, ``t8005``
 :Proofs: ``bpm-tar-header``, ``bpm-tar-octal``, ``bpm-archive-path``,
    ``bpm-oci-challenge``, ``bpm-oci-token``, ``bpm-oci-header``,
    ``bpm-oci-descriptor``, ``bpm-semver-model``, ``Shirudo.SemVer``,

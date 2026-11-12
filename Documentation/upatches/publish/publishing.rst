@@ -117,9 +117,11 @@ Append it to the tree
    your certificate. For every entry it checks that the artifact is a
    load directive whose upatch name equals the entry's ``id``, pushes the
    artifact as an artifact of its own, and appends an operation with the
-   entry's selector. It then signs the next generation, which names the
-   previous publication's digest as its parent, and prints the tree's
-   reference and new digest.
+   entry's selector and, when the entry has one, its ``fixes`` list. It
+   then signs the next generation, which names the previous
+   publication's digest as its parent, and prints the tree's reference
+   and new digest. Every earlier operation goes into the new generation
+   as it was, its ``fixes`` included.
 
    A repository without a publication starts a new tree at generation 1,
    with the package name as tree id or the id ``--tree-id`` gives. For an
@@ -135,7 +137,7 @@ Append it to the tree
           oci://<registry>/<namespace>/<tree> --keys-dir <keys-dir> --op delete
 
    Nothing is ever removed from the tree: a ``delete`` is a new operation
-   after the ``add``. To replace a loaded upatch with a new build of the
+   after the ``add``, and carries no ``fixes``. To replace a loaded upatch with a new build of the
    same name, append the ``delete`` of the old package first and the
    ``add`` of the new one after it, since a target cannot load a second
    upatch under a name that is already loaded.

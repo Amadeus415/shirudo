@@ -486,15 +486,14 @@ static void tree_emit_artifact(struct json_emit *e,
 	json_obj_close(e);
 }
 
-static int tree_emit_operation(struct json_emit *e,
-			       const struct tree_operation *op,
-			       bool with_digest)
+/* The five keys the operation digest covers, into an open object. */
+static int tree_emit_operation_keys(struct json_emit *e,
+				    const struct tree_operation *op)
 {
 	int ret;
 
 	if (!tree_operation_text(op))
 		return -EINVAL;
-	json_obj_open(e);
 	json_kv_int(e, "seq", op->seq);
 	json_kv_string(e, "op", op->op);
 	json_kv_string(e, "id", op->id);
@@ -502,8 +501,23 @@ static int tree_emit_operation(struct json_emit *e,
 	if (ret)
 		return ret;
 	tree_emit_artifact(e, &op->artifact);
-	if (with_digest)
-		json_kv_string(e, "operation_digest", op->operation_digest);
+	return 0;
+}
+
+static int tree_emit_operation(struct json_emit *e,
+			       const struct tree_publication *pub, int index,
+			       const struct tree_emit_extra *extra)
+{
+	const struct tree_operation *op = &pub->operations[index];
+	int ret;
+
+	json_obj_open(e);
+	ret = tree_emit_operation_keys(e, op);
+	if (!ret && extra)
+		ret = extra->operation(e, index, extra->ctx);
+	if (ret)
+		return ret;
+	json_kv_string(e, "operation_digest", op->operation_digest);
 	json_obj_close(e);
 	return e->err;
 }
@@ -525,7 +539,11 @@ int tree_operation_digest(const struct tree_operation *op,
 	if (!body)
 		return -ENOMEM;
 	e = (struct json_emit){ .buf = body, .cap = body_cap };
-	ret = tree_emit_operation(&e, op, false);
+	json_obj_open(&e);
+	ret = tree_emit_operation_keys(&e, op);
+	json_obj_close(&e);
+	if (!ret)
+		ret = e.err;
 	if (!ret && sha256_buffer(body, e.len, digest))
 		ret = -EIO;
 	if (!ret) {
@@ -578,9 +596,11 @@ static size_t tree_operation_bound(const struct tree_operation *op)
 /*
  * Serialise a publication in the field order every publisher has used:
  * schema, tree_id, generation, parent_manifest_digest (when any), base,
- * operations, head.
+ * operations, head. The bound covers the published form; the emitter
+ * grows past it only for keys extra adds.
  */
 int tree_emit_publication(const struct tree_publication *pub,
+			  const struct tree_emit_extra *extra,
 			  char **out, size_t *out_len)
 {
 	struct json_emit e;
@@ -593,7 +613,9 @@ int tree_emit_publication(const struct tree_publication *pub,
 	body = xmalloc(cap);
 	if (!body)
 		return -ENOMEM;
-	e = (struct json_emit){ .buf = body, .cap = cap };
+	e = (struct json_emit){
+		.buf = body, .cap = cap, .max = JSON_MAX_BYTES + 1,
+	};
 	json_obj_open(&e);
 	json_kv_int(&e, "schema", pub->schema);
 	json_kv_string(&e, "tree_id", pub->tree_id);
@@ -606,7 +628,7 @@ int tree_emit_publication(const struct tree_publication *pub,
 	json_obj_close(&e);
 	json_arr_open(&e, "operations");
 	for (int i = 0; !ret && i < pub->n_operations; i++)
-		ret = tree_emit_operation(&e, &pub->operations[i], true);
+		ret = tree_emit_operation(&e, pub, i, extra);
 	json_arr_close(&e);
 	json_obj_open_key(&e, "head");
 	json_kv_int(&e, "seq", pub->head_seq);
@@ -618,10 +640,10 @@ int tree_emit_publication(const struct tree_publication *pub,
 	if (!ret && e.len > JSON_MAX_BYTES)
 		ret = -E2BIG;
 	if (ret) {
-		xfree(body, cap);
+		xfree(e.buf, e.cap);
 		return ret;
 	}
-	*out = body;
+	*out = e.buf;
 	*out_len = e.len;
 	return 0;
 }

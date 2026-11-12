@@ -73,7 +73,7 @@ done
 for name in config-boot-keys config-live-new-key config-live-revoke-a config-a config-b config-bad config-revoke \
 	config-tree-stable config-tree-updated config-tree-deleted config-tree-restored \
 	config-tree-kconfig config-tree-reloaded config-tree-outcomes \
-	config-tree-stopped config-tree-fetched \
+	config-tree-stopped config-tree-fetched config-tree-fixes \
 	config-otel config-jsonl config-jsonl-bad config-interrupted config-end2end \
 	config-local-stack config-builtin config-untrusted; do
 	[ "$name" != config-builtin ] || [ -n "$builtin_key" ] || continue
