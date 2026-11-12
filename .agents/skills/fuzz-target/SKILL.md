@@ -26,8 +26,8 @@ property of the parser breaks:
 
 - what it accepts and emits again reads back the same, as `fuzz-tree.c`
   holds a tree publication and its operation digests;
-- what it writes reads back as its format, as `fuzz-otel.c` holds the
-  OTLP AnyValues to JSON;
+- what it writes reads back as its format, as `fuzz-quote-check.c`
+  holds the line of a verdict to JSON;
 - offsets and sizes it returns lie within the input, as `fuzz-rodata.c`
   holds the `.rodata` range;
 - two ways to the same value agree.

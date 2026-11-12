@@ -541,7 +541,9 @@ signed config image.
    * - ``t8003-systemd-map-export``
      - Exporter units and timers and their package scriptlets, as text
    * - ``t8004-status-otel``
-     - The keepalive log record
+     - ``status --keepalive``, ``status --otel`` without a TPM or an
+       endpoint, and the keepalive log record: its string body, its one
+       quote attribute and a body JSON cannot carry
    * - ``t8005-tls-policy``
      - TLS 1.3 with ``X25519MLKEM768`` only
    * - ``t8006-otel-transport``

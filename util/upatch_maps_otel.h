@@ -58,20 +58,6 @@ int upatch_maps_otel_send_decoded(const struct map_view *v,
 				  const struct otel_opts *opts);
 
 /*
- * Send an already-built JSON object as the structured body of one OTLP
- * log. A tamper_attempts of 0 or more rides along as an attribute; a
- * negative one leaves it out.
- */
-int otel_send_log_json(const struct otel_opts *opts,
-		       const char *scope_name,
-		       const char *event_name,
-		       int severity_number,
-		       const char *severity_text,
-		       const char *status,
-		       const char *version_id,
-		       __s64 tamper_attempts,
-		       const char *body_json, size_t body_len);
-/*
  * Send body_len bytes as the string body of one OTLP log with a single
  * string attribute. The receiver decodes the very bytes passed in; a
  * body with a NUL or malformed UTF-8 is -EILSEQ and nothing is sent.
