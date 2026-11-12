@@ -2053,6 +2053,8 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 		memset(state.projection_root_tpm, '0', 64);
 		state.projection_root_tpm[64] = '\0';
 	}
+	state.head_seq = pub.head_seq;
+	state.segment_base_seq = pub.base_seq;
 	ret = tree_recover_pending(&pub, &state);
 	if (ret) {
 		tree_sync_report_error("pending_recovery", NULL, ret);

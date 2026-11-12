@@ -57,6 +57,7 @@
 #define BPM_TREE_VAR_DIR	BPM_VAR_DIR "/upatch-tree"
 #define BPM_TREE_STATE_PATH	BPM_TREE_VAR_DIR "/state.json"
 #define BPM_TREE_EVENTLOG_PATH BPM_TREE_VAR_DIR "/tree-eventlog"
+#define BPM_TREE_OUTCOMES_PATH BPM_TREE_VAR_DIR "/outcomes"
 #define BPM_TREE_PENDING_PATH BPM_TREE_VAR_DIR "/pending.json"
 #define BPM_TREE_ARTIFACTS_DIR BPM_TREE_VAR_DIR "/artifacts"
 #define BPM_TREE_STATUS_DIR BPM_TREE_VAR_DIR "/status"

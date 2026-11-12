@@ -95,6 +95,9 @@ struct tree_state {
 	char projection_root[65];
 	char projection_root_tpm[65];
 	char manifest_digest[128];
+	/* head.seq and base.seq of the recorded publication. */
+	__s64 head_seq;
+	__s64 segment_base_seq;
 };
 
 int tree_parse(const char *body, size_t len,
@@ -166,6 +169,47 @@ int tree_state_write(const struct tree_state *state);
 int tree_event_append(__s64 seq, const char *operation_digest,
 		      const __u8 projection_root[32]);
 int tree_event_replay(__u8 out[32]);
+
+/* What a node did with a tree operation, as its outcomes record has it. */
+enum tree_outcome {
+	TREE_OUTCOME_APPLIED = 1,
+	TREE_OUTCOME_UNMATCHED = 2,
+	TREE_OUTCOME_MODULE_ABSENT = 3,
+};
+
+/*
+ * The outcomes record: one line per operation the node processed, in
+ * order from seq 1, with the projection and history roots after it. A
+ * last line without its newline is an append that did not finish, which
+ * every reader skips. A writer holds the bpm lock.
+ *
+ * tree_outcome_append() writes the line of seq and syncs it to disk,
+ * without looking at the lines before it; -EINVAL for a seq below 1 or
+ * an outcome that is none of the three.
+ *
+ * tree_outcomes_read() gives the outcomes of from + 1 through to in the
+ * to - from bytes at codes, and both roots after from, 32 zero bytes
+ * for 0. -ENOENT when the record ends before to, -EBADMSG for a line up
+ * to it that is malformed or not the next seq, -EINVAL for a range that
+ * is none.
+ *
+ * tree_outcomes_truncate() drops every line past last_seq and a last
+ * line without its newline; no record is nothing to drop. -EBADMSG as
+ * above for a line up to last_seq.
+ *
+ * tree_outcomes_check() is what a sync holds a state with last_seq to:
+ * a line for every seq from 1 to it. -EBADMSG without the record, for
+ * one that ends before last_seq and as above; a last_seq of 0 asks
+ * nothing.
+ */
+int tree_outcome_append(__s64 seq, enum tree_outcome outcome,
+			const __u8 projection_root[32],
+			const __u8 history_root[32]) __must_check;
+int tree_outcomes_read(__s64 from, __s64 to, __u8 *codes,
+		       __u8 projection_root[32],
+		       __u8 history_root[32]) __must_check;
+int tree_outcomes_truncate(__s64 last_seq) __must_check;
+int tree_outcomes_check(__s64 last_seq) __must_check;
 
 void tree_emit_status(struct json_emit *e);
 

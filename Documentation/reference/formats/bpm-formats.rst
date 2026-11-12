@@ -536,7 +536,10 @@ not published.
      - JSON object with ``schema`` (1), ``tree_id``, ``generation`` and
        ``manifest_digest`` of the last applied publication, ``last_seq``,
        ``projection_root`` and ``projection_root_tpm``. ``last_seq`` also
-       moves past operations whose selector does not match.
+       moves past operations whose selector does not match. ``head_seq``
+       and ``segment_base_seq`` are the ``head.seq`` and ``base.seq`` of
+       the publication the node last synced to; a state without either
+       is refused.
    * - ``tree-eventlog``
      - One JSON object per line and applied operation, with ``schema``
        (1), ``seq``, ``digest`` (the ``operation_digest``) and

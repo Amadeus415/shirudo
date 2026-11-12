@@ -643,6 +643,9 @@ int tree_state_read(struct tree_state *out)
 		  out->projection_root_tpm, sizeof(out->projection_root_tpm), 0, NULL, 0 },
 		{ "manifest_digest", JSON_T_STRING, out->manifest_digest,
 		  sizeof(out->manifest_digest), 0, NULL, 0 },
+		{ "head_seq", JSON_T_INT, &out->head_seq, 0, 0, NULL, 0 },
+		{ "segment_base_seq", JSON_T_INT, &out->segment_base_seq, 0, 0,
+		  NULL, 0 },
 	};
 	int ret;
 
@@ -651,7 +654,8 @@ int tree_state_read(struct tree_state *out)
 	if (ret)
 		return ret;
 	ret = json_parse((const char *)body, len, f, ARRAY_SIZE(f));
-	if (!ret && (schema != 1 || !f[1].seen || !f[3].seen || !f[4].seen))
+	if (!ret && (schema != 1 || !f[1].seen || !f[3].seen || !f[4].seen ||
+		     !f[7].seen || !f[8].seen))
 		ret = -EINVAL;
 	if (!ret && !f[5].seen) {
 		/* State written before the software projection field was added. */
@@ -703,6 +707,8 @@ int tree_state_write(const struct tree_state *s)
 	json_kv_string(&e, "projection_root", s->projection_root);
 	json_kv_string(&e, "projection_root_tpm", s->projection_root_tpm);
 	json_kv_string(&e, "manifest_digest", s->manifest_digest);
+	json_kv_int(&e, "head_seq", s->head_seq);
+	json_kv_int(&e, "segment_base_seq", s->segment_base_seq);
 	json_obj_close(&e);
 	if (e.err)
 		return e.err;
@@ -791,6 +797,246 @@ int tree_event_replay(__u8 out[32])
 		memcpy(out, chain, 32);
 	xfree(body, len + 1);
 	return ret;
+}
+
+/* A line with the longest seq is 221 bytes. */
+#define OUTCOME_LINE_MAX	256
+
+struct outcome_line {
+	__s64	seq;
+	__s64	outcome;
+	__u8	projection_root[32];
+	__u8	history_root[32];
+};
+
+static bool outcome_valid(__s64 outcome)
+{
+	return outcome == TREE_OUTCOME_APPLIED ||
+	       outcome == TREE_OUTCOME_UNMATCHED ||
+	       outcome == TREE_OUTCOME_MODULE_ABSENT;
+}
+
+static int outcome_emit(const struct outcome_line *line, char *buf,
+			size_t cap, size_t *len)
+{
+	struct json_emit e = { .buf = buf, .cap = cap };
+	char root[65];
+
+	json_obj_open(&e);
+	json_kv_int(&e, "schema", 1);
+	json_kv_int(&e, "seq", line->seq);
+	json_kv_int(&e, "outcome", line->outcome);
+	hex_encode(line->projection_root, 32, root);
+	json_kv_string(&e, "projection_root", root);
+	hex_encode(line->history_root, 32, root);
+	json_kv_string(&e, "history_root", root);
+	json_obj_close(&e);
+	*len = e.len;
+	return e.err;
+}
+
+static int outcome_parse(const char *text, size_t len,
+			 struct outcome_line *out)
+{
+	char projection[65] = {}, history[65] = {};
+	__s64 schema = 0;
+	struct json_field f[] = {
+		{ "schema", JSON_T_INT, &schema, 0, 0, NULL, 0 },
+		{ "seq", JSON_T_INT, &out->seq, 0, 0, NULL, 0 },
+		{ "outcome", JSON_T_INT, &out->outcome, 0, 0, NULL, 0 },
+		{ "projection_root", JSON_T_STRING, projection,
+		  sizeof(projection), 0, NULL, 0 },
+		{ "history_root", JSON_T_STRING, history, sizeof(history),
+		  0, NULL, 0 },
+	};
+
+	*out = (struct outcome_line){};
+	if (memchr(text, '\0', len) ||
+	    json_parse(text, len, f, ARRAY_SIZE(f)))
+		return -EBADMSG;
+	for (size_t i = 0; i < ARRAY_SIZE(f); i++) {
+		if (!f[i].seen)
+			return -EBADMSG;
+	}
+	if (schema != 1 || out->seq <= 0 || !outcome_valid(out->outcome) ||
+	    hex_decode(projection, out->projection_root, 32) ||
+	    hex_decode(history, out->history_root, 32))
+		return -EBADMSG;
+	return 0;
+}
+
+/*
+ * The line of the record at fd that starts at *off, which moves past
+ * it: 1, 0 at the end and at a last line without its newline, -EBADMSG
+ * for a line that is longer than any or does not parse.
+ */
+static int outcome_next(int fd, off_t *off, struct outcome_line *out)
+{
+	char buf[OUTCOME_LINE_MAX];
+	size_t have = 0, len;
+	const char *newline;
+	ssize_t got;
+	int ret;
+
+	while (have < sizeof(buf)) {
+		got = pread(fd, buf + have, sizeof(buf) - have,
+			    *off + (off_t)have);
+		if (got < 0 && errno == EINTR)
+			continue;
+		if (got < 0)
+			return -errno;
+		if (!got)
+			break;
+		have += (size_t)got;
+	}
+	newline = memchr(buf, '\n', have);
+	if (!newline)
+		return have < sizeof(buf) ? 0 : -EBADMSG;
+	len = (size_t)(newline - buf);
+	ret = outcome_parse(buf, len, out);
+	if (ret)
+		return ret;
+	*off += (off_t)len + 1;
+	return 1;
+}
+
+/*
+ * The lines of seq 1 through to, each the one after the line before it, with
+ * the outcomes past from and the roots at from for the pointers that
+ * are set, and in *end where the last of them ends. -ENOENT when the
+ * record ends before to, with *end set all the same.
+ */
+static int outcomes_walk(int fd, __s64 from, __s64 to, __u8 *codes,
+			 __u8 projection_root[32], __u8 history_root[32],
+			 off_t *end)
+{
+	struct outcome_line line;
+	off_t off = 0;
+	int ret = 0;
+
+	if (projection_root)
+		memset(projection_root, 0, 32);
+	if (history_root)
+		memset(history_root, 0, 32);
+	for (__s64 seq = 1; seq <= to; seq++) {
+		ret = outcome_next(fd, &off, &line);
+		if (ret < 0)
+			return ret;
+		if (!ret) {
+			ret = -ENOENT;
+			break;
+		}
+		ret = 0;
+		if (line.seq != seq)
+			return -EBADMSG;
+		if (seq == from && projection_root)
+			memcpy(projection_root, line.projection_root, 32);
+		if (seq == from && history_root)
+			memcpy(history_root, line.history_root, 32);
+		if (seq > from && codes)
+			codes[seq - from - 1] = (__u8)line.outcome;
+	}
+	if (end)
+		*end = off;
+	return ret;
+}
+
+int tree_outcome_append(__s64 seq, enum tree_outcome outcome,
+			const __u8 projection_root[32],
+			const __u8 history_root[32])
+{
+	struct outcome_line line = { .seq = seq, .outcome = outcome };
+	char buf[OUTCOME_LINE_MAX];
+	size_t len;
+	int ret;
+
+	if (seq <= 0 || !outcome_valid(outcome))
+		return -EINVAL;
+	memcpy(line.projection_root, projection_root, 32);
+	memcpy(line.history_root, history_root, 32);
+	ret = outcome_emit(&line, buf, sizeof(buf), &len);
+	if (ret)
+		return ret;
+	ret = seal_mkdir_p(BPM_TREE_VAR_DIR, 0700);
+	if (ret)
+		return ret;
+	return seal_append_line(BPM_TREE_OUTCOMES_PATH, buf, len);
+}
+
+int tree_outcomes_read(__s64 from, __s64 to, __u8 *codes,
+		       __u8 projection_root[32], __u8 history_root[32])
+{
+	int fd, ret;
+
+	if (from < 0 || to < from)
+		return -EINVAL;
+	if (!to) {
+		memset(projection_root, 0, 32);
+		memset(history_root, 0, 32);
+		return 0;
+	}
+	fd = seal_open_read(BPM_TREE_OUTCOMES_PATH);
+	if (fd < 0)
+		return fd;
+	ret = outcomes_walk(fd, from, to, codes, projection_root,
+			    history_root, NULL);
+	close(fd);
+	return ret;
+}
+
+static int outcomes_cut(int fd, __s64 last_seq)
+{
+	struct stat st;
+	off_t end = 0;
+	int ret;
+
+	ret = outcomes_walk(fd, last_seq, last_seq, NULL, NULL, NULL, &end);
+	if (ret && ret != -ENOENT)
+		return ret;
+	if (fstat(fd, &st))
+		return -errno;
+	if (end == st.st_size)
+		return 0;
+	if (ftruncate(fd, end) || fsync(fd))
+		return -errno;
+	return 0;
+}
+
+int tree_outcomes_truncate(__s64 last_seq)
+{
+	int fd, ret;
+
+	if (last_seq < 0)
+		return -EINVAL;
+	fd = seal_open(BPM_TREE_OUTCOMES_PATH, O_RDWR, 0);
+	if (fd == -ENOENT)
+		return 0;
+	if (fd < 0)
+		return fd;
+	ret = lock_exclusive(fd);
+	if (!ret)
+		ret = outcomes_cut(fd, last_seq);
+	if (close(fd) && !ret)
+		ret = -errno;
+	return ret;
+}
+
+int tree_outcomes_check(__s64 last_seq)
+{
+	int fd, ret;
+
+	if (last_seq < 0)
+		return -EINVAL;
+	if (!last_seq)
+		return 0;
+	fd = seal_open_read(BPM_TREE_OUTCOMES_PATH);
+	if (fd == -ENOENT)
+		return -EBADMSG;
+	if (fd < 0)
+		return fd;
+	ret = outcomes_walk(fd, last_seq, last_seq, NULL, NULL, NULL, NULL);
+	close(fd);
+	return ret == -ENOENT ? -EBADMSG : ret;
 }
 
 void tree_emit_status(struct json_emit *e)
