@@ -538,8 +538,9 @@ not published.
        ``projection_root`` and ``projection_root_tpm``. ``last_seq`` also
        moves past operations whose selector does not match. ``head_seq``
        and ``segment_base_seq`` are the ``head.seq`` and ``base.seq`` of
-       the publication the node last synced to; a state without either
-       is refused.
+       the publication the node last synced to. A state without one of
+       ``tree_id``, ``last_seq``, the two roots, ``head_seq`` and
+       ``segment_base_seq`` is refused.
    * - ``tree-eventlog``
      - One JSON object per line and applied operation, with ``schema``
        (1), ``seq``, ``digest`` (the ``operation_digest``) and

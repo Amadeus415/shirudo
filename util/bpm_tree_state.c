@@ -655,18 +655,10 @@ int tree_state_read(struct tree_state *out)
 		return ret;
 	ret = json_parse((const char *)body, len, f, ARRAY_SIZE(f));
 	if (!ret && (schema != 1 || !f[1].seen || !f[3].seen || !f[4].seen ||
-		     !f[7].seen || !f[8].seen))
+		     !f[5].seen || !f[7].seen || !f[8].seen))
 		ret = -EINVAL;
-	if (!ret && !f[5].seen) {
-		/* State written before the software projection field was added. */
-		memcpy(out->projection_root_tpm, out->projection_root,
-		       sizeof(out->projection_root_tpm));
-	}
-	if (!ret && (strlen(out->projection_root) != 64 ||
-		     !hex32_valid(out->projection_root) ||
-		     (out->projection_root_tpm[0] &&
-		      (strlen(out->projection_root_tpm) != 64 ||
-		       !hex32_valid(out->projection_root_tpm)))))
+	if (!ret && (!hex32_valid(out->projection_root) ||
+		     !hex32_valid(out->projection_root_tpm)))
 		ret = -EINVAL;
 	if (!ret && out->manifest_digest[0] &&
 	    sha256_digest_decode(out->manifest_digest, digest))

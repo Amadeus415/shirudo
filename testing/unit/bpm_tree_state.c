@@ -472,6 +472,29 @@ static void state_names_its_publication_head_and_base(void)
 	drop_tree();
 }
 
+#define STATE_TAIL \
+	"\"manifest_digest\":\"" PENDING_DIGEST "\",\"head_seq\":7,"	\
+	"\"segment_base_seq\":0}"
+#define STATE_NO_TPM_ROOT \
+	"{\"schema\":1,\"tree_id\":\"prod\",\"generation\":3,\"last_seq\":5," \
+	"\"projection_root\":\"" STATE_ROOT "\","
+
+static void state_needs_both_projection_roots(void)
+{
+	struct tree_state s;
+
+	use_tree();
+	EXPECT_EQ(read_state(STATE_NO_TPM_ROOT STATE_TAIL, &s), -EINVAL);
+	EXPECT_EQ(read_state(STATE_NO_TPM_ROOT "\"projection_root_tpm\":\"\","
+			     STATE_TAIL, &s), -EINVAL);
+	EXPECT_EQ(read_state(STATE_NO_TPM_ROOT "\"projection_root_tpm\":\"5c\","
+			     STATE_TAIL, &s), -EINVAL);
+	ASSERT_EQ(read_state(STATE_NO_TPM_ROOT "\"projection_root_tpm\":\""
+			     STATE_ROOT "\"," STATE_TAIL, &s), 0);
+	EXPECT_STREQ(s.projection_root_tpm, STATE_ROOT);
+	drop_tree();
+}
+
 static const struct unit_case cases[] = {
 	UNIT_CASE(long_line_is_one_line),
 	UNIT_CASE(gzip_config_is_one_whole_member),
@@ -483,6 +506,7 @@ static const struct unit_case cases[] = {
 	UNIT_CASE(outcomes_longer_line_is_malformed),
 	UNIT_CASE(outcomes_cover_the_state),
 	UNIT_CASE(state_names_its_publication_head_and_base),
+	UNIT_CASE(state_needs_both_projection_roots),
 	{}
 };
 
