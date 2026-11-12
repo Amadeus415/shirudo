@@ -318,6 +318,11 @@ if bundle_is_current; then
 	exit 0
 fi
 
+# Without libtpms the make rule skips tpmsim-cmd, which the bundle carries.
+require_command pkg-config pkg-config pkgconf-pkg-config
+pkg-config --exists libtpms ||
+	die "libtpms is required for testing/helper/tpmsim-cmd; install it with: $(test_vm_install_cmd "$(test_vm_pkg libtpms-dev libtpms-devel)")"
+
 jobs=$(nproc)
 log "building host shirudo payload and test helpers"
 make -C "$REPO_ROOT" -j"$jobs" all

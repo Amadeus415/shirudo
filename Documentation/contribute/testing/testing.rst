@@ -35,7 +35,10 @@ Before you begin
   ``dracut-core``, ``file``, ``isc-dhcp-client``, ``libguestfs-tools``,
   ``qemu-system-x86``, ``qemu-utils``, ``swtpm``, ``swtpm-tools`` and
   ``tpm2-tools`` among others. :src:`testing/vm/run.sh` names the packages
-  it misses with an install command for ``apt-get`` or ``dnf``.
+  it misses with an install command for ``apt-get`` or ``dnf``. The
+  bundle carries the TPM simulator helper, so
+  :src:`testing/vm/build-bundle.sh` builds no bundle without
+  ``libtpms-dev``.
 - For the end-to-end tests: Docker on the host.
 
 The ``CI suite`` workflow uses the x86-64 CI kernel package from
