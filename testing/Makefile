@@ -244,7 +244,7 @@ vm-ssh:
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" $(ROOT)/testing/vm/run.sh --ssh
 
 define run-target-vm
-VM_MODE=test TEST_VM_SUITE="$(1)" VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(2)" VM_TENANT="$(VM_TENANT)" \
+VM_MODE=$(or $(4),test) TEST_VM_SUITE="$(1)" VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(2)" VM_TENANT="$(VM_TENANT)" \
 		TEST_VM_INITRD="$(3)" \
 		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
 		TEST_VM_KERNEL_ARTIFACT_DIR="$(abspath $(VM_KERNEL_ARTIFACT_DIR))" \
@@ -279,7 +279,7 @@ FAMILIES := $(call family-list,[0-9])
 VM_SUITES := $(call family-list,1) end2end
 vm-tests = $(if $(filter 0,$(VM)),:,$(MAKE) $(addprefix vm-test-,$(1)))
 .PHONY: $(addprefix unit/,$(UNIT_SUITES)) $(addprefix functional/,$(FAMILIES)) \
-	$(addprefix vm-test-,register $(VM_SUITES))
+	$(addprefix vm-test-,register $(VM_SUITES)) vm-node-end2end
 
 all:
 	+$(Q)$(MAKE) unit
@@ -312,7 +312,14 @@ end2end: build-operator
 	+$(Q)$(if $(filter 0,$(VM)),:,$(MAKE) test-vm-bundle && \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		TEST_VM_HOST_PRIVATE_DIR="$(abspath $(TEST_VM_HOST_PRIVATE_DIR))" \
+		MAKE="$(MAKE)" \
 		$(ROOT)/testing/end2end/host.sh $(MAKE) -C $(ROOT)/testing vm-test-end2end)
+
+# Node B of the end-to-end run, which end2end/host.sh boots beside the
+# suite's VM and stops after it: prepared like that VM, but it runs no
+# tests and stays up until it is stopped.
+vm-node-end2end: $(VM_KERNEL_DEP) test-vm-bundle
+	$(Q)$(call run-target-vm,end2end,$(if $(VM_NAME),$(VM_NAME)-end2end-b),1,node)
 
 vm-test-tpm: vm-test-register
 

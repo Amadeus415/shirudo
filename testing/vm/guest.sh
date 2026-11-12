@@ -247,9 +247,22 @@ configure_map_export()
 		>/etc/shirudo/shirudo.conf
 }
 
+# The end-to-end nodes run an image that the keepalive backend knows by
+# its os-release id and version. Their root is the stock cloud image, not a
+# dm-verity image, so the command line names no roothash= and the backend
+# binds them as declared.
+configure_image_identity()
+{
+	[[ "${TEST_VM_SUITE:-}" == end2end ]] || return 0
+	cat /usr/lib/os-release "$LOWER/testing/vm/files/end2end.os-release" \
+		>/etc/os-release.tmp
+	mv -f /etc/os-release.tmp /etc/os-release
+}
+
 configure_oci_ca
 configure_bpm_oci_repository
 configure_map_export
+configure_image_identity
 
 [[ -s /etc/shirudo-test-vm-runtime ]] || {
 	log "prepared runtime image is missing; run make -C testing bundle"
@@ -416,6 +429,14 @@ if tpm.get("chain_matches_eventlog") is not True:
     raise SystemExit("register does not match the shirudo eventlog")
 PY
 
+if [[ "$VM_MODE" == node ]]; then
+	log "node B of the end2end suite takes the core role"
+	"$SHIRUDO_BIN" image update /var/lib/shirudo/images/config-core
+fi
+if [[ "${TEST_VM_SUITE:-}" == end2end ]]; then
+	"$SHIRUDO_BIN" status --keepalive >/mnt/shirudo-out/keepalive.json
+fi
+
 if [[ "${TEST_VM_LOCAL_STACK:-0}" == 1 ]]; then
 	"$SHIRUDO_BIN" image update /var/lib/shirudo/images/config-local-stack
 	install -d /etc/shirudo/bpm
@@ -443,6 +464,11 @@ if [[ -n "${TEST_VM_BPM_TREE_INPUT:-}" ]]; then
 fi
 
 report_boot_memory
+
+if [[ "$VM_MODE" == node ]]; then
+	log "node prepared; node mode runs no tests and starts no timers"
+	exit 0
+fi
 
 if [[ "$VM_MODE" == interactive ]]; then
 	# init above was deliberately run directly so the current boot gets one

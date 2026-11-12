@@ -5,9 +5,11 @@
 # Boot an Ubuntu guest with a selected Linux kernel and an swtpm vTPM.
 # In test mode it runs the target tests of the family TEST_VM_SUITE names,
 # or the TPM register tests for "register"; in interactive mode it prepares
-# the guest and leaves QEMU and swtpm running.
+# the guest and leaves QEMU and swtpm running. Node mode boots the second
+# node of the end2end suite: prepared like the suite's VM, with no tests
+# and no timers, and left running until TEST_VM_TIMEOUT or a --stop.
 #
-# VM_MODE=test|interactive selects the mode. VM_NAME optionally selects a
+# VM_MODE=test|interactive|node selects the mode. VM_NAME optionally selects a
 # stable state directory; if omitted, a unique name is allocated atomically.
 # VM_TENANT is used as the map-export tenant when OTEL export is enabled.
 # VM_VERBOSE=1 streams test-mode QEMU output to the terminal as well as the
@@ -169,7 +171,11 @@ validate_mode()
 	fi
 	case "$VM_MODE" in
 	interactive|test) ;;
-	*) die "VM_MODE must be 'interactive' or 'test'" ;;
+	node)
+		[[ "$VM_SUITE" == end2end ]] ||
+			die "node mode boots the second node of the end2end suite only"
+		;;
+	*) die "VM_MODE must be 'interactive', 'test' or 'node'" ;;
 	esac
 	case "$VM_SUITE" in
 	'')
@@ -1532,7 +1538,7 @@ cat >>"$USER_DATA" <<'EOF'
       fi
       printf '%s\n' "$rc" >/mnt/shirudo-out/status
       sync
-      if [ "${VM_MODE:-test}" = interactive ] && [ "$rc" -eq 0 ]; then
+      if [ "${VM_MODE:-test}" != test ] && [ "$rc" -eq 0 ]; then
         while :; do sleep 3600; done
       fi
       poweroff
@@ -1736,7 +1742,21 @@ capture_host_memory_report()
 	HOST_MEMORY_REPORT="$report"
 }
 
-if [[ "$VM_MODE" == interactive ]]; then
+if [[ "$VM_MODE" == node ]]; then
+	# Bounded like a test run, so that a node its caller lost stops.
+	nohup timeout --signal=TERM --kill-after=30 "$VM_TIMEOUT" \
+		"$QEMU_BIN" "${QEMU_ARGS[@]}" \
+		>"$RUN_DIR/qemu.log" 2>&1 </dev/null &
+	QEMU_PID=$!
+	printf '%s\n' "$QEMU_PID" >"$RUN_DIR/qemu.pid"
+	wait_for_ssh_listener
+	wait_for_guest_status
+	capture_host_memory_report
+	LEAVE_RUNNING=1
+	FINAL_STATUS=0
+	log "node ready: name=$VM_NAME state=$RUN_DIR ssh_port=$SSH_PORT"
+	print_memory_summary
+elif [[ "$VM_MODE" == interactive ]]; then
 	if user_systemd_available; then
 		QEMU_UNIT_FILE="$RUN_DIR/qemu.unit"
 		QEMU_UNIT="shirudo-vm-$VM_NAME-qemu.service"

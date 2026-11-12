@@ -606,7 +606,9 @@ Run the end-to-end tests
 ------------------------
 
 ``make -C testing end2end`` runs ``t9001`` on the host, then
-:src:`testing/end2end/host.sh` plays the operator around one VM. It starts
+:src:`testing/end2end/host.sh` plays the operator around two VMs, node A,
+which runs the target tests, and node B beside it (see
+:ref:`testing-two-nodes`). It starts
 an OCI registry, an OpenTelemetry Collector and ClickHouse in Docker
 containers pinned by digest. The registry and collector use a throwaway
 CA. It builds ``kernel-obs`` into a package with ``bpm build``, pushes
@@ -655,6 +657,92 @@ ClickHouse, both through QEMU's address for the host. Without
 .. code-block:: console
 
    # make -C testing end2end BACKEND_DIR=/path/to/backend
+
+.. _testing-two-nodes:
+
+The two nodes
+~~~~~~~~~~~~~
+
+The tier boots two targets at once, each with its own software TPM and
+so its own attestation key. Node A is the family's VM, named
+``<name>-end2end``, and runs the target tests in number order. Node B,
+``<name>-end2end-b``, boots beside it with ``make -C testing
+vm-node-end2end``: the runner's node mode prepares it as it prepares node
+A, runs no tests, starts no timers and leaves it running until ``host.sh``
+stops it after node A. Each takes its role from a signed config image, as
+``t9105`` configures node A:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 26 52
+
+   * - Image
+     - Labels
+     - Points at
+   * - ``config-end2end``
+     - ``role=edge``
+     - The tree ``shirudo/end2end-tree`` and the test's collector. Node
+       A activates it in ``t9105``, and the ``kernel-obs`` operation
+       selects ``role=edge``.
+   * - ``config-edge``
+     - ``role=edge``
+     - The tree ``shirudo/pipeline-tree`` on the test's registry and the
+       keepalive backend's collector, for a test that moves node A to
+       that tree.
+   * - ``config-core``
+     - ``role=core``
+     - The same as ``config-edge``. Node B activates it while it is
+       prepared.
+
+Both nodes declare an image: :src:`testing/vm/files/end2end.os-release`,
+``IMAGE_ID=fleet-os`` and ``IMAGE_VERSION=end2end-1``, is added to their
+``/etc/os-release``. Neither binds the image as ``verified``. Their root
+is the stock cloud image in a writable overlay, not a dm-verity image,
+and their kernel command line names no ``roothash=`` or ``usrhash=``, so
+``image_root`` is ``null`` and the keepalive backend binds both nodes as
+``declared``. Giving node A a root hash would mean building its root as a
+verity image; the backend's own tests cover ``verified`` and
+``root_mismatch`` with rows they insert.
+
+After node A, ``host.sh`` checks node B: its evidence verifies, its
+attestation key differs from node A's, its labels are ``role=core``, and
+the keepalive body each node printed while it was prepared, in
+``result/keepalive.json`` of its state directory, names the image above
+and no root.
+
+A test in node A reaches node B as root over SSH through
+:src:`testing/end2end/node-b-lib.sh`. ``node_b_wait`` waits for node B to
+be prepared and fails when it did not boot; ``node_b`` runs a command line
+in node B's shell, with the test's standard input and output:
+
+.. code-block:: sh
+
+   . ./end2end/node-b-lib.sh
+   node_b_wait || test_skip_all "node B did not boot"
+   node_b /usr/local/bin/shirudo-runtime status --keepalive >"$W/node-b.json"
+   node_b cat /var/lib/shirudo/bpm/upatch-tree/state.json
+   node_b "cat >/etc/shirudo/end2end-ca.pem" <"$E2E/ca.pem"
+
+``host.sh`` records the SSH port and key in
+``build/test-vm/end2end/node-b/``, which node A reads through the
+read-only checkout. Node B reaches the registry and the collectors through
+QEMU's address for the host, as node A does, and has the checkout at
+``/workspace/shirudo`` too. A tree at ``127.0.0.1:15443`` names its
+packages there, so a test that syncs node B starts
+``end2end/tcp_forward.py`` in it, as ``t9105`` does in node A, detached
+from the SSH session:
+
+.. code-block:: sh
+
+   node_b "cd /workspace/shirudo/testing &&
+           python3 end2end/tcp_forward.py 127.0.0.1:15443 10.0.2.2:15443 \
+                   /tmp/forward-ready </dev/null >/dev/null 2>&1 &"
+
+Node B has 2 CPUs and ``TEST_VM_NODE_MEMORY``, ``2G`` by default; node A
+keeps ``TEST_VM_CPUS`` and ``TEST_VM_MEMORY``. With the defaults the
+guests take 6 GiB of host memory, and the registry, the two collectors
+and the two ClickHouse servers come on top. ``host.sh`` prints node B's
+memory use, and its boot log is ``build/test-vm/end2end/node-b.log``.
 
 Select test scripts
 ~~~~~~~~~~~~~~~~~~~

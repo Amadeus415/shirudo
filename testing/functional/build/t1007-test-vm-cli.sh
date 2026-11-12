@@ -32,6 +32,21 @@ test_expect_success 'register protocols run only in an isolated pre-init test VM
 	grep -q "register suite requires test mode" "$WORK/register-initrd.out"
 '
 
+test_expect_success 'node mode boots only the second node of the end2end suite' '
+	! VM_MODE=node TEST_VM_WORK_DIR="$WORK/node" \
+		"$RUNNER" >"$WORK/node-upatch.out" 2>&1 &&
+	grep -q "node mode boots the second node of the end2end suite only" \
+		"$WORK/node-upatch.out" &&
+	! TEST_VM_SUITE=end2end VM_MODE=node TEST_VM_WORK_DIR="$WORK/node" \
+		TEST_VM_KERNEL="$WORK/no-bzImage" "$RUNNER" \
+		>"$WORK/node-end2end.out" 2>&1 &&
+	grep -q "kernel image not found" "$WORK/node-end2end.out" &&
+	grep -Fq "\$(call run-target-vm,end2end,\$(if \$(VM_NAME),\$(VM_NAME)-end2end-b),1,node)" \
+		../testing/Makefile &&
+	grep -Fq "if [[ \"\$VM_MODE\" == node ]]" vm/guest.sh &&
+	grep -Fq "image update /var/lib/shirudo/images/config-core" vm/guest.sh
+'
+
 test_expect_success 'test-vm requires a SHA-256 for a remote kernel' '
 	! TEST_VM_WORK_DIR="$WORK/no-sha" \
 		TEST_VM_KERNEL_URL=https://example.invalid/bzImage "$RUNNER" \
@@ -487,7 +502,7 @@ test_expect_success 'test harness records a failed test title' '
 test_expect_success 'make -C testing vm and test-vm share named mode support' '
 	grep -q "^[[:space:]]*vm:" ../testing/Makefile &&
 	grep -q "VM_MODE=interactive" ../testing/Makefile &&
-	grep -q "VM_MODE=test" ../testing/Makefile &&
+	grep -Fq "VM_MODE=\$(or \$(4),test)" ../testing/Makefile &&
 	grep -Fq "VMS_DIR=\"\${VM_ROOT}/vms\"" vm/run.sh &&
 	grep -Fq "mktemp -d \"\${VMS_DIR}/\${VM_MODE}\${VM_SUITE:+-\$VM_SUITE}-XXXXXX\"" \
 		vm/run.sh &&

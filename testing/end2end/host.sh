@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Authors of shirudo
 # testing/end2end/host.sh -- run the operator side of the end-to-end VM test.
+# Its arguments are the command that runs the suite in node A; node B, a
+# second target with a TPM of its own, boots beside it.
 
 set -eu
 
@@ -29,13 +31,67 @@ RESULT=$REPO/build/test-vm/vms/$VM_NAME-end2end/result/end2end
 POLICY_FIXTURE=$TEST_VM_HOST_BUNDLE/fixtures/shirudo-test-policy-exec-graph.upatch
 CHECKER=$REPO/tools/quote-check/shirudo-quote-check
 KEEPALIVE=$REPO/testing/fixtures/keepalive
+NODE_B_DIR=$W/node-b
+NODE_B_HOST=127.0.0.1
+NODE_B_VM=$VM_NAME-end2end-b
+NODE_B_RUN=$REPO/build/test-vm/vms/$NODE_B_VM
+NODE_B_PID=
+. "$REPO/testing/end2end/node-b-lib.sh"
 
 say() { printf 'end2end: %s\n' "$*"; }
 die() { printf 'end2end: %s\n' "$*" >&2; exit 1; }
 
 down() {
+	node_b_down
 	stack_down
 	rm -rf -- "$TLS_DIR"
+}
+
+# Boot node B beside node A, prepared like it but with the core role and no
+# tests, and record in $NODE_B_DIR how to reach it.
+node_b_boot() {
+	mkdir -p "$NODE_B_DIR"
+	if "${MAKE:-make}" -C "$REPO/testing" vm-node-end2end TEST_VM_CPUS=2 \
+		TEST_VM_MEMORY="${TEST_VM_NODE_MEMORY:-2G}" >"$W/node-b.log" 2>&1 &&
+	   cp "$NODE_B_RUN/ssh.port" "$NODE_B_DIR/port" &&
+	   install -m 0600 "$NODE_B_RUN/ssh/id_ed25519" "$NODE_B_DIR/key"; then
+		: >"$NODE_B_DIR/ready"
+	else
+		: >"$NODE_B_DIR/failed"
+	fi
+}
+
+# Stop node B. A boot still under way ends when its VM stops, or comes up
+# after the first stop and meets the second.
+node_b_down() {
+	node_b_stop
+	[ -z "$NODE_B_PID" ] || wait "$NODE_B_PID" || :
+	NODE_B_PID=
+	node_b_stop
+}
+
+node_b_stop() {
+	[ ! -d "$NODE_B_RUN" ] ||
+		VM_NAME=$NODE_B_VM "$REPO/testing/vm/run.sh" --stop >/dev/null 2>&1 || :
+}
+
+# Check the keepalive body that node $1 printed at boot, file $2: the image
+# it names is the one the os-release of the end-to-end nodes declares, with
+# no root, and with $3 set, its config root is $3.
+image_identity() {
+	python3 - "$2" "$REPO/testing/vm/files/end2end.os-release" "${3-}" <<'PY' ||
+import json, sys
+
+body, release, config_root = sys.argv[1:4]
+image = dict(line.split("=", 1) for line in open(release).read().splitlines()
+             if "=" in line and not line.startswith("#"))
+node = json.load(open(body))
+assert node["image_id"] == image["IMAGE_ID"], node["image_id"]
+assert node["image_version"] == image["IMAGE_VERSION"], node["image_version"]
+assert node["image_root"] is None, node["image_root"]
+assert not config_root or node["config_root"] == config_root, node["config_root"]
+PY
+		die "node $1 does not declare the image of the end-to-end nodes"
 }
 
 # The keepalive backend t9107 runs against, in $BACKEND: BACKEND_DIR, a
@@ -146,7 +202,7 @@ sed -i '/^source = "kernel-obs.bpf.c"$/a\
 id = "kernel-obs"\
 \
 [upatches.tree.selector.labels]\
-role = ["end2end"]' "$W/pkg/kernel-obs/Beefile"
+role = ["edge"]' "$W/pkg/kernel-obs/Beefile"
 (cd "$W/pkg" && "$S" bpm build kernel-obs --version 1.0.0 --keys-dir "$KEYS")
 BEE=$W/pkg/kernel-obs-1.0.0.bee
 "$S" bpm push "$BEE" "oci://$REGISTRY/shirudo/kernel-obs" --keys-dir "$KEYS" \
@@ -179,7 +235,9 @@ else
 	say "no keepalive backend at ../backend and no BACKEND_DIR: t9107 skips"
 fi
 
-say "the target, in $VM_NAME-end2end"
+say "node A, in $VM_NAME-end2end, and node B, in $NODE_B_VM"
+node_b_boot &
+NODE_B_PID=$!
 "$@"
 
 say "the evidence verifies and records what was published"
@@ -238,5 +296,41 @@ python3 "$REPO/testing/end2end/check-otlp.py" \
 	"$REPO/build/test-vm/vms/$VM_NAME-end2end/result/end2end/otel" \
 	"$W/out/otlp.json" "http://$CLICKHOUSE/" || \
 	die "the collector or ClickHouse snapshots differ from the map exports"
+
+say "node B booted with an attestation key and a role of its own"
+wait "$NODE_B_PID" || :
+NODE_B_PID=
+node_b_wait 0 || {
+	tail -n 40 "$W/node-b.log" >&2
+	die "node B did not boot; see $W/node-b.log"
+}
+node_b "/usr/local/bin/shirudo-runtime attest --nonce=$(cat "$W/nonce")" \
+	>"$W/node-b-evidence.json" || die "node B gave no evidence"
+# Node B loads nothing of its own: a test gives it only what a tree holds.
+ak_b=$(python3 -c 'import json, sys
+evidence = json.load(open(sys.argv[1]))
+assert not [r for r in evidence["eventlog"] if r["type"] == "upatch_load"]
+print(evidence["ak"]["name"])' "$W/node-b-evidence.json") ||
+	die "node B loaded an upatch while it was prepared"
+"$S" attest verify --evidence="$W/node-b-evidence.json" \
+	--nonce="$(cat "$W/nonce")" --ak-name="$ak_b" --allow-runtime-events \
+	--require-initrd >"$W/node-b-verify.out" 2>&1 &&
+	grep -qx 'verdict: ok' "$W/node-b-verify.out" || {
+	cat "$W/node-b-verify.out" >&2
+	die "the evidence of node B does not verify"
+}
+[ "$ak_b" != "$ak" ] || die "node A and node B share an attestation key"
+[ "$(node_b cat /run/shirudo/config/etc/shirudo/node.labels)" = role=core ] ||
+	die "node B is not labelled role=core"
+image_identity A "$REPO/build/test-vm/vms/$VM_NAME-end2end/result/keepalive.json"
+image_identity B "$NODE_B_RUN/result/keepalive.json" \
+	"$(cat "$TEST_VM_HOST_BUNDLE/verity/config-core.root")"
+for report in boot-memory host-memory; do
+	[ ! -s "$NODE_B_RUN/result/$report" ] ||
+		say "node B $report: $(tr '\n' ' ' <"$NODE_B_RUN/result/$report")"
+done
+node_b_down
+rm -rf -- "$NODE_B_RUN/rootfs.qcow2" "$NODE_B_RUN/initrd.img" \
+	"$NODE_B_RUN/seed.img" "$NODE_B_RUN/initrd-seed"
 
 say "ok"
