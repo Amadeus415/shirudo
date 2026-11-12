@@ -222,6 +222,44 @@ static void body(struct json_emit *e, const struct keepalive_input *in)
 	json_obj_close(e);
 }
 
+static bool tree_state_same(const struct tree_state *a, int a_rc,
+			    const struct tree_state *b, int b_rc)
+{
+	if (a_rc || b_rc)
+		return a_rc == b_rc;
+	return a->schema == b->schema && a->generation == b->generation &&
+	       a->last_seq == b->last_seq && a->head_seq == b->head_seq &&
+	       a->segment_base_seq == b->segment_base_seq &&
+	       !strcmp(a->tree_id, b->tree_id) &&
+	       !strcmp(a->projection_root, b->projection_root) &&
+	       !strcmp(a->projection_root_tpm, b->projection_root_tpm) &&
+	       !strcmp(a->manifest_digest, b->manifest_digest);
+}
+
+int keepalive_snapshot(const struct keepalive_snapshot_ops *ops, void *ctx,
+		       struct tree_state *state, int *state_rc, __u32 *flags)
+{
+	bool pending = false, settled = false;
+	struct tree_state again;
+	int tries, again_rc, ret;
+
+	for (tries = 0; tries < KEEPALIVE_SNAPSHOT_TRIES && !settled; tries++) {
+		*state_rc = ops->read_state(ctx, state);
+		pending = ops->pending(ctx);
+		ret = ops->collect(ctx, state, *state_rc);
+		if (ret)
+			return ret;
+		pending = ops->pending(ctx) || pending;
+		again_rc = ops->read_state(ctx, &again);
+		settled = tree_state_same(state, *state_rc, &again, again_rc);
+	}
+	if (pending)
+		*flags |= KEEPALIVE_TREE_OP_PENDING;
+	if (!settled)
+		*flags |= KEEPALIVE_SNAPSHOT_UNSETTLED;
+	return 0;
+}
+
 int keepalive_emit(const struct keepalive_input *in, char *buf, size_t cap,
 		   size_t *len)
 {

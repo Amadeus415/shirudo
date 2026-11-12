@@ -9,7 +9,7 @@ shirudo status
 ==============
 
 Report the local readiness and state of this host, and optionally send the
-report as an OTLP keepalive.
+report as an OTLP keepalive or print the keepalive body.
 
 Runs on: any host, and on a target as root with the runtime binary. It is the
 only command that runs while a config activation is pending or cannot be
@@ -21,8 +21,8 @@ Usage
 
 .. code-block:: none
 
-   shirudo status [--json | --otel] [--check] [--show-full]
-                  [--include-system] [--include-eventlog]
+   shirudo status [--json | --otel | --keepalive] [--check]
+                  [--show-full] [--include-system] [--include-eventlog]
 
 Description
 -----------
@@ -85,6 +85,77 @@ says nothing, except while a config activation is pending or unverifiable,
 when it prints a warning. ``--otel`` alone prints nothing on standard
 output. Add ``--json`` to print the document too.
 
+With ``--keepalive``, ``status`` prints the keepalive body, the compact
+status record a node's TPM is to quote, as one line on standard output.
+It neither quotes nor sends it and needs no TPM, so an operator can see
+what a node reports. The body has 22 keys in a fixed order: ``schema``
+(``shirudo.keepalive/1``), ``boot_id``, ``version_id``, ``config_root``,
+``kernel_release``, ``image_id``, ``image_version``, ``image_root``,
+``verdict``, ``cond``, ``flags``, ``tamper``, ``tree_id``,
+``generation``, ``base_seq``, ``last_seq``, ``base_root``,
+``projection_root``, ``mask``, ``set_sha256``, ``count`` and ``not_ok``.
+A key that does not apply is ``null``:
+
+- ``config_root`` unless the selected config is active;
+- the seven tree keys, ``tree_id`` to ``mask``, when the node follows no
+  tree or its tree state cannot be read.
+
+``mask`` holds two bits per operation from ``base_seq + 1`` to the head
+of the recorded publication, read from the outcomes record of
+:doc:`/reference/formats/bpm-formats`: ``01`` applied, ``10`` passed
+over, ``11`` module absent, ``00`` not reached. ``set_sha256`` is
+SHA-256 over a ``<payload_sha256> <name>`` line for every loaded upatch,
+sorted by name, the ``set_digest`` form of the ``init`` event.
+``not_ok`` counts the loaded upatches the tree holds a status file for.
+The bits of ``flags``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 8 24 68
+
+   * - Bit
+     - Name
+     - Set when
+   * - 0
+     - ``register_rebound``
+     - The register was bound more than once for this TPM reset.
+   * - 1
+     - ``bound_late``
+     - This boot's ``init`` record says the register was bound from the
+       root file system, not from the initrd.
+   * - 2
+     - ``tree_log_mismatch``
+     - The tree eventlog does not replay to the ``projection_root`` of
+       ``state.json``, or the outcomes record lacks a line the window
+       needs; ``base_root`` and ``mask`` are then ``null``.
+   * - 3
+     - ``tamper_unavailable``
+     - The tamper counters cannot be read; ``tamper`` is ``null``.
+   * - 4
+     - ``tree_op_pending``
+     - A tree operation was left in flight: ``pending.json`` existed
+       before or after the read, after a sync stopped mid-operation.
+   * - 5
+     - ``snapshot_unsettled``
+     - ``state.json`` kept changing while the body was read, which the
+       config operation lock leaves to a writer outside it.
+
+``status`` holds the config operation lock for its whole run, as every
+target command does, a ``bpm tree sync`` included. It therefore never
+reads a tree a sync is changing: while one runs, ``status`` waits up to
+30 seconds for the lock and then fails, and no body is printed. A sync
+writes ``pending.json`` before it loads or unloads anything and removes
+it only after ``state.json`` has the new ``last_seq``, so bit 4 says a
+sync stopped in the middle of an operation and the next sync completes
+it. ``status`` still reads ``state.json``, looks for ``pending.json``,
+reads the outcomes up to that ``last_seq`` and the loaded upatches, then
+looks for ``pending.json`` and reads ``state.json`` again, and starts
+over when the second ``state.json`` differs from the first, three times
+in all, printing the last read with bit 5 set; under the lock that
+happens only if something writes the tree without it. With bits 4 and 5
+clear the tree keys and the loaded set describe one point. The two bits
+say the node is busy, not that it is unhealthy.
+
 Options
 -------
 
@@ -104,6 +175,11 @@ Options
      - none
      - off
      - Send the JSON report as an OTLP keepalive log record.
+   * - ``--keepalive``
+     - none
+     - off
+     - Print the keepalive body without quoting or sending it. Not with
+       ``--json`` or ``--otel``.
    * - ``--include-system``
      - none
      - off
@@ -144,10 +220,11 @@ reads ``.status`` and the conditions from the JSON document.
      - With ``--check``: the verdict is ``tampered``. With ``--otel``:
        the configuration cannot be loaded or the OTLP request failed.
        With ``--json``: the document does not fit the output buffer.
-       Also an allocation failure.
+       With ``--keepalive``: the body cannot be built. Also an allocation
+       failure.
    * - 2
-     - An unknown option, or with ``--otel`` an invalid ``map_export``
-       configuration.
+     - An unknown option, ``--keepalive`` with ``--json`` or ``--otel``,
+       or with ``--otel`` an invalid ``map_export`` configuration.
 
 Files and environment
 ---------------------
@@ -157,6 +234,11 @@ Files and environment
   ``/var/lib/shirudo/eventlog``, ``/var/lib/shirudo/keys``, the config
   certificate the runtime image's bootstrap names and the config
   activation records
+- With ``--keepalive``: ``state.json``, ``pending.json``, ``outcomes``,
+  ``tree-eventlog`` and ``status/`` under
+  ``/var/lib/shirudo/bpm/upatch-tree``, ``/etc/os-release`` (else
+  ``/usr/lib/os-release``), ``/proc/cmdline`` and
+  ``/proc/sys/kernel/random/boot_id``
 - With ``--otel``: ``map_export.*`` and the ``OTEL_EXPORTER_OTLP_*``
   variables (see :doc:`/reference/environment`).
   ``shirudo-keepalive.service`` reads them from
@@ -297,6 +379,13 @@ Read the verdict in a script:
 
    target# shirudo status --json | jq -r .status
    ok
+
+Print the keepalive body of the same target, which follows no tree:
+
+.. code-block:: console
+
+   target# shirudo status --keepalive
+   {"schema":"shirudo.keepalive/1","boot_id":"82639935-1127-4dab-91b5-f818eabc7f13","version_id":"d0d7aa800303439023907d1979d917d46a21bec21f816689c138728a28e84af9","config_root":"6d5ed552f448a1c07e3b9d24f5a86c1e0b7d93f2c4e5a6b7180c9d2e3f4a5b6c","kernel_release":"7.3.0-bpf-next+","image_id":null,"image_version":null,"image_root":null,"verdict":"ok","cond":5461,"flags":0,"tamper":[15,0,0,0,0,1,0,0,0,0,0,8,0,0,0,0,0,1,0,0,1,0,0,0,0,0,7,0,0,2,0,0,0,0,0,0,0],"tree_id":null,"generation":null,"base_seq":null,"last_seq":null,"base_root":null,"projection_root":null,"mask":null,"set_sha256":"5f0c2e8b7a1d4c3f9e6b2a0d8c7f1e3b5a9d4c2e6f8b0a1d3c5e7f9b2d4a6c8e","count":1,"not_ok":0}
 
 Add this boot's eventlog to the report:
 

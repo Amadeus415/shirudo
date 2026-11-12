@@ -41,6 +41,7 @@
 #include "util/io.h"
 #include "util/json.h"
 #include "util/identity.h"
+#include "util/keepalive.h"
 #include "util/image_bootstrap.h"
 #include "util/image_runtime.h"
 #include "util/keyring.h"
@@ -337,6 +338,7 @@ static void print_system_human(const struct sysinfo *si)
 static const struct help_item status_options[] = {
 	{ "--json",             "print the report as one JSON document" },
 	{ "--otel",             "send the JSON report as an OTLP keepalive log" },
+	{ "--keepalive",        "print the keepalive body, unquoted and unsent" },
 	{ "--check",            "exit 1 when the verdict is tampered" },
 	{ "--show-full",        "print every section, folded or not, and the "
 				"system and eventlog sections" },
@@ -351,9 +353,9 @@ static const struct help_section status_help_sections[] = {
 };
 
 static const struct help status_help = {
-	.usage      = "shirudo status [--json | --otel] [--check] "
-		      "[--show-full]\n"
-		      "                       [--include-system] "
+	.usage      = "shirudo status [--json | --otel | --keepalive] "
+		      "[--check]\n"
+		      "                       [--show-full] [--include-system] "
 		      "[--include-eventlog]",
 	.summary    = "Report the state of this host: the verdict, the "
 		      "conditions behind it, the\ntamper counters and the "
@@ -479,6 +481,218 @@ static bool status_otel_endpoint_configured(const struct config *cfg)
 		return true;
 	endpoint = getenv("OTEL_EXPORTER_OTLP_ENDPOINT");
 	return endpoint && endpoint[0];
+}
+
+/* What a keepalive snapshot reads past the tree state, for one try. */
+struct keepalive_view {
+	__s64	base_seq;
+	int	outcomes_rc;
+	__u8	codes[KEEPALIVE_MASK_OPS];
+	char	base_root[2 * CHAIN_DIGEST_LEN + 1];
+	char	mask[KEEPALIVE_MASK_B64_MAX];
+	bool	log_mismatch;
+	char	set_sha256[2 * CHAIN_DIGEST_LEN + 1];
+	__u64	count;
+	__u64	not_ok;
+};
+
+static int keepalive_read_state(void *ctx, struct tree_state *state)
+{
+	return tree_state_read(state);
+}
+
+static bool keepalive_pending(void *ctx)
+{
+	return access(BPM_TREE_PENDING_PATH, F_OK) == 0;
+}
+
+/* The window of the last KEEPALIVE_MASK_OPS operations up to head_seq. */
+static void keepalive_window(struct keepalive_view *v,
+			     const struct tree_state *s)
+{
+	__u8 projection[CHAIN_DIGEST_LEN], history[CHAIN_DIGEST_LEN];
+
+	v->base_seq = max_t(__s64, s->head_seq - KEEPALIVE_MASK_OPS, 0);
+	memset(v->codes, 0, sizeof(v->codes));
+	if (s->last_seq < v->base_seq || s->last_seq > s->head_seq) {
+		v->outcomes_rc = -EBADMSG;
+		return;
+	}
+	v->outcomes_rc = tree_outcomes_read(v->base_seq, s->last_seq, v->codes,
+					    projection, history);
+	if (!v->outcomes_rc)
+		v->outcomes_rc = keepalive_mask(v->codes,
+						s->head_seq - v->base_seq,
+						v->mask, sizeof(v->mask));
+	if (!v->outcomes_rc)
+		hex_encode(projection, sizeof(projection), v->base_root);
+}
+
+/* eventlog_matches_state of the status document, false only. */
+static bool keepalive_log_mismatch(const struct tree_state *s, int state_rc)
+{
+	__u8 live[CHAIN_DIGEST_LEN], replay[CHAIN_DIGEST_LEN];
+
+	if (tree_event_replay(replay))
+		return false;
+	return state_rc || hex_decode(s->projection_root, live, sizeof(live)) ||
+	       memneq_explicit(live, replay, sizeof(live));
+}
+
+/* A tree status file says why the tree left the upatch not loaded. */
+static bool keepalive_upatch_not_ok(const char *name)
+{
+	char path[PATH_MAX];
+
+	if (strsprintf(path, sizeof(path), "%s/%s", BPM_TREE_STATUS_DIR,
+		       name) < 0)
+		return false;
+	return access(path, F_OK) == 0;
+}
+
+/* The set_digest of an init event, over every upatch pinned now. */
+static int keepalive_loaded_set(struct keepalive_view *v)
+{
+	__u8 none[CHAIN_DIGEST_LEN] = {}, digest[CHAIN_DIGEST_LEN];
+	struct measured_upatch *set = NULL;
+	__u8 event[CHAIN_DIGEST_LEN];
+	struct dirent **ups = NULL;
+	int n, i, ret = 0;
+
+	n = scandir(BPFFS_UPATCHES_DIR, &ups, notdot, alphasort);
+	if (n < 0)
+		n = 0;
+	if (n) {
+		set = xcalloc((size_t)n, sizeof(*set));
+		if (!set)
+			ret = -ENOMEM;
+	}
+	v->not_ok = 0;
+	for (i = 0; !ret && i < n; i++) {
+		struct measured_upatch *u = &set[i];
+
+		if (upatch_name_from_bpffs(u->name, sizeof(u->name),
+					   ups[i]->d_name) &&
+		    strscpy(u->name, ups[i]->d_name, sizeof(u->name)) < 0) {
+			ret = -ENAMETOOLONG;
+			break;
+		}
+		upatch_payload_sha256(u->name, u->payload_hex,
+				      sizeof(u->payload_hex));
+		if (keepalive_upatch_not_ok(u->name))
+			v->not_ok++;
+	}
+	if (!ret)
+		ret = chain_init_event(none, set, (size_t)n, none, digest,
+				       event);
+	if (!ret) {
+		hex_encode(digest, sizeof(digest), v->set_sha256);
+		v->count = (__u64)n;
+	}
+	for (i = 0; i < n; i++)
+		libc_free(ups[i]);
+	libc_free(ups);
+	xfree(set, (size_t)n * sizeof(*set));
+	return ret;
+}
+
+static int keepalive_collect(void *ctx, const struct tree_state *state,
+			     int state_rc)
+{
+	struct keepalive_view *v = ctx;
+
+	if (!state_rc)
+		keepalive_window(v, state);
+	v->log_mismatch = keepalive_log_mismatch(state, state_rc);
+	return keepalive_loaded_set(v);
+}
+
+static const struct keepalive_snapshot_ops keepalive_ops = {
+	.read_state	= keepalive_read_state,
+	.pending	= keepalive_pending,
+	.collect	= keepalive_collect,
+};
+
+static __u32 keepalive_flags(const struct chain_status *cst, int tamper_rc,
+			     const struct keepalive_view *v, int state_rc)
+{
+	__u32 flags = 0;
+
+	if (cst->rebound)
+		flags |= KEEPALIVE_REGISTER_REBOUND;
+	if (cst->logged && !cst->init.initrd)
+		flags |= KEEPALIVE_BOUND_LATE;
+	if (v->log_mismatch || (!state_rc && v->outcomes_rc))
+		flags |= KEEPALIVE_TREE_LOG_MISMATCH;
+	if (tamper_rc)
+		flags |= KEEPALIVE_TAMPER_UNAVAILABLE;
+	return flags;
+}
+
+/*
+ * The keepalive body, printed rather than quoted and sent. A tree state
+ * that cannot be read is a node that follows no tree.
+ */
+static noinline_for_stack int
+print_keepalive(const struct conditions_input *cin,
+		const struct chain_status *cst,
+		const struct tamper_counts *tamper, int tamper_rc,
+		const char *config_root_hex)
+{
+	struct condition conds[CONDITIONS_MAX];
+	struct keepalive_input in = {};
+	struct keepalive_view v = {};
+	char body[KEEPALIVE_BODY_MAX];
+	struct sysinfo_image img;
+	struct tree_state state;
+	struct sysinfo si = {};
+	int state_rc, ret;
+	__u32 flags = 0;
+	size_t nc, len;
+
+	ret = keepalive_snapshot(&keepalive_ops, &v, &state, &state_rc,
+				 &flags);
+	if (ret) {
+		pr_err("status: read the keepalive inputs: %s", strerror(-ret));
+		return 1;
+	}
+	sysinfo_gather(&si);
+	sysinfo_image_read(&img);
+	nc = conditions(cin, conds, ARRAY_SIZE(conds));
+	in = (struct keepalive_input){
+		.boot_id		= si.boot_id,
+		.version_id		= shirudo_version_id,
+		.config_root		= config_root_hex,
+		.kernel_release		= si.kernel_release,
+		.image_id		= img.id,
+		.image_version		= img.version,
+		.image_root		= img.root,
+		.verdict		= status_verdict(cin),
+		.cond			= keepalive_cond(conds, nc),
+		.flags			= flags | keepalive_flags(cst, tamper_rc,
+								  &v, state_rc),
+		.tamper			= tamper_rc ? NULL : tamper->count,
+		.set_sha256		= v.set_sha256,
+		.count			= v.count,
+		.not_ok			= v.not_ok,
+	};
+	if (!state_rc) {
+		in.tree = true;
+		in.tree_id = state.tree_id;
+		in.generation = (__u64)state.generation;
+		in.base_seq = (__u64)v.base_seq;
+		in.last_seq = (__u64)state.last_seq;
+		in.base_root = v.outcomes_rc ? NULL : v.base_root;
+		in.projection_root = state.projection_root;
+		in.mask = v.outcomes_rc ? NULL : v.mask;
+	}
+	ret = keepalive_emit(&in, body, sizeof(body), &len);
+	if (ret) {
+		pr_err("status: build the keepalive body: %s", strerror(-ret));
+		return 1;
+	}
+	printf("%s\n", body);
+	return 0;
 }
 
 #define STATUS_SUBJECT_MAX	256
@@ -830,7 +1044,7 @@ static void print_keyring_serials(const struct status_keyring *k)
 int cmd_status(int argc, const char **argv)
 {
 	bool json = false;
-	bool json_stdout = false, otel = false;
+	bool json_stdout = false, otel = false, keepalive = false;
 	bool include_system = false, include_eventlog = false;
 	bool show_full = false, check = false;
 	char hostname[256] = "?";
@@ -894,6 +1108,8 @@ int cmd_status(int argc, const char **argv)
 			json_stdout = true;
 		} else if (strcmp(argv[i], "--otel") == 0) {
 			otel = true;
+		} else if (strcmp(argv[i], "--keepalive") == 0) {
+			keepalive = true;
 		} else if (strcmp(argv[i], "--include-system") == 0) {
 			include_system = true;
 		} else if (strcmp(argv[i], "--include-eventlog") == 0) {
@@ -910,6 +1126,11 @@ int cmd_status(int argc, const char **argv)
 			usage();
 			return 2;
 		}
+	}
+	if (keepalive && (json_stdout || otel)) {
+		fprintf(stderr, "status: --keepalive goes without --json and --otel\n");
+		usage();
+		return 2;
 	}
 	json = json_stdout || otel;
 	if (otel) {
@@ -1076,7 +1297,10 @@ int cmd_status(int argc, const char **argv)
 	cin.xdp_coverage_rc = xdp_coverage_rc;
 	keyring_cond_input(&cin, &bpf, &dmv);
 
-	if (json) {
+	if (keepalive) {
+		ret = print_keepalive(&cin, &cst, &tamper, tamper_rc,
+				      config_state ? NULL : config_root_hex);
+	} else if (json) {
 		struct json_emit e;
 
 		/*

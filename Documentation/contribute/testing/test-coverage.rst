@@ -512,6 +512,12 @@ signed config image.
        malformed, on an ``add``, a ``delete`` and an operation without a
        match, syncs with the outcomes, state and tree eventlog of the
        same operations without it
+   * - ``t7109-bpm-tree-keepalive``
+     - ``status --keepalive``: the keys of the body in order, its tree
+       keys and mask as ``state.json`` and the outcomes record have them,
+       flags bit 4 after a sync is killed after its load, and after the
+       sync the loaded set its mask folds to and the masks of node A and
+       node B
 
 ``otel`` (8)
 ~~~~~~~~~~~~
@@ -734,7 +740,7 @@ Coverage by area
    * - upatch tree
      - ``t3011``, ``t5004``, ``t7005``, ``t7007``, ``t7101``,
        ``t7102``, ``t7103``, ``t7104``, ``t7105``, ``t7106``,
-       ``t7107``, ``t9105``. Fuzz: ``tree``,
+       ``t7107``, ``t7109``, ``t9105``. Fuzz: ``tree``,
        ``tree-state``, ``kconfig``. Unit: ``bpm_tree``,
        ``bpm_tree_overlap``, ``bpm_tree_state``, ``kernel_build_id``,
        ``kernel_release``
@@ -743,9 +749,10 @@ Coverage by area
        Unauthorized policy-xattr changes: ``t6111``. Task and socket
        inheritance: ``t6141``, ``t6142``
    * - Telemetry
-     - ``t6139``, ``t8001`` to ``t8006``, ``t8101`` to ``t8105``,
-       ``t9101`` to ``t9105``. Fuzz: ``otel``, ``quote-check``,
-       ``serializer``. Unit: ``sysinfo``
+     - ``t6139``, ``t7109``, ``t8001`` to ``t8006``, ``t8101`` to
+       ``t8105``, ``t9101`` to ``t9105``. Fuzz: ``otel``,
+       ``quote-check``, ``serializer``. Unit: ``keepalive``,
+       ``sysinfo``
    * - Decoders
      - ``t3002``, ``t8102``, ``t9101``. Fuzz: ``decoder``
    * - Tamper counters

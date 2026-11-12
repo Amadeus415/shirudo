@@ -198,7 +198,7 @@ _shirudo()
 		COMPREPLY=( $(compgen -W "--check-only --json" -- "$cur") )
 		;;
 	status)
-		COMPREPLY=( $(compgen -W "--json --otel --check --show-full \
+		COMPREPLY=( $(compgen -W "--json --otel --keepalive --check --show-full \
 			--include-system --include-eventlog" -- "$cur") )
 		;;
 	attest)

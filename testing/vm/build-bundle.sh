@@ -448,7 +448,7 @@ build_tree_test_registry()
 	local payloads="$FIXTURE_WORK/tree-payload"
 	local reference
 
-	# One append-only tree that t7101 to t7107 walk in order:
+	# One append-only tree that t7101 to t7107 and t7109 walk in order:
 	# the tree state a target writes is sealed, so no test can start
 	# over, and each generation extends the one before it.
 	python3 - "$registry_dir" \
@@ -579,10 +579,20 @@ operations = [
     operation(16, "shirudo-test-tree-match", other_node, match_artifact,
               fixes=["", "B", "A", "A", "x y\n"] +
                     ["ID-%d" % i for i in range(17)]),
+    # t7109: an add, a delete and an add this node takes, then three it
+    # passes over, the masks of node A and node B of the release example.
+    operation(17, "shirudo-test-tree-match", this_node, match_artifact),
+    operation(18, "shirudo-test-tree-match", this_node,
+              match_unload_artifact, op="delete"),
+    operation(19, "shirudo-test-tree-match", this_node, match_artifact),
+    operation(20, "shirudo-test-tree-skip", other_node, skip_artifact),
+    operation(21, "shirudo-test-tree-skip", other_node,
+              skip_unload_artifact, op="delete"),
+    operation(22, "shirudo-test-tree-skip", other_node, skip_artifact),
 ]
 heads = {"stable": 2, "updated": 3, "deleted": 4, "restored": 5,
          "kconfig": 6, "reloaded": 7, "outcomes": 10, "stopped": 12,
-         "fetched": 13, "fixes": 16}
+         "fetched": 13, "fixes": 16, "keepalive": 19, "unmatched": 22}
 for generation, (reference, head) in enumerate(heads.items(), start=1):
     publication = {
         "schema": 1,
@@ -598,7 +608,7 @@ for generation, (reference, head) in enumerate(heads.items(), start=1):
 PY
 
 	for reference in stable updated deleted restored kconfig reloaded \
-			 outcomes stopped fetched fixes; do
+			 outcomes stopped fetched fixes keepalive unmatched; do
 		openssl cms -sign -binary -md sha512 \
 			-in "$payloads-$reference.json" \
 			-signer "$FIXTURE_WORK/trusted/cert.der" \
@@ -627,7 +637,8 @@ def write(path, body):
 
 
 for reference in ("stable", "updated", "deleted", "restored", "kconfig",
-                  "reloaded", "outcomes", "stopped", "fetched", "fixes"):
+                  "reloaded", "outcomes", "stopped", "fetched", "fixes",
+                  "keepalive", "unmatched"):
     stem = payloads.name + "-" + reference
     payload = payloads.with_name(stem + ".json").read_bytes()
     signature = payloads.with_name(stem + ".sig").read_bytes()

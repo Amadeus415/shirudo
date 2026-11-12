@@ -748,6 +748,162 @@ static void body_of_the_largest_values_fits(void)
 	EXPECT_EQ(keepalive_emit(&in, body, whole + 1, &len), 0);
 }
 
+/*
+ * A node read by a snapshot. Each state read gives the next of seqs as
+ * last_seq and the last one past the end, or with no seqs a last_seq
+ * that moves on every read; each pending() call gives the next of
+ * pending, false past the end.
+ */
+struct fake_node {
+	const __s64	*seqs;
+	int		n_seqs;
+	const bool	*pending;
+	int		n_pending;
+	int		state_rc;
+	int		collect_ret;
+	int		reads;
+	int		pending_calls;
+	int		collects;
+};
+
+#define SEQS(...)	.seqs = (const __s64[]){ __VA_ARGS__ },		\
+			.n_seqs = ARRAY_SIZE(((const __s64[]){ __VA_ARGS__ }))
+#define PENDING(...)	.pending = (const bool[]){ __VA_ARGS__ },	\
+			.n_pending = ARRAY_SIZE(((const bool[]){ __VA_ARGS__ }))
+
+#define MOVING_FROM	100
+
+static int fake_read_state(void *ctx, struct tree_state *state)
+{
+	struct fake_node *node = ctx;
+	int read = node->reads++;
+
+	*state = (struct tree_state){ .schema = 1, .generation = 1,
+				      .head_seq = KEEPALIVE_MASK_OPS };
+	strscpy(state->tree_id, "fleet-base", sizeof(state->tree_id));
+	if (!node->n_seqs)
+		state->last_seq = MOVING_FROM + read;
+	else
+		state->last_seq = node->seqs[min(read, node->n_seqs - 1)];
+	return node->state_rc;
+}
+
+static bool fake_pending(void *ctx)
+{
+	struct fake_node *node = ctx;
+	int call = node->pending_calls++;
+
+	return call < node->n_pending && node->pending[call];
+}
+
+static int fake_collect(void *ctx, const struct tree_state *state,
+			int state_rc)
+{
+	struct fake_node *node = ctx;
+
+	node->collects++;
+	return node->collect_ret;
+}
+
+static const struct keepalive_snapshot_ops fake_ops = {
+	.read_state	= fake_read_state,
+	.pending	= fake_pending,
+	.collect	= fake_collect,
+};
+
+static __u32 snapshot_of(struct fake_node *node, struct tree_state *state)
+{
+	__u32 flags = 0;
+	int state_rc;
+
+	ASSERT_EQ(keepalive_snapshot(&fake_ops, node, state, &state_rc,
+				     &flags), 0);
+	EXPECT_EQ(state_rc, node->state_rc);
+	return flags;
+}
+
+static void snapshot_of_a_still_tree_reads_it_twice(void)
+{
+	struct fake_node node = { SEQS(7) };
+	struct tree_state state;
+
+	EXPECT_UEQ(snapshot_of(&node, &state), 0);
+	EXPECT_EQ(node.reads, 2);
+	EXPECT_EQ(node.collects, 1);
+	EXPECT_EQ(state.last_seq, 7);
+}
+
+static void snapshot_tries_again_after_a_state_that_moved(void)
+{
+	struct fake_node node = { SEQS(7, 8) };
+	struct tree_state state;
+
+	EXPECT_UEQ(snapshot_of(&node, &state), 0);
+	EXPECT_EQ(node.reads, 4);
+	EXPECT_EQ(node.collects, 2);
+	EXPECT_EQ(state.last_seq, 8);
+}
+
+static void snapshot_gives_up_on_a_state_that_keeps_moving(void)
+{
+	struct fake_node node = {};
+	struct tree_state state;
+
+	EXPECT_UEQ(snapshot_of(&node, &state), KEEPALIVE_SNAPSHOT_UNSETTLED);
+	EXPECT_EQ(node.reads, 2 * KEEPALIVE_SNAPSHOT_TRIES);
+	EXPECT_EQ(node.collects, KEEPALIVE_SNAPSHOT_TRIES);
+	/* The first read of the last try is what the body sends. */
+	EXPECT_EQ(state.last_seq,
+		  MOVING_FROM + 2 * (KEEPALIVE_SNAPSHOT_TRIES - 1));
+}
+
+static void snapshot_sees_a_pending_operation_before_it_reads(void)
+{
+	struct fake_node node = { SEQS(7), PENDING(true, false) };
+	struct tree_state state;
+
+	EXPECT_UEQ(snapshot_of(&node, &state), KEEPALIVE_TREE_OP_PENDING);
+}
+
+static void snapshot_sees_a_pending_operation_after_it_reads(void)
+{
+	struct fake_node node = { SEQS(7), PENDING(false, true) };
+	struct tree_state state;
+
+	EXPECT_UEQ(snapshot_of(&node, &state), KEEPALIVE_TREE_OP_PENDING);
+}
+
+static void snapshot_tells_the_pending_operation_of_its_last_try(void)
+{
+	struct fake_node node = { SEQS(7, 8), PENDING(true, true) };
+	struct tree_state state;
+
+	EXPECT_UEQ(snapshot_of(&node, &state), 0);
+	EXPECT_EQ(node.pending_calls, 4);
+}
+
+static void snapshot_of_no_tree_settles(void)
+{
+	struct fake_node node = { .state_rc = -ENOENT };
+	struct tree_state state;
+
+	EXPECT_UEQ(snapshot_of(&node, &state), 0);
+	EXPECT_EQ(node.collects, 1);
+}
+
+static void snapshot_stops_at_a_failed_collect(void)
+{
+	struct fake_node node = { SEQS(7), .collect_ret = -ENOMEM };
+	struct tree_state state;
+	__u32 flags = 0;
+	int state_rc;
+
+	EXPECT_EQ(keepalive_snapshot(&fake_ops, &node, &state, &state_rc,
+				     &flags), -ENOMEM);
+	EXPECT_EQ(node.reads, 1);
+	EXPECT_UEQ(flags, 0);
+}
+
 static const struct unit_case cases[] = {
 	UNIT_CASE(mask_of_one_operation),
 	UNIT_CASE(mask_of_the_release_example),
@@ -779,6 +935,14 @@ static const struct unit_case cases[] = {
 	UNIT_CASE(body_refuses_a_string_that_is_not_utf8),
 	UNIT_CASE(body_refuses_a_buffer_one_byte_short),
 	UNIT_CASE(body_of_the_largest_values_fits),
+	UNIT_CASE(snapshot_of_a_still_tree_reads_it_twice),
+	UNIT_CASE(snapshot_tries_again_after_a_state_that_moved),
+	UNIT_CASE(snapshot_gives_up_on_a_state_that_keeps_moving),
+	UNIT_CASE(snapshot_sees_a_pending_operation_before_it_reads),
+	UNIT_CASE(snapshot_sees_a_pending_operation_after_it_reads),
+	UNIT_CASE(snapshot_tells_the_pending_operation_of_its_last_try),
+	UNIT_CASE(snapshot_of_no_tree_settles),
+	UNIT_CASE(snapshot_stops_at_a_failed_collect),
 	{}
 };
 

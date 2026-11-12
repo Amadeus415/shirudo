@@ -43,6 +43,16 @@ Both timers start their service 5 seconds after boot and again 5 seconds
 after each run ends. ``shirudo-map-export.service`` runs only while
 ``/run/shirudo/bpffs/lsm_link`` exists.
 
+A keepalive and a ``bpm tree sync`` stall each other rather than run at
+once. Every target command holds the config operation lock for its whole
+run, and a sync holds it until its last operation is applied. A
+keepalive that starts during a sync waits up to 30 seconds for the lock;
+when the sync is still running then, that run fails and sends nothing,
+and the next run of the timer tries again. A sync that fetches and
+applies for minutes therefore leaves a gap of about that length in the
+node's keepalives, which a backend's threshold for a stale node must
+allow for. See :doc:`/reference/systemd-units`.
+
 The keepalive record has the event name ``shirudo.keepalive``. Its body
 is the ``shirudo status --json`` document with the system section, and
 its attributes are ``shirudo.status`` (the verdict),

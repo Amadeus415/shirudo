@@ -15,6 +15,7 @@
 #include <shirudo/misc.h>
 
 #include "bpf/lib/tamper.h"
+#include "bpm_tree.h"
 #include "conditions.h"
 
 #define KEEPALIVE_MASK_OPS	512
@@ -23,6 +24,20 @@
 
 /* Holds the largest body and its terminator. */
 #define KEEPALIVE_BODY_MAX	4096
+
+/* The bits of the body's flags. */
+#define KEEPALIVE_REGISTER_REBOUND	(1u << 0)
+#define KEEPALIVE_BOUND_LATE		(1u << 1)
+#define KEEPALIVE_TREE_LOG_MISMATCH	(1u << 2)
+#define KEEPALIVE_TAMPER_UNAVAILABLE	(1u << 3)
+#define KEEPALIVE_TREE_OP_PENDING	(1u << 4)
+#define KEEPALIVE_SNAPSHOT_UNSETTLED	(1u << 5)
+
+/*
+ * How many times a snapshot reads the tree before it gives up on a state
+ * that keeps moving; kept here alone so that system testing can tune it.
+ */
+#define KEEPALIVE_SNAPSHOT_TRIES	3
 
 /*
  * The values of the body, one member per key but "schema", which the
@@ -82,5 +97,32 @@ int keepalive_mask(const __u8 *codes, size_t n, char *b64,
  * place in conds: 0 not evaluated, 1 OK, 2 WARN, 3 ALERT.
  */
 __u16 keepalive_cond(const struct condition *conds, size_t n);
+
+/*
+ * The reads of a snapshot. read_state() is tree_state_read() and
+ * pending() whether pending.json exists. collect() reads what follows
+ * the state it is given, the outcomes up to its last_seq and the loaded
+ * set, into ctx, and fails the snapshot with a nonzero return.
+ */
+struct keepalive_snapshot_ops {
+	int	(*read_state)(void *ctx, struct tree_state *state);
+	bool	(*pending)(void *ctx);
+	int	(*collect)(void *ctx, const struct tree_state *state,
+			   int state_rc);
+};
+
+/*
+ * Reads the tree keys and the loaded set of one point without the tree
+ * lock, which a sync holds for minutes: the state, pending.json, what
+ * collect() reads, pending.json and the state again, over again while
+ * the second state differs from the first, at most
+ * KEEPALIVE_SNAPSHOT_TRIES times. *state and *state_rc are the first
+ * read of the last try. Sets KEEPALIVE_TREE_OP_PENDING in *flags when
+ * that try saw pending.json and KEEPALIVE_SNAPSHOT_UNSETTLED when the
+ * tries ran out. 0, or what collect() returned.
+ */
+int keepalive_snapshot(const struct keepalive_snapshot_ops *ops, void *ctx,
+		       struct tree_state *state, int *state_rc,
+		       __u32 *flags) __must_check;
 
 #endif /* SHIRUDO_KEEPALIVE_H */

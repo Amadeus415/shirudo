@@ -194,6 +194,16 @@ The keepalive is sent only when ``map_export.otel_endpoint``,
 ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`` or ``OTEL_EXPORTER_OTLP_ENDPOINT``
 names an endpoint. See :doc:`/reference/formats/otlp`.
 
+A keepalive and a ``bpm tree sync`` do not run at once. Every target
+command holds the config operation lock for its whole run, and a sync
+holds it until its last operation is applied. A keepalive that starts
+during a sync waits up to 30 seconds for the lock; when the sync is
+still running then, that run fails and sends nothing, and the next
+run of the timer tries again. A sync that fetches and applies for
+minutes therefore leaves a gap of about that length in the node's
+keepalives, which a backend's threshold for a stale node must allow
+for.
+
 shirudo-xdp-reconcile.service
 -----------------------------
 
