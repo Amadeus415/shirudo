@@ -72,6 +72,9 @@ for t in "$dir"/t[0-9]1[0-9][0-9]-*.sh; do
 	[ -e "$t" ] || continue
 	found=1
 	test_matches "$t" || continue
+	# end2end/host.sh runs t9109 itself, on the host after node A's suite,
+	# against the fresh edge node and node B.
+	[ "$t" != end2end/t9109-pipeline.sh ] || continue
 	log="$SHIRUDO_TEST_RESULTS/$(basename "$t").log"
 	rc=0
 	sh "$t" >"$log" 2>&1 || rc=$?

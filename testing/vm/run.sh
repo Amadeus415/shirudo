@@ -5,9 +5,10 @@
 # Boot an Ubuntu guest with a selected Linux kernel and an swtpm vTPM.
 # In test mode it runs the target tests of the family TEST_VM_SUITE names,
 # or the TPM register tests for "register"; in interactive mode it prepares
-# the guest and leaves QEMU and swtpm running. Node mode boots the second
-# node of the end2end suite: prepared like the suite's VM, with no tests
-# and no timers, and left running until TEST_VM_TIMEOUT or a --stop.
+# the guest and leaves QEMU and swtpm running. Node mode boots another
+# node of the end2end suite, with the role TEST_VM_NODE_ROLE names, core
+# by default or edge: prepared like the suite's VM, with no tests and no
+# timers, and left running until TEST_VM_TIMEOUT or a --stop.
 #
 # VM_MODE=test|interactive|node selects the mode. VM_NAME optionally selects a
 # stable state directory; if omitted, a unique name is allocated atomically.
@@ -71,6 +72,7 @@ DISK_SIZE="${TEST_VM_DISK_SIZE:-30G}"
 VM_TIMEOUT="${TEST_VM_TIMEOUT:-3600}"
 VM_MODE="${VM_MODE:-test}"
 VM_SUITE="${TEST_VM_SUITE:-}"
+NODE_ROLE="${TEST_VM_NODE_ROLE:-core}"
 TEST_MODE="${TEST_VM_MODE:-verity}"
 SKIP_SEAL="${TEST_VM_SKIP_SEAL:-0}"
 VM_INITRD="${TEST_VM_INITRD:-1}"
@@ -173,7 +175,9 @@ validate_mode()
 	interactive|test) ;;
 	node)
 		[[ "$VM_SUITE" == end2end ]] ||
-			die "node mode boots the second node of the end2end suite only"
+			die "node mode boots a node of the end2end suite only"
+		[[ "$NODE_ROLE" == core || "$NODE_ROLE" == edge ]] ||
+			die "TEST_VM_NODE_ROLE must be 'core' or 'edge'"
 		;;
 	*) die "VM_MODE must be 'interactive', 'test' or 'node'" ;;
 	esac
@@ -1479,6 +1483,7 @@ printf '      export VM_MODE=%q\n' "$VM_MODE" >>"$USER_DATA"
 printf '      export TEST_VM_MODE=%q\n' "$TEST_MODE" >>"$USER_DATA"
 printf '      export TEST_VM_SUITE=%q\n' "$VM_SUITE" >>"$USER_DATA"
 printf '      export TEST_FILTER=%q\n' "${TEST_FILTER:-}" >>"$USER_DATA"
+printf '      export TEST_VM_NODE_ROLE=%q\n' "$NODE_ROLE" >>"$USER_DATA"
 printf '      export TEST_VM_SKIP_SEAL=%q\n' "$SKIP_SEAL" >>"$USER_DATA"
 printf '      export TEST_VM_INITRD=%q\n' "$VM_INITRD" >>"$USER_DATA"
 printf '      export TEST_VM_SSH_PUBLIC_KEY=%q\n' "$SSH_PUBLIC_KEY" >>"$USER_DATA"

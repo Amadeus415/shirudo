@@ -430,8 +430,8 @@ if tpm.get("chain_matches_eventlog") is not True:
 PY
 
 if [[ "$VM_MODE" == node ]]; then
-	log "node B of the end2end suite takes the core role"
-	"$SHIRUDO_BIN" image update /var/lib/shirudo/images/config-core
+	log "this node of the end2end suite takes the ${TEST_VM_NODE_ROLE} role"
+	"$SHIRUDO_BIN" image update "/var/lib/shirudo/images/config-${TEST_VM_NODE_ROLE}"
 fi
 if [[ "${TEST_VM_SUITE:-}" == end2end ]]; then
 	"$SHIRUDO_BIN" status --keepalive >/mnt/shirudo-out/keepalive.json

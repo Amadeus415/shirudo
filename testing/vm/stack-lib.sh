@@ -132,11 +132,7 @@ stack_backend()
 		[ "$attempt" -lt 150 ] || return 1
 		sleep 0.2
 	done
-	for file in "$backend"/sql/*.sql; do
-		stack_backend_client <"$file" || return 1
-	done
-	"$backend/sql/apply-retention.sh" docker exec -i "$container" \
-		clickhouse-client >/dev/null || return 1
+	stack_backend_schema "$backend" || return 1
 	stack_run "$STACK_NAME-backend-collector" --network "$STACK_NAME" \
 		-p "$BACKEND_COLLECTOR:4318" -v "$TLS_DIR:/certs:ro" \
 		-e CLICKHOUSE_ENDPOINT=tcp://backend-clickhouse:9000 \
@@ -144,6 +140,17 @@ stack_backend()
 		"$COLLECTOR_IMAGE"
 	stack_wait_https -X POST -H 'Content-Type: application/json' -d '{}' \
 		"https://$BACKEND_COLLECTOR/v1/logs"
+}
+
+# Load the schema of the backend in directory $1, with the retention its
+# settings name, into the backend's ClickHouse.
+stack_backend_schema()
+{
+	for file in "$1"/sql/*.sql; do
+		stack_backend_client <"$file" || return 1
+	done
+	"$1/sql/apply-retention.sh" docker exec -i \
+		"$STACK_NAME-backend-clickhouse" clickhouse-client >/dev/null
 }
 
 stack_down()

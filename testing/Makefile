@@ -315,11 +315,15 @@ end2end: build-operator
 		MAKE="$(MAKE)" \
 		$(ROOT)/testing/end2end/host.sh $(MAKE) -C $(ROOT)/testing vm-test-end2end)
 
-# Node B of the end-to-end run, which end2end/host.sh boots beside the
-# suite's VM and stops after it: prepared like that VM, but it runs no
-# tests and stays up until it is stopped.
+# A node of the end-to-end run that end2end/host.sh boots and stops,
+# prepared like the suite's VM, but it runs no tests and stays up until it
+# is stopped. END2END_NODE=b is node B, with the core role, beside the
+# suite's VM; edge is a fresh node with the edge role, after it.
+END2END_NODE ?= b
 vm-node-end2end: $(VM_KERNEL_DEP) test-vm-bundle
-	$(Q)$(call run-target-vm,end2end,$(if $(VM_NAME),$(VM_NAME)-end2end-b),1,node)
+	$(Q)$(if $(filter-out b edge,$(END2END_NODE)),$(error END2END_NODE must be b or edge))
+	$(Q)TEST_VM_NODE_ROLE=$(if $(filter edge,$(END2END_NODE)),edge,core) \
+		$(call run-target-vm,end2end,$(if $(VM_NAME),$(VM_NAME)-end2end-$(END2END_NODE)),1,node)
 
 vm-test-tpm: vm-test-register
 

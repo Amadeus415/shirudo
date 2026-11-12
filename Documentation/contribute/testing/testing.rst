@@ -170,6 +170,11 @@ a Python companion with the same stem, such as
 before ``init``. They skip on the build host and run in a separate VM
 that the ``tpm`` family boots without the production initrd.
 
+``t9109`` carries a target number but runs on the host:
+:src:`testing/end2end/host.sh` runs it after node A's suite, against two
+other nodes (see :ref:`testing-two-nodes`), and node A's runner leaves it
+out.
+
 Run the tests
 -------------
 
@@ -606,9 +611,9 @@ Run the end-to-end tests
 ------------------------
 
 ``make -C testing end2end`` runs ``t9001`` on the host, then
-:src:`testing/end2end/host.sh` plays the operator around two VMs, node A,
-which runs the target tests, and node B beside it (see
-:ref:`testing-two-nodes`). It starts
+:src:`testing/end2end/host.sh` plays the operator around node A, which
+runs the target tests, node B beside it, and with a keepalive backend a
+fresh edge node after node A (see :ref:`testing-two-nodes`). It starts
 an OCI registry, an OpenTelemetry Collector and ClickHouse in Docker
 containers pinned by digest. The registry and collector use a throwaway
 CA. It builds ``kernel-obs`` into a package with ``bpm build``, pushes
@@ -651,8 +656,10 @@ the example tree of :src:`testing/fixtures/keepalive/` signed with the
 operator key and loads it with the backend's tree ingest job, which runs
 ``bpm tree show``. In the guest, ``t9107`` sends the example keepalives
 with their recorded quotes through that collector and queries
-ClickHouse, both through QEMU's address for the host. Without
-``BACKEND_DIR`` and without ``../backend``, ``t9107`` skips:
+ClickHouse, both through QEMU's address for the host. After node A,
+``host.sh`` runs ``t9109`` against the same backend, see
+:ref:`testing-pipeline`. Without ``BACKEND_DIR`` and without
+``../backend``, ``t9107`` skips and ``t9109`` does not run:
 
 .. code-block:: console
 
@@ -660,17 +667,20 @@ ClickHouse, both through QEMU's address for the host. Without
 
 .. _testing-two-nodes:
 
-The two nodes
-~~~~~~~~~~~~~
+The nodes
+~~~~~~~~~
 
-The tier boots two targets at once, each with its own software TPM and
-so its own attestation key. Node A is the family's VM, named
-``<name>-end2end``, and runs the target tests in number order. Node B,
-``<name>-end2end-b``, boots beside it with ``make -C testing
-vm-node-end2end``: the runner's node mode prepares it as it prepares node
-A, runs no tests, starts no timers and leaves it running until ``host.sh``
-stops it after node A. Each takes its role from a signed config image, as
-``t9105`` configures node A:
+The tier boots up to three targets, at most two at once, each with its
+own software TPM and so its own attestation key. Node A is the family's
+VM, named ``<name>-end2end``, and runs the target tests in number order.
+Node B, ``<name>-end2end-b``, boots beside it. With a keepalive backend,
+the fresh edge node, ``<name>-end2end-edge``, boots once node A has
+stopped, and ``t9109`` runs against it and node B. Both boot with ``make
+-C testing vm-node-end2end``, ``END2END_NODE=b`` or ``edge``: the runner's
+node mode prepares a node as it prepares node A, activates the config
+image of its role, runs no tests, starts no timers and leaves it running
+until ``host.sh`` stops it at the end. Each takes its role from a signed
+config image, as ``t9105`` configures node A:
 
 .. list-table::
    :header-rows: 1
@@ -687,62 +697,118 @@ stops it after node A. Each takes its role from a signed config image, as
    * - ``config-edge``
      - ``role=edge``
      - The tree ``shirudo/pipeline-tree`` on the test's registry and the
-       keepalive backend's collector, for a test that moves node A to
-       that tree.
+       keepalive backend's collector. The fresh edge node activates it
+       while it is prepared.
    * - ``config-core``
      - ``role=core``
      - The same as ``config-edge``. Node B activates it while it is
        prepared.
 
-Both nodes declare an image: :src:`testing/vm/files/end2end.os-release`,
+``t9109`` needs a node that has run nothing else. By the time it runs,
+node A has loaded ``kernel-obs`` and ``policy-exec-graph``, counted
+denied execs, and followed ``shirudo/end2end-tree``, none of which a fleet
+node has, and its register and eventlog keep all of it. So the fresh edge
+node takes node A's place rather than node A moving to the pipeline
+tree. Booting it after node A keeps two guests at most.
+
+All nodes declare an image: :src:`testing/vm/files/end2end.os-release`,
 ``IMAGE_ID=fleet-os`` and ``IMAGE_VERSION=end2end-1``, is added to their
-``/etc/os-release``. Neither binds the image as ``verified``. Their root
-is the stock cloud image in a writable overlay, not a dm-verity image,
-and their kernel command line names no ``roothash=`` or ``usrhash=``, so
-``image_root`` is ``null`` and the keepalive backend binds both nodes as
-``declared``. Giving node A a root hash would mean building its root as a
+``/etc/os-release``. None binds the image as ``verified``. Their root is
+the stock cloud image in a writable overlay, not a dm-verity image, and
+their kernel command line names no ``roothash=`` or ``usrhash=``, so
+``image_root`` is ``null`` and the keepalive backend binds every node as
+``declared``. Giving a node a root hash would mean building its root as a
 verity image; the backend's own tests cover ``verified`` and
 ``root_mismatch`` with rows they insert.
 
 After node A, ``host.sh`` checks node B: its evidence verifies, its
-attestation key differs from node A's, its labels are ``role=core``, and
+attestation key differs from node A's and its labels are ``role=core``.
+It checks that the fresh edge node is labelled ``role=edge``, and that
 the keepalive body each node printed while it was prepared, in
 ``result/keepalive.json`` of its state directory, names the image above
 and no root.
 
-A test in node A reaches node B as root over SSH through
-:src:`testing/end2end/node-b-lib.sh`. ``node_b_wait`` waits for node B to
-be prepared and fails when it did not boot; ``node_b`` runs a command line
-in node B's shell, with the test's standard input and output:
+A test reaches node B and the fresh edge node as root over SSH through
+:src:`testing/end2end/node-lib.sh`, by the names ``b`` and ``edge``.
+``node_wait`` waits for a node to be prepared and fails when it did not
+boot; ``node_sh`` runs a command line in its shell, with the test's
+standard input and output:
 
 .. code-block:: sh
 
-   . ./end2end/node-b-lib.sh
-   node_b_wait || test_skip_all "node B did not boot"
-   node_b /usr/local/bin/shirudo-runtime status --keepalive >"$W/node-b.json"
-   node_b cat /var/lib/shirudo/bpm/upatch-tree/state.json
-   node_b "cat >/etc/shirudo/end2end-ca.pem" <"$E2E/ca.pem"
+   . ./end2end/node-lib.sh
+   node_wait b || test_skip_all "node B did not boot"
+   node_sh b /usr/local/bin/shirudo-runtime status --keepalive >"$W/node-b.json"
+   node_sh b cat /var/lib/shirudo/bpm/upatch-tree/state.json
+   node_sh b "cat >/etc/shirudo/end2end-ca.pem" <"$E2E/ca.pem"
 
-``host.sh`` records the SSH port and key in
-``build/test-vm/end2end/node-b/``, which node A reads through the
-read-only checkout. Node B reaches the registry and the collectors through
-QEMU's address for the host, as node A does, and has the checkout at
-``/workspace/shirudo`` too. A tree at ``127.0.0.1:15443`` names its
-packages there, so a test that syncs node B starts
-``end2end/tcp_forward.py`` in it, as ``t9105`` does in node A, detached
-from the SSH session:
+``host.sh`` records each node's SSH port and key in
+``build/test-vm/end2end/node-b/`` and ``node-edge/``, which node A reads
+through the read-only checkout; on the host, ``NODES_DIR`` names that
+directory and ``NODES_HOST`` is ``127.0.0.1``. The nodes reach the
+registry and the collectors through QEMU's address for the host, as node
+A does, and have the checkout at ``/workspace/shirudo`` too. A tree at
+``127.0.0.1:15443`` names its packages there, so a test that syncs a node
+starts ``end2end/tcp_forward.py`` in it, as ``t9105`` does in node A,
+detached from the SSH session:
 
 .. code-block:: sh
 
-   node_b "cd /workspace/shirudo/testing &&
-           python3 end2end/tcp_forward.py 127.0.0.1:15443 10.0.2.2:15443 \
-                   /tmp/forward-ready </dev/null >/dev/null 2>&1 &"
+   node_sh b "cd /workspace/shirudo/testing &&
+              setsid -f python3 end2end/tcp_forward.py 127.0.0.1:15443 \
+                     10.0.2.2:15443 /tmp/forward-ready </dev/null >/dev/null 2>&1"
 
-Node B has 2 CPUs and ``TEST_VM_NODE_MEMORY``, ``2G`` by default; node A
-keeps ``TEST_VM_CPUS`` and ``TEST_VM_MEMORY``. With the defaults the
-guests take 6 GiB of host memory, and the registry, the two collectors
-and the two ClickHouse servers come on top. ``host.sh`` prints node B's
-memory use, and its boot log is ``build/test-vm/end2end/node-b.log``.
+The other nodes have 2 CPUs and ``TEST_VM_NODE_MEMORY``, ``2G`` by
+default; node A keeps ``TEST_VM_CPUS`` and ``TEST_VM_MEMORY``. With the
+defaults the guests take 6 GiB of host memory at most, while node A and
+node B run, and the registry, the two collectors and the two ClickHouse
+servers come on top. ``host.sh`` prints each node's memory use, and their
+boot logs are ``build/test-vm/end2end/node-b.log`` and
+``node-edge.log``.
+
+.. _testing-pipeline:
+
+The full chain
+~~~~~~~~~~~~~~
+
+``t9109`` runs the whole keepalive pipeline on real data, with no
+fixture at a seam between two stages. ``host.sh`` runs it on the host as
+root, after node A, with ``E2E``, the backend directory, the operator key
+and the nodes' directory in its environment; its output is
+``build/test-vm/end2end/t9109.log``. It:
+
+#. empties the keepalive backend that ``t9107`` used and loads its
+   schema again;
+#. builds ``xfs-fix`` 1.0.0 and 1.1.0 from
+   :src:`testing/fixtures/pipeline/xfs-fix/`, whose Beefile names
+   ``fixes = ["EXAMPLE-0101"]`` and selects ``role=edge``, and appends
+   add 1.0.0, delete 1.0.0 and add 1.1.0 to ``shirudo/pipeline-tree``;
+#. loads the publication with the backend's tree ingest job;
+#. syncs the fresh edge node, which applies all three operations, and
+   node B, which passes over all three, with ``shirudo-bpm-tree-sync``,
+   and sends two keepalives from each a few seconds apart with
+   ``shirudo-keepalive``;
+#. writes the SBOM store of the nodes' image, and one image for each
+   other state of an SBOM, and runs the backend's sbom-scan job with the
+   stub ``trivy`` of the fixtures, which prints one ``openssl`` finding;
+#. seeds the kernel advisory of the fixtures, whose range holds every test
+   kernel, and the nodes' build, and refreshes ``node_status`` and
+   ``node_vulns``.
+
+It then checks the tree, the stored records and their quotes,
+``node_status`` with the masks ``VA==`` and ``qA==``, each node's
+``state.json``, ``outcomes``, ``tree-eventlog`` and loaded set against
+the backend's rows, the state of every SBOM, and the exposure of each
+node: the kernel advisory ``shielded`` by ``xfs-fix`` on the edge node and
+``shield_excludes_node`` on node B, and the ``openssl`` finding
+``exposed_no_shield`` on both. A record replayed through the collector
+with one byte of its body changed lands in ``rejected`` as
+``body_mismatch`` and changes no row of ``node_status``.
+
+``t9109`` takes nothing from :src:`testing/fixtures/keepalive/`.
+:src:`testing/end2end/pipeline_checks.py` recomputes the roots, the mask,
+the loaded set and each quote's qualifying data from the formats' own
+definitions.
 
 Select test scripts
 ~~~~~~~~~~~~~~~~~~~

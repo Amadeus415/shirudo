@@ -32,19 +32,28 @@ test_expect_success 'register protocols run only in an isolated pre-init test VM
 	grep -q "register suite requires test mode" "$WORK/register-initrd.out"
 '
 
-test_expect_success 'node mode boots only the second node of the end2end suite' '
+test_expect_success 'node mode boots only a core or edge node of the end2end suite' '
 	! VM_MODE=node TEST_VM_WORK_DIR="$WORK/node" \
 		"$RUNNER" >"$WORK/node-upatch.out" 2>&1 &&
-	grep -q "node mode boots the second node of the end2end suite only" \
+	grep -q "node mode boots a node of the end2end suite only" \
 		"$WORK/node-upatch.out" &&
-	! TEST_VM_SUITE=end2end VM_MODE=node TEST_VM_WORK_DIR="$WORK/node" \
+	! TEST_VM_SUITE=end2end VM_MODE=node TEST_VM_NODE_ROLE=gateway \
+		TEST_VM_WORK_DIR="$WORK/node" "$RUNNER" \
+		>"$WORK/node-role.out" 2>&1 &&
+	grep -q "TEST_VM_NODE_ROLE must be .core. or .edge." "$WORK/node-role.out" &&
+	! TEST_VM_SUITE=end2end VM_MODE=node TEST_VM_NODE_ROLE=edge \
+		TEST_VM_WORK_DIR="$WORK/node" \
 		TEST_VM_KERNEL="$WORK/no-bzImage" "$RUNNER" \
 		>"$WORK/node-end2end.out" 2>&1 &&
 	grep -q "kernel image not found" "$WORK/node-end2end.out" &&
-	grep -Fq "\$(call run-target-vm,end2end,\$(if \$(VM_NAME),\$(VM_NAME)-end2end-b),1,node)" \
+	grep -Fq "\$(call run-target-vm,end2end,\$(if \$(VM_NAME),\$(VM_NAME)-end2end-\$(END2END_NODE)),1,node)" \
 		../testing/Makefile &&
+	grep -Fq "TEST_VM_NODE_ROLE=\$(if \$(filter edge,\$(END2END_NODE)),edge,core)" \
+		../testing/Makefile &&
+	grep -Fq "export TEST_VM_NODE_ROLE=" vm/run.sh &&
 	grep -Fq "if [[ \"\$VM_MODE\" == node ]]" vm/guest.sh &&
-	grep -Fq "image update /var/lib/shirudo/images/config-core" vm/guest.sh
+	grep -Fq "image update \"/var/lib/shirudo/images/config-\${TEST_VM_NODE_ROLE}\"" \
+		vm/guest.sh
 '
 
 test_expect_success 'test-vm requires a SHA-256 for a remote kernel' '
@@ -954,7 +963,11 @@ test_expect_success 'the runners split the tests by number' '
 		case " $families " in *" ${f%/} "*) ;; *) return 1 ;; esac
 	done &&
 	! sh run-tests.sh nosuch >"$WORK/nosuch.out" 2>&1 &&
-	grep -q "no tests nosuch" "$WORK/nosuch.out"
+	grep -q "no tests nosuch" "$WORK/nosuch.out" &&
+	test -e end2end/t9109-pipeline.sh &&
+	grep -Fqx "	[ \"\$t\" != end2end/t9109-pipeline.sh ] || continue" \
+		run-target-tests.sh &&
+	grep -Fq "sh end2end/t9109-pipeline.sh" end2end/host.sh
 '
 
 test_expect_success 'test-vm rejects unknown policy modes before boot' '

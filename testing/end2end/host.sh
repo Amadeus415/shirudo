@@ -3,7 +3,9 @@
 # Copyright (c) 2026 Authors of shirudo
 # testing/end2end/host.sh -- run the operator side of the end-to-end VM test.
 # Its arguments are the command that runs the suite in node A; node B, a
-# second target with a TPM of its own, boots beside it.
+# second target with a TPM of its own, boots beside it. After node A, a
+# fresh edge node boots in its place and t9109 runs here against it and
+# node B.
 
 set -eu
 
@@ -31,48 +33,70 @@ RESULT=$REPO/build/test-vm/vms/$VM_NAME-end2end/result/end2end
 POLICY_FIXTURE=$TEST_VM_HOST_BUNDLE/fixtures/shirudo-test-policy-exec-graph.upatch
 CHECKER=$REPO/tools/quote-check/shirudo-quote-check
 KEEPALIVE=$REPO/testing/fixtures/keepalive
-NODE_B_DIR=$W/node-b
-NODE_B_HOST=127.0.0.1
-NODE_B_VM=$VM_NAME-end2end-b
-NODE_B_RUN=$REPO/build/test-vm/vms/$NODE_B_VM
+NODES_DIR=$W
+NODES_HOST=127.0.0.1
 NODE_B_PID=
-. "$REPO/testing/end2end/node-b-lib.sh"
+NODE_EDGE_PID=
+. "$REPO/testing/end2end/node-lib.sh"
 
 say() { printf 'end2end: %s\n' "$*"; }
 die() { printf 'end2end: %s\n' "$*" >&2; exit 1; }
 
 down() {
-	node_b_down
+	node_down edge "$NODE_EDGE_PID"
+	NODE_EDGE_PID=
+	node_down b "$NODE_B_PID"
+	NODE_B_PID=
 	stack_down
 	rm -rf -- "$TLS_DIR"
 }
 
-# Boot node B beside node A, prepared like it but with the core role and no
-# tests, and record in $NODE_B_DIR how to reach it.
-node_b_boot() {
-	mkdir -p "$NODE_B_DIR"
-	if "${MAKE:-make}" -C "$REPO/testing" vm-node-end2end TEST_VM_CPUS=2 \
-		TEST_VM_MEMORY="${TEST_VM_NODE_MEMORY:-2G}" >"$W/node-b.log" 2>&1 &&
-	   cp "$NODE_B_RUN/ssh.port" "$NODE_B_DIR/port" &&
-	   install -m 0600 "$NODE_B_RUN/ssh/id_ed25519" "$NODE_B_DIR/key"; then
-		: >"$NODE_B_DIR/ready"
+# The state directory of node $1's VM.
+node_run_dir() {
+	printf '%s/build/test-vm/vms/%s-end2end-%s\n' "$REPO" "$VM_NAME" "$1"
+}
+
+# Boot node $1, b with the core role or edge with the edge role, prepared
+# like node A but without tests, and record in $NODES_DIR/node-$1 how to
+# reach it.
+node_boot() {
+	run=$(node_run_dir "$1")
+	mkdir -p "$NODES_DIR/node-$1"
+	if "${MAKE:-make}" -C "$REPO/testing" vm-node-end2end END2END_NODE="$1" \
+		TEST_VM_CPUS=2 TEST_VM_MEMORY="${TEST_VM_NODE_MEMORY:-2G}" \
+		>"$W/node-$1.log" 2>&1 &&
+	   cp "$run/ssh.port" "$NODES_DIR/node-$1/port" &&
+	   install -m 0600 "$run/ssh/id_ed25519" "$NODES_DIR/node-$1/key"; then
+		: >"$NODES_DIR/node-$1/ready"
 	else
-		: >"$NODE_B_DIR/failed"
+		: >"$NODES_DIR/node-$1/failed"
 	fi
 }
 
-# Stop node B. A boot still under way ends when its VM stops, or comes up
-# after the first stop and meets the second.
-node_b_down() {
-	node_b_stop
-	[ -z "$NODE_B_PID" ] || wait "$NODE_B_PID" || :
-	NODE_B_PID=
-	node_b_stop
+# Stop node $1, whose boot runs as process $2 if it is still under way. A
+# boot under way ends when its VM stops, or comes up after the first stop
+# and meets the second.
+node_down() {
+	node_stop "$1"
+	[ -z "$2" ] || wait "$2" || :
+	node_stop "$1"
 }
 
-node_b_stop() {
-	[ ! -d "$NODE_B_RUN" ] ||
-		VM_NAME=$NODE_B_VM "$REPO/testing/vm/run.sh" --stop >/dev/null 2>&1 || :
+node_stop() {
+	[ ! -d "$(node_run_dir "$1")" ] ||
+		VM_NAME=$VM_NAME-end2end-$1 "$REPO/testing/vm/run.sh" --stop \
+			>/dev/null 2>&1 || :
+}
+
+# Print the memory node $1 used, and remove the disks of its stopped VM.
+node_clean() {
+	run=$(node_run_dir "$1")
+	for report in boot-memory host-memory; do
+		[ ! -s "$run/result/$report" ] ||
+			say "node $1 $report: $(tr '\n' ' ' <"$run/result/$report")"
+	done
+	rm -rf -- "$run/rootfs.qcow2" "$run/initrd.img" "$run/seed.img" \
+		"$run/initrd-seed"
 }
 
 # Check the keepalive body that node $1 printed at boot, file $2: the image
@@ -235,10 +259,17 @@ else
 	say "no keepalive backend at ../backend and no BACKEND_DIR: t9107 skips"
 fi
 
-say "node A, in $VM_NAME-end2end, and node B, in $NODE_B_VM"
-node_b_boot &
+say "node A, in $VM_NAME-end2end, and node B, in $VM_NAME-end2end-b"
+node_boot b &
 NODE_B_PID=$!
 "$@"
+
+# The fresh edge node takes node A's place, so that two guests run at most.
+if [ -s "$W/backend-tree.digest" ]; then
+	say "the fresh edge node, in $VM_NAME-end2end-edge"
+	node_boot edge &
+	NODE_EDGE_PID=$!
+fi
 
 say "the evidence verifies and records what was published"
 [ -s "$RESULT/evidence.json" ] || die "the target left no evidence in $RESULT"
@@ -300,11 +331,11 @@ python3 "$REPO/testing/end2end/check-otlp.py" \
 say "node B booted with an attestation key and a role of its own"
 wait "$NODE_B_PID" || :
 NODE_B_PID=
-node_b_wait 0 || {
+node_wait b 0 || {
 	tail -n 40 "$W/node-b.log" >&2
 	die "node B did not boot; see $W/node-b.log"
 }
-node_b "/usr/local/bin/shirudo-runtime attest --nonce=$(cat "$W/nonce")" \
+node_sh b "/usr/local/bin/shirudo-runtime attest --nonce=$(cat "$W/nonce")" \
 	>"$W/node-b-evidence.json" || die "node B gave no evidence"
 # Node B loads nothing of its own: a test gives it only what a tree holds.
 ak_b=$(python3 -c 'import json, sys
@@ -320,17 +351,35 @@ print(evidence["ak"]["name"])' "$W/node-b-evidence.json") ||
 	die "the evidence of node B does not verify"
 }
 [ "$ak_b" != "$ak" ] || die "node A and node B share an attestation key"
-[ "$(node_b cat /run/shirudo/config/etc/shirudo/node.labels)" = role=core ] ||
+[ "$(node_sh b cat /run/shirudo/config/etc/shirudo/node.labels)" = role=core ] ||
 	die "node B is not labelled role=core"
 image_identity A "$REPO/build/test-vm/vms/$VM_NAME-end2end/result/keepalive.json"
-image_identity B "$NODE_B_RUN/result/keepalive.json" \
+image_identity B "$(node_run_dir b)/result/keepalive.json" \
 	"$(cat "$TEST_VM_HOST_BUNDLE/verity/config-core.root")"
-for report in boot-memory host-memory; do
-	[ ! -s "$NODE_B_RUN/result/$report" ] ||
-		say "node B $report: $(tr '\n' ' ' <"$NODE_B_RUN/result/$report")"
-done
-node_b_down
-rm -rf -- "$NODE_B_RUN/rootfs.qcow2" "$NODE_B_RUN/initrd.img" \
-	"$NODE_B_RUN/seed.img" "$NODE_B_RUN/initrd-seed"
+
+if [ -n "$NODE_EDGE_PID" ]; then
+	wait "$NODE_EDGE_PID" || :
+	NODE_EDGE_PID=
+	node_wait edge 0 || {
+		tail -n 40 "$W/node-edge.log" >&2
+		die "the fresh edge node did not boot; see $W/node-edge.log"
+	}
+	[ "$(node_sh edge cat /run/shirudo/config/etc/shirudo/node.labels)" = role=edge ] ||
+		die "the fresh edge node is not labelled role=edge"
+	image_identity edge "$(node_run_dir edge)/result/keepalive.json" \
+		"$(cat "$TEST_VM_HOST_BUNDLE/verity/config-edge.root")"
+	say "t9109, on the host, against the fresh edge node and node B"
+	rc=0
+	(cd testing && E2E=$W END2END_BACKEND=$BACKEND END2END_KEYS=$KEYS \
+		NODES_DIR=$NODES_DIR NODES_HOST=$NODES_HOST \
+		sh end2end/t9109-pipeline.sh) >"$W/t9109.log" 2>&1 || rc=$?
+	cat "$W/t9109.log"
+	[ "$rc" -eq 0 ] || die "t9109 failed; see $W/t9109.log"
+	! grep -q '^1\.\.0 # SKIP' "$W/t9109.log" || die "t9109 was skipped"
+	node_down edge ""
+	node_clean edge
+fi
+node_down b ""
+node_clean b
 
 say "ok"
