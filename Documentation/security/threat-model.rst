@@ -44,7 +44,7 @@ Every entry has a stable ID that commits, issues and other pages cite:
      - Residual risks: known and bounded limits of the mechanisms.
    * - U1 to U20
      - Threats to resolve: gaps in the code that are not closed yet.
-   * - D1 to D9
+   * - D1 to D10
      - Deferred mitigations that are in scope.
 
 Each threat is explained in prose and then summarized in a fact box.
@@ -1892,6 +1892,15 @@ D9 Perf events across exec
    Refuse task-bound perf events that a task opened before the exec
    that marks it (T3), tracked in `issue 11
    <https://github.com/shirudo-dev/shirudo/issues/11>`__.
+
+D10 One verifier of a TPM quote
+   Check a quote's signature, its signer and the attestation key's
+   public area in one function of :src:`util/tpm_wire.c`, a
+   ``tpm_quote_signed()``, that ``shirudo attest verify`` and
+   ``shirudo-quote-check`` both call. Each has its own code today, and
+   the two check different fields of the key
+   (:doc:`/reference/cli/quote-check`), so a check or a fix one gains
+   can miss the other (R17, T9).
 
 Out of scope
 ------------

@@ -120,6 +120,62 @@ and the program does not decide which keys a backend accepts.
 :doc:`attest-challenge` and :doc:`attest-verify` tie an attestation key
 to a TPM.
 
+Compared with attest verify
+---------------------------
+
+``shirudo attest verify`` checks the signature and the signer of the
+quotes in an evidence document with code of its own,
+:src:`util/attest.c`, where this program has
+:src:`tools/quote-check/row.c`. Both parse the key with the same
+``TPMT_PUBLIC`` parser, which refuses a curve other than NIST P-256 and
+an ECDSA hash other than SHA-256, and both check the signer as the
+key's qualified name under the endorsement hierarchy. They differ in
+these:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 36 32 32
+
+   * - Check
+     - ``shirudo-quote-check``
+     - ``shirudo attest verify``
+   * - The key is an ECC key with the ECDSA scheme
+     - Yes, step 2
+     - Yes
+   * - The key has no symmetric algorithm
+     - No: the parser also takes AES-128-CFB
+     - Yes
+   * - The key's attributes include restricted, sign, fixedTPM,
+       fixedParent and sensitiveDataOrigin
+     - No
+     - Yes
+   * - The signer's name is compared
+     - With ``memcmp()``
+     - In constant time, with ``memneq_explicit()``
+   * - After a check fails
+     - Stops: the first failure decides the reason
+     - Goes on and reports every check, unless a structure does not
+       parse
+   * - A key that is no point of the curve
+     - ``bad_signature``
+     - The signature check fails
+
+The attribute check would prove little here. The ``ak`` field travels
+with the row from the node, so its attributes are what the node
+declares, and a software P-256 key can carry the same bits (U1 of
+:doc:`/security/threat-model`). That a key is a TPM's comes only from
+credential activation, :doc:`attest-challenge` and ``shirudo attest
+--challenge``, and from pinning its name in :doc:`attest-verify`; a
+backend treats every node as ``untrusted`` until it has done that (R17).
+The signer's name is public, so the comparison needs no constant time.
+
+.. note::
+
+   The two verifiers are separate code: a check added to one, or a fix
+   to one, does not reach the other. Change both, and their tests, in
+   the same commit. D10 of :doc:`/security/threat-model` is the
+   consolidation into one function.
+
 Output
 ------
 
