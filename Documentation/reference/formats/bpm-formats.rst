@@ -543,11 +543,20 @@ Target acceptance
    ``generation``. A direct successor that names a
    ``parent_manifest_digest`` names the recorded manifest.
 #. ``head.seq`` is not below the node's last applied ``seq``.
-#. ``base.seq`` is 0. The target does not yet walk back through the
-   sealed segments to a node's last applied ``seq``, nor check a later
-   segment's base against the node's history, and refuses a later
-   segment with the ``segment`` phase of
-   :doc:`/reference/failure-categories`.
+#. When ``base.seq`` lies past the node's last applied ``seq``, 0 for a
+   node without a state, the node walks back to it through the sealed
+   segments, see `Walk`_.
+#. Base check: the ``history_root`` of the node's ``outcomes`` at
+   ``base.seq``, 32 zero bytes at 0, equals ``base.history_root``.
+#. Prefix check: the publication's operation digests, folded from
+   ``base.history_root`` up to the node's last applied ``seq``, give the
+   node's ``history_root`` there. This applies to every publication, so
+   a registry that serves operations other than the ones a node already
+   processed, inside a segment or at its base, is refused with
+   ``EKEYREJECTED``.
+
+The node then records the publication, see `Node records`_, and processes
+the operations after its last applied ``seq``.
 
 For each new operation whose selector matches, the target then fetches the
 artifact manifest by ``manifest_digest``, takes the layer with
@@ -555,6 +564,34 @@ artifact manifest by ``manifest_digest``, takes the layer with
 checks its digest and size, and refuses the ``.upatch`` unless its header
 ``payload_sha256`` equals ``artifact.payload_sha256``, its ``name`` equals
 ``id`` and it is an unload directive exactly when ``op`` is ``delete``.
+
+Walk
+~~~~
+
+A node behind the segment that ``<reference>`` names fetches back to the
+segment its last applied ``seq`` lies in, then applies the segments
+forwards. It keeps the manifest digest, ``base.seq``, ``head.seq`` and
+``generation`` of each segment, not the documents.
+
+#. While the oldest segment so far starts past the node's last applied
+   ``seq``, the node refuses the sync when the distance between the two
+   exceeds the walk limit (``E2BIG``), see `Limits`_, then fetches
+   ``manifests/<base.segment_manifest_digest>``. The sealed segment must
+   pass checks 1 to 3 above, hash to that digest, have the same
+   ``tree_id``, end at its successor's ``base.seq`` and have a lower
+   ``generation`` (``ERANGE``). A segment the registry does not serve
+   refuses the sync; the node never skips ahead.
+#. Oldest first, the node fetches each sealed segment again by its
+   digest and checks it as before, then runs checks 4 to 9 and applies
+   it as above. The segment ``<reference>`` names, which the walk holds,
+   comes last.
+
+An operation left in progress is completed against the oldest segment of
+the walk alone: the node records a segment before it processes it, so the
+operation lies in the segment its state names. ``state.json`` moves at
+each applied operation and at each segment recorded, so a walk that stops
+resumes with a shorter one. A reboot never walks: ``init`` reads
+``state.json`` alone.
 
 Node records
 ~~~~~~~~~~~~
@@ -574,10 +611,12 @@ not published.
        publication the node last accepted, ``last_seq``,
        ``projection_root`` and ``projection_root_tpm``. ``head_seq`` and
        ``segment_base_seq`` are the publication's ``head.seq`` and
-       ``base.seq``. A sync records a publication once it passes the
-       checks above and an interrupted operation is completed, before it
-       processes the first new operation, so a sync that stops among them
-       leaves ``last_seq`` at or below ``head_seq`` and the node refuses
+       ``base.seq``. A sync records a publication, each segment of a walk
+       in turn, once it passes the checks above and an interrupted
+       operation is completed, before it processes the first new
+       operation of it, so a sync that stops among them leaves
+       ``last_seq`` from ``segment_base_seq`` to ``head_seq`` and the
+       node refuses
        an older generation from then on. ``last_seq`` also moves past
        operations whose selector does not match. A state without one of
        ``tree_id``, ``last_seq``, the two roots, ``head_seq`` and
@@ -652,10 +691,31 @@ Limits
      - 512
    * - Tree operations per publication
      - 512
+   * - Tree walk of a node that has processed an operation,
+       ``TREE_MAX_WALK_OPS``
+     - 65,536 operations from its last applied ``seq``
+   * - Tree walk of a node that has processed none, ``TREE_MAX_JOIN_OPS``
+     - 1,048,576 operations from ``seq`` 0
    * - JSON document
      - 8 MiB
    * - Detached signature
      - 64 KiB (writer)
+
+A walk past its limit refuses the sync with ``E2BIG`` before it fetches a
+sealed segment, see `Walk`_. The bound is on the distance from the node's
+last applied ``seq``, not on the size of the tree. A node that has
+applied nothing holds no upatch of the tree yet and is joining, so it
+gets the higher limit; a running node walks holding the bpm lock, which
+stops its keepalive, and gets the lower one. A higher limit only allows
+more verified fetches and never makes a node accept what it would
+otherwise refuse. Join time grows linearly with the tree: each segment
+of a walk costs two fetches of its manifest, document and signature and
+two signature checks, so a node that joins at the limit with the default
+64 operations per segment walks 16,384 segments, about 100,000 registry
+requests, besides fetching, loading and measuring each operation its
+selectors match. Both limits are compile-time defines, settled for now
+and to be revisited by experiment on live clusters; a node further
+behind than its limit is refused every sync of the tree.
 
 Related
 -------

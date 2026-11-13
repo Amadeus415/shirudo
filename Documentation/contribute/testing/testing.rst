@@ -149,9 +149,10 @@ A shell test is named ``t<F><K><NN>-<what>.sh``:
        seal, task authority, task and socket policy inheritance, the
        keyrings and the TPM path
    * - 7
-     - ``functional/bpm/``
+     - ``functional/bpm/``, ``functional/bpm-segments/``
      - Package commands, Beefile policy labels, publishing and the
-       upatch tree
+       upatch tree; ``bpm-segments`` boots a VM of its own, whose node
+       starts without a tree, for the walk through a tree's segments
    * - 8
      - ``functional/otel/``
      - Map export, the status keepalive, OTLP transport and TLS policy

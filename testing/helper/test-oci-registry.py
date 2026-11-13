@@ -14,6 +14,11 @@ and manifest puts).  Files are laid out as:
 Every request is recorded as ``METHOD<TAB>PATH<TAB>STATUS`` when --log is
 provided, so tests can assert that selectors caused only the expected
 artifact requests.
+
+A file beside a manifest or blob, named after it with ``.hold`` and
+holding a number n, stops the n-th GET of it that comes while the file is
+there: the fixture creates ``<name>.held`` and answers only once the hold
+file is gone, so a test can stop a client at that request.
 """
 
 import argparse
@@ -23,6 +28,8 @@ import pathlib
 import re
 import secrets
 import sys
+import threading
+import time
 import urllib.parse
 
 UPLOAD_RE = re.compile(r"/v2/(.+)/blobs/uploads/?")
@@ -103,6 +110,7 @@ class RegistryHandler(http.server.BaseHTTPRequestHandler):
             self._reply(404)
             return
         candidate, kind = result
+        self._hold(candidate)
         if not candidate.is_file():
             self._reply(404)
             return
@@ -112,6 +120,23 @@ class RegistryHandler(http.server.BaseHTTPRequestHandler):
             if kind == "manifests" else "application/octet-stream"
         )
         self._reply(200, body, content_type)
+
+    def _hold(self, candidate):
+        if self.command != "GET":
+            return
+        hold = candidate.with_name(candidate.name + ".hold")
+        try:
+            wanted = int(hold.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        with self.server.lock:
+            count = self.server.held.get(candidate, 0) + 1
+            self.server.held[candidate] = count
+        if count != wanted:
+            return
+        candidate.with_name(candidate.name + ".held").touch()
+        while hold.exists():
+            time.sleep(0.05)
 
     def do_POST(self):
         self._body()
@@ -189,6 +214,8 @@ def main():
     server.request_log = args.log
     server.writable = args.writable
     server.uploads = {}
+    server.held = {}
+    server.lock = threading.Lock()
     if args.ready_file is not None:
         args.ready_file.touch()
     try:

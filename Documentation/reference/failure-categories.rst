@@ -612,16 +612,34 @@ rc=<rc> (<strerror>)`` and exits 1:
    * - ``operation_validate``
      - An operation of the publication is malformed or its digest does
        not match.
-   * - ``segment``
-     - The publication is a segment after the first (``base.seq`` above
-       0), which this release does not apply (``ENOTSUP``): it neither
-       walks back through the sealed segments nor checks a segment's base
-       against the node's history. A line before it names the segment's
-       base and the node's last applied ``seq``. Nothing is applied.
    * - ``outcomes_check``
      - The ``outcomes`` record does not cover the recorded ``last_seq``:
        it is missing, has a gap or a malformed line, or ends early
        (``EBADMSG``), or it cannot be read or cut. Nothing is applied.
+   * - ``segment_walk``
+     - The segment the tag names starts further past the node's last
+       applied ``seq`` than the walk limit allows (``E2BIG``): 65,536
+       operations, or 1,048,576 for a node that has processed none. A
+       line before it names the segment's base, the limit and the node's
+       ``seq``. Nothing is fetched further and nothing is applied.
+   * - ``segment_fetch``
+     - A sealed segment of the walk cannot be fetched, ``ENOENT`` when
+       the registry does not serve its digest, or does not verify, or
+       has changed when it is fetched again. A line before it names its
+       digest. Nothing past it is applied.
+   * - ``segment_chain``
+     - A sealed segment is not the one its successor names: another
+       digest, tree, head or a generation that is not lower, or it does
+       not follow the node's state (``ERANGE``).
+   * - ``history_base``
+     - The segment's ``base.history_root`` is not the ``history_root``
+       the node's ``outcomes`` holds at ``base.seq`` (``EKEYREJECTED``),
+       or that line cannot be read. Nothing of the segment is applied.
+   * - ``history_prefix``
+     - The publication's operations up to the node's last applied
+       ``seq`` are not the ones the node processed: their
+       ``history_root`` differs from the node's (``EKEYREJECTED``).
+       Nothing of the publication is applied.
    * - ``pending_recovery``
      - An interrupted operation cannot be reconciled with the tree
        eventlog, or its ``outcomes`` lines or state cannot be written.

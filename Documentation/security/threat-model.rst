@@ -1044,7 +1044,14 @@ has a higher generation, and names its parent, which the target
 compares when the generation is exactly one higher. The target records
 a publication when it accepts it, before it applies the first new
 operation, so one it stopped in the middle of is not followed by an
-older one. A delete applies
+older one. It refuses a publication whose operations up to its last
+applied one are not the ones it processed, by the history root its
+``outcomes`` record holds, and a segment that does not start from that
+root at its base. A node behind the segment the tag names walks back
+through the sealed segments by digest, each signed and naming the one
+before it, up to a limit of 65,536 operations, or 1,048,576 for a node
+that has processed none, so a registry can neither splice another
+history in nor keep a node walking without end. A delete applies
 the signed unload directive whose name equals the operation's id. An
 operation's ``fixes``, which the backend reads and the operation digest
 does not cover, the target's parser skips: a malformed one cannot make
@@ -1069,7 +1076,7 @@ and tree signatures accept algorithms other than ML-DSA (U4).
 :Refusal: the ``bpm`` command fails and installs nothing
 :Counters: none
 :Tests: ``t7005``, ``t7101``, ``t7102``, ``t7103``, ``t7104``,
-   ``t7105``, ``t7106``, ``t7107``, ``t8005``
+   ``t7105``, ``t7106``, ``t7107``, ``t7108``, ``t8005``
 :Proofs: ``bpm-tar-header``, ``bpm-tar-octal``, ``bpm-archive-path``,
    ``bpm-oci-challenge``, ``bpm-oci-token``, ``bpm-oci-header``,
    ``bpm-oci-descriptor``, ``bpm-semver-model``, ``Shirudo.SemVer``,
@@ -1449,11 +1456,16 @@ R8 Registry withholding and replay
    unless ``--new-index`` is given. ``bpm tree append`` builds the next
    publication on the one the registry serves the same way, so an older
    one makes the operator sign a second branch of the tree. A target
-   compares the parent of a direct successor only, and takes a
-   publication of that branch two or more generations on, applying its
-   operations after those of the first. Detection: compare the upatch payloads
-   and tree operations that ``attest verify`` certifies with what you
-   published, and the pushed index with the versions you released.
+   that processed an operation the second branch does not have refuses
+   it, as its operations up to the target's cursor do not fold to the
+   ``history_root`` the target holds, in a segment and at a segment's
+   base alike; a target behind the point where the branches part takes
+   either. A registry can still withhold the latest publication or a
+   sealed segment, which stops a walk, and keep serving a stale tag,
+   which a target takes for current until a later one reaches it.
+   Detection: compare the upatch payloads and tree operations that
+   ``attest verify`` certifies with what you published, and the pushed
+   index with the versions you released.
 
 R9 Classical pieces
    The WebPKI certificates of registries and collectors authenticate

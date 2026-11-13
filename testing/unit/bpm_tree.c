@@ -7,6 +7,9 @@
 #include <shirudo/string.h>
 
 #include "bpm_tree.h"
+#include "chain.h"
+#include "crypto.h"
+#include "hex.h"
 #include "json.h"
 #include "malloc.h"
 #include "unit.h"
@@ -469,6 +472,79 @@ static void segment_precedes_its_successor(void)
 	EXPECT_EQ(tree_segment_precedes(&pred, "", &succ), -ERANGE);
 }
 
+/*
+ * A joining node may walk further back than one that holds upatches of the
+ * tree, and neither past its limit.
+ */
+static void walk_stays_within_its_limit(void)
+{
+	EXPECT_EQ(tree_walk_within(0, 0), 0);
+	EXPECT_EQ(tree_walk_within(TREE_MAX_JOIN_OPS, 0), 0);
+	EXPECT_EQ(tree_walk_within((__s64)TREE_MAX_JOIN_OPS + 1, 0), -E2BIG);
+	EXPECT_EQ(tree_walk_within(1 + TREE_MAX_WALK_OPS, 1), 0);
+	EXPECT_EQ(tree_walk_within(2 + TREE_MAX_WALK_OPS, 1), -E2BIG);
+	EXPECT_EQ(tree_walk_within(INT64_MAX, 1), -E2BIG);
+	EXPECT_EQ(tree_walk_within(3, 7), 0);
+	EXPECT_EQ(tree_walk_within(-1, 0), -EINVAL);
+	EXPECT_EQ(tree_walk_within(INT64_MAX, -1), -EINVAL);
+}
+
+/* The history root at any seq of a segment, folded from its base. */
+static void history_folds_from_the_base(void)
+{
+	struct tree_publication pub = { .base_seq = 4, .head_seq = 6 };
+	struct tree_operation *ops = xcalloc(2, sizeof(*ops));
+	__u8 base[32], one[32], two[32], digest[32], out[32];
+
+	ASSERT_TRUE(ops);
+	pub.operations = ops;
+	pub.n_operations = 2;
+	ops[0].seq = 5;
+	ops[1].seq = 6;
+	set(ops[0].operation_digest, sizeof(ops[0].operation_digest), DIGEST);
+	set(ops[1].operation_digest, sizeof(ops[1].operation_digest), SEALED);
+	set(pub.history_root, sizeof(pub.history_root), ROOT);
+	ASSERT_EQ(hex_decode(ROOT, base, sizeof(base)), 0);
+	ASSERT_EQ(sha256_digest_decode(DIGEST, digest), 0);
+	ASSERT_EQ(chain_history_step(base, digest, one), 0);
+	ASSERT_EQ(sha256_digest_decode(SEALED, digest), 0);
+	ASSERT_EQ(chain_history_step(one, digest, two), 0);
+
+	EXPECT_EQ(tree_history_at(&pub, 4, out), 0);
+	EXPECT_EQ(memcmp(out, base, 32), 0);
+	EXPECT_EQ(tree_history_at(&pub, 5, out), 0);
+	EXPECT_EQ(memcmp(out, one, 32), 0);
+	EXPECT_EQ(tree_history_at(&pub, 6, out), 0);
+	EXPECT_EQ(memcmp(out, two, 32), 0);
+	EXPECT_EQ(tree_history_at(&pub, 3, out), -EINVAL);
+	EXPECT_EQ(tree_history_at(&pub, 7, out), -EINVAL);
+
+	/* The first segment starts from 32 zero bytes, whatever it holds. */
+	pub.base_seq = 0;
+	ops[0].seq = 1;
+	ops[1].seq = 2;
+	pub.head_seq = 2;
+	memset(base, 0, sizeof(base));
+	EXPECT_EQ(tree_history_at(&pub, 0, out), 0);
+	EXPECT_EQ(memcmp(out, base, 32), 0);
+	ASSERT_EQ(sha256_digest_decode(DIGEST, digest), 0);
+	ASSERT_EQ(chain_history_step(base, digest, one), 0);
+	EXPECT_EQ(tree_history_at(&pub, 1, out), 0);
+	EXPECT_EQ(memcmp(out, one, 32), 0);
+
+	pub.base_seq = 4;
+	set(pub.history_root, sizeof(pub.history_root), "00");
+	EXPECT_EQ(tree_history_at(&pub, 4, out), -EINVAL);
+	set(pub.history_root, sizeof(pub.history_root), ROOT);
+	ops[0].seq = 5;
+	ops[1].seq = 6;
+	pub.head_seq = 6;
+	ops[1].operation_digest[7] = 'x';
+	EXPECT_EQ(tree_history_at(&pub, 5, out), 0);
+	EXPECT_EQ(tree_history_at(&pub, 6, out), -EINVAL);
+	xfree(ops, 2 * sizeof(*ops));
+}
+
 static const struct unit_case cases[] = {
 	UNIT_CASE(operation_takes_no_control_character),
 	UNIT_CASE(publication_reads_back),
@@ -482,6 +558,8 @@ static const struct unit_case cases[] = {
 	UNIT_CASE(publication_follows_the_recorded_state),
 	UNIT_CASE(segment_asks_for_a_walk),
 	UNIT_CASE(segment_precedes_its_successor),
+	UNIT_CASE(walk_stays_within_its_limit),
+	UNIT_CASE(history_folds_from_the_base),
 	{}
 };
 

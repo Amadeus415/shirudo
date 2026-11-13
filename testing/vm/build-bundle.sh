@@ -338,7 +338,11 @@ cleanup()
 }
 trap cleanup EXIT
 
-make -C "$REPO_ROOT" -j"$jobs" DESTDIR="$TMP_DIR/root" install-target
+# t7108 reaches the tree walk limits: the guest runs a target that walks
+# 4 operations back from a cursor past 0 and 6 from 0.
+make -C "$REPO_ROOT" -j"$jobs" \
+	TREE_LIMIT_CFLAGS="-DTREE_MAX_WALK_OPS=4 -DTREE_MAX_JOIN_OPS=6" \
+	DESTDIR="$TMP_DIR/root" install-target
 make -C "$REPO_ROOT" -j"$jobs" -f Makefile.shirudo \
 	PROFILE=target CONFIG_MK=config-target.mk verity-test-helpers
 
@@ -670,6 +674,197 @@ for reference in ("stable", "updated", "deleted", "restored", "kconfig",
 PY
 }
 
+# The tree t7108 walks: one operation per append with --segment-ops 2, so
+# segments of two, published by bpm tree append to a registry on the
+# loopback. Each generation's manifest stays as g<k>, and the test moves the
+# reference the target follows from one to the next. Its artifacts name the
+# registry's port, so the guest serves the copy on the same one.
+build_tree_segments_registry()
+{
+	local work="$FIXTURE_WORK/segments"
+	local registry="$TMP_DIR/fixtures/segments-oci"
+	local repo="$registry/shirudo/segments"
+	local builder="$REPO_ROOT/tools/shirudo-build/shirudo-build"
+	local pid port pkg op k
+
+	mkdir -p "$work"
+	for pkg in match other; do
+		mkdir "$work/seg-$pkg"
+		cp "$REPO_ROOT/testing/fixtures/segments/seg-$pkg/"* "$work/seg-$pkg/"
+		ln -s "$REPO_ROOT/vendor" "$work/seg-$pkg/vendor"
+		ln -s "$REPO_ROOT/bpf" "$work/seg-$pkg/bpf"
+		(
+			cd "$work"
+			SHIRUDO_BUILD="$builder" "$REPO_ROOT/shirudo" bpm build \
+				"$work/seg-$pkg" --version 1.0.0 \
+				--keys-dir "$FIXTURE_WORK/trusted" \
+				--vmlinux "$REPO_ROOT/vendor/linux/vmlinux.h" >/dev/null
+		)
+	done
+	port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+	python3 "$REPO_ROOT/testing/helper/test-oci-registry.py" \
+		--root "$registry" --port "$port" --writable \
+		--ready-file "$work/ready" &
+	pid=$!
+	for k in $(seq 50); do
+		[ -e "$work/ready" ] && break
+		sleep 0.1
+	done
+	[ -e "$work/ready" ] || die "the segment registry did not start"
+	# k = 1, 2, 0 mod 3: add the upatch this node takes, add one it does
+	# not, delete the first.
+	for k in $(seq 28); do
+		case $((k % 3)) in
+		1) pkg=match op=add ;;
+		2) pkg=other op=add ;;
+		*) pkg=match op=delete ;;
+		esac
+		env -u BPM_OCI_CA_FILE -u BPM_OCI_USERNAME -u BPM_OCI_PASSWORD \
+			BPM_OCI_SCHEME=http REGISTRY_AUTH_FILE="$work/absent-auth.json" \
+			NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 \
+			SHIRUDO_BUILD="$builder" "$REPO_ROOT/shirudo" bpm tree append \
+			"$work/seg-$pkg-1.0.0.bee" \
+			"oci://127.0.0.1:$port/shirudo/segments" \
+			--keys-dir "$FIXTURE_WORK/trusted" --tree-id shirudo-test-segments \
+			--segment-ops 2 --op "$op" >/dev/null ||
+			{ kill "$pid"; die "bpm tree append $k of the segment tree failed"; }
+		cp "$repo/manifests/stable" "$repo/manifests/g$k"
+	done
+	kill "$pid"
+	wait "$pid" 2>/dev/null || :
+	printf '%s\n' "$port" >"$registry/port"
+
+	# What the publisher refuses to write, re-signed as a registry that
+	# holds the operator's key could: t7108's forks and a broken link.
+	python3 - "$repo" "$work" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+repo, work = map(pathlib.Path, sys.argv[1:3])
+DOC = "application/vnd.shirudo.upatch.tree.v1+json"
+
+
+def digest(body):
+    return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+def manifest(ref):
+    return (repo / "manifests" / ref).read_bytes()
+
+
+def document(ref):
+    layers = json.loads(manifest(ref))["layers"]
+    blob = [layer for layer in layers if layer["mediaType"] == DOC][0]
+    return json.loads((repo / "blobs" / blob["digest"]).read_bytes())
+
+
+def with_digest(op):
+    canonical = {k: v for k, v in op.items()
+                 if k not in ("operation_digest", "fixes")}
+    body = json.dumps(canonical, separators=(",", ":")).encode()
+    return dict(canonical, operation_digest=digest(body))
+
+
+g20, g22, g24 = document("g20"), document("g22"), document("g24")
+pred = {"schema": 1, "tree_id": g20["tree_id"], "generation": 21,
+        "parent_manifest_digest": digest(manifest("g20")),
+        "base": {"seq": 20,
+                 "segment_manifest_digest": digest(manifest("g18")),
+                 "history_root": "ab" * 32},
+        "operations": g22["operations"], "head": {"seq": 22}}
+forked = dict(g20["operations"][0], selector={"labels": {"env": ["forked"]}})
+docs = {
+    # A predecessor that starts from another history than the node's.
+    "fork-pred": pred,
+    # The current segment, its first operation not the one nodes took.
+    "fork-prefix": {"schema": 1, "tree_id": g20["tree_id"], "generation": 21,
+                    "parent_manifest_digest": digest(manifest("g20")),
+                    "base": g20["base"],
+                    "operations": [with_digest(forked), g20["operations"][1],
+                                   g22["operations"][0]],
+                    "head": {"seq": 21}},
+    # A segment that names a sealed one ending a step before its base.
+    "head-gap": {"schema": 1, "tree_id": g20["tree_id"], "generation": 23,
+                 "parent_manifest_digest": digest(manifest("g22")),
+                 "base": {"seq": 23,
+                          "segment_manifest_digest": digest(manifest("g22")),
+                          "history_root": "cd" * 32},
+                 "operations": [g24["operations"][1]], "head": {"seq": 24}},
+}
+for name, doc in docs.items():
+    (work / (name + ".json")).write_bytes(
+        json.dumps(doc, separators=(",", ":")).encode())
+PY
+	for name in fork-pred fork-prefix head-gap fork-base; do
+		if [ "$name" = fork-base ]; then
+			python3 - "$repo" "$work" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+repo, work = map(pathlib.Path, sys.argv[1:3])
+pred_manifest = (repo / "manifests" / "fork-pred").read_bytes()
+pred = json.loads((work / "fork-pred.json").read_bytes())
+for layer in json.loads((repo / "manifests" / "g24").read_bytes())["layers"]:
+    if layer["mediaType"] == "application/vnd.shirudo.upatch.tree.v1+json":
+        g24 = json.loads((repo / "blobs" / layer["digest"]).read_bytes())
+root = bytes.fromhex(pred["base"]["history_root"])
+for op in pred["operations"]:
+    root = hashlib.sha256(b"shirudo-tree-history\0" + root +
+                          bytes.fromhex(op["operation_digest"][7:])).digest()
+pred_digest = "sha256:" + hashlib.sha256(pred_manifest).hexdigest()
+# The segment after the forked predecessor, consistent with it.
+doc = {"schema": 1, "tree_id": pred["tree_id"], "generation": 23,
+       "parent_manifest_digest": pred_digest,
+       "base": {"seq": 22, "segment_manifest_digest": pred_digest,
+                "history_root": root.hex()},
+       "operations": g24["operations"], "head": {"seq": 24}}
+(work / "fork-base.json").write_bytes(
+    json.dumps(doc, separators=(",", ":")).encode())
+PY
+		fi
+		openssl cms -sign -binary -md sha512 -in "$work/$name.json" \
+			-signer "$FIXTURE_WORK/trusted/cert.der" \
+			-inkey "$FIXTURE_WORK/trusted/signing_key.pem" \
+			-outform DER -out "$work/$name.sig" \
+			-nosmimecap -nocerts -keyid
+		python3 - "$repo" "$work" "$name" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+repo, work = map(pathlib.Path, sys.argv[1:3])
+name = sys.argv[3]
+
+
+def digest(body):
+    return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+payload = (work / (name + ".json")).read_bytes()
+signature = (work / (name + ".sig")).read_bytes()
+for body in (payload, signature):
+    (repo / "blobs" / digest(body)).write_bytes(body)
+manifest = json.dumps({
+    "schemaVersion": 2,
+    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+    "layers": [
+        {"mediaType": "application/vnd.shirudo.upatch.tree.v1+json",
+         "digest": digest(payload), "size": len(payload)},
+        {"mediaType": "application/vnd.shirudo.upatch.tree.signature.v1",
+         "digest": digest(signature), "size": len(signature)},
+    ],
+}, separators=(",", ":")).encode()
+for ref in (name, digest(manifest)):
+    (repo / "manifests" / ref).write_bytes(manifest)
+PY
+	done
+}
+
 build_obs_fixture()
 {
 	local keys_dir="$1"
@@ -927,6 +1122,7 @@ tree_skip_unload_payload="$($REPO_ROOT/shirudo upatch info \
 	"$TMP_DIR/fixtures/shirudo-test-tree-skip.unload.upatch" --json |
 	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
 build_tree_test_registry
+build_tree_segments_registry
 
 mv /tmp/shirudo-test-uprobe-target \
 	"$TMP_DIR/fixtures/shirudo-test-uprobe-target"

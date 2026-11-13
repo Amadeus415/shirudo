@@ -10,6 +10,7 @@ templates="$source_dir/testing/vm/files"
 keys_dir=
 boot_keys_dir=
 output=
+segments_port=
 builtin_key=${TEST_VM_BUILTIN_SIGNING_KEY:-}
 builtin_cert=${TEST_VM_BUILTIN_SIGNING_CERT:-}
 while [ $# -gt 0 ]; do
@@ -17,8 +18,9 @@ while [ $# -gt 0 ]; do
 	--boot-keys-dir) boot_keys_dir=${2:?}; shift 2 ;;
 	--keys-dir) keys_dir=${2:?}; shift 2 ;;
 	--output) output=${2:?}; shift 2 ;;
+	--segments-port) segments_port=${2:?}; shift 2 ;;
 	*)
-		printf 'usage: %s --keys-dir <operator-keys> [--boot-keys-dir <operator-keys>] --output <new-directory>\n' \
+		printf 'usage: %s --keys-dir <operator-keys> [--boot-keys-dir <operator-keys>] [--segments-port <port>] --output <new-directory>\n' \
 			"$0" >&2
 		exit 2
 		;;
@@ -74,10 +76,11 @@ for name in config-boot-keys config-live-new-key config-live-revoke-a config-a c
 	config-tree-stable config-tree-updated config-tree-deleted config-tree-restored \
 	config-tree-kconfig config-tree-reloaded config-tree-outcomes \
 	config-tree-stopped config-tree-fetched config-tree-fixes \
-	config-tree-keepalive config-tree-unmatched \
+	config-tree-keepalive config-tree-unmatched config-tree-segments \
 	config-otel config-jsonl config-jsonl-bad config-interrupted config-end2end \
 	config-edge config-core config-local-stack config-builtin config-untrusted; do
 	[ "$name" != config-builtin ] || [ -n "$builtin_key" ] || continue
+	[ "$name" != config-tree-segments ] || [ -n "$segments_port" ] || continue
 	root="$output/source/$name"
 	mkdir -p "$root/etc/shirudo" "$root/keys/trusted" "$root/keys/revoked"
 	sed "s/@tenant@/$name/g" "$templates/config.conf.in" \
@@ -89,6 +92,10 @@ for name in config-boot-keys config-live-new-key config-live-revoke-a config-a c
 		sed "s/@reference@/${name#config-tree-}/g" \
 			"$templates/upatch-tree.conf.in" \
 			>"$root/etc/shirudo/bpm/upatch-tree.conf"
+		# The segment tree's artifacts name the port it was published on.
+		[ "$name" != config-tree-segments ] ||
+			sed -i "s|127.0.0.1:5443/shirudo/upatch-tree|127.0.0.1:$segments_port/shirudo/segments|" \
+				"$root/etc/shirudo/bpm/upatch-tree.conf"
 		;;
 	config-otel)
 		cp "$templates/otel.conf" "$root/etc/shirudo/shirudo.conf"

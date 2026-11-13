@@ -197,7 +197,8 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
        exactly without the segment keys, a later one exactly with an
        operation, a ``sha256:`` digest and a root of 64 hex digits
    * - ``bpm-tree-follows``
-     - ``tree_publication_follows()``, ``tree_segment_precedes()``
+     - ``tree_publication_follows()``, ``tree_segment_precedes()``,
+       ``tree_walk_within()``
      - Every sequence number and generation; strings up to 2 bytes
      - Refuses exactly a publication of another tree, of an earlier
        generation unless the same manifest, naming another parent when
@@ -205,9 +206,13 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
        asks for a walk exactly when one it accepts starts past the
        cursor, or past 0 without a state. A step of the walk accepts
        exactly the segment the successor names, of its tree, ending at
-       its base and of a lower generation
+       its base and of a lower generation. The walk is allowed exactly
+       ``TREE_MAX_JOIN_OPS`` operations back from 0 and
+       ``TREE_MAX_WALK_OPS`` from any other cursor, and a negative number
+       is ``-EINVAL``
    * - ``bpm-tree-signers``
-     - ``tree_fetch_publication()``
+     - ``tree_source_open()``, ``tree_fetch_checked()``,
+       ``tree_source_clear()``
      - Active or inactive image config; every signing-set count through
        capacity, every unvouched count through the set size, and parse,
        allocation, load, check and fetch failures
@@ -216,17 +221,22 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
        failures refuse the fetch and every allocated set is released
    * - ``bpm-tree-sync-model``
      - ``cmd_bpm_tree_sync()``, ``tree_recover_pending()``,
-       ``tree_publication_check()``, ``tree_publication_follows()``
-     - The full command with 0 or 1 operation, every pending state,
-       selector answer, install answer and first failing I/O call, or no
-       failure. Names have one byte, and the previous root and the
-       history root the outcomes record holds at the cursor have 32
-       symbolic bytes each.
+       ``tree_publication_check()``, ``tree_publication_follows()``,
+       the walk back and forwards, the base and prefix checks,
+       ``tree_history_at()``
+     - The full command with 0 or 1 operation at any base, every pending
+       state, selector answer, install answer and first failing I/O
+       call, or no failure; a publication past the cursor asks for a walk
+       the registry cannot serve. Names have one byte, and the previous
+       root and the history roots the outcomes record holds at the cursor
+       and at any other seq have 32 symbolic bytes each.
      - Writes match the Lean model ``Shirudo.TreeSync`` in order, the
        cut of the outcomes record, each outcome line with its code and
        both roots, and the state written at acceptance with the
-       publication's head and base included; nothing is written after a
-       failure and every expected write happens when nothing fails
+       publication's head and base included; a publication whose base
+       or prefix is not the node's history writes nothing past the cut;
+       nothing is written after a failure and every expected write
+       happens when nothing fails
    * - ``bpm-tree-sync-application``
      - ``cmd_bpm_tree_sync()``
      - Two operations with no pending record; every selector answer
@@ -240,6 +250,19 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
        replay equals the previous root, the next root, or neither;
        the previous root has 32 symbolic bytes.
      - The same ordered-write properties as ``bpm-tree-sync-model``
+   * - ``bpm-tree-sync-walk``
+     - ``cmd_bpm_tree_sync()``, ``tree_walk_back()``,
+       ``tree_walk_forward()``, ``tree_recover_pending()``
+     - The publication the tag names and a sealed segment the registry
+       serves by its digest, one operation each, at any bases and
+       generations; every pending state, selector answer, walk limit,
+       link between the two and first failing I/O call, or no failure
+     - The same ordered-write properties as ``bpm-tree-sync-model``,
+       through a walk: the sealed segment is applied first, with
+       recovery, then the tag's, each recorded before its operations;
+       a walk past its limit, a segment the registry does not serve or
+       one that is not the predecessor its successor names writes
+       nothing past the cut
    * - ``bpm-tree-recovery-model``
      - ``tree_recover_pending()``
      - Publications with 0 to 2 operations, a matching or unrelated
@@ -762,8 +785,14 @@ the model follows the C.
        ``outcomes_fixed``, ``lastSeq_le_head``: the outcomes record has a
        line for every operation from 1 to the cursor, in order, no line
        at or below the cursor ever changes, and the cursor never passes
-       the head of the recorded publication
-     - A manifest digest names one publication; the hash is injective on
+       the head of the recorded publication. All of these hold across
+       segment boundaries, as a publication of any base is a sync
+     - A sync that walks is one sync per segment: it leaves out only the
+       state each segment but the last writes at its end, which the next
+       segment's record overwrites with the same cursor and root, and
+       its cut keeps every line; the base and prefix checks are left out
+       of the model, as they only refuse more. A manifest digest names
+       one publication; the hash is injective on
        (root, digest) and never 64 zeros; only sync writes the tree files,
        each write whole, one sync at a time; the unlink of ``pending.json``
        succeeds; an extend and its eventlog record are one write. An
@@ -772,8 +801,9 @@ the model follows the C.
        cursor is a theorem, not a branch of the model
      - CBMC: ``bpm-tree-follows`` for ``tree_publication_follows()``,
        ``bpm-tree-sync-model`` and its two-operation variants for
-       sync writes, ``bpm-tree-recovery-model`` for pending recovery;
-       ``tree_parse()`` by review
+       sync writes, ``bpm-tree-sync-walk`` for a walk,
+       ``bpm-tree-recovery-model`` for pending recovery; ``tree_parse()``
+       and the walk as one sync per segment by review
 
 Not covered yet
 ---------------

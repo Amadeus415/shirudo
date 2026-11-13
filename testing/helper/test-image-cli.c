@@ -15,6 +15,7 @@ int __wrap_bpm_tree_fetch_publication(struct bpm_oci_client *client,
 				      char *digest, size_t capacity)
 {
 	puts(certificate);
+	strscpy(pub->tree_id, "t", sizeof(pub->tree_id));
 	return 0;
 }
 
@@ -81,12 +82,17 @@ int main(int argc, const char **argv)
 	} else if (!strcmp(argv[2], "tree")) {
 		struct tree_publication publication = {};
 		struct bpm_tree_config config = {};
+		struct tree_source source = {};
 		char digest[BPM_MAX_DIGEST];
 
 		strscpy(config.endpoint, "oci://example.invalid/tree", sizeof(config.endpoint));
 		strscpy(config.reference, "latest", sizeof(config.reference));
-		ret = tree_fetch_publication(&config, &publication, digest,
-					     sizeof(digest));
+		ret = tree_source_open(&config, &source);
+		if (!ret)
+			ret = tree_fetch_checked(&source, config.reference,
+						 &publication, digest,
+						 sizeof(digest));
+		tree_source_clear(&source);
 	} else {
 		ret = 2;
 	}

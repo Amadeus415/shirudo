@@ -11,8 +11,10 @@
  * asks for a walk back exactly when such a publication starts past the
  * cursor, or past 0 without a state. And tree_segment_precedes(), one
  * step of that walk, which accepts exactly the segment the successor
- * names, of its tree, ending at its base and of a lower generation.
- * Strings are of up to two bytes.
+ * names, of its tree, ending at its base and of a lower generation. And
+ * tree_walk_within(), the limit of that walk, which allows exactly
+ * TREE_MAX_JOIN_OPS operations back from 0 and TREE_MAX_WALK_OPS from any
+ * other cursor. Strings are of up to two bytes.
  */
 
 #include <stdbool.h>
@@ -88,8 +90,26 @@ static void precedes_the_successor(void)
 			 "successor names, ending at its base");
 }
 
+static void walks_within_the_limit(void)
+{
+	__s64 base, last;
+	int ret = tree_walk_within(base, last);
+
+	__CPROVER_assert(ret == 0 || ret == -E2BIG || ret == -EINVAL,
+			 "0, -E2BIG or -EINVAL");
+	__CPROVER_assert((ret == -EINVAL) == (base < 0 || last < 0),
+			 "-EINVAL exactly for a negative number");
+	__CPROVER_assert(ret == -EINVAL || !ret ==
+			 (base <= last ||
+			  (last ? base - last <= TREE_MAX_WALK_OPS :
+				  base <= TREE_MAX_JOIN_OPS)),
+			 "within the walk limit of a running node, or of one "
+			 "at 0 that joins");
+}
+
 void harness(void)
 {
 	follows_the_state();
 	precedes_the_successor();
+	walks_within_the_limit();
 }

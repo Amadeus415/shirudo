@@ -1612,37 +1612,39 @@ static bool tree_digest_valid(const char *digest)
 	return !sha256_digest_decode(digest, raw);
 }
 
-static int tree_fetch_publication(const struct bpm_tree_config *cfg,
-				  struct tree_publication *pub,
-				  char *manifest_digest, size_t digest_sz)
-{
-	struct bpm_oci_client c __cleanup(bpm_oci_client_clear) = {};
-	struct trusted_set *trusted = NULL;
+/* Where the tree's publications come from and what signs them. */
+struct tree_source {
+	struct bpm_oci_client c;
 	char repository[BPM_MAX_ENDPOINT];
+	struct trusted_set *trusted;
+};
+
+static void tree_source_clear(struct tree_source *src)
+{
+	bpm_oci_client_clear(&src->c);
+	xfree(src->trusted, sizeof(*src->trusted));
+	src->trusted = NULL;
+}
+
+/* The signing set is loaded once, for every segment a walk fetches. */
+static int tree_source_open(const struct bpm_tree_config *cfg,
+			    struct tree_source *src)
+{
 	int ret;
 
-	ret = bpm_oci_parse_tree_repo(cfg->endpoint, &c,
-				      repository, sizeof(repository));
-	if (ret)
+	ret = bpm_oci_parse_tree_repo(cfg->endpoint, &src->c,
+				      src->repository, sizeof(src->repository));
+	if (ret || !image_config_active())
 		return ret;
-	if (image_config_active()) {
-		trusted = xcalloc(1, sizeof(*trusted));
-		if (!trusted)
-			return -ENOMEM;
-		ret = keys_load_image_root(get_cert_path(), image_config_root_fd(),
-					   true, trusted);
-		if (!ret && (!trusted->n || trusted->n_unvouched))
-			ret = -EKEYREJECTED;
-		if (!ret)
-			ret = keys_check_image_set(trusted);
-		if (ret)
-			goto out;
-	}
-	ret = bpm_tree_fetch_publication(&c, repository, cfg->reference,
-					 get_cert_path(), trusted, pub,
-					 manifest_digest, digest_sz);
-out:
-	xfree(trusted, sizeof(*trusted));
+	src->trusted = xcalloc(1, sizeof(*src->trusted));
+	if (!src->trusted)
+		return -ENOMEM;
+	ret = keys_load_image_root(get_cert_path(), image_config_root_fd(),
+				   true, src->trusted);
+	if (!ret && (!src->trusted->n || src->trusted->n_unvouched))
+		ret = -EKEYREJECTED;
+	if (!ret)
+		ret = keys_check_image_set(src->trusted);
 	return ret;
 }
 
@@ -2062,17 +2064,449 @@ static void tree_sync_report_error(const char *phase,
 		       err ? strerror(err) : "success");
 }
 
+/*
+ * The publication reference names, a tag or a manifest digest, signed and
+ * with what tree sync checks before it applies anything.
+ */
+static int tree_fetch_checked(struct tree_source *src, const char *reference,
+			      struct tree_publication *pub,
+			      char *manifest_digest, size_t digest_sz)
+{
+	int ret;
+
+	ret = bpm_tree_fetch_publication(&src->c, src->repository, reference,
+					 get_cert_path(), src->trusted, pub,
+					 manifest_digest, digest_sz);
+	if (ret)
+		return ret;
+	/*
+	 * The node records the tree ID in its state, which takes names
+	 * alone: one that is not would be applied, measured and logged
+	 * and then never recorded, failing every later sync.
+	 */
+	if (!bpm_package_name_ok(pub->tree_id))
+		return -EINVAL;
+	ret = tree_publication_check(pub);
+	if (ret)
+		return ret;
+	for (int i = 0; i < pub->n_operations; i++) {
+		ret = tree_operation_validate(&pub->operations[i]);
+		if (ret) {
+			tree_sync_report_error("operation_validate",
+					       &pub->operations[i], ret);
+			return ret;
+		}
+	}
+	return 0;
+}
+
+/*
+ * A segment the walk back passed: the forward pass fetches it again by
+ * its manifest digest, which names the same bytes, so only this is kept
+ * and not the document.
+ */
+struct tree_segment {
+	__u8 manifest_digest[32];
+	__s64 base_seq;
+	__s64 head_seq;
+	__s64 generation;
+};
+
+/* The segments of a walk, newest first. */
+struct tree_walk {
+	struct tree_segment *segments;
+	size_t n;
+	size_t cap;
+};
+
+static void tree_walk_free(struct tree_walk *w)
+{
+	xfree(w->segments, w->cap * sizeof(*w->segments));
+	*w = (struct tree_walk){};
+}
+
+static int tree_walk_add(struct tree_walk *w, const struct tree_publication *pub,
+			 const char *manifest_digest)
+{
+	struct tree_segment *seg;
+
+	if (w->n == w->cap) {
+		size_t cap = w->cap ? 2 * w->cap : 8;
+
+		seg = xreallocarray(w->segments, w->cap, cap, sizeof(*seg));
+		if (!seg)
+			return -ENOMEM;
+		w->segments = seg;
+		w->cap = cap;
+	}
+	seg = &w->segments[w->n];
+	if (sha256_digest_decode(manifest_digest, seg->manifest_digest))
+		return -EINVAL;
+	seg->base_seq = pub->base_seq;
+	seg->head_seq = pub->head_seq;
+	seg->generation = pub->generation;
+	w->n++;
+	return 0;
+}
+
+/*
+ * Back from the publication the tag names to the segment the cursor
+ * last_seq lies in, each sealed segment fetched by the digest its
+ * successor names and checked as the one it names. Nothing is applied
+ * before the whole chain is known, and a gap, a fork or a walk past its
+ * limit refuses the sync.
+ */
+static int tree_walk_back(struct tree_source *src,
+			  const struct tree_publication *tag,
+			  const char *tag_digest, __s64 last_seq,
+			  struct tree_walk *w)
+{
+	const struct tree_publication *succ = tag;
+	struct tree_publication fetched[2] = {};
+	char digest[BPM_MAX_DIGEST];
+	int next = 0, ret;
+
+	ret = tree_walk_add(w, tag, tag_digest);
+	while (!ret && succ->base_seq > last_seq) {
+		ret = tree_walk_within(succ->base_seq, last_seq);
+		if (ret) {
+			pr_err("bpm tree sync: the segment that starts after seq %lld is more than %d operations past seq %lld, where this node is",
+			       succ->base_seq,
+			       last_seq ? TREE_MAX_WALK_OPS : TREE_MAX_JOIN_OPS,
+			       last_seq);
+			tree_sync_report_error("segment_walk", NULL, ret);
+			break;
+		}
+		tree_publication_free(&fetched[next]);
+		ret = tree_fetch_checked(src, succ->segment_manifest_digest,
+					 &fetched[next], digest, sizeof(digest));
+		if (ret) {
+			pr_err("bpm tree sync: the sealed segment %s, which ends at seq %lld, cannot be fetched or does not verify",
+			       succ->segment_manifest_digest, succ->base_seq);
+			tree_sync_report_error("segment_fetch", NULL, ret);
+			break;
+		}
+		ret = tree_segment_precedes(&fetched[next], digest, succ);
+		if (ret) {
+			pr_err("bpm tree sync: the sealed segment %s is not the one before the segment that starts after seq %lld",
+			       succ->segment_manifest_digest, succ->base_seq);
+			tree_sync_report_error("segment_chain", NULL, ret);
+			break;
+		}
+		ret = tree_walk_add(w, &fetched[next], digest);
+		succ = &fetched[next];
+		next ^= 1;
+	}
+	tree_publication_free(&fetched[0]);
+	tree_publication_free(&fetched[1]);
+	return ret;
+}
+
+/* What a sync holds while it goes through the segments. */
+struct tree_sync {
+	struct tree_state state;
+	bool have_state;
+	/* The history root at state.last_seq. */
+	__u8 history_root[32];
+	bool dry_run;
+	/* The cursor a dry run reports, which it moves in memory alone. */
+	__s64 dry_seq;
+	int selected, skipped, applied, module_skipped;
+};
+
+/*
+ * Acceptance steps 4 and 5: the segment starts where this node's history
+ * was at its base, and its operations up to the cursor are the ones the
+ * node processed, so a registry that serves another history than the one
+ * the node went through is refused, inside a segment as at its base.
+ */
+static int tree_history_check(const struct tree_publication *pub,
+			      const struct tree_sync *sync)
+{
+	__u8 projection_root[32], node[32], doc[32];
+	__s64 last_seq = sync->state.last_seq;
+	int ret = 0;
+
+	if (pub->base_seq == last_seq)
+		memcpy(node, sync->history_root, sizeof(node));
+	else
+		ret = tree_outcomes_read(pub->base_seq, pub->base_seq, NULL,
+					 projection_root, node);
+	if (!ret)
+		ret = tree_history_at(pub, pub->base_seq, doc);
+	if (!ret && memcmp(node, doc, sizeof(doc)))
+		ret = -EKEYREJECTED;
+	if (ret) {
+		pr_err("bpm tree sync: the segment that starts after seq %lld does not start from this node's history there",
+		       pub->base_seq);
+		tree_sync_report_error("history_base", NULL, ret);
+		return ret;
+	}
+	ret = tree_history_at(pub, last_seq, doc);
+	if (!ret && memcmp(sync->history_root, doc, sizeof(doc)))
+		ret = -EKEYREJECTED;
+	if (ret) {
+		pr_err("bpm tree sync: the operations of the publication up to seq %lld are not the ones this node processed",
+		       last_seq);
+		tree_sync_report_error("history_prefix", NULL, ret);
+	}
+	return ret;
+}
+
+/*
+ * Recorded before its first operation is processed, so that a sync that
+ * stops among them leaves the cursor within the publication the state
+ * names.
+ */
+static int tree_record(struct tree_sync *sync,
+		       const struct tree_publication *pub,
+		       const char *manifest_digest)
+{
+	struct tree_state *st = &sync->state;
+	int ret;
+
+	st->generation = pub->generation;
+	bpm_copy_string(st->manifest_digest, sizeof(st->manifest_digest),
+			manifest_digest);
+	st->head_seq = pub->head_seq;
+	st->segment_base_seq = pub->base_seq;
+	sync->have_state = true;
+	if (sync->dry_run)
+		return 0;
+	ret = tree_state_write(st);
+	if (ret)
+		tree_sync_report_error("tree_state_commit_accept", NULL, ret);
+	return ret;
+}
+
+/* A dry run moves its cursor in memory alone, for a walk to go on. */
+static int tree_dry_pass(struct tree_sync *sync,
+			 const struct tree_operation *op)
+{
+	__u8 digest[32];
+
+	if (sha256_digest_decode(op->operation_digest, digest))
+		return -EINVAL;
+	sync->state.last_seq = op->seq;
+	return chain_history_step(sync->history_root, digest,
+				  sync->history_root);
+}
+
+static int tree_apply_operations(struct tree_sync *sync,
+				 struct tree_publication *pub)
+{
+	struct tree_state *st = &sync->state;
+	int ret;
+
+	for (int i = 0; i < pub->n_operations; i++) {
+		struct tree_operation *op = &pub->operations[i];
+		__u8 digest[32], previous[32], next[32];
+		char artifact[PATH_MAX];
+		bool skipped_module = false;
+
+		if (op->seq <= st->last_seq)
+			continue;
+		ret = tree_selector_matches(&op->selector);
+		if (ret < 0) {
+			tree_sync_report_error("selector_evaluate", op, ret);
+			return ret;
+		}
+		if (ret)
+			sync->selected++;
+		else
+			sync->skipped++;
+		if (sync->dry_run) {
+			ret = tree_dry_pass(sync, op);
+			if (ret)
+				return ret;
+			continue;
+		}
+		if (!ret) {
+			if (hex_decode(st->projection_root, previous, 32)) {
+				tree_sync_report_error("projection_root_decode", op, -EINVAL);
+				return -EINVAL;
+			}
+			ret = tree_outcome_unmatched(op, previous,
+						     sync->history_root);
+			if (ret) {
+				tree_sync_report_error("tree_outcome_append", op, ret);
+				return ret;
+			}
+			st->last_seq = op->seq;
+			continue;
+		}
+		ret = sha256_digest_decode(op->operation_digest, digest);
+		if (ret) {
+			tree_sync_report_error("operation_digest_parse", op, ret);
+			return -EINVAL;
+		}
+		ret = tree_pending_write(op);
+		if (ret) {
+			tree_sync_report_error("pending_write", op, ret);
+			return ret;
+		}
+		ret = tree_pull_artifact(op, artifact, sizeof(artifact));
+		if (ret) {
+			tree_sync_report_error("artifact_fetch_or_verify", op, ret);
+			return ret;
+		}
+		if (!strcmp(op->op, "add"))
+			ret = upatch_install(artifact);
+		else if (!strcmp(op->op, "delete"))
+			ret = upatch_remove(artifact);
+		else
+			return -EINVAL;
+		if (ret == UPATCH_INSTALL_TARGET_MISSING &&
+		    !strcmp(op->op, "add")) {
+			skipped_module = true;
+			ret = 0;
+			sync->module_skipped++;
+			pr_warn("bpm tree: skipped %s: module not loaded", op->id);
+		}
+		if (ret) {
+			tree_sync_report_error("upatch_install", op, ret);
+			return ret;
+		}
+		if (hex_decode(st->projection_root, previous, 32)) {
+			tree_sync_report_error("projection_root_decode", op, -EINVAL);
+			return -EINVAL;
+		}
+		ret = sha256_2(previous, 32, digest, 32, next);
+		if (ret) {
+			tree_sync_report_error("projection_root_hash", op, ret);
+			return ret;
+		}
+		ret = tree_measure_operation(op, digest);
+		if (ret) {
+			tree_sync_report_error("register_extend", op, ret);
+			return ret;
+		}
+		hex_encode(next, 32, st->projection_root);
+		hex_encode(next, 32, st->projection_root_tpm);
+		ret = tree_event_append(op->seq, op->operation_digest, next);
+		if (ret) {
+			tree_sync_report_error("tree_event_append", op, ret);
+			return ret;
+		}
+		ret = tree_outcome_record(op->seq, digest,
+					  skipped_module ?
+					  TREE_OUTCOME_MODULE_ABSENT :
+					  TREE_OUTCOME_APPLIED,
+					  next, sync->history_root);
+		if (ret) {
+			tree_sync_report_error("tree_outcome_append", op, ret);
+			return ret;
+		}
+		st->last_seq = op->seq;
+		sync->applied++;
+		ret = tree_state_write(st);
+		if (ret) {
+			tree_sync_report_error("tree_state_commit", op, ret);
+			return ret;
+		}
+		if (skipped_module)
+			ret = tree_status_write(op->id, "skipped: module not loaded");
+		else
+			tree_status_clear(op->id);
+		if (ret) {
+			tree_sync_report_error("tree_status_write", op, ret);
+			return ret;
+		}
+		unlink(BPM_TREE_PENDING_PATH);
+	}
+	return 0;
+}
+
+/*
+ * Acceptance steps 4 to 6 and the operations of one segment, the oldest
+ * of a walk first, or of the one publication without a walk. Only the
+ * oldest has an operation left pending: the node records a segment
+ * before it processes any, so the state names the segment that operation
+ * is in, and the walk starts from that one.
+ */
+static int tree_apply_segment(struct tree_sync *sync,
+			      struct tree_publication *pub,
+			      const char *manifest_digest, bool oldest)
+{
+	int ret;
+
+	ret = tree_publication_follows(pub, sync->have_state ?
+					    &sync->state : NULL,
+				       manifest_digest);
+	if (ret) {
+		ret = ret < 0 ? ret : -ERANGE;
+		pr_err("bpm tree sync: the segment %s does not follow seq %lld, where this node is",
+		       manifest_digest, sync->state.last_seq);
+		tree_sync_report_error("segment_chain", NULL, ret);
+		return ret;
+	}
+	ret = tree_history_check(pub, sync);
+	if (ret)
+		return ret;
+	if (oldest) {
+		ret = tree_recover_pending(pub, &sync->state,
+					   sync->history_root);
+		if (ret) {
+			tree_sync_report_error("pending_recovery", NULL, ret);
+			return ret;
+		}
+		sync->dry_seq = sync->state.last_seq;
+	}
+	ret = tree_record(sync, pub, manifest_digest);
+	if (ret)
+		return ret;
+	return tree_apply_operations(sync, pub);
+}
+
+/*
+ * The walk forwards, oldest segment first: each sealed one fetched again
+ * by its digest and checked as before, and the tag's document, which the
+ * walk holds, last.
+ */
+static int tree_walk_forward(struct tree_source *src, struct tree_sync *sync,
+			     const struct tree_walk *w,
+			     struct tree_publication *tag,
+			     const char *tag_digest)
+{
+	char want[BPM_MAX_DIGEST], digest[BPM_MAX_DIGEST];
+	__u8 got[32];
+	int ret;
+
+	for (size_t i = w->n; i-- > 1;) {
+		struct tree_publication seg = {};
+
+		memcpy(want, "sha256:", 7);
+		hex_encode(w->segments[i].manifest_digest, 32, want + 7);
+		ret = tree_fetch_checked(src, want, &seg, digest,
+					 sizeof(digest));
+		if (!ret && (sha256_digest_decode(digest, got) ||
+			     memcmp(got, w->segments[i].manifest_digest,
+				    sizeof(got))))
+			ret = -ERANGE;
+		if (ret) {
+			pr_err("bpm tree sync: the sealed segment %s, which ends at seq %lld, cannot be fetched again or has changed",
+			       want, w->segments[i].head_seq);
+			tree_sync_report_error("segment_fetch", NULL, ret);
+		} else {
+			ret = tree_apply_segment(sync, &seg, digest,
+						 i == w->n - 1);
+		}
+		tree_publication_free(&seg);
+		if (ret)
+			return ret;
+	}
+	return tree_apply_segment(sync, tag, tag_digest, w->n == 1);
+}
+
 static int cmd_bpm_tree_sync(int argc, const char **argv)
 {
+	struct tree_source src = {};
+	struct tree_walk walk = {};
+	struct tree_sync sync = {};
 	struct bpm_tree_config cfg;
 	struct tree_publication pub = {};
-	struct tree_state state = {};
 	char manifest_digest[BPM_MAX_DIGEST];
 	char report[PATH_MAX] = {};
-	__u8 history_root[32];
-	bool dry_run = false, have_state = false;
-	int selected = 0, skipped = 0, applied = 0, module_skipped = 0;
-	int tpm_available = 0;
 	int ret;
 
 	if (argc < 2 || strcmp(argv[1], "sync")) {
@@ -2081,7 +2515,7 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 	}
 	for (int i = 2; i < argc; i++) {
 		if (!strcmp(argv[i], "--dry-run")) {
-			dry_run = true;
+			sync.dry_run = true;
 		} else if (!strncmp(argv[i], "--report=", 9) ||
 			   (!strcmp(argv[i], "--report") && i + 1 < argc)) {
 			const char *path = argv[i][8] == '=' ? argv[i] + 9 :
@@ -2108,218 +2542,63 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 	}
 	if (ret)
 		goto out;
-	ret = tree_state_read(&state);
+	ret = tree_state_read(&sync.state);
 	if (!ret)
-		have_state = true;
+		sync.have_state = true;
 	else if (ret != -ENOENT)
 		goto out;
-	ret = tree_fetch_publication(&cfg, &pub, manifest_digest,
-				     sizeof(manifest_digest));
+	ret = tree_source_open(&cfg, &src);
 	if (ret)
 		goto out;
-	/*
-	 * The node records the tree ID in its state, which takes names
-	 * alone: one that is not would be applied, measured and logged
-	 * and then never recorded, failing every later sync.
-	 */
-	if (!bpm_package_name_ok(pub.tree_id)) {
-		ret = -EINVAL;
-		goto out;
-	}
-	ret = tree_publication_check(&pub);
+	ret = tree_fetch_checked(&src, cfg.reference, &pub, manifest_digest,
+				 sizeof(manifest_digest));
 	if (ret)
 		goto out;
-	for (int i = 0; i < pub.n_operations; i++) {
-		ret = tree_operation_validate(&pub.operations[i]);
-		if (ret) {
-			tree_sync_report_error("operation_validate", &pub.operations[i], ret);
-			goto out;
-		}
-	}
-	ret = tree_publication_follows(&pub, have_state ? &state : NULL,
+	ret = tree_publication_follows(&pub, sync.have_state ?
+					     &sync.state : NULL,
 				       manifest_digest);
 	if (ret < 0)
 		goto out;
-	/*
-	 * A later segment is applied only after its base is checked
-	 * against the node's history root, and reached only by a walk
-	 * back through the sealed segments when the node is behind it.
-	 */
-	if (ret == TREE_FOLLOWS_WALK || pub.base_seq) {
-		pr_err("bpm tree sync: the publication is a segment that starts "
-		       "after seq %lld and this node is at seq %lld; walking "
-		       "back through sealed segments and checking a segment's "
-		       "base are not supported", pub.base_seq, state.last_seq);
-		ret = -ENOTSUP;
-		tree_sync_report_error("segment", NULL, ret);
-		goto out;
+	if (!sync.have_state) {
+		sync.state.schema = 1;
+		bpm_copy_string(sync.state.tree_id, sizeof(sync.state.tree_id),
+				pub.tree_id);
+		memset(sync.state.projection_root, '0', 64);
+		sync.state.projection_root[64] = '\0';
+		memset(sync.state.projection_root_tpm, '0', 64);
+		sync.state.projection_root_tpm[64] = '\0';
 	}
-	if (!have_state) {
-		state.schema = 1;
-		bpm_copy_string(state.tree_id, sizeof(state.tree_id), pub.tree_id);
-		memset(state.projection_root, '0', 64);
-		state.projection_root[64] = '\0';
-		memset(state.projection_root_tpm, '0', 64);
-		state.projection_root_tpm[64] = '\0';
-	}
-	ret = tree_outcomes_start(state.last_seq, history_root);
+	ret = tree_outcomes_start(sync.state.last_seq, sync.history_root);
 	if (ret) {
 		tree_sync_report_error("outcomes_check", NULL, ret);
 		goto out;
 	}
-	ret = tree_recover_pending(&pub, &state, history_root);
-	if (ret) {
-		tree_sync_report_error("pending_recovery", NULL, ret);
+	ret = tree_walk_back(&src, &pub, manifest_digest, sync.state.last_seq,
+			     &walk);
+	if (ret)
 		goto out;
-	}
-	/*
-	 * Recorded before its first operation is processed, so that a
-	 * sync that stops among them leaves the cursor within the
-	 * publication the state names.
-	 */
-	if (!dry_run) {
-		state.generation = pub.generation;
-		bpm_copy_string(state.manifest_digest, sizeof(state.manifest_digest),
-				manifest_digest);
-		state.head_seq = pub.head_seq;
-		state.segment_base_seq = pub.base_seq;
-		ret = tree_state_write(&state);
-		if (ret) {
-			tree_sync_report_error("tree_state_commit_accept", NULL, ret);
-			goto out;
-		}
-	}
-	tpm_available = chain_bound();
-	for (int i = 0; i < pub.n_operations; i++) {
-		struct tree_operation *op = &pub.operations[i];
-		__u8 digest[32], previous[32], next[32];
-		char artifact[PATH_MAX];
-		bool skipped_module = false;
-
-		if (op->seq <= state.last_seq)
-			continue;
-		ret = tree_selector_matches(&op->selector);
-		if (ret < 0) {
-			tree_sync_report_error("selector_evaluate", op, ret);
-			goto out;
-		}
-		if (!ret) {
-			skipped++;
-			if (dry_run)
-				continue;
-			if (hex_decode(state.projection_root, previous, 32)) {
-				tree_sync_report_error("projection_root_decode", op, -EINVAL);
-				ret = -EINVAL;
-				goto out;
-			}
-			ret = tree_outcome_unmatched(op, previous, history_root);
-			if (ret) {
-				tree_sync_report_error("tree_outcome_append", op, ret);
-				goto out;
-			}
-			state.last_seq = op->seq;
-			continue;
-		}
-		selected++;
-		if (dry_run)
-			continue;
-		ret = sha256_digest_decode(op->operation_digest, digest);
-		if (ret) {
-			tree_sync_report_error("operation_digest_parse", op, ret);
-			ret = -EINVAL;
-			goto out;
-		}
-		ret = tree_pending_write(op);
-		if (ret) {
-			tree_sync_report_error("pending_write", op, ret);
-			goto out;
-		}
-		ret = tree_pull_artifact(op, artifact, sizeof(artifact));
-		if (ret) {
-			tree_sync_report_error("artifact_fetch_or_verify", op, ret);
-			goto out;
-		}
-		if (!strcmp(op->op, "add")) {
-			ret = upatch_install(artifact);
-		} else if (!strcmp(op->op, "delete")) {
-			ret = upatch_remove(artifact);
-		} else {
-			ret = -EINVAL;
-			goto out;
-		}
-		if (ret == UPATCH_INSTALL_TARGET_MISSING &&
-		    !strcmp(op->op, "add")) {
-			skipped_module = true;
-			ret = 0;
-			module_skipped++;
-			pr_warn("bpm tree: skipped %s: module not loaded", op->id);
-		}
-		if (ret) {
-			tree_sync_report_error("upatch_install", op, ret);
-			goto out;
-		}
-		if (hex_decode(state.projection_root, previous, 32)) {
-			tree_sync_report_error("projection_root_decode", op, -EINVAL);
-			ret = -EINVAL;
-			goto out;
-		}
-		ret = sha256_2(previous, 32, digest, 32, next);
-		if (ret) {
-			tree_sync_report_error("projection_root_hash", op, ret);
-			goto out;
-		}
-		ret = tree_measure_operation(op, digest);
-		if (ret) {
-			tree_sync_report_error("register_extend", op, ret);
-			goto out;
-		}
-		hex_encode(next, 32, state.projection_root);
-		hex_encode(next, 32, state.projection_root_tpm);
-		ret = tree_event_append(op->seq, op->operation_digest, next);
-		if (ret) {
-			tree_sync_report_error("tree_event_append", op, ret);
-			goto out;
-		}
-		ret = tree_outcome_record(op->seq, digest,
-					  skipped_module ?
-					  TREE_OUTCOME_MODULE_ABSENT :
-					  TREE_OUTCOME_APPLIED,
-					  next, history_root);
-		if (ret) {
-			tree_sync_report_error("tree_outcome_append", op, ret);
-			goto out;
-		}
-		state.last_seq = op->seq;
-		applied++;
-		ret = tree_state_write(&state);
-		if (ret) {
-			tree_sync_report_error("tree_state_commit", op, ret);
-			goto out;
-		}
-		if (skipped_module)
-			ret = tree_status_write(op->id, "skipped: module not loaded");
-		else
-			tree_status_clear(op->id);
-		if (ret) {
-			tree_sync_report_error("tree_status_write", op, ret);
-			goto out;
-		}
-		unlink(BPM_TREE_PENDING_PATH);
-	}
+	ret = tree_walk_forward(&src, &sync, &walk, &pub, manifest_digest);
+	if (ret)
+		goto out;
 	/* A run of operations without a match at the end moved the cursor. */
-	if (!dry_run) {
-		ret = tree_state_write(&state);
+	if (!sync.dry_run) {
+		ret = tree_state_write(&sync.state);
 		if (ret) {
 			tree_sync_report_error("tree_state_commit_final", NULL, ret);
 			goto out;
 		}
+	} else {
+		sync.state.last_seq = sync.dry_seq;
 	}
 	/* "-" is standard output, where the report goes without --report. */
 	ret = tree_write_report(report[0] && strcmp(report, "-") ? report : NULL,
-				&state, selected, skipped, applied,
-				module_skipped, dry_run, tpm_available);
+				&sync.state, sync.selected, sync.skipped,
+				sync.applied, sync.module_skipped,
+				sync.dry_run, chain_bound());
 out:
+	tree_walk_free(&walk);
 	tree_publication_free(&pub);
+	tree_source_clear(&src);
 	return ret;
 }
 

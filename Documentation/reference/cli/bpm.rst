@@ -181,9 +181,18 @@ reading its options.
    and sequence numbers against the state in
    ``/var/lib/shirudo/bpm/upatch-tree/state.json``.
 #. It drops from ``upatch-tree/outcomes`` what a sync that stopped left
-   past the recorded ``last_seq``, refuses a record that does not cover
-   it, completes an operation that sync left in progress, and records
-   the publication in ``state.json``.
+   past the recorded ``last_seq`` and refuses a record that does not
+   cover it.
+#. When the publication is a segment that starts past the recorded
+   ``last_seq``, it walks back through the sealed segments by their
+   digests to the one ``last_seq`` lies in, and refuses a walk of more
+   than 65,536 operations, or 1,048,576 when the node has processed
+   none. It then takes the segments oldest first, the publication
+   last.
+#. It refuses a segment that does not start from the node's
+   ``history_root`` at its base, or whose operations up to ``last_seq``
+   are not the ones the node processed. It completes an operation a
+   sync left in progress and records the segment in ``state.json``.
 #. For each new operation whose selector matches the node labels
    (``etc/shirudo/node.labels`` of the config image, or
    ``/etc/shirudo/node.labels``), it fetches and verifies the artifact,
@@ -192,10 +201,17 @@ reading its options.
    operation, matched or not, gets its line in ``outcomes``.
 #. It prints a JSON report to standard output, or to ``--report``.
 
+A failure names its phase as :doc:`/reference/failure-categories`
+lists them, and the sync applies nothing past it. The walk, its limits
+and the time a joining node takes, which grows linearly with the tree,
+are in :doc:`/reference/formats/bpm-formats`; both limits are to be
+revisited on live clusters.
+
 With ``--dry-run``, it reports which operations would apply and applies
-none: it neither records the publication nor writes a line for a new
-operation, but it still drops the leftovers in ``outcomes`` and
-completes an operation left in progress. An ``add`` whose kprobe target
+none: it fetches and checks every segment of a walk, but neither
+records a segment nor writes a line for a new operation, and reports
+the recorded ``last_seq``. It still drops the leftovers in ``outcomes``
+and completes an operation left in progress. An ``add`` whose kprobe target
 module is not loaded is skipped and recorded as ``skipped: module not
 loaded``.
 

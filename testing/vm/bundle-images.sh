@@ -11,7 +11,9 @@ work=$2
 keys=$3
 boot_keys=$4
 "$source_dir/testing/vm/image-fixtures.sh" --keys-dir "$keys" \
-	--boot-keys-dir "$boot_keys" --output "$work/verity"
+	--boot-keys-dir "$boot_keys" \
+	--segments-port "$(cat "$bundle/fixtures/segments-oci/port")" \
+	--output "$work/verity"
 mkdir "$bundle/verity"
 cp -a "$work/verity/public/." "$bundle/verity/"
 sed 's/@config_image@/config-boot-keys/g' "$templates/runtime.conf.in" \

@@ -76,10 +76,27 @@ applies it again, and that goes on to measure it: `upatch_install()` takes
 the payload already loaded under the name as installed, and
 `upatch_remove()` an upatch already gone as removed.
 testing/proofs/cbmc/bpm-tree-follows.c proves
-`tree_publication_follows()` returns 0 exactly when `Follows` holds, the
-sync refusing the walk it asks for otherwise, and bpm-tree-sync-model.c checks
-the writes of `cmd_bpm_tree_sync()` against `run` for publications of up to
-two operations.
+`tree_publication_follows()` returns 0 exactly when `Follows` holds and asks
+for a walk exactly when the publication starts past the cursor, and
+bpm-tree-sync-model.c checks the writes of `cmd_bpm_tree_sync()` against
+`run` for publications of up to two operations, and through a walk back
+over one sealed segment.
+
+A publication that starts past the cursor is a segment the node reaches by
+walking back through the sealed segments before it. The sync then takes
+the segments oldest first, each recorded at acceptance and its operations
+applied, as `run` takes one publication: the oldest segment with the cut
+of the outcomes record and recovery, and each later one, which starts at
+the cursor the one before left, with neither, as the cut keeps every line
+and nothing is pending between two segments. A sync that walks is
+therefore a sync of each segment in turn, with one write fewer: the state
+`run` writes at the end of a segment, which the next segment's record at
+acceptance overwrites with the same cursor and root. Every node such a
+sync leaves is one a `Steps` history of single syncs leaves, so every
+theorem here holds across segment boundaries too. The base check and the
+prefix check
+of the walk only refuse more; the model leaves them out, as it does the
+digest checks.
 -/
 
 namespace Shirudo.TreeSync
@@ -110,7 +127,8 @@ structure Pub (T M I D : Type) where
 /-- `struct tree_state`: `root` is `projection_root`, which sync writes into
 `projection_root_tpm` too, `manifest` is `none` for an empty
 `manifest_digest`, and `headSeq` is `head_seq`, the head of the recorded
-publication. `segment_base_seq` is 0 with `Checked` and is left out. -/
+publication. `segment_base_seq` is left out: no write of the model depends
+on it. -/
 structure State (T M D : Type) where
   treeId : T
   generation : Int
@@ -188,10 +206,12 @@ def cursor (n : Node T M I D) : Int :=
 /-! ### The checks before anything is applied -/
 
 /-- What `tree_parse()` and `tree_publication_check()` require of a
-publication's numbers: a generation of 0 or more, a base of 0, and
-operations numbered from base + 1 to head without a gap. -/
+publication's numbers: a generation of 0 or more, a base of 0 or more, and
+operations numbered from base + 1 to head without a gap. A segment past
+the first, base above 0, is one of these too; the keys that name its
+sealed predecessor and its history root are left out with the digests. -/
 def Checked (pub : Pub T M I D) : Prop :=
-  0 ≤ pub.generation ∧ pub.baseSeq = 0 ∧
+  0 ≤ pub.generation ∧ 0 ≤ pub.baseSeq ∧
     pub.headSeq = pub.baseSeq + pub.ops.length ∧
     pub.ops.map (·.seq) =
       (List.range pub.ops.length).map
@@ -202,8 +222,9 @@ instance (pub : Pub T M I D) : Decidable (Checked pub) := by
 
 /-- What the sync takes of `tree_publication_follows()`, a return of 0,
 as `bpm-tree-follows.c` states it and proves the C meets for every
-`__s64`; it refuses the walk the function asks for past the cursor.
-Without a state, a base of 0; with
+`__s64`. A publication that starts past the cursor, for which the function
+asks for a walk, is applied as the segments of the walk, each of which
+returns 0 in its turn; see `run`. Without a state, a base of 0; with
 one, the same tree, a later generation unless it is the same manifest, the
 recorded manifest as parent when it is the next generation and names one,
 and the cursor between base and head. -/
@@ -2061,10 +2082,23 @@ theorem consec_of_range : ∀ (os : List (Op I D)) (a : Int),
 /-- What `Checked` says of a publication's numbers, as the loops read
 them. -/
 theorem consec_of_checked {pub : Pub T M I D} (h : Checked pub) :
-    Consec 0 pub.ops ∧ (pub.ops.length : Int) = pub.headSeq := by
-  obtain ⟨-, hb, hh, hm⟩ := h
-  rw [hb] at hm hh
-  exact ⟨consec_of_range pub.ops 0 hm, by omega⟩
+    Consec pub.baseSeq pub.ops ∧
+      pub.baseSeq + (pub.ops.length : Int) = pub.headSeq := by
+  obtain ⟨-, -, hh, hm⟩ := h
+  exact ⟨consec_of_range pub.ops pub.baseSeq hm, by omega⟩
+
+/-- A publication that follows the node starts at or before its cursor. -/
+theorem base_le_cursor [DecidableEq T] [DecidableEq M] {pub : Pub T M I D}
+    {n : Node T M I D} {m : M} (h : Follows pub n.state m) :
+    pub.baseSeq ≤ cursor n := by
+  cases hs : n.state with
+  | none =>
+    simp only [hs, Follows] at h
+    simp [cursor, hs, h]
+  | some s =>
+    simp only [hs, Follows] at h
+    simp only [cursor, hs]
+    exact h.2.2.2.1
 
 theorem consec_mem {o : Op I D} : ∀ (os : List (Op I D)) (a : Int),
     Consec a os → o ∈ os → a < o.seq ∧ o.seq ≤ a + (os.length : Int)
@@ -2435,7 +2469,9 @@ record and the head go, stopped after any of its writes: the lines continue
 the record to the operation's number before the state that covers them. -/
 theorem ocomplete_inv {H : D → D → D} {pub : Pub T M I D} {n : Node T M I D}
     {st0 st : State T M D} {p : Op I D} (hx : Exact n (cursor n)) (ho : OInv n)
-    (hcs : Consec 0 pub.ops) (hlen : (pub.ops.length : Int) = pub.headSeq)
+    (hcs : Consec pub.baseSeq pub.ops)
+    (hlen : pub.baseSeq + (pub.ops.length : Int) = pub.headSeq)
+    (hbc : pub.baseSeq ≤ cursor n)
     (hst0 : st0.lastSeq = cursor n) (hlt : cursor n < p.seq)
     (hph : p.seq ≤ pub.headSeq) (hl : st.lastSeq = p.seq)
     (hh : ∀ s, n.state = some s → st.headSeq = s.headSeq)
@@ -2450,8 +2486,9 @@ theorem ocomplete_inv {H : D → D → D} {pub : Pub T M I D} {n : Node T M I D}
   obtain ⟨c, hc, he⟩ := hx
   obtain ⟨s1, hs1, hps⟩ := ho.pend p hpn
   have hhs := hh s1 hs1
-  obtain ⟨c', hc', hext⟩ := passed_ext st0.lastSeq p.seq st0.root pub.ops 0 c
-    hcs (by omega) (by omega) (Or.inr (by omega)) (by omega) (by omega)
+  obtain ⟨c', hc', hext⟩ := passed_ext st0.lastSeq p.seq st0.root pub.ops
+    pub.baseSeq c hcs (by omega) (by omega) (Or.inr (by omega)) (by omega)
+    (by omega)
   obtain ⟨hal, hoL, heq⟩ := along_olines
     (passed st0.lastSeq p.seq st0.root pub.ops ++
       [(⟨p.seq, true, H st0.root p.digest⟩ : OLine D)]) n ho hlenx
@@ -2522,8 +2559,9 @@ loop goes on from a record that holds exactly the lines up to its cursor,
 and an operation still pending is one of the publication. -/
 theorem orecover_inv {H : D → D → D} {pub : Pub T M I D} {n : Node T M I D}
     {st0 st : State T M D} {ws : List (Write T M I D)}
-    (hx : Exact n (cursor n)) (ho : OInv n) (hcs : Consec 0 pub.ops)
-    (hlen : (pub.ops.length : Int) = pub.headSeq)
+    (hx : Exact n (cursor n)) (ho : OInv n) (hcs : Consec pub.baseSeq pub.ops)
+    (hlen : pub.baseSeq + (pub.ops.length : Int) = pub.headSeq)
+    (hbc : pub.baseSeq ≤ cursor n)
     (hst0 : st0.lastSeq = cursor n) (hcur : cursor n ≤ pub.headSeq)
     (hfound : ∀ p, n.pending = some p → ∃ o ∈ pub.ops, o.seq = p.seq)
     (hspec : RecoverSpec n (recLines H pub st0) ws st) :
@@ -2540,7 +2578,7 @@ theorem orecover_inv {H : D → D → D} {pub : Pub T M I D} {n : Node T M I D}
   | some p =>
     simp only [RecoverSpec, hp] at hspec
     obtain ⟨o, hom, hop⟩ := hfound p hp
-    have hoh := (consec_mem pub.ops 0 hcs hom).2
+    have hoh := (consec_mem pub.ops pub.baseSeq hcs hom).2
     have hph : p.seq ≤ pub.headSeq := by omega
     rcases hspec with ⟨-, rfl, hl⟩ | ⟨-, -, -, rfl, hl⟩ |
         ⟨hlt, -, -, ⟨r, rfl⟩, hl, hh⟩ | ⟨hlt, -, rfl, hl, hh⟩
@@ -2562,11 +2600,11 @@ theorem orecover_inv {H : D → D → D} {pub : Pub T M I D} {n : Node T M I D}
         ho.inert rfl rfl ho.pend
       obtain ⟨ha, hxe, hcu, hoi, hpe⟩ := ocomplete_inv (H := H) (pub := pub)
         (n := (Write.append ⟨p.seq, p.digest, r⟩ : Write T M I D).apply n)
-        (st0 := st0) (st := st) hx h1 hcs hlen hst0 hlt hph hl hh hp
+        (st0 := st0) (st := st) hx h1 hcs hlen hbc hst0 hlt hph hl hh hp
       exact ⟨along_cons ho (OMono.inert rfl rfl) ha, hxe, hcu, by omega, hoi,
         hpe⟩
     · obtain ⟨ha, hxe, hcu, hoi, hpe⟩ := ocomplete_inv (H := H) (pub := pub)
-        (st0 := st0) (st := st) hx ho hcs hlen hst0 hlt hph hl hh hp
+        (st0 := st0) (st := st) hx ho hcs hlen hbc hst0 hlt hph hl hh hp
       exact ⟨ha, hxe, hcu, by omega, hoi, hpe⟩
 
 /-- A whole sync, as far as the outcomes record and the head go, stopped
@@ -2582,6 +2620,8 @@ theorem orun_inv [DecidableEq T] [DecidableEq M] [DecidableEq I]
   · rename_i hc
     obtain ⟨hchk, hfol⟩ := hc
     obtain ⟨hcs, hlen⟩ := consec_of_checked hchk
+    have hbc := base_le_cursor hfol
+    have hb0 := hchk.2.1
     have hsm : Same n ((Write.truncate (cursor n).toNat).apply n) :=
       ⟨rfl, rfl, rfl, rfl⟩
     have hinv0 := Inv.of_same hsm hinv
@@ -2627,10 +2667,15 @@ theorem orun_inv [DecidableEq T] [DecidableEq M] [DecidableEq I]
       obtain ⟨-, -, hspec⟩ := recover_inv H init ha.binds ha.hash_inj
         ha.hash_init hinv0 hchk hfol hsig hrec0
       have hst0 := (start_facts H init ha.binds hinv0 hchk hfol hsig).2.1
-      obtain ⟨haw, hxw, hcw, hbw, how, hpw⟩ := orecover_inv hx0 ho0 hcs hlen hst0
-        hcur (fun p hp => recover_found hrec0 hp) hspec
-      have hnn : 0 ≤ st.lastSeq := by
-        obtain ⟨cw, hcw', -⟩ := hxw
+      obtain ⟨haw, hxw, hcw, hbw, how, hpw⟩ := orecover_inv hx0 ho0 hcs hlen
+        hbc hst0 hcur (fun p hp => recover_found hrec0 hp) hspec
+      have hnn : pub.baseSeq ≤ st.lastSeq := by
+        have hm := along_between OMono.refl (fun _ _ _ => OMono.trans) haw 0
+          ws.length (Nat.zero_le _)
+        simp only [List.take_zero, applyAll_nil, List.take_length] at hm
+        have hm1 := hm.1
+        have : cursor ((Write.truncate (cursor n).toNat).apply n) = cursor n :=
+          rfl
         omega
       have hoA : OInv ((Write.state ⟨st.treeId, pub.generation, st.lastSeq,
           st.root, some m, pub.headSeq⟩).apply
@@ -2660,7 +2705,7 @@ theorem orun_inv [DecidableEq T] [DecidableEq M] [DecidableEq I]
             pub.headSeq⟩, rfl, rfl⟩, hoA⟩
       obtain ⟨hl, hr'⟩ := oloop_inv (H := H) sel pub.ops _
         ⟨st.treeId, pub.generation, st.lastSeq, st.root, some m, pub.headSeq⟩
-        0 hcs hnn (by omega) hrA
+        pub.baseSeq hcs hnn (by omega) hrA
       refine along_append (along_append
         (along_append haw (along_one how hmA hoA)) ?_) ?_
       · rw [applyAll_append]

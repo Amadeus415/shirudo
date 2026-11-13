@@ -147,7 +147,13 @@ class to one upatch, or the two entries selectors that exclude each
 other. A segment that holds `--segment-ops` operations (64 by default,
 1 to 512) is sealed and tagged `segment-<k>`, and the append starts the
 next one; keep the `segment-*` tags in the registry, since targets walk
-back through the sealed segments by digest. `tree
+back through the sealed segments by digest: up to 65,536 operations from
+where they are, or 1,048,576 for one that has applied none, past which
+`bpm tree sync` refuses with the `segment_walk` phase. A target refuses
+a segment that does not start from its own `history_root`, or whose
+operations up to its cursor differ from the ones it processed
+(`history_base`, `history_prefix`), so never republish a sealed segment
+or rewrite an operation a target may have taken. `tree
 show` prints the publication verified as a target verifies it, as
 `{"manifest_digest":...,"document":...}` with the signed document
 verbatim, `fixes` included: the check that an append published what

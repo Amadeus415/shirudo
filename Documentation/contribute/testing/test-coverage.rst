@@ -545,6 +545,24 @@ signed config image.
        malformed, on an ``add``, a ``delete`` and an operation without a
        match, syncs with the outcomes, state and tree eventlog of the
        same operations without it
+   * - ``t7108-bpm-tree-segments``
+     - In ``functional/bpm-segments/``, a VM of its own, so that the node
+       starts without a tree, on a tree ``bpm tree append --segment-ops
+       2`` published and a bundle that lowers the walk limits to 4 and 6
+       operations. A new node refuses a walk past its limit before it
+       fetches a sealed segment, then walks back through four segments,
+       past the running limit, and applies them with the tree eventlog,
+       ``tree_op`` records, projection root and outcomes of the
+       operations taken as one publication; a node inside the current
+       segment fetches only it; a walk stopped between two segments, at
+       a registry request held, or with an operation pending, resumes
+       with a shorter walk and applies no operation twice; a forked
+       predecessor fails the base check and a forked current segment the
+       prefix check; a sealed segment the registry lost, a predecessor
+       ending before its successor's base and a running node's walk past
+       its limit are refused with nothing applied; a dry run walks and
+       records nothing; ``init`` walks nothing and takes the projection
+       root one publication gives
    * - ``t7109-bpm-tree-keepalive``
      - ``status --keepalive``: the keys of the body in order, its tree
        keys and mask as ``state.json`` and the outcomes record have them,
@@ -797,7 +815,7 @@ Coverage by area
    * - upatch tree
      - ``t3011``, ``t5004``, ``t7005``, ``t7007``, ``t7008``, ``t7009``,
        ``t7101``, ``t7102``, ``t7103``, ``t7104``, ``t7105``, ``t7106``,
-       ``t7107``, ``t7109``, ``t9105``, ``t9109``. Fuzz: ``tree``,
+       ``t7107``, ``t7108``, ``t7109``, ``t9105``, ``t9109``. Fuzz: ``tree``,
        ``tree-state``, ``kconfig``. Unit: ``bpm_tree``,
        ``bpm_tree_overlap``, ``bpm_tree_state``, ``chain_history``,
        ``kernel_build_id``, ``kernel_release``
@@ -862,8 +880,8 @@ The threats are those of :doc:`/security/threat-model`.
      - ``t1006``, ``t4101``, ``t6115``, ``t6126``
    * - T7 The delivery path
      - ``t7002``, ``t7003``, ``t7005``, ``t7101``, ``t7102``,
-       ``t7103``, ``t7104``, ``t7105``, ``t7106``, ``t7107``, ``t8005``,
-       ``t9105``
+       ``t7103``, ``t7104``, ``t7105``, ``t7106``, ``t7107``, ``t7108``,
+       ``t8005``, ``t9105``
    * - T8 Quantum-capable adversaries
      - ``t2001``, ``t2002``, ``t5001``, ``t8005``
    * - T9 A target lying about its state

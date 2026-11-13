@@ -18,11 +18,16 @@
 
 /*
  * The most operations a walk back through sealed segments may cover from
- * seq 0, as a node that joins a tree does: one past it is -E2BIG. A test
- * build sets it low.
+ * seq 0, as a node that joins a tree does, and from the cursor of a node
+ * that has processed one: one past it is -E2BIG. A running node walks
+ * holding the bpm lock, with its keepalive stopped, so it gets the lower
+ * one. A test build sets both low.
  */
 #ifndef TREE_MAX_JOIN_OPS
 #define TREE_MAX_JOIN_OPS 1048576
+#endif
+#ifndef TREE_MAX_WALK_OPS
+#define TREE_MAX_WALK_OPS 65536
 #endif
 
 struct json_emit;
@@ -174,6 +179,21 @@ int tree_publication_follows(const struct tree_publication *pub,
 int tree_segment_precedes(const struct tree_publication *pred,
 			  const char *pred_manifest_digest,
 			  const struct tree_publication *succ) __must_check;
+
+/*
+ * tree_walk_within() is the limit of that walk: 0 when a node whose cursor
+ * is last_seq may walk back to a segment that starts at base_seq,
+ * TREE_MAX_JOIN_OPS operations at most from 0 and TREE_MAX_WALK_OPS from
+ * any other cursor, -E2BIG past it, -EINVAL for a negative number.
+ *
+ * tree_history_at() gives the history root at seq of a publication that
+ * tree_publication_check() accepts: its base's, 32 zero bytes at 0, over
+ * the digests of its operations up to seq. -EINVAL for a seq outside base
+ * to head or a malformed root or digest.
+ */
+int tree_walk_within(__s64 base_seq, __s64 last_seq) __must_check;
+int tree_history_at(const struct tree_publication *pub, __s64 seq,
+		    __u8 out[32]) __must_check;
 
 /*
  * Evaluate a publication selector against the running node.  An empty

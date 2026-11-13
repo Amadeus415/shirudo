@@ -429,6 +429,31 @@ build/target/%.o: %.c Makefile.shirudo $(CONFIG_MK_DEP)
 
 -include $(DEPS)
 
+# The tree walk limits of util/bpm_tree.h. The test VM bundle builds its
+# target with them low, TREE_LIMIT_CFLAGS='-DTREE_MAX_WALK_OPS=<n>
+# -DTREE_MAX_JOIN_OPS=<n>', so that a target test reaches them; the operator
+# profile ignores it. The objects that read them rebuild whenever the value
+# differs from the one they were built with, so a build without it never
+# keeps the lowered limits.
+ifeq ($(PROFILE),target)
+TREE_LIMIT_CFLAGS ?=
+else
+override TREE_LIMIT_CFLAGS :=
+endif
+TREE_LIMIT_STAMP := build/tree-limits-$(PROFILE)
+TREE_LIMIT_OBJS := $(call obj,builtin-bpm.o) $(call obj,util/bpm_tree.o)
+
+.PHONY: FORCE_TREE_LIMITS
+FORCE_TREE_LIMITS:
+
+$(TREE_LIMIT_STAMP): FORCE_TREE_LIMITS
+	$(Q)mkdir -p $(dir $@)
+	$(Q)printf '%s\n' '$(TREE_LIMIT_CFLAGS)' | cmp -s - $@ 2>/dev/null || \
+	    printf '%s\n' '$(TREE_LIMIT_CFLAGS)' > $@
+
+$(TREE_LIMIT_OBJS): $(TREE_LIMIT_STAMP)
+$(TREE_LIMIT_OBJS): CFLAGS += $(TREE_LIMIT_CFLAGS)
+
 # BPF objects pull vmlinux.h from vendor/linux, <bpf/...> helper headers
 # and UAPI kernel headers from vendor/libbpf, and shirudo's own BPF
 # library headers from bpf/lib.
@@ -1105,8 +1130,8 @@ FUZZ_CONFIG := util/config.c util/image_config.c
 FUZZ_SEAL := util/seal.c $(FUZZ_CONFIG)
 FUZZ_OCI := util/bpm_oci.c util/curl.c util/io.c $(FUZZ_SEAL) \
             util/crypto_openssl.c util/tls_openssl.c
-FUZZ_PACKAGE := util/bpm_package.c util/bpm_tree.c util/upatch.c \
-                util/keys.c $(FUZZ_OCI)
+FUZZ_PACKAGE := util/bpm_package.c util/bpm_tree.c util/chain_history.c \
+                util/upatch.c util/keys.c $(FUZZ_OCI)
 
 FUZZ_TARGETS := $(patsubst %.c,%,$(wildcard testing/fuzz/fuzz-*.c))
 
@@ -1116,8 +1141,9 @@ testing/fuzz/fuzz-oci-manifest: testing/fuzz/fuzz-oci-manifest.c \
 testing/fuzz/fuzz-bpm-index: testing/fuzz/fuzz-bpm-index.c \
                              $(FUZZ_BASE) $(FUZZ_PACKAGE)
 testing/fuzz/fuzz-tree: testing/fuzz/fuzz-tree.c $(FUZZ_BASE) \
-                        util/bpm_tree.c util/crypto_openssl.c util/io.c \
-                        util/upatch.c $(FUZZ_SEAL)
+                        util/bpm_tree.c util/chain_history.c \
+                        util/crypto_openssl.c util/io.c util/upatch.c \
+                        $(FUZZ_SEAL)
 testing/fuzz/fuzz-upatch: testing/fuzz/fuzz-upatch.c $(FUZZ_BASE) \
                           util/upatch.c
 testing/fuzz/fuzz-prog-metadata: testing/fuzz/fuzz-prog-metadata.c \
@@ -1195,7 +1221,8 @@ testing/fuzz/fuzz-config-update: testing/fuzz/fuzz-config-update.c \
                                  $(FUZZ_BASE) util/config_update.c \
                                  util/config_measure.c testing/fuzz/chain.c \
                                  util/crypto_openssl.c util/io.c $(FUZZ_SEAL)
-FUZZ_TREE_STATE := util/bpm_tree_state.c util/bpm_tree.c util/upatch.c \
+FUZZ_TREE_STATE := util/bpm_tree_state.c util/bpm_tree.c \
+                   util/chain_history.c util/upatch.c \
                    util/io.c $(FUZZ_SEAL) \
                    util/kernel_build_id.c util/kernel_release.c \
                    util/crypto_openssl.c testing/fuzz/chain.c

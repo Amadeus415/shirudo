@@ -2,8 +2,9 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Prove that tree_fetch_publication() checks the active image's signing set
- * before fetching a tree, and releases the set on every path that allocates it.
+ * Prove that tree_source_open() checks the active image's signing set
+ * before tree_fetch_checked() fetches a tree with it, and that
+ * tree_source_clear() releases the set on every path that allocates it.
  */
 
 #define __NO_CTYPE 1
@@ -106,21 +107,41 @@ int bpm_tree_fetch_publication(struct bpm_oci_client *c,
 	__CPROVER_assert(set == (active ? &signing_set : NULL),
 			 "fetch receives the checked signing set");
 	fetched = true;
+	pub->tree_id[0] = 't';
 	return fetch_fail ? -EIO : 0;
 }
 
+/* The checks of the publication, which other proofs cover. */
+bool bpm_package_name_ok(const char *name)
+{
+	return true;
+}
+
+int tree_publication_check(const struct tree_publication *pub)
+{
+	return 0;
+}
+
+int tree_operation_validate(const struct tree_operation *op)
+{
+	return 0;
+}
+
+/* xfree(NULL) releases nothing. */
 void xfree(void *p, size_t size)
 {
-	__CPROVER_assert(!freed && size == sizeof(signing_set) &&
-			 p == (allocated ? &signing_set : NULL),
+	__CPROVER_assert(size == sizeof(signing_set) &&
+			 p == (allocated && !freed ? &signing_set : NULL),
 			 "the owned signing set is released once");
-	freed = true;
+	if (p)
+		freed = true;
 }
 
 void harness(void)
 {
 	struct bpm_tree_config cfg = {};
 	struct tree_publication pub = {};
+	struct tree_source src = {};
 	struct {
 		__u32 signers, unvouched;
 		bool active, parse_fail, alloc_fail;
@@ -141,7 +162,11 @@ void harness(void)
 	__CPROVER_assume(n_signers <= KEYS_MAX && n_unvouched <= n_signers);
 	cfg.endpoint[0] = 'e';
 	cfg.reference[0] = 'f';
-	ret = tree_fetch_publication(&cfg, &pub, manifest, sizeof(manifest));
+	ret = tree_source_open(&cfg, &src);
+	if (!ret)
+		ret = tree_fetch_checked(&src, cfg.reference, &pub, manifest,
+					 sizeof(manifest));
+	tree_source_clear(&src);
 
 	should_check = !parse_fail && active && !alloc_fail &&
 		       !load_fail && n_signers && !n_unvouched;
@@ -153,7 +178,7 @@ void harness(void)
 			 "a valid loaded set is always checked");
 	__CPROVER_assert(fetched == should_fetch,
 			 "fetch occurs exactly after successful preflight");
-	should_free = !parse_fail && (!active || !alloc_fail);
+	should_free = !parse_fail && active && !alloc_fail;
 	__CPROVER_assert(freed == should_free,
 			 "every allocated set is released");
 	if (!should_fetch)

@@ -2,22 +2,25 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * cmd_bpm_tree_sync() of builtin-bpm.c, tree_recover_pending() and the loop
- * over the operations included, against the run of the model that
+ * cmd_bpm_tree_sync() of builtin-bpm.c, tree_recover_pending(), the walk
+ * back through sealed segments, the base and prefix checks and the loop over
+ * the operations included, against the run of the model that
  * testing/proofs/lean4/Shirudo/TreeSync.lean proves never takes a node back.
  * Below sync, the files and the rest of the I/O are stubs that record the
  * write the model names, or fail. For every state, pending record, tree
  * eventlog replay and record of the pending operation this boot, every
- * publication of LEN operations that tree_parse() lets through, every
- * selector answer and every failure, sync makes the model's writes in the
- * model's order, nothing after a failure and all of them when nothing fails.
- * Strings are of one byte, as sync only compares them; hashes, hex and paths
- * are stubs the model does not depend on. The functions after the stubs
- * restate the Lean definitions: checked() is Checked, follows() Follows,
- * recover() recover and run() run, with its loop. An outcome line carries
- * more here than in the Lean model: its code, 1 or 3 by what the install or
- * the pins say, and the history root, a fold the sync starts from the root
- * its record holds at the cursor.
+ * publication of LEN operations that tree_parse() lets through, at any base,
+ * with NSEG 2 a sealed segment of LEN operations the registry serves by its
+ * digest too, every selector answer and every failure, sync makes the
+ * model's writes in the model's order, nothing after a failure and all of
+ * them when nothing fails. Strings are of one byte, as sync only compares
+ * them; hashes, hex and paths are stubs the model does not depend on. The
+ * functions after the stubs restate the Lean definitions: checked() is
+ * Checked, follows() Follows, recover() recover, history_ok() the base and
+ * prefix checks and run() run, with its walk and loop. An outcome line
+ * carries more here than in the Lean model: its code, 1 or 3 by what the
+ * install or the pins say, and the history root, a fold the sync starts
+ * from the root its record holds at the cursor.
  */
 
 /* As proof.h, before the system headers can include <ctype.h>. */
@@ -64,8 +67,18 @@ struct write {
 	__u8		h[32];
 };
 
-/* The cut, recovery's append, lines, state and unlink, the record, the loop. */
-#define MAX_WRITES	(8 + 7 * LEN)
+/*
+ * NSEG publications: the one the tag names, and with 2 the sealed segment
+ * before it. Their operations are ops[0] to ops[LEN - 1] and, for the
+ * sealed one, ops[LEN] to ops[2 * LEN - 1].
+ */
+#ifndef NSEG
+#define NSEG	1
+#endif
+#define NOPS	(NSEG * (LEN ? LEN : 1))
+
+/* The cut, recovery's append, lines, state and unlink, the records, the loops. */
+#define MAX_WRITES	(8 + 8 * NOPS)
 
 static struct write want[MAX_WRITES];
 static int n_got, n_want;
@@ -78,13 +91,17 @@ static struct tree_state disk_state;
 static struct tree_pending disk_pending;
 static int replay_kind;		/* 0 -ENOENT, 1 -EINVAL, 2 a root */
 static __u8 replay_root[32];
-static struct tree_operation ops[LEN ? LEN : 1];
-static struct tree_publication fetched;
-static char fetched_manifest[2];
-static bool sel_match[LEN ? LEN : 1], sel_fail[LEN ? LEN : 1];
-/* The history root the record holds at the cursor, and what an install finds. */
-static __u8 disk_history[32];
-static bool op_add[LEN ? LEN : 1], module_absent[LEN ? LEN : 1];
+static struct tree_operation ops[NOPS];
+static struct tree_publication fetched, sealed;
+static char fetched_manifest[2], sealed_manifest[2];
+static int fetches;
+static bool sel_match[NOPS], sel_fail[NOPS];
+/*
+ * The history roots the record holds at the cursor and at any other seq,
+ * and what an install finds.
+ */
+static __u8 disk_history[32], disk_other_history[32];
+static bool op_add[NOPS], module_absent[NOPS];
 static bool pins_loaded;
 static int installing = -1;
 static __s64 measure_seq;
@@ -125,7 +142,7 @@ static void record(const struct write *w)
 /* Which operation a pointer is into, without a division by its size. */
 static int op_index(const char *digest)
 {
-	for (int i = 0; i < LEN; i++)
+	for (int i = 0; i < NOPS; i++)
 		if (digest == ops[i].operation_digest)
 			return i;
 	return -1;
@@ -133,7 +150,7 @@ static int op_index(const char *digest)
 
 static int op_of(const struct tree_operation *op)
 {
-	for (int i = 0; i < LEN; i++)
+	for (int i = 0; i < NOPS; i++)
 		if (op == &ops[i])
 			return i;
 	return -1;
@@ -278,6 +295,24 @@ const char *get_cert_path(void)
 	return "c";
 }
 
+/*
+ * The publication a digest of one byte names, as a registry serves it: 0 the
+ * tag's, 1 the sealed segment, -1 none.
+ */
+static int served(char digest)
+{
+	if (digest == fetched_manifest[0])
+		return 0;
+	if (NSEG == 2 && digest == sealed_manifest[0])
+		return 1;
+	return -1;
+}
+
+/*
+ * The first fetch is of the tag; the others name a digest, which sync
+ * passes as it is or as "sha256:" and the hex of the byte the decode stub
+ * takes, the one byte of a NUL-terminated hex_encode() of it.
+ */
 int bpm_tree_fetch_publication(struct bpm_oci_client *c,
 			       const char *repository, const char *reference,
 			       const char *cert_path,
@@ -285,9 +320,29 @@ int bpm_tree_fetch_publication(struct bpm_oci_client *c,
 			       struct tree_publication *pub,
 			       char *manifest_digest, size_t digest_sz)
 {
-	*pub = fetched;
-	copy_short(manifest_digest, fetched_manifest);
-	return fail_here() ? -EIO : 0;
+	int s = 0;
+
+	if (fail_here())
+		return -EIO;
+	if (fetches++)
+		s = served(strncmp(reference, "sha256:", 7) ? reference[0] :
+			   reference[7]);
+	if (s < 0)
+		return -ENOENT;
+	*pub = s ? sealed : fetched;
+	copy_short(manifest_digest, s ? sealed_manifest : fetched_manifest);
+	return 0;
+}
+
+static struct tree_segment walk_store[8];
+
+void *xreallocarray(void *ptr, size_t old_nmemb, size_t new_nmemb,
+		    size_t size)
+{
+	__CPROVER_assert(size == sizeof(struct tree_segment) && new_nmemb <= 8 &&
+			 (!ptr || ptr == walk_store),
+			 "only the walk's descriptors are reallocated");
+	return fail_here() ? NULL : walk_store;
 }
 
 bool bpm_package_name_ok(const char *s)
@@ -409,9 +464,15 @@ int tree_outcomes_check(__s64 last_seq)
 int tree_outcomes_read(__s64 from, __s64 to, __u8 *codes,
 		       __u8 projection_root[32], __u8 history_root[32])
 {
+	__s64 cursor = have_state ? disk_state.last_seq : 0;
+
 	__CPROVER_assert(from == to && !codes,
-			 "the roots at the cursor are what sync reads");
-	memcpy(history_root, disk_history, 32);
+			 "the roots at one seq are what sync reads");
+	if (!from)
+		memset(history_root, 0, 32);
+	else
+		memcpy(history_root, from == cursor ? disk_history :
+				     disk_other_history, 32);
 	return fail_here() ? -EIO : 0;
 }
 
@@ -466,7 +527,7 @@ int tree_selector_matches(const struct tree_selector *selector)
 {
 	int i = -1;
 
-	for (int k = 0; k < LEN; k++)
+	for (int k = 0; k < NOPS; k++)
 		if (selector == &ops[k].selector)
 			i = k;
 	__CPROVER_assert(i >= 0, "the selector of an operation");
@@ -539,9 +600,9 @@ int upatch_install(const char *path)
 {
 	int ret;
 
-	__CPROVER_assert(installing >= 0 && installing < LEN,
+	__CPROVER_assert(installing >= 0 && installing < NOPS,
 			 "an install follows its pending record");
-	if (installing >= 0 && installing < LEN && module_absent[installing])
+	if (installing >= 0 && installing < NOPS && module_absent[installing])
 		return UPATCH_INSTALL_TARGET_MISSING;
 	__CPROVER_assume(ret == 0 || ret == 1 || ret == -EIO);
 	if (ret)
@@ -769,36 +830,108 @@ static bool same_write(const struct write *a, int index)
 }
 
 /*
- * Checked, and the first segment naming no predecessor, which Checked
- * leaves out as it does the digests: the sync refuses every later one.
+ * Checked: the numbers of tree_publication_check() and the base keys,
+ * present past base 0 and absent at it. Their form is the decode stubs',
+ * which accept any; the generation tree_parse() keeps from 0.
  */
-static bool checked(void)
+static bool checked_pub(const struct tree_publication *p)
 {
-	if (fetched.generation < 0 || fetched.base_seq != 0 ||
-	    fetched.segment_manifest_digest[0] || fetched.history_root[0] ||
-	    fetched.head_seq != fetched.n_operations)
+	int n = p->n_operations;
+
+	if (p->generation < 0 || p->base_seq < 0)
 		return false;
-	for (int i = 0; i < fetched.n_operations; i++)
-		if (ops[i].seq != 1 + i)
-			return false;
-	return true;
+	if (!p->base_seq && (p->segment_manifest_digest[0] ||
+			     p->history_root[0]))
+		return false;
+	if (p->base_seq && !n)
+		return false;
+	if (n && (p->operations[0].seq != p->base_seq + 1 ||
+		  p->head_seq != p->operations[n - 1].seq))
+		return false;
+	return n || p->head_seq == p->base_seq;
 }
 
-static bool follows(const struct mstate *s)
+static bool checked(void)
+{
+	return checked_pub(&fetched);
+}
+
+/*
+ * tree_publication_follows(): -1 for a refusal, 0 when the publication
+ * follows the state, Follows, and 1 for a walk back to its base.
+ */
+static int follows_pub(const struct tree_publication *p, const char *m,
+		       const struct mstate *s)
 {
 	bool same;
 
 	if (!s)
-		return fetched.base_seq == 0;
-	same = !strcmp(s->manifest, fetched_manifest);
-	return !strcmp(s->tree_id, fetched.tree_id) &&
-	       (same || s->generation < fetched.generation) &&
-	       (same || !(s->generation < fetched.generation &&
-			  fetched.generation - 1 == s->generation) ||
-		!fetched.parent_manifest_digest[0] ||
-		!strcmp(fetched.parent_manifest_digest, s->manifest)) &&
-	       fetched.base_seq <= s->last_seq &&
-	       s->last_seq <= fetched.head_seq;
+		return p->base_seq ? 1 : 0;
+	same = !strcmp(s->manifest, m);
+	if (strcmp(s->tree_id, p->tree_id) ||
+	    (!same && p->generation <= s->generation) ||
+	    (!same && p->generation - 1 == s->generation &&
+	     p->parent_manifest_digest[0] &&
+	     strcmp(p->parent_manifest_digest, s->manifest)) ||
+	    p->head_seq < s->last_seq)
+		return -1;
+	return p->base_seq > s->last_seq ? 1 : 0;
+}
+
+static bool follows(const struct mstate *s)
+{
+	return follows_pub(&fetched, fetched_manifest, s) == 0;
+}
+
+/* tree_walk_within() with the limits of util/bpm_tree.h. */
+static bool within(__s64 base, __s64 last)
+{
+	return base >= 0 && last >= 0 &&
+	       base - last <= (last ? TREE_MAX_WALK_OPS : TREE_MAX_JOIN_OPS);
+}
+
+/* tree_segment_precedes() of the publication the walk fetched. */
+static bool precedes(const struct tree_publication *pred, const char *m,
+		     const struct tree_publication *succ)
+{
+	return succ->base_seq > 0 &&
+	       !strcmp(succ->segment_manifest_digest, m) &&
+	       !strcmp(pred->tree_id, succ->tree_id) &&
+	       pred->head_seq == succ->base_seq &&
+	       pred->generation < succ->generation;
+}
+
+/*
+ * The base check and the prefix check: the node's history root at the
+ * segment's base, the one sync holds when the base is its cursor and the
+ * record's otherwise, is the segment's, and the segment's operations up to
+ * the cursor fold from it to the one sync holds.
+ */
+static bool history_ok(const struct tree_publication *p,
+		       const struct mstate *st)
+{
+	__u8 node[32], doc[32], d[32];
+
+	if (p->base_seq == st->last_seq)
+		memcpy(node, st->hist, 32);
+	else if (!p->base_seq)
+		memset(node, 0, 32);
+	else
+		memcpy(node, p->base_seq == (have_state ? disk_state.last_seq : 0) ?
+		       disk_history : disk_other_history, 32);
+	memset(doc, 0, 32);
+	if (p->base_seq)
+		for (int i = 0; i < 32; i++)
+			doc[i] = (__u8)p->history_root[i];
+	if (memcmp(node, doc, 32))
+		return false;
+	for (int i = 0; i < p->n_operations; i++) {
+		if (p->operations[i].seq > st->last_seq)
+			break;
+		digest_of(p->operations[i].operation_digest, d);
+		model_history(doc, d, doc);
+	}
+	return !memcmp(doc, st->hist, 32);
 }
 
 /*
@@ -806,20 +939,23 @@ static bool follows(const struct mstate *s)
  * is in the tree eventlog: a line for each operation the stopped sync passed
  * over, the operation's own, the state and the unlink.
  */
-static void want_recovered(struct mstate *st, const struct tree_operation *o,
-			   const __u8 *d, const __u8 *next)
+static void want_recovered(struct mstate *st, const struct tree_publication *p,
+			   const struct tree_operation *o, const __u8 *d,
+			   const __u8 *next)
 {
 	int index = op_of(o);
 	__u8 passed[32];
 
-	for (int i = 0; i < fetched.n_operations; i++) {
-		if (ops[i].seq >= o->seq)
+	for (int i = 0; i < p->n_operations; i++) {
+		const struct tree_operation *q = &p->operations[i];
+
+		if (q->seq >= o->seq)
 			break;
-		if (ops[i].seq <= st->last_seq)
+		if (q->seq <= st->last_seq)
 			continue;
-		digest_of(ops[i].operation_digest, passed);
+		digest_of(q->operation_digest, passed);
 		model_history(st->hist, passed, st->hist);
-		want_outcome(ops[i].seq, TREE_OUTCOME_UNMATCHED, st->root,
+		want_outcome(q->seq, TREE_OUTCOME_UNMATCHED, st->root,
 			     st->hist);
 	}
 	model_history(st->hist, d, st->hist);
@@ -833,19 +969,21 @@ static void want_recovered(struct mstate *st, const struct tree_operation *o,
 }
 
 /* false for a refusal before it writes anything. */
-static bool recover(struct mstate *st)
+static bool recover_in(struct mstate *st, const struct tree_publication *p)
 {
 	const struct tree_operation *o = NULL;
 	__u8 d[32], next[32];
 
 	if (!have_pending)
 		return true;
-	for (int i = 0; i < fetched.n_operations; i++) {
-		if (ops[i].seq == disk_pending.seq &&
-		    !strcmp(ops[i].id, disk_pending.id) &&
-		    !strcmp(ops[i].operation_digest,
+	for (int i = 0; i < p->n_operations; i++) {
+		const struct tree_operation *q = &p->operations[i];
+
+		if (q->seq == disk_pending.seq &&
+		    !strcmp(q->id, disk_pending.id) &&
+		    !strcmp(q->operation_digest,
 			    disk_pending.operation_digest)) {
-			o = &ops[i];
+			o = q;
 			break;
 		}
 	}
@@ -860,7 +998,7 @@ static bool recover(struct mstate *st)
 	if (replay_kind == 1)
 		return false;
 	if (replay_kind == 2 && !memcmp(replay_root, next, 32)) {
-		want_recovered(st, o, d, next);
+		want_recovered(st, p, o, d, next);
 		return true;
 	}
 	if (replay_kind == 2 && memcmp(replay_root, st->root, 32))
@@ -868,14 +1006,57 @@ static bool recover(struct mstate *st)
 	if (!measured)
 		return true;
 	want_write(W_APPEND, op_of(o), o->seq, next, NULL);
-	want_recovered(st, o, d, next);
+	want_recovered(st, p, o, d, next);
 	return true;
+}
+
+static bool recover(struct mstate *st)
+{
+	return recover_in(st, &fetched);
+}
+
+/* The loop over one publication's operations. */
+static void loop(struct mstate *st, const struct tree_publication *p)
+{
+	__u8 d[32];
+
+	for (int i = 0; i < p->n_operations; i++) {
+		const struct tree_operation *o = &p->operations[i];
+		int k = op_of(o);
+
+		if (o->seq <= st->last_seq)
+			continue;
+		digest_of(o->operation_digest, d);
+		if (!sel_match[k]) {
+			model_history(st->hist, d, st->hist);
+			want_outcome(o->seq, TREE_OUTCOME_UNMATCHED, st->root,
+				     st->hist);
+			st->last_seq = o->seq;
+			continue;
+		}
+		want_write(W_PENDING, k, 0, NULL, NULL);
+		want_write(W_MEASURE, k, o->seq, d, NULL);
+		model_hash(st->root, d, st->root);
+		want_write(W_APPEND, k, o->seq, st->root, NULL);
+		model_history(st->hist, d, st->hist);
+		want_outcome(o->seq, op_add[k] && module_absent[k] ?
+			     TREE_OUTCOME_MODULE_ABSENT : TREE_OUTCOME_APPLIED,
+			     st->root, st->hist);
+		st->last_seq = o->seq;
+		want_write(W_STATE, 0, 0, NULL, st);
+		want_write(W_UNLINK, 0, 0, NULL, NULL);
+	}
 }
 
 static void run(void)
 {
+	const struct tree_publication *walk[NSEG + 1];
+	const char *names[NSEG + 1];
+	const struct tree_publication *succ = &fetched;
+	bool have = have_state;
 	struct mstate st;
-	__u8 d[32];
+	__s64 cursor;
+	int n = 0;
 
 	/* The node's state, or the fresh one sync starts from without it. */
 	st.tree_id[0] = have_state ? disk_state.tree_id[0] : fetched.tree_id[0];
@@ -888,39 +1069,51 @@ static void run(void)
 	st.manifest[1] = '\0';
 	st.head_seq = have_state ? disk_state.head_seq : 0;
 	st.base_seq = have_state ? disk_state.segment_base_seq : 0;
-	memcpy(st.hist, disk_history, 32);
-	if (!checked() || !follows(have_state ? &st : NULL))
+	if (st.last_seq)
+		memcpy(st.hist, disk_history, 32);
+	else
+		memset(st.hist, 0, 32);
+	if (!checked() ||
+	    follows_pub(&fetched, fetched_manifest, have ? &st : NULL) < 0)
 		return;
 	want_write(W_TRUNCATE, 0, st.last_seq, NULL, NULL);
-	if (!recover(&st))
-		return;
-	st.generation = fetched.generation;
-	copy_short(st.manifest, fetched_manifest);
-	st.head_seq = fetched.head_seq;
-	st.base_seq = fetched.base_seq;
-	want_write(W_STATE, 0, 0, NULL, &st);
-	for (int i = 0; i < fetched.n_operations; i++) {
-		if (ops[i].seq <= st.last_seq)
-			continue;
-		digest_of(ops[i].operation_digest, d);
-		if (!sel_match[i]) {
-			model_history(st.hist, d, st.hist);
-			want_outcome(ops[i].seq, TREE_OUTCOME_UNMATCHED,
-				     st.root, st.hist);
-			st.last_seq = ops[i].seq;
-			continue;
-		}
-		want_write(W_PENDING, i, 0, NULL, NULL);
-		want_write(W_MEASURE, i, ops[i].seq, d, NULL);
-		model_hash(st.root, d, st.root);
-		want_write(W_APPEND, i, ops[i].seq, st.root, NULL);
-		model_history(st.hist, d, st.hist);
-		want_outcome(ops[i].seq, op_add[i] && module_absent[i] ?
-			     TREE_OUTCOME_MODULE_ABSENT : TREE_OUTCOME_APPLIED,
-			     st.root, st.hist);
-		st.last_seq = ops[i].seq;
+	/* Back to the segment the cursor lies in. */
+	cursor = st.last_seq;
+	walk[n] = &fetched;
+	names[n++] = fetched_manifest;
+	while (succ->base_seq > cursor) {
+		int s;
+
+		if (!within(succ->base_seq, cursor))
+			return;
+		s = served(succ->segment_manifest_digest[0]);
+		if (s < 0)
+			return;
+		if (!checked_pub(s ? &sealed : &fetched) ||
+		    !precedes(s ? &sealed : &fetched,
+			      s ? sealed_manifest : fetched_manifest, succ))
+			return;
+		__CPROVER_assert(n <= NSEG, "a walk passes each segment once");
+		walk[n] = s ? &sealed : &fetched;
+		names[n++] = s ? sealed_manifest : fetched_manifest;
+		succ = walk[n - 1];
+	}
+	/* Forwards, the oldest first. */
+	for (int k = n - 1; k >= 0; k--) {
+		const struct tree_publication *p = walk[k];
+
+		if (follows_pub(p, names[k], have ? &st : NULL) ||
+		    !history_ok(p, &st))
+			return;
+		if (k == n - 1 && !recover_in(&st, p))
+			return;
+		st.generation = p->generation;
+		copy_short(st.manifest, names[k]);
+		st.head_seq = p->head_seq;
+		st.base_seq = p->base_seq;
+		have = true;
 		want_write(W_STATE, 0, 0, NULL, &st);
-		want_write(W_UNLINK, 0, 0, NULL, NULL);
+		loop(&st, p);
 	}
 	want_write(W_STATE, 0, 0, NULL, &st);
 }
@@ -939,12 +1132,15 @@ static void any_name(char *s, bool may_be_empty)
 	s[1] = '\0';
 }
 
-/* What tree_parse() lets through, which the fetch stub stands for. */
-static void any_publication(void)
+/*
+ * What tree_parse() lets through, which the fetch stub stands for: the
+ * publication of the operations from first on, and its manifest digest.
+ */
+static void any_one(struct tree_publication *out, int first, char *manifest)
 {
 	struct tree_publication pub;
 
-	pub.operations = ops;
+	pub.operations = &ops[first];
 	pub.operations_capacity = 0;
 	pub.n_operations = LEN;
 	any_name(pub.tree_id, false);
@@ -954,13 +1150,13 @@ static void any_publication(void)
 	__CPROVER_assume(pub.generation >= 0 && pub.generation != INT64_MAX &&
 			 pub.base_seq >= 0 && pub.head_seq >= pub.base_seq &&
 			 pub.head_seq != INT64_MAX);
-	fetched = pub;
-	for (int i = 0; i < LEN; i++) {
+	*out = pub;
+	for (int i = first; i < first + LEN; i++) {
 		struct tree_operation *o = &ops[i];
 		bool add, match, fail, absent;
 		__s64 seq;
 
-		__CPROVER_assume(seq > 0 && (!i || seq - 1 == ops[i - 1].seq));
+		__CPROVER_assume(seq > 0 && (i == first || seq - 1 == ops[i - 1].seq));
 		o->seq = seq;
 		any_name(o->id, false);
 		any_name(o->operation_digest, false);
@@ -974,7 +1170,15 @@ static void any_publication(void)
 		op_add[i] = add;
 		module_absent[i] = absent;
 	}
-	any_name(fetched_manifest, false);
+	any_name(manifest, false);
+}
+
+static void any_publication(void)
+{
+	any_one(&fetched, 0, fetched_manifest);
+#if NSEG == 2
+	any_one(&sealed, LEN, sealed_manifest);
+#endif
 }
 
 /*
@@ -999,10 +1203,11 @@ static void any_node(void)
 	disk_state.head_seq = state_there ? head_seq : 0;
 	disk_state.segment_base_seq = state_there ? base_seq : 0;
 	for (int i = 0; i < 32; i++) {
-		__u8 b, h;
+		__u8 b, h, o;
 
 		disk_state.projection_root[i] = state_there ? (char)b : '\0';
 		disk_history[i] = h;
+		disk_other_history[i] = o;
 	}
 	__CPROVER_assume(seq > 0 && id && digest);
 	disk_pending.seq = pending_there ? seq : 0;

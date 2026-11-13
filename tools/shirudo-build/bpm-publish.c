@@ -1024,19 +1024,12 @@ static int tree_refuse_sealed_xdp_class(struct bpm_oci_client *c,
 static int tree_history_at_head(const struct tree_publication *seg,
 				char out[65])
 {
-	__u8 root[32] = {}, digest[32];
+	__u8 root[32];
 	int ret;
 
-	if (seg->base_seq && hex_decode(seg->history_root, root, sizeof(root)))
-		return -EINVAL;
-	for (int i = 0; i < seg->n_operations; i++) {
-		ret = sha256_digest_decode(seg->operations[i].operation_digest,
-					   digest);
-		if (!ret)
-			ret = chain_history_step(root, digest, root);
-		if (ret)
-			return ret;
-	}
+	ret = tree_history_at(seg, seg->head_seq, root);
+	if (ret)
+		return ret;
 	hex_encode(root, sizeof(root), out);
 	return 0;
 }
