@@ -678,6 +678,15 @@ signed config image.
        running node's walk back, ``base_root`` verified against
        ``node_ops``, a node first seen past seq 0 reading ``gap`` and
        ``healthy``, and a shield below the window still ``shielded``
+   * - ``t9111-pipeline-segments``
+     - A backward walk on real data, run by ``host.sh`` after ``t9110`` on
+       a second fresh edge node and node B: ``bpm tree append
+       --segment-ops 2`` sealing three segments, a node without tree state
+       and a node behind inside a sealed segment both fetching it by its
+       digest, as the registry's access log shows, then applying forwards
+       with the masks ``VQ==`` and ``mg==``, no walk once both are at the
+       new segment's base, keepalives over all three segments and both
+       nodes ``healthy``
 
 Unit suites and fuzz targets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -839,7 +848,7 @@ Coverage by area
      - ``t3011``, ``t5004``, ``t7005``, ``t7007``, ``t7008``, ``t7009``,
        ``t7101``, ``t7102``, ``t7103``, ``t7104``, ``t7105``, ``t7106``,
        ``t7107``, ``t7108``, ``t7109``, ``t7110``, ``t9105``, ``t9109``,
-       ``t9110``.
+       ``t9110``, ``t9111``.
        Fuzz: ``tree``,
        ``tree-state``, ``kconfig``. Unit: ``bpm_tree``,
        ``bpm_tree_overlap``, ``bpm_tree_state``, ``chain_history``,
@@ -851,7 +860,8 @@ Coverage by area
    * - Telemetry
      - ``t4006``, ``t4104``, ``t6139``, ``t7109``, ``t7110``, ``t8001`` to
        ``t8006``, ``t8101`` to ``t8106``, ``t9101`` to ``t9105``,
-       ``t9107``, ``t9109``, ``t9110``. Fuzz: ``otel``, ``quote-check``,
+       ``t9107``, ``t9109``, ``t9110``, ``t9111``. Fuzz: ``otel``,
+       ``quote-check``,
        ``serializer``.
        Unit: ``keepalive``, ``keepalive_quote``, ``sysinfo``
    * - Decoders

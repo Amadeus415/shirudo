@@ -42,66 +42,11 @@ command -v python3 >/dev/null 2>&1 || test_skip_all "no python3"
 [ -s "$E2E/ca.pem" ] || test_skip_all "no registry and collector CA in $E2E"
 . ./vm/stack-lib.sh
 . ./end2end/node-lib.sh
+. ./end2end/pipeline-lib.sh
 node_wait edge 0 && node_wait b 0 ||
 	test_skip_all "the fresh edge node and node B are not up"
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
-
-# Run the query $1 on the backend's ClickHouse and print its result.
-ch() {
-	stack_backend_client --query "$1" </dev/null
-}
-
-# Wait up to 60 seconds for the query $1 to print $2.
-ch_wait() {
-	i=0
-	until [ "$(ch "$1")" = "$2" ]; do
-		i=$((i + 1))
-		[ "$i" -lt 120 ] || return 1
-		sleep 0.5
-	done
-}
-
-# Compare the query $1's result with file $2.
-ch_cmp() {
-	ch "$1" >"$2.out" && diff -u "$2" "$2.out" >&2
-}
-
-refresh() {
-	for view in node_status_mv node_vulns_mv; do
-		ch "SYSTEM REFRESH VIEW shirudo.$view" &&
-		ch "SYSTEM WAIT VIEW shirudo.$view" || return 1
-	done
-}
-
-# Run the command line ${2...} as root in node $1, edge or b, with no
-# standard input.
-on() {
-	node_sh "$@" </dev/null
-}
-
-# Start the unit $2 in node $1 and wait for it; its journal is what a
-# failure needs.
-unit_ok() {
-	on "$1" "systemctl start $2 ||
-		{ journalctl -u $2 --no-pager | tail -n 30 >&2; exit 1; }"
-}
-
-# Copy node $1's tree records to $W/<name>-$1, and print its view of them.
-# A node that applied nothing has no tree-eventlog.
-node_view() {
-	on "$1" cat "$STATE/state.json" >"$W/state.json-$1" &&
-	on "$1" cat "$STATE/outcomes" >"$W/outcomes-$1" &&
-	on "$1" "[ ! -e $STATE/tree-eventlog ] || cat $STATE/tree-eventlog" \
-		>"$W/tree-eventlog-$1" || return 1
-	python3 "$CHECKS" node "$W/state.json-$1" "$W/outcomes-$1" \
-		"$W/tree-eventlog-$1"
-}
-
-# The attestation key name of node $1, found by its boot_id in the records.
-ak() {
-	cat "$W/ak-$1"
-}
 
 # The payload_sha256 of the upatch xfs-fix in the package of release $1.
 payload() {
@@ -180,28 +125,15 @@ print(\"\\n\".join(op[\"operation_digest\"].removeprefix(\"sha256:\") for op in 
 '
 
 test_expect_success 'both nodes trust the CA and reach the registry' '
-	for n in edge b; do
-		node_sh "$n" "cat >/etc/shirudo/end2end-ca.pem" <"$E2E/ca.pem" &&
-		on "$n" "install -d /etc/shirudo/bpm &&
-			echo BPM_OCI_CA_FILE=/etc/shirudo/end2end-ca.pem \
-				>/etc/shirudo/bpm/environment &&
-			echo OTEL_EXPORTER_OTLP_CERTIFICATE=/etc/shirudo/end2end-ca.pem \
-				>/etc/shirudo/map-export.env &&
-			cd /workspace/shirudo/testing && rm -f /tmp/forward-ready &&
-			setsid -f python3 end2end/tcp_forward.py 127.0.0.1:15443 \
-				10.0.2.2:15443 /tmp/forward-ready \
-				</dev/null >/dev/null 2>&1 &&
-			i=0 && until [ -e /tmp/forward-ready ]; do
-				i=\$((i + 1)); [ \$i -lt 50 ] || exit 1; sleep 0.1
-			done" || exit 1
-	done
+	node_reach edge &&
+	node_reach b
 '
 
 test_expect_success 'the sync applies 01 01 01 on the edge node and 10 10 10 on node B' '
 	unit_ok edge shirudo-bpm-tree-sync.service &&
 	unit_ok b shirudo-bpm-tree-sync.service &&
-	node_view edge >"$W/view-edge" &&
-	node_view b >"$W/view-b" &&
+	node_view edge &&
+	node_view b &&
 	python3 - "$W/view-edge" "$W/view-b" <<-\PY
 	import json, sys
 	edge, b = (json.load(open(path)) for path in sys.argv[1:3])
@@ -220,12 +152,8 @@ test_expect_success 'each node sends two quoted keepalives, a few seconds apart'
 	unit_ok edge shirudo-keepalive.service &&
 	unit_ok b shirudo-keepalive.service &&
 	ch_wait "SELECT count() FROM shirudo.keepalive FINAL" 4 &&
-	for n in edge b; do
-		boot=$(on "$n" cat /proc/sys/kernel/random/boot_id) &&
-		ch "SELECT DISTINCT ak_name FROM shirudo.keepalive
-			WHERE boot_id = '\''$boot'\''" >"$W/ak-$n" &&
-		test "$(wc -l <"$W/ak-$n")" = 1 || exit 1
-	done &&
+	ak_record edge &&
+	ak_record b &&
 	test "$(ak edge)" != "$(ak b)"
 '
 
@@ -249,14 +177,12 @@ test_expect_success 'node_status shows both nodes healthy with the masks VA== an
 	test "$version" = "$(on b "$RUNTIME version --version-id")" &&
 	ch "INSERT INTO shirudo.expected_builds (version_id, note)
 		VALUES ('\''$version'\'', '\''t9109'\'')" &&
-	refresh &&
+	refresh node_status_mv node_vulns_mv &&
 	printf "%s\thealthy\tuntrusted\t0\n" "$(ak b)" "$(ak edge)" | sort >"$W/status" &&
 	ch_cmp "SELECT ak_name, status, trust, failed_check FROM shirudo.node_status
 		ORDER BY ak_name" "$W/status" &&
-	ch "SELECT line FROM shirudo.node_status ARRAY JOIN log AS line
-		WHERE ak_name = '\''$(ak edge)'\''" >"$W/log-edge" &&
-	ch "SELECT line FROM shirudo.node_status ARRAY JOIN log AS line
-		WHERE ak_name = '\''$(ak b)'\''" >"$W/log-b" &&
+	status_log edge >"$W/log-edge" &&
+	status_log b >"$W/log-b" &&
 	root=$(python3 -c "import json, sys; print(json.load(open(sys.argv[1]))[\"projection_root\"][:8])" \
 		"$W/view-edge") &&
 	grep -qx "4 chain: pass, root $root" "$W/log-edge" &&
@@ -366,7 +292,7 @@ test_expect_success 'node_vulns shields the edge node and excludes node B' '
 		<"$FIX/kernel-vulns.json" &&
 	test "$(ch "SELECT countIf(kver(kernel_release) >= [7, 0])
 		FROM shirudo.keepalive_latest FINAL")" = 2 &&
-	refresh &&
+	refresh node_status_mv node_vulns_mv &&
 	cat >"$W/vulns" <<-EOF &&
 	b	declared	kernel	EXAMPLE-0101	linux	shield_excludes_node	xfs-fix	3	add	fixes
 	b	declared	sbom	EXAMPLE-0202	openssl	exposed_no_shield		0		none
@@ -391,7 +317,7 @@ test_expect_success 'a record replayed with one body byte changed is body_mismat
 	test "$(ch "SELECT reason, lower(hex(SHA256(body))) FROM shirudo.rejected")" = \
 		"$(printf "body_mismatch\t%s" "$(sha256sum "$W/altered" | cut -d " " -f 1)")" &&
 	test "$(ch "SELECT count() FROM shirudo.keepalive FINAL")" = 4 &&
-	refresh &&
+	refresh node_status_mv node_vulns_mv &&
 	status_rows >"$W/status-after" &&
 	diff -u "$W/status-before" "$W/status-after" >&2
 '

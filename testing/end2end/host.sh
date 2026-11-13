@@ -5,7 +5,8 @@
 # Its arguments are the command that runs the suite in node A; node B, a
 # second target with a TPM of its own, boots beside it. After node A, a
 # fresh edge node boots in its place and t9109 and t9110 run here against
-# it and node B.
+# it and node B. A second fresh edge node and node B then take their
+# place, on a registry that holds no tree, and t9111 runs against them.
 
 set -eu
 
@@ -37,6 +38,9 @@ NODES_DIR=$W
 NODES_HOST=127.0.0.1
 NODE_B_PID=
 NODE_EDGE_PID=
+# The second pair of nodes adds NODE_ROUND to the VM name of the nodes
+# beside node A and to their boot logs.
+NODE_ROUND=
 . "$REPO/testing/end2end/node-lib.sh"
 
 say() { printf 'end2end: %s\n' "$*"; }
@@ -53,7 +57,8 @@ down() {
 
 # The state directory of node $1's VM.
 node_run_dir() {
-	printf '%s/build/test-vm/vms/%s-end2end-%s\n' "$REPO" "$VM_NAME" "$1"
+	printf '%s/build/test-vm/vms/%s%s-end2end-%s\n' "$REPO" "$VM_NAME" \
+		"$NODE_ROUND" "$1"
 }
 
 # Boot node $1, b with the core role or edge with the edge role, prepared
@@ -63,8 +68,9 @@ node_boot() {
 	run=$(node_run_dir "$1")
 	mkdir -p "$NODES_DIR/node-$1"
 	if "${MAKE:-make}" -C "$REPO/testing" vm-node-end2end END2END_NODE="$1" \
+		VM_NAME="$VM_NAME$NODE_ROUND" \
 		TEST_VM_CPUS=2 TEST_VM_MEMORY="${TEST_VM_NODE_MEMORY:-2G}" \
-		>"$W/node-$1.log" 2>&1 &&
+		>"$W/node-$1$NODE_ROUND.log" 2>&1 &&
 	   cp "$run/ssh.port" "$NODES_DIR/node-$1/port" &&
 	   install -m 0600 "$run/ssh/id_ed25519" "$NODES_DIR/node-$1/key"; then
 		: >"$NODES_DIR/node-$1/ready"
@@ -84,7 +90,7 @@ node_down() {
 
 node_stop() {
 	[ ! -d "$(node_run_dir "$1")" ] ||
-		VM_NAME=$VM_NAME-end2end-$1 "$REPO/testing/vm/run.sh" --stop \
+		VM_NAME=$VM_NAME$NODE_ROUND-end2end-$1 "$REPO/testing/vm/run.sh" --stop \
 			>/dev/null 2>&1 || :
 }
 
@@ -131,6 +137,35 @@ host_test() {
 	cat "$log"
 	[ "$rc" -eq 0 ] || die "${1%%-*} failed; see $log"
 	! grep -q '^1\.\.0 # SKIP' "$log" || die "${1%%-*} was skipped"
+}
+
+# Boot the second pair of nodes for t9111, a fresh edge node and a fresh
+# node B with TPMs of their own, once the first pair has stopped, so that
+# two guests run at most. Their config images name the tree t9109 and
+# t9110 grew, so the registry starts again without it, and holds no tree.
+second_pair() {
+	NODE_ROUND=-2
+	rm -rf -- "$NODES_DIR/node-edge" "$NODES_DIR/node-b"
+	docker rm -fv "$STACK_NAME-registry" >/dev/null 2>&1 || :
+	stack_oci || die "the registry did not come up again"
+	say "a second fresh edge node and node B, in $VM_NAME$NODE_ROUND-end2end-edge and -b"
+	node_boot edge &
+	NODE_EDGE_PID=$!
+	node_boot b &
+	NODE_B_PID=$!
+	wait "$NODE_EDGE_PID" || :
+	wait "$NODE_B_PID" || :
+	NODE_EDGE_PID=
+	NODE_B_PID=
+	for n in edge b; do
+		node_wait "$n" 0 || {
+			tail -n 40 "$W/node-$n$NODE_ROUND.log" >&2
+			die "node $n of the second pair did not boot; see $W/node-$n$NODE_ROUND.log"
+		}
+	done
+	[ "$(node_sh edge cat /run/shirudo/config/etc/shirudo/node.labels)" = role=edge ] &&
+	[ "$(node_sh b cat /run/shirudo/config/etc/shirudo/node.labels)" = role=core ] ||
+		die "the second pair is not labelled role=edge and role=core"
 }
 
 # The keepalive backend t9107 runs against, in $BACKEND: BACKEND_DIR, a
@@ -385,6 +420,12 @@ if [ -n "$NODE_EDGE_PID" ]; then
 		"$(cat "$TEST_VM_HOST_BUNDLE/verity/config-edge.root")"
 	host_test t9109-pipeline
 	host_test t9110-keepalive-history
+	node_down edge ""
+	node_clean edge
+	node_down b ""
+	node_clean b
+	second_pair
+	host_test t9111-pipeline-segments
 	node_down edge ""
 	node_clean edge
 fi

@@ -67,6 +67,14 @@ stack_oci()
 	stack_wait_https "https://$REGISTRY/v2/"
 }
 
+# The registry's access log, oldest request first, one line per request
+# in the combined log format. The registry writes it to standard output
+# and the rest of its log to standard error.
+stack_oci_log()
+{
+	docker logs "$STACK_NAME-registry" 2>/dev/null
+}
+
 stack_telemetry()
 {
 	docker network inspect "$STACK_NAME" >/dev/null 2>&1 ||

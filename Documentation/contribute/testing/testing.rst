@@ -172,9 +172,9 @@ a Python companion with the same stem, such as
 before ``init``. They skip on the build host and run in a separate VM
 that the ``tpm`` family boots without the production initrd.
 
-``t9109`` and ``t9110`` carry target numbers but run on the host:
-:src:`testing/end2end/host.sh` runs them after node A's suite, in that
-order, against two other nodes (see :ref:`testing-two-nodes`), and node
+``t9109``, ``t9110`` and ``t9111`` carry target numbers but run on the
+host: :src:`testing/end2end/host.sh` runs them after node A's suite, in
+that order, against other nodes (see :ref:`testing-two-nodes`), and node
 A's runner leaves them out.
 
 Run the tests
@@ -659,10 +659,10 @@ operator key and loads it with the backend's tree ingest job, which runs
 ``bpm tree show``. In the guest, ``t9107`` sends the example keepalives
 with their recorded quotes through that collector and queries
 ClickHouse, both through QEMU's address for the host. After node A,
-``host.sh`` runs ``t9109`` and ``t9110`` against the same backend, see
-:ref:`testing-pipeline` and :ref:`testing-history`. Without
-``BACKEND_DIR`` and without ``../backend``, ``t9107`` skips and
-``t9109`` and ``t9110`` do not run:
+``host.sh`` runs ``t9109``, ``t9110`` and ``t9111`` against the same
+backend, see :ref:`testing-pipeline`, :ref:`testing-history` and
+:ref:`testing-walk`. Without ``BACKEND_DIR`` and without ``../backend``,
+``t9107`` skips and ``t9109`` to ``t9111`` do not run:
 
 .. code-block:: console
 
@@ -673,13 +673,15 @@ ClickHouse, both through QEMU's address for the host. After node A,
 The nodes
 ~~~~~~~~~
 
-The tier boots up to three targets, at most two at once, each with its
+The tier boots up to five targets, at most two at once, each with its
 own software TPM and so its own attestation key. Node A is the family's
 VM, named ``<name>-end2end``, and runs the target tests in number order.
 Node B, ``<name>-end2end-b``, boots beside it. With a keepalive backend,
 the fresh edge node, ``<name>-end2end-edge``, boots once node A has
 stopped, and ``t9109`` and then ``t9110`` run against it and node B.
-Both boot with ``make -C testing vm-node-end2end``, ``END2END_NODE=b`` or
+Once both have stopped, a second fresh edge node and node B,
+``<name>-2-end2end-edge`` and ``<name>-2-end2end-b``, boot for
+``t9111``. All of them boot with ``make -C testing vm-node-end2end``, ``END2END_NODE=b`` or
 ``edge``: the runner's
 node mode prepares a node as it prepares node A, activates the config
 image of its role, runs no tests, starts no timers and leaves it running
@@ -715,6 +717,16 @@ node has, and its register and eventlog keep all of it. So the fresh edge
 node takes node A's place rather than node A moving to the pipeline
 tree. Booting it after node A keeps two guests at most.
 
+``t9111`` needs nodes that have followed no tree, and both nodes of
+``t9109`` and ``t9110`` hold the eleven operations of
+``shirudo/pipeline-tree`` and their upatches by then. So ``host.sh``
+stops them and boots a second pair with the same config images, and it
+starts the registry again without a volume, so that it holds no tree
+and ``shirudo/pipeline-tree`` begins anew. The registry keeps nothing
+else that a later step needs, and the second pair needs no config image
+of its own. The pair boots once the first has stopped, so two guests
+still run at most; their boot costs the tier two more boots.
+
 All nodes declare an image: :src:`testing/vm/files/end2end.os-release`,
 ``IMAGE_ID=fleet-os`` and ``IMAGE_VERSION=end2end-1``, is added to their
 ``/etc/os-release``. None binds the image as ``verified``. Their root is
@@ -730,10 +742,11 @@ attestation key differs from node A's and its labels are ``role=core``.
 It checks that the fresh edge node is labelled ``role=edge``, and that
 the keepalive body each node printed while it was prepared, in
 ``result/keepalive.json`` of its state directory, names the image above
-and no root.
+and no root. It checks the labels of the second pair the same way.
 
 A test reaches node B and the fresh edge node as root over SSH through
-:src:`testing/end2end/node-lib.sh`, by the names ``b`` and ``edge``.
+:src:`testing/end2end/node-lib.sh`, by the names ``b`` and ``edge``,
+which name the second pair once it has booted.
 ``node_wait`` waits for a node to be prepared and fails when it did not
 boot; ``node_sh`` runs a command line in its shell, with the test's
 standard input and output:
@@ -768,7 +781,8 @@ defaults the guests take 6 GiB of host memory at most, while node A and
 node B run, and the registry, the two collectors and the two ClickHouse
 servers come on top. ``host.sh`` prints each node's memory use, and their
 boot logs are ``build/test-vm/end2end/node-b.log`` and
-``node-edge.log``.
+``node-edge.log``, and ``node-b-2.log`` and ``node-edge-2.log`` for the
+second pair.
 
 .. _testing-pipeline:
 
@@ -852,6 +866,62 @@ node's ``base_root`` verified and node B's log reading ``base unverified
 the kernel advisory ``shielded`` by ``xfs-fix`` at seq 3, below the
 window, on the edge node and ``unknown`` on node B, as threat U20 of
 :doc:`/security/threat-model` says.
+
+.. _testing-walk:
+
+The backward walk
+~~~~~~~~~~~~~~~~~
+
+``t9111`` shows a node's walk back over a sealed segment on real data:
+the publisher seals it, a node behind it follows its signed digest back
+and applies forwards, and the backend sees one tree. ``host.sh`` runs it
+after ``t9110``, against the second fresh edge node and node B and the
+same backend, and its output is ``build/test-vm/end2end/t9111.log``. The
+tree's five operations fit in the walk, join and keepalive window of the
+bundle's targets. It:
+
+#. checks that neither node has tree state and that the registry holds
+   no tree, empties the keepalive backend, loads its schema again and
+   sets ``window`` to 7;
+#. builds ``xfs-fix`` 1.0.0 and 1.1.0 and ``net-guard`` from
+   :src:`testing/fixtures/pipeline/net-guard/`, which selects no label,
+   so that node B applies something;
+#. appends, with ``--segment-ops 2`` and the tree id ``segments``, add
+   ``xfs-fix`` 1.0.0 for ``role=edge``, which node B alone syncs, then add
+   ``net-guard``, delete ``xfs-fix`` 1.0.0 and add ``xfs-fix`` 1.1.0,
+   which seal segment 1 at generation 2 as ``segment-1``;
+#. syncs the edge node, which has ``last_seq`` 0, and node B, at seq 1,
+   one after the other. Each fetches ``stable``, segment 2, then segment
+   1 by its digest, and applies forwards to seq 4;
+#. loads the tree with the ingest job and sends a keepalive from each
+   node;
+#. appends delete ``net-guard``, which seals segment 2 as ``segment-2``,
+   syncs both nodes, which fetch ``stable`` and the manifest of the
+   ``net-guard`` package the delete names, which ``bpm tree append``
+   keeps in the tree's repository, but no sealed segment, and sends
+   keepalives again.
+
+The registry's access log (``stack_oci_log`` of
+:src:`testing/vm/stack-lib.sh`) is how it sees each fetch: the test
+writes a mark there before and after each sync, a request for a manifest
+that does not exist, and reads the requests for the tree's repository
+between them. It checks that each walk fetches segment 1 by its digest
+after ``stable`` and never by its ``segment-1`` tag, and that no sync
+after seq 5 fetches a sealed segment. It checks that each segment's
+``base`` names the manifest its tag names and the ``history_root`` the
+test folds from the published digests; that each node's ``outcomes``,
+``tree-eventlog`` and ``projection_root`` follow from the published
+operations and its role, with the masks ``VQ==`` and ``mg==`` at seq 4
+and ``VUA=`` and ``mkA=`` at seq 5, the same ``history_root`` on every
+line of both, ``segment_base_seq`` 2 and then 4, the ``tree_op`` events
+of its attested eventlog and its loaded upatches; that each keepalive
+covers all five operations from ``base_seq`` 0; and that ``tree_pubs``
+holds the three segments, ``tree_ops`` the five operations and
+``node_ops`` each node from seq 1, with no contradiction marked, and
+both nodes are ``healthy`` with ``4 chain: pass``, ``5 head: pass, seq 5
+of 5`` and ``6 set: pass``. :src:`testing/end2end/pipeline-lib.sh` holds
+what ``t9109`` to ``t9111`` do to the nodes, the registry and
+ClickHouse.
 
 Select test scripts
 ~~~~~~~~~~~~~~~~~~~

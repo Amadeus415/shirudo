@@ -72,10 +72,11 @@ for t in "$dir"/t[0-9]1[0-9][0-9]-*.sh; do
 	[ -e "$t" ] || continue
 	found=1
 	test_matches "$t" || continue
-	# end2end/host.sh runs t9109 and t9110 itself, on the host after node
-	# A's suite, against the fresh edge node and node B.
+	# end2end/host.sh runs t9109 to t9111 itself, on the host after node
+	# A's suite, against fresh edge nodes and nodes B.
 	case "$t" in
 	end2end/t9109-pipeline.sh | end2end/t9110-keepalive-history.sh) continue ;;
+	end2end/t9111-pipeline-segments.sh) continue ;;
 	esac
 	log="$SHIRUDO_TEST_RESULTS/$(basename "$t").log"
 	rc=0

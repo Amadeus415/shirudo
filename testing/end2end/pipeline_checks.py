@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Authors of shirudo
-"""What t9109 and t9110 recompute from a node's records, the publications
+"""What t9109 to t9111 recompute from a node's records, the publications
 and the backend's rows, each from the format's own definition, so that
 neither side is taken on trust."""
 
 import base64
 import hashlib
 import json
+import re
 import ssl
 import sys
 import urllib.request
@@ -86,6 +87,7 @@ def node(state_path, outcomes_path, eventlog_path, window=None):
         "projection_root": hexdigest(state["projection_root"]),
         "outcomes": [line["outcome"] for line in outcomes],
         "history_root": hexdigest(outcomes[-1]["history_root"]),
+        "history_roots": [hexdigest(line["history_root"]) for line in outcomes],
         "outcome_root": hexdigest(outcomes[-1]["projection_root"]),
         "base_seq": base,
         "base_root": base_root,
@@ -159,6 +161,87 @@ def operations(path):
             for op in segment["document"]["operations"]]
 
 
+def artifacts(path, *seqs):
+    """The artifact manifest digests of the operations seqs of a walk, as
+    a node fetches them to apply each."""
+    wanted = {int(seq) for seq in seqs}
+    return [hexdigest(op["artifact"]["manifest_digest"])
+            for segment in walk(path)
+            for op in segment["document"]["operations"]
+            if op["seq"] in wanted]
+
+
+def selected(selector, labels):
+    """Whether a node with the labels selects an operation: every label
+    the selector names has one of its values."""
+    return all(labels.get(key) in values
+               for key, values in selector.get("labels", {}).items())
+
+
+def expect(view_path, walk_path, *labels):
+    """Hold a node's view against the operations of a walk and the node's
+    labels, key=value each: a node whose upatches all load applies every
+    operation it selects (01) and passes over the others (10), chains the
+    digests it applies into its projection_root and every digest into
+    the history_root of each line of its outcomes. Prints its mask."""
+    with open(view_path, encoding="utf-8") as f:
+        view = json.load(f)
+    labels = dict(label.split("=", 1) for label in labels)
+    ops = [op for segment in walk(walk_path)
+           for op in segment["document"]["operations"]]
+    ops = ops[:view["last_seq"]]
+    codes = [1 if selected(op.get("selector", {}), labels) else 2 for op in ops]
+    assert view["outcomes"] == codes, (view["outcomes"], codes)
+    digests = [hexdigest(op["operation_digest"]) for op in ops]
+    applied = [d for d, code in zip(digests, codes) if code == 1]
+    assert view["chained"] == applied, (view["chained"], applied)
+    assert view["projection_root"] == roots(applied)[0], view
+    assert view["outcome_root"] == view["projection_root"], view
+    assert view["history_roots"] == [roots(digests[:seq])[1]
+                                     for seq in range(1, len(digests) + 1)], view
+    return mask([{"seq": seq, "outcome": code}
+                 for seq, code in enumerate(codes, 1)],
+                view["head_seq"], view["base_seq"])
+
+
+def loaded(upatch_list):
+    """The loaded upatches of `upatch list --json`, one "<name> <payload>"
+    per line, by name."""
+    with open(upatch_list, encoding="utf-8") as f:
+        upatches = json.load(f)["upatches"]
+    return sorted(f"{u['name']} {u['payload_sha256']}" for u in upatches
+                  if u["loaded"] and u.get("type") == "load")
+
+
+def tree_events(evidence_path):
+    """The seq of every tree_op record of the eventlog in evidence."""
+    with open(evidence_path, encoding="utf-8") as f:
+        records = json.load(f)["eventlog"]
+    return [r["tree"]["seq"] for r in records if r["type"] == "tree_op"]
+
+
+ACCESS = re.compile(r'"([A-Z]+) /v2/(\S+) HTTP/[0-9.]+" ')
+
+
+def requests(log, start, end, repository):
+    """The requests for repository in the registry access log between the
+    GETs of the marks start and end, as "<method> <path>"."""
+    marks = {f"end2end-mark/manifests/{name}": name for name in (start, end)}
+    seen = None
+    for line in log:
+        found = ACCESS.search(line)
+        if not found:
+            continue
+        method, path = found.groups()
+        if marks.get(path) == start and seen is None:
+            seen = []
+        elif marks.get(path) == end and seen is not None:
+            return seen
+        elif seen is not None and path.startswith(repository + "/"):
+            seen.append(f"{method} {path[len(repository) + 1:]}")
+    raise SystemExit(f"pipeline_checks.py: no marks {start} and {end} in order")
+
+
 def tags(registry, ca, repository, count):
     """The manifest digests of the tags segment-1 to segment-<count>."""
     ctx = ssl.create_default_context(cafile=ca)
@@ -184,8 +267,18 @@ def main():
         print(*segments(args[0]), sep="\n")
     elif command == "operations":
         print(*operations(args[0]), sep="\n")
+    elif command == "artifacts":
+        print(*artifacts(args[0], *args[1:]), sep="\n")
     elif command == "tags":
         print(*tags(args[0], args[1], args[2], int(args[3])), sep="\n")
+    elif command == "expect":
+        print(expect(*args))
+    elif command == "loaded":
+        sys.stdout.writelines(f"{line}\n" for line in loaded(args[0]))
+    elif command == "tree-events":
+        print(*tree_events(args[0]))
+    elif command == "requests":
+        sys.stdout.writelines(f"{line}\n" for line in requests(sys.stdin, *args))
     elif command == "set":
         print(loaded_set(args[0]))
     elif command == "quotes":
