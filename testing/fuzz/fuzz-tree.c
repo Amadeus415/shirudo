@@ -7,7 +7,8 @@
  * bare and with the publisher's fixes, which must read back with the same
  * base, operations and digests and pass tree_publication_check() exactly
  * when the first did. A segment the check passes names its predecessor
- * when it starts past 0, and never precedes itself.
+ * when it starts past 0, and never precedes itself. tree_publication_verify()
+ * passes only what the check passes and names the operation that failed.
  */
 
 #include <stdlib.h>
@@ -63,6 +64,18 @@ static void read_back(const struct tree_publication *pub,
 	xfree(out, len);
 }
 
+static void verify_names_its_failure(const struct tree_publication *pub)
+{
+	int bad_op, ret;
+
+	ret = tree_publication_verify(pub, &bad_op);
+	if (bad_op < -1 || bad_op >= pub->n_operations ||
+	    (!ret && (bad_op != -1 || tree_publication_check(pub))) ||
+	    (bad_op >= 0 &&
+	     tree_operation_validate(&pub->operations[bad_op]) != ret))
+		abort();
+}
+
 int LLVMFuzzerTestOneInput(const __u8 *data, size_t size)
 {
 	struct tree_publication pub;
@@ -76,6 +89,7 @@ int LLVMFuzzerTestOneInput(const __u8 *data, size_t size)
 	     (pub.base_seq && !pub.n_operations) ||
 	     !tree_segment_precedes(&pub, pub.segment_manifest_digest, &pub)))
 		abort();
+	verify_names_its_failure(&pub);
 	read_back(&pub, NULL);
 	read_back(&pub, &extra);
 	tree_publication_free(&pub);

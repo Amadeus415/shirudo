@@ -156,6 +156,10 @@ int tree_emit_publication(const struct tree_publication *pub,
  * and names a well-formed sealed predecessor digest and history root; the
  * first names neither: 0 or -EINVAL.
  *
+ * tree_publication_verify() makes those checks of a publication, and that
+ * its tree ID is a name the node can record: 0 or the first failure, with
+ * *bad_op the index of the operation that failed or -1.
+ *
  * And it may follow the state the node recorded, NULL for none, with
  * manifest_digest its manifest's: the same tree, a later generation
  * unless it is the same manifest, the parent the node recorded when it is
@@ -173,6 +177,8 @@ int tree_emit_publication(const struct tree_publication *pub,
 
 int tree_operation_validate(const struct tree_operation *op);
 int tree_publication_check(const struct tree_publication *pub);
+int tree_publication_verify(const struct tree_publication *pub,
+			    int *bad_op) __must_check;
 int tree_publication_follows(const struct tree_publication *pub,
 			     const struct tree_state *state,
 			     const char *manifest_digest);

@@ -2072,32 +2072,18 @@ static int tree_fetch_checked(struct tree_source *src, const char *reference,
 			      struct tree_publication *pub,
 			      char *manifest_digest, size_t digest_sz)
 {
-	int ret;
+	int bad_op, ret;
 
 	ret = bpm_tree_fetch_publication(&src->c, src->repository, reference,
 					 get_cert_path(), src->trusted, pub,
 					 manifest_digest, digest_sz);
 	if (ret)
 		return ret;
-	/*
-	 * The node records the tree ID in its state, which takes names
-	 * alone: one that is not would be applied, measured and logged
-	 * and then never recorded, failing every later sync.
-	 */
-	if (!bpm_package_name_ok(pub->tree_id))
-		return -EINVAL;
-	ret = tree_publication_check(pub);
-	if (ret)
-		return ret;
-	for (int i = 0; i < pub->n_operations; i++) {
-		ret = tree_operation_validate(&pub->operations[i]);
-		if (ret) {
-			tree_sync_report_error("operation_validate",
-					       &pub->operations[i], ret);
-			return ret;
-		}
-	}
-	return 0;
+	ret = tree_publication_verify(pub, &bad_op);
+	if (ret && bad_op >= 0)
+		tree_sync_report_error("operation_validate",
+				       &pub->operations[bad_op], ret);
+	return ret;
 }
 
 /*

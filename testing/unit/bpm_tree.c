@@ -307,6 +307,46 @@ static void publication_runs_from_base_to_head(void)
 }
 
 /*
+ * What sync checks of a publication: a tree ID its state can record, the
+ * numbers and each operation's digests, naming the operation that fails.
+ */
+static void publication_verifies_as_sync_does(void)
+{
+	struct tree_publication pub = { .schema = 1, .generation = 1,
+					.head_seq = 2 };
+	struct tree_operation *op = operation();
+	int bad_op = 0;
+
+	set(pub.tree_id, sizeof(pub.tree_id), "t");
+	for (int seq = 1; seq <= 2; seq++) {
+		op->seq = seq;
+		ASSERT_EQ(tree_operation_digest(op, op->operation_digest), 0);
+		ASSERT_EQ(tree_publication_append(&pub, op), 0);
+	}
+	EXPECT_EQ(tree_publication_verify(&pub, &bad_op), 0);
+	EXPECT_EQ(bad_op, -1);
+	set(pub.tree_id, sizeof(pub.tree_id), "../t");
+	bad_op = 0;
+	EXPECT_EQ(tree_publication_verify(&pub, &bad_op), -EINVAL);
+	EXPECT_EQ(bad_op, -1);
+	set(pub.tree_id, sizeof(pub.tree_id), "t");
+	pub.head_seq = 3;
+	bad_op = 0;
+	EXPECT_EQ(tree_publication_verify(&pub, &bad_op), -EINVAL);
+	EXPECT_EQ(bad_op, -1);
+	pub.head_seq = 2;
+	pub.operations[1].operation_digest[7] ^= 1;
+	EXPECT_EQ(tree_publication_verify(&pub, &bad_op), -EKEYREJECTED);
+	EXPECT_EQ(bad_op, 1);
+	pub.operations[0].id[0] = '.';
+	EXPECT_EQ(tree_publication_verify(&pub, &bad_op), -EINVAL);
+	EXPECT_EQ(bad_op, 0);
+	tree_publication_free(&pub);
+	tree_selector_free(&op->selector);
+	xfree(op, sizeof(*op));
+}
+
+/*
  * A segment past the first names its sealed predecessor and the history
  * root at its base and holds an operation; the first names neither.
  */
@@ -554,6 +594,7 @@ static const struct unit_case cases[] = {
 	UNIT_CASE(segment_refuses_malformed_keys),
 	UNIT_CASE(operation_validates_against_its_digest),
 	UNIT_CASE(publication_runs_from_base_to_head),
+	UNIT_CASE(publication_verifies_as_sync_does),
 	UNIT_CASE(segment_names_its_base),
 	UNIT_CASE(publication_follows_the_recorded_state),
 	UNIT_CASE(segment_asks_for_a_walk),

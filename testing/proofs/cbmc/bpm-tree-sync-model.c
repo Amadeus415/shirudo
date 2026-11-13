@@ -37,11 +37,38 @@
 #include <openssl/x509.h>
 
 #include "proof.h"
-/* The model's checks run as the C has them; the digest check is a stub. */
+/*
+ * The model's checks run as the C has them; the digest check is a stub.
+ * The copy of tree_publication_verify() in util/bpm_tree.c would call the
+ * real one, so it is given here as the C has it, calling the stub.
+ */
 #define tree_operation_validate tree_operation_validate_unused
+#define tree_publication_verify tree_publication_verify_unused
 #include "../../../util/bpm_tree.c"
 #undef tree_operation_validate
+#undef tree_publication_verify
 int tree_operation_validate(const struct tree_operation *op);
+
+int tree_publication_verify(const struct tree_publication *pub, int *bad_op)
+{
+	int ret;
+
+	*bad_op = -1;
+	if (!bpm_package_name_ok(pub->tree_id))
+		return -EINVAL;
+	ret = tree_publication_check(pub);
+	if (ret)
+		return ret;
+	for (int i = 0; i < pub->n_operations; i++) {
+		ret = tree_operation_validate(&pub->operations[i]);
+		if (ret) {
+			*bad_op = i;
+			return ret;
+		}
+	}
+	return 0;
+}
+
 #include "../../../builtin-bpm.c"
 
 enum {

@@ -112,18 +112,9 @@ int bpm_tree_fetch_publication(struct bpm_oci_client *c,
 }
 
 /* The checks of the publication, which other proofs cover. */
-bool bpm_package_name_ok(const char *name)
+int tree_publication_verify(const struct tree_publication *pub, int *bad_op)
 {
-	return true;
-}
-
-int tree_publication_check(const struct tree_publication *pub)
-{
-	return 0;
-}
-
-int tree_operation_validate(const struct tree_operation *op)
-{
+	*bad_op = -1;
 	return 0;
 }
 

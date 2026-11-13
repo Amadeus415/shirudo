@@ -960,10 +960,11 @@ static int tree_refuse_sealed_xdp_class(struct bpm_oci_client *c,
 	struct tree_later later = {};
 	int next = 0, ret;
 
-	if (cur->base_seq > TREE_MAX_JOIN_OPS) {
+	ret = tree_walk_within(cur->base_seq, 0);
+	if (ret) {
 		pr_err("bpm tree append: a joining node walks back %lld operations, past the limit of %d, so the XDP device classes of the sealed segments cannot be checked",
 		       (long long)cur->base_seq, TREE_MAX_JOIN_OPS);
-		return -E2BIG;
+		return ret;
 	}
 	seen = xmalloc(sizeof(*seen));
 	if (!seen)
@@ -1162,7 +1163,7 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 	struct json_emit e;
 	char empty_config[] = "{}";
 	char package_dir[101];
-	int appended = 0, ret;
+	int appended = 0, bad_op, ret;
 	bool unload;
 
 	for (int i = 2; i < argc; i++) {
@@ -1308,7 +1309,7 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 			ret = -EINVAL;
 			goto out;
 		}
-		ret = build_tree_publication_verify(&pub);
+		ret = tree_publication_verify(&pub, &bad_op);
 		if (ret) {
 			pr_err("bpm tree append: the publication at %s:%s does not verify",
 			       repo_ref, reference);

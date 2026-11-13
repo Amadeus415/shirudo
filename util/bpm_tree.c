@@ -10,6 +10,7 @@
 #include <shirudo/misc.h>
 #include <shirudo/string.h>
 
+#include "bpm_oci.h"
 #include "bpm_tree.h"
 #include "crypto.h"
 #include "hex.h"
@@ -705,6 +706,31 @@ int tree_publication_check(const struct tree_publication *pub)
 		return -EINVAL;
 	if (!n && pub->head_seq != pub->base_seq)
 		return -EINVAL;
+	return 0;
+}
+
+int tree_publication_verify(const struct tree_publication *pub, int *bad_op)
+{
+	int ret;
+
+	*bad_op = -1;
+	/*
+	 * The node records the tree ID in its state, which takes names
+	 * alone: one that is not would be applied, measured and logged
+	 * and then never recorded, failing every later sync.
+	 */
+	if (!bpm_package_name_ok(pub->tree_id))
+		return -EINVAL;
+	ret = tree_publication_check(pub);
+	if (ret)
+		return ret;
+	for (int i = 0; i < pub->n_operations; i++) {
+		ret = tree_operation_validate(&pub->operations[i]);
+		if (ret) {
+			*bad_op = i;
+			return ret;
+		}
+	}
 	return 0;
 }
 
