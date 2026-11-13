@@ -768,9 +768,14 @@ static bool same_write(const struct write *a, int index)
 	}
 }
 
+/*
+ * Checked, and the first segment naming no predecessor, which Checked
+ * leaves out as it does the digests: the sync refuses every later one.
+ */
 static bool checked(void)
 {
 	if (fetched.generation < 0 || fetched.base_seq != 0 ||
+	    fetched.segment_manifest_digest[0] || fetched.history_root[0] ||
 	    fetched.head_seq != fetched.n_operations)
 		return false;
 	for (int i = 0; i < fetched.n_operations; i++)
@@ -944,6 +949,8 @@ static void any_publication(void)
 	pub.n_operations = LEN;
 	any_name(pub.tree_id, false);
 	any_name(pub.parent_manifest_digest, true);
+	any_name(pub.segment_manifest_digest, true);
+	any_name(pub.history_root, true);
 	__CPROVER_assume(pub.generation >= 0 && pub.generation != INT64_MAX &&
 			 pub.base_seq >= 0 && pub.head_seq >= pub.base_seq &&
 			 pub.head_seq != INT64_MAX);

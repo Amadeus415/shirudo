@@ -5,7 +5,9 @@
  * tree_parse() on an upatch tree publication, the canonical
  * digest of every operation it accepts and the publication emitted again,
  * bare and with the publisher's fixes, which must read back with the same
- * operations and digests.
+ * base, operations and digests and pass tree_publication_check() exactly
+ * when the first did. A segment the check passes names its predecessor
+ * when it starts past 0, and never precedes itself.
  */
 
 #include <stdlib.h>
@@ -42,7 +44,12 @@ static void read_back(const struct tree_publication *pub,
 	    again.n_operations != pub->n_operations ||
 	    strcmp(again.tree_id, pub->tree_id) ||
 	    again.generation != pub->generation ||
-	    again.head_seq != pub->head_seq)
+	    again.base_seq != pub->base_seq ||
+	    strcmp(again.segment_manifest_digest,
+		   pub->segment_manifest_digest) ||
+	    strcmp(again.history_root, pub->history_root) ||
+	    again.head_seq != pub->head_seq ||
+	    !tree_publication_check(&again) != !tree_publication_check(pub))
 		abort();
 	for (int i = 0; i < pub->n_operations; i++) {
 		if (tree_operation_digest(&pub->operations[i], digest) !=
@@ -63,6 +70,12 @@ int LLVMFuzzerTestOneInput(const __u8 *data, size_t size)
 
 	if (tree_parse((const char *)data, size, &pub))
 		return 0;
+	if (!tree_publication_check(&pub) &&
+	    (!pub.segment_manifest_digest[0] != !pub.base_seq ||
+	     !pub.history_root[0] != !pub.base_seq ||
+	     (pub.base_seq && !pub.n_operations) ||
+	     !tree_segment_precedes(&pub, pub.segment_manifest_digest, &pub)))
+		abort();
 	read_back(&pub, NULL);
 	read_back(&pub, &extra);
 	tree_publication_free(&pub);

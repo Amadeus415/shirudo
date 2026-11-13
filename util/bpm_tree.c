@@ -306,6 +306,11 @@ int tree_parse(const char *body, size_t len,
 		};
 		struct json_field base[] = {
 			{ "seq", JSON_T_INT, &out->base_seq, 0, 0, NULL, 0 },
+			{ "segment_manifest_digest", JSON_T_STRING,
+			  out->segment_manifest_digest,
+			  sizeof(out->segment_manifest_digest), 0, NULL, 0 },
+			{ "history_root", JSON_T_STRING, out->history_root,
+			  sizeof(out->history_root), 0, NULL, 0 },
 		};
 		struct json_field head[] = {
 			{ "seq", JSON_T_INT, &out->head_seq, 0, 0, NULL, 0 },
@@ -595,9 +600,9 @@ static size_t tree_operation_bound(const struct tree_operation *op)
 
 /*
  * Serialise a publication in the field order every publisher has used:
- * schema, tree_id, generation, parent_manifest_digest (when any), base,
- * operations, head. The bound covers the published form; the emitter
- * grows past it only for keys extra adds.
+ * schema, tree_id, generation, parent_manifest_digest (when any), base
+ * with its segment keys (when any), operations, head. The bound covers
+ * the published form; the emitter grows past it only for keys extra adds.
  */
 int tree_emit_publication(const struct tree_publication *pub,
 			  const struct tree_emit_extra *extra,
@@ -625,6 +630,11 @@ int tree_emit_publication(const struct tree_publication *pub,
 			       pub->parent_manifest_digest);
 	json_obj_open_key(&e, "base");
 	json_kv_int(&e, "seq", pub->base_seq);
+	if (pub->segment_manifest_digest[0])
+		json_kv_string(&e, "segment_manifest_digest",
+			       pub->segment_manifest_digest);
+	if (pub->history_root[0])
+		json_kv_string(&e, "history_root", pub->history_root);
 	json_obj_close(&e);
 	json_arr_open(&e, "operations");
 	for (int i = 0; !ret && i < pub->n_operations; i++)
@@ -666,6 +676,20 @@ int tree_operation_validate(const struct tree_operation *op)
 	return strcmp(op->operation_digest, expected) ? -EKEYREJECTED : 0;
 }
 
+static bool tree_base_valid(const struct tree_publication *pub)
+{
+	__u8 digest[32];
+
+	if (pub->base_seq < 0)
+		return false;
+	if (!pub->base_seq)
+		return !pub->segment_manifest_digest[0] &&
+		       !pub->history_root[0];
+	return pub->n_operations > 0 &&
+	       !sha256_digest_decode(pub->segment_manifest_digest, digest) &&
+	       !hex_decode(pub->history_root, digest, sizeof(digest));
+}
+
 int tree_publication_check(const struct tree_publication *pub)
 {
 	__u8 digest[32];
@@ -674,8 +698,8 @@ int tree_publication_check(const struct tree_publication *pub)
 	if (pub->parent_manifest_digest[0] &&
 	    sha256_digest_decode(pub->parent_manifest_digest, digest))
 		return -EINVAL;
-	if (pub->base_seq != 0)
-		return -ENOTSUP;
+	if (!tree_base_valid(pub))
+		return -EINVAL;
 	if (n && (pub->operations[0].seq != pub->base_seq + 1 ||
 		  pub->head_seq != pub->operations[n - 1].seq))
 		return -EINVAL;
@@ -691,7 +715,7 @@ int tree_publication_follows(const struct tree_publication *pub,
 	bool same;
 
 	if (!state)
-		return pub->base_seq ? -ERANGE : 0;
+		return pub->base_seq ? TREE_FOLLOWS_WALK : 0;
 	if (strcmp(state->tree_id, pub->tree_id))
 		return -EINVAL;
 	same = !strcmp(state->manifest_digest, manifest_digest);
@@ -705,7 +729,20 @@ int tree_publication_follows(const struct tree_publication *pub,
 	    pub->parent_manifest_digest[0] &&
 	    strcmp(pub->parent_manifest_digest, state->manifest_digest))
 		return -ERANGE;
-	if (pub->head_seq < state->last_seq || pub->base_seq > state->last_seq)
+	if (pub->head_seq < state->last_seq)
+		return -ERANGE;
+	return pub->base_seq > state->last_seq ? TREE_FOLLOWS_WALK : 0;
+}
+
+int tree_segment_precedes(const struct tree_publication *pred,
+			  const char *pred_manifest_digest,
+			  const struct tree_publication *succ)
+{
+	if (succ->base_seq <= 0 ||
+	    strcmp(succ->segment_manifest_digest, pred_manifest_digest) ||
+	    strcmp(pred->tree_id, succ->tree_id) ||
+	    pred->head_seq != succ->base_seq ||
+	    pred->generation >= succ->generation)
 		return -ERANGE;
 	return 0;
 }

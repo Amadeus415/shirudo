@@ -187,17 +187,25 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - ``-E2BIG`` exactly at the limit with nothing changed; a copy owns
        its arrays, a failed one holds nothing; text without controls
    * - ``bpm-tree-reader``
-     - ``tree_map_pair()``, ``tree_take_operation()``
-     - Every pair and operation, into an empty or a full publication
+     - ``tree_map_pair()``, ``tree_take_operation()``,
+       ``tree_publication_check()``
+     - Every pair and operation, into an empty or a full publication;
+       every base with 0 or 1 operation and segment keys of every content
+       the parser leaves
      - A key taken once, with a value, below its limit; an operation
-       taken exactly when whole and with room
+       taken exactly when whole and with room; a base of 0 accepted
+       exactly without the segment keys, a later one exactly with an
+       operation, a ``sha256:`` digest and a root of 64 hex digits
    * - ``bpm-tree-follows``
-     - ``tree_publication_follows()``
+     - ``tree_publication_follows()``, ``tree_segment_precedes()``
      - Every sequence number and generation; strings up to 2 bytes
-     - Accepts exactly a publication of the same tree, of a later
-       generation unless the same manifest, naming the recorded parent
-       when the next generation, with the node's cursor between its base
-       and head; without a state, one that starts at 0
+     - Refuses exactly a publication of another tree, of an earlier
+       generation unless the same manifest, naming another parent when
+       the next generation, or with its head before the node's cursor;
+       asks for a walk exactly when one it accepts starts past the
+       cursor, or past 0 without a state. A step of the walk accepts
+       exactly the segment the successor names, of its tree, ending at
+       its base and of a lower generation
    * - ``bpm-tree-signers``
      - ``tree_fetch_publication()``
      - Active or inactive image config; every signing-set count through

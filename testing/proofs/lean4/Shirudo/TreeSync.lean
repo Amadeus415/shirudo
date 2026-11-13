@@ -76,7 +76,8 @@ applies it again, and that goes on to measure it: `upatch_install()` takes
 the payload already loaded under the name as installed, and
 `upatch_remove()` an upatch already gone as removed.
 testing/proofs/cbmc/bpm-tree-follows.c proves
-`tree_publication_follows()` is `Follows`, and bpm-tree-sync-model.c checks
+`tree_publication_follows()` returns 0 exactly when `Follows` holds, the
+sync refusing the walk it asks for otherwise, and bpm-tree-sync-model.c checks
 the writes of `cmd_bpm_tree_sync()` against `run` for publications of up to
 two operations.
 -/
@@ -199,8 +200,10 @@ def Checked (pub : Pub T M I D) : Prop :=
 instance (pub : Pub T M I D) : Decidable (Checked pub) := by
   unfold Checked; infer_instance
 
-/-- `tree_publication_follows()`, as `bpm-tree-follows.c` states it and
-proves the C meets for every `__s64`: without a state, a base of 0; with
+/-- What the sync takes of `tree_publication_follows()`, a return of 0,
+as `bpm-tree-follows.c` states it and proves the C meets for every
+`__s64`; it refuses the walk the function asks for past the cursor.
+Without a state, a base of 0; with
 one, the same tree, a later generation unless it is the same manifest, the
 recorded manifest as parent when it is the next generation and names one,
 and the cursor between base and head. -/

@@ -5,7 +5,10 @@
  * What tree_parse() of util/bpm_tree.c keeps of a publication from a
  * registry, as its parser hands it over: a kconfig or label key only once,
  * with a value and below its limit, and an operation only whole, with a
- * positive seq, no empty selector list and room in the publication.
+ * positive seq, no empty selector list and room in the publication. And
+ * the base tree_publication_check() then accepts: at 0 without the
+ * segment keys, past 0 with an operation, a "sha256:" digest and a root
+ * of 64 hex digits each.
  */
 
 /* util/malloc.c and util/string.c behind a file that includes their headers. */
@@ -13,6 +16,7 @@
 #define STRING_INTERNAL
 
 #include "proof.h"
+#include "../../../util/hex.c"
 #include "../../../util/bpm_tree.c"
 #include "../../../util/malloc.c"
 #include "../../../util/string.c"
@@ -110,8 +114,50 @@ static void take_operation(void)
 			 "the next operation read into a cleared one");
 }
 
+static bool hex_digits(const char *s)
+{
+	for (int i = 0; i < 64; i++)
+		if (!((s[i] >= '0' && s[i] <= '9') ||
+		      (s[i] >= 'a' && s[i] <= 'f') ||
+		      (s[i] >= 'A' && s[i] <= 'F')))
+			return false;
+	return !s[64];
+}
+
+/* LEN operations, which run from the base to the head. */
+static void check_base(void)
+{
+	struct tree_operation *op = any_bytes(sizeof(*op));
+	struct tree_publication pub;
+	bool named, keys;
+	__s64 base;
+	int ret;
+
+	__CPROVER_assume(base >= 0 && base < INT64_MAX);
+	pub.base_seq = base;
+	pub.operations = op;
+	pub.n_operations = LEN;
+	pub.head_seq = base + LEN;
+	op->seq = base + 1;
+	pub.parent_manifest_digest[0] = '\0';
+	/* As the parser leaves them. */
+	pub.segment_manifest_digest[sizeof(pub.segment_manifest_digest) - 1] =
+		'\0';
+	pub.history_root[sizeof(pub.history_root) - 1] = '\0';
+	ret = tree_publication_check(&pub);
+	keys = pub.segment_manifest_digest[0] || pub.history_root[0];
+	named = !strncmp(pub.segment_manifest_digest, "sha256:", 7) &&
+		hex_digits(pub.segment_manifest_digest + 7) &&
+		hex_digits(pub.history_root);
+	__CPROVER_assert(ret == 0 || ret == -EINVAL, "0 or -EINVAL");
+	__CPROVER_assert(!ret == (base ? LEN && named : !keys),
+			 "the first segment without the segment keys, a later "
+			 "one with an operation and both keys well formed");
+}
+
 void harness(void)
 {
 	map_pair();
 	take_operation();
+	check_base();
 }

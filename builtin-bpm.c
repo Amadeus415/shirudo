@@ -2138,8 +2138,22 @@ static int cmd_bpm_tree_sync(int argc, const char **argv)
 	}
 	ret = tree_publication_follows(&pub, have_state ? &state : NULL,
 				       manifest_digest);
-	if (ret)
+	if (ret < 0)
 		goto out;
+	/*
+	 * A later segment is applied only after its base is checked
+	 * against the node's history root, and reached only by a walk
+	 * back through the sealed segments when the node is behind it.
+	 */
+	if (ret == TREE_FOLLOWS_WALK || pub.base_seq) {
+		pr_err("bpm tree sync: the publication is a segment that starts "
+		       "after seq %lld and this node is at seq %lld; walking "
+		       "back through sealed segments and checking a segment's "
+		       "base are not supported", pub.base_seq, state.last_seq);
+		ret = -ENOTSUP;
+		tree_sync_report_error("segment", NULL, ret);
+		goto out;
+	}
 	if (!have_state) {
 		state.schema = 1;
 		bpm_copy_string(state.tree_id, sizeof(state.tree_id), pub.tree_id);

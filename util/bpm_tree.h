@@ -80,6 +80,9 @@ struct tree_publication {
 	__s64 generation;
 	char parent_manifest_digest[128];
 	__s64 base_seq;
+	/* Past the first segment: its sealed predecessor, history at base. */
+	char segment_manifest_digest[128];
+	char history_root[65];
 	struct tree_operation *operations;
 	int operations_capacity;
 	int n_operations;
@@ -134,20 +137,34 @@ int tree_emit_publication(const struct tree_publication *pub,
  * digests and the operation digest its fields hash to: 0, -EINVAL, or
  * -EKEYREJECTED for a digest that does not match. A publication names a
  * well-formed parent digest if any, and its operations run from
- * base_seq + 1 to head_seq, or head_seq is base_seq without them: 0 or
- * -EINVAL, and -ENOTSUP for a base past 0, which snapshot compaction, a
- * later schema, would need. And it may follow the state the node
- * recorded, NULL for none, with manifest_digest its manifest's: the same
- * tree, a later generation unless it is the same manifest, the parent
- * the node recorded when it is the next generation and names one, no
- * head before the node's cursor and no base after it. 0, -EINVAL for
- * another tree, or -ERANGE.
+ * base_seq + 1 to head_seq, or head_seq is base_seq without them. A
+ * segment past the first, base_seq above 0, holds an operation or more
+ * and names a well-formed sealed predecessor digest and history root; the
+ * first names neither: 0 or -EINVAL.
+ *
+ * And it may follow the state the node recorded, NULL for none, with
+ * manifest_digest its manifest's: the same tree, a later generation
+ * unless it is the same manifest, the parent the node recorded when it is
+ * the next generation and names one, and no head before the node's
+ * cursor. 0, -EINVAL for another tree, -ERANGE, or TREE_FOLLOWS_WALK when
+ * its base lies past the cursor, 0 without a state, and the node must
+ * walk back through the sealed segments before it.
+ *
+ * tree_segment_precedes() is the check of one step of that walk: pred,
+ * whose manifest hashed to pred_manifest_digest, is the sealed segment
+ * succ names, of the same tree, ending where succ starts and of a lower
+ * generation. 0 or -ERANGE.
  */
+#define TREE_FOLLOWS_WALK 1
+
 int tree_operation_validate(const struct tree_operation *op);
 int tree_publication_check(const struct tree_publication *pub);
 int tree_publication_follows(const struct tree_publication *pub,
 			     const struct tree_state *state,
 			     const char *manifest_digest);
+int tree_segment_precedes(const struct tree_publication *pred,
+			  const char *pred_manifest_digest,
+			  const struct tree_publication *succ) __must_check;
 
 /*
  * Evaluate a publication selector against the running node.  An empty

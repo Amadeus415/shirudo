@@ -612,6 +612,12 @@ rc=<rc> (<strerror>)`` and exits 1:
    * - ``operation_validate``
      - An operation of the publication is malformed or its digest does
        not match.
+   * - ``segment``
+     - The publication is a segment after the first (``base.seq`` above
+       0), which this release does not apply (``ENOTSUP``): it neither
+       walks back through the sealed segments nor checks a segment's base
+       against the node's history. A line before it names the segment's
+       base and the node's last applied ``seq``. Nothing is applied.
    * - ``outcomes_check``
      - The ``outcomes`` record does not cover the recorded ``last_seq``:
        it is missing, has a gap or a malformed line, or ends early

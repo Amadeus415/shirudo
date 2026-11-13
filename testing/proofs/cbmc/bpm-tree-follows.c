@@ -7,9 +7,12 @@
  * recorded, for every sequence number and generation a __s64 holds: it
  * accepts exactly a publication of the same tree, of a later generation
  * unless it is the same manifest, naming the recorded parent when it is
- * the next generation, with the node's cursor between its base and head,
- * and without a state one that starts at 0. Strings are of up to two
- * bytes.
+ * the next generation, with its head not before the node's cursor, and
+ * asks for a walk back exactly when such a publication starts past the
+ * cursor, or past 0 without a state. And tree_segment_precedes(), one
+ * step of that walk, which accepts exactly the segment the successor
+ * names, of its tree, ending at its base and of a lower generation.
+ * Strings are of up to two bytes.
  */
 
 #include <stdbool.h>
@@ -28,7 +31,7 @@ static void follows_the_state(void)
 	struct tree_publication pub;
 	struct tree_state state;
 	char manifest[3];
-	bool have, same, next;
+	bool have, same, next, refused;
 	int ret;
 
 	short_string(pub.tree_id);
@@ -38,36 +41,55 @@ static void follows_the_state(void)
 	short_string(manifest);
 	ret = tree_publication_follows(&pub, have ? &state : NULL, manifest);
 	if (!have) {
-		__CPROVER_assert(!ret == (pub.base_seq == 0),
-				 "a first publication starts at 0");
+		__CPROVER_assert(ret == (pub.base_seq ? TREE_FOLLOWS_WALK : 0),
+				 "without a state, a walk unless it starts at 0");
 		return;
 	}
 	same = !strcmp(state.manifest_digest, manifest);
 	next = pub.generation > state.generation &&
 	       pub.generation - 1 == state.generation;
-	__CPROVER_assert(ret || !strcmp(pub.tree_id, state.tree_id),
-			 "the same tree");
-	__CPROVER_assert(ret || same || pub.generation > state.generation,
-			 "never an earlier or the same generation");
-	__CPROVER_assert(ret || same || !next ||
-			 !pub.parent_manifest_digest[0] ||
-			 !strcmp(pub.parent_manifest_digest,
-				 state.manifest_digest),
-			 "the next generation names the recorded parent");
-	__CPROVER_assert(ret || (pub.head_seq >= state.last_seq &&
-				 pub.base_seq <= state.last_seq),
-			 "the cursor between base and head");
-	__CPROVER_assert(!ret || strcmp(pub.tree_id, state.tree_id) ||
-			 (!same && pub.generation <= state.generation) ||
-			 (!same && next && pub.parent_manifest_digest[0] &&
-			  strcmp(pub.parent_manifest_digest,
-				 state.manifest_digest)) ||
-			 pub.head_seq < state.last_seq ||
-			 pub.base_seq > state.last_seq,
-			 "and refused for nothing else");
+	refused = strcmp(pub.tree_id, state.tree_id) ||
+		  (!same && pub.generation <= state.generation) ||
+		  (!same && next && pub.parent_manifest_digest[0] &&
+		   strcmp(pub.parent_manifest_digest, state.manifest_digest)) ||
+		  pub.head_seq < state.last_seq;
+	__CPROVER_assert(ret == 0 || ret == TREE_FOLLOWS_WALK ||
+			 ret == -EINVAL || ret == -ERANGE,
+			 "0, a walk or a refusal");
+	__CPROVER_assert((ret < 0) == refused,
+			 "refused exactly for another tree, an older generation, "
+			 "another parent or a head before the cursor");
+	__CPROVER_assert(ret < 0 ||
+			 (ret == TREE_FOLLOWS_WALK) ==
+			 (pub.base_seq > state.last_seq),
+			 "a walk exactly when it starts past the cursor");
+}
+
+static void precedes_the_successor(void)
+{
+	struct tree_publication pred, succ;
+	char digest[3];
+	bool named;
+	int ret;
+
+	short_string(pred.tree_id);
+	short_string(succ.tree_id);
+	short_string(succ.segment_manifest_digest);
+	short_string(digest);
+	ret = tree_segment_precedes(&pred, digest, &succ);
+	named = succ.base_seq > 0 &&
+		!strcmp(succ.segment_manifest_digest, digest) &&
+		!strcmp(pred.tree_id, succ.tree_id) &&
+		pred.head_seq == succ.base_seq &&
+		pred.generation < succ.generation;
+	__CPROVER_assert(ret == 0 || ret == -ERANGE, "0 or -ERANGE");
+	__CPROVER_assert(!ret == named,
+			 "exactly the earlier segment of the tree that the "
+			 "successor names, ending at its base");
 }
 
 void harness(void)
 {
 	follows_the_state();
+	precedes_the_successor();
 }

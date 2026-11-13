@@ -362,7 +362,9 @@ Publication document
     "tree_id": "<tree-id>",
     "generation": <n>,
     "parent_manifest_digest": "sha256:<hex>",
-    "base": {"seq": 0},
+    "base": {"seq": <b>,
+             "segment_manifest_digest": "sha256:<hex>",
+             "history_root": "<hex>"},
     "operations": [<operation>, ...],
     "head": {"seq": <n>}}
 
@@ -383,10 +385,19 @@ Publication document
      - Digest of the publication manifest this one replaces. Absent in
        the first publication.
    * - ``base.seq``
-     - Required. The target accepts only 0.
+     - Required. 0 for the first segment of the tree, otherwise the
+       ``head.seq`` of the sealed segment before it.
+   * - ``base.segment_manifest_digest``
+     - Required when ``base.seq`` is above 0 and refused at 0. Digest of
+       the sealed publication manifest of the segment before this one.
+   * - ``base.history_root``
+     - Required when ``base.seq`` is above 0 and refused at 0. 64 hex
+       digits: the ``history_root`` every node's ``outcomes`` record
+       holds at ``base.seq``, see `Node records`_.
    * - ``operations``
      - Required. At most 512. Each ``seq`` is one more than the previous
-       one, and the first is ``base.seq + 1``.
+       one, and the first is ``base.seq + 1``. At least one when
+       ``base.seq`` is above 0.
    * - ``head.seq``
      - Required. The ``seq`` of the last operation, or ``base.seq`` when
        there is none. Below 2\ :sup:`63` - 1.
@@ -519,13 +530,18 @@ Target acceptance
 #. The signature verifies against the runtime image's initial
    certificate.
 #. The document parses with the rules above, ``tree_id`` is a package
-   name, ``base.seq`` is 0, and every operation has a valid ``id``,
-   ``op`` and digests and a correct ``operation_digest``.
+   name, and every operation has a valid ``id``, ``op`` and digests and a
+   correct ``operation_digest``.
 #. ``tree_id`` equals the one the node recorded.
 #. A publication other than the recorded one has a higher
    ``generation``. A direct successor that names a
    ``parent_manifest_digest`` names the recorded manifest.
 #. ``head.seq`` is not below the node's last applied ``seq``.
+#. ``base.seq`` is 0. The target does not yet walk back through the
+   sealed segments to a node's last applied ``seq``, nor check a later
+   segment's base against the node's history, and refuses a later
+   segment with the ``segment`` phase of
+   :doc:`/reference/failure-categories`.
 
 For each new operation whose selector matches, the target then fetches the
 artifact manifest by ``manifest_digest``, takes the layer with
