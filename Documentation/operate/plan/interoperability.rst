@@ -381,14 +381,14 @@ Debuggers, tracing and /proc
 :Mechanism: The seal marks a task at its exec of a runtime file, and a
    fork inherits the mark. ``lsm/ptrace_access_check`` refuses every
    ptrace access check against a marked task, both attach and read
-   modes, and ``lsm/perf_event_alloc`` refuses a perf event bound to one.
+   modes, but counts only attach mode, and ``lsm/perf_event_alloc`` refuses a perf event bound to one.
    An exec of a runtime file by a traced task is refused. The ptrace
    check runs after the kernel's own user and capability checks, so only
    root, or a caller running as the same user, reaches it.
 :Symptom: See the table below.
 :What to do: Debug shirudo where it does not enforce, such as the test
-   VM (:doc:`/contribute/testing/testing`). Expect ``SealPtrace`` in the
-   baseline of a host that runs process monitors as root.
+   VM (:doc:`/contribute/testing/testing`). A read-mode refusal shows
+   only as ``EACCES`` to the caller, never in ``SealPtrace``.
 
 .. list-table::
    :header-rows: 1
@@ -403,18 +403,21 @@ Debuggers, tracing and /proc
    * - Starting shirudo under ``strace`` or ``gdb``
      - The exec fails with ``EACCES``
      - ``ExecTraced``
-   * - Reading ``/proc/<pid>/exe``, ``environ``, ``maps``, ``mem`` or
-       the ``fd`` links of a shirudo command
+   * - Reading ``/proc/<pid>/mem`` of a shirudo command
      - ``EACCES``
      - ``SealPtrace``
+   * - Reading ``/proc/<pid>/exe``, ``environ``, ``maps`` or the ``fd``
+       links of a shirudo command
+     - ``EACCES``
+     - None
    * - Reading ``/proc/<pid>/stat`` of a shirudo command, as ``ps`` and
        ``top`` do
      - Succeeds, with the fields that need the check zeroed
-     - ``SealPtrace``
+     - None
    * - journald receiving a log line from a shirudo command
      - journald cannot read ``/proc/<pid>/exe``, so the entry has no
        ``_EXE=`` field
-     - ``SealPtrace``
+     - None
    * - ``perf record --pid``, ``perf stat --pid`` on a shirudo command
      - ``EACCES``
      - ``SealPerf``

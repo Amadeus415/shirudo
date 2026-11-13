@@ -56,7 +56,6 @@ Print the report
         BpfCommand                8  detach, update, delete or unclassified bpf() command
         BpffsUmount               1  unmount of the private bpffs
         SealWrite                 1  write open of a sealed file
-        SealPtrace                7  ptrace of a shirudo task
         SealEntry                 2  entry into a sealed directory, or a sealed inode linked
 
       Loaded upatches (1):
@@ -109,7 +108,6 @@ line; a section unfolds on its own when its condition is not ``OK``.
      BpfCommand                8  detach, update, delete or unclassified bpf() command
      BpffsUmount               1  unmount of the private bpffs
      SealWrite                 1  write open of a sealed file
-     SealPtrace                7  ptrace of a shirudo task
      SealEntry                 2  entry into a sealed directory, or a sealed inode linked
 
    Loaded upatches (1):
@@ -743,7 +741,6 @@ LSM returns. The report afterwards lists one more count under
      PinUnlink                 1  unlink of a pin in the private bpffs
      BpffsUmount               1  unmount of the private bpffs
      SealWrite                 1  write open of a sealed file
-     SealPtrace               12  ptrace of a shirudo task
      ObjGet                    1  pin, map or link opened by another executable
    ...
 
@@ -751,15 +748,16 @@ Read the counters with these rules:
 
 - Learn the baseline of your hosts. Software other than shirudo that
   uses BPF or inspects processes is refused too. A freshly booted test
-  VM shows counts for ``LoadNotLoader``, ``MapCreate``, ``BpfCommand``
-  and ``SealPtrace`` before any upatch is loaded.
+  VM shows counts for ``LoadNotLoader``, ``MapCreate`` and
+  ``BpfCommand`` before any upatch is loaded.
 - Alert on a counter that moves beyond the baseline, and on any count of
   a counter that stays at zero on your hosts.
 - Find the actor in the journal and on the host. The counter does not
   record who tried.
 - A zero count does not prove that nothing tried. Some refusals have no
-  counter, among them those of the runtime and config image mounts and
-  of device-mapper control commands.
+  counter, among them those of the runtime and config image mounts, of
+  device-mapper control commands and of a read-mode ptrace check, such
+  as journald reading ``/proc/<pid>/exe`` of a shirudo command.
 
 :doc:`/security/tamper-counters` lists every counter and the guard point
 that raises it.

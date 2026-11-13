@@ -183,7 +183,6 @@ Check enforcement
         LoadNotLoader            15  program load that is not a signed loader
         MapCreate                 1  map creation by another executable
         BpfCommand                8  detach, update, delete or unclassified bpf() command
-        SealPtrace                6  ptrace of a shirudo task
         ObjGet                    1  pin, map or link opened by another executable
 
       Loaded upatches (0):

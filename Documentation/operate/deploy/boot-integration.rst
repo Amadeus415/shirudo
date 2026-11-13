@@ -461,7 +461,6 @@ Boot and verify
         BpfCommand                8  detach, update, delete or unclassified bpf() command
         BpffsUmount               1  unmount of the private bpffs
         SealWrite                 1  write open of a sealed file
-        SealPtrace                7  ptrace of a shirudo task
         SealEntry                 2  entry into a sealed directory, or a sealed inode linked
 
       Loaded upatches (1):

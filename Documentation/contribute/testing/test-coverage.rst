@@ -438,7 +438,8 @@ signed config image.
    * - ``t6133-seal-init-xattr``
      - Labels at inode creation
    * - ``t6134-seal-task``
-     - ``ptrace`` and perf events on a running shirudo
+     - ``ptrace``, ``/proc`` reads and perf events on a running
+       shirudo; only attach mode counts
    * - ``t6135-task-descriptors``
      - Descriptors through ``/proc`` and ``pidfd_getfd``
    * - ``t6136-secure-exec``
@@ -874,7 +875,7 @@ tests assert that a refusal moves its counter:
    * - ``SealCopyUp``
      - ``t6124``
    * - ``SealPtrace``
-     - ``t6135``
+     - ``t6134``, ``t6135``
    * - ``SealSignal``
      - ``t6143``
    * - ``ExecTraced``

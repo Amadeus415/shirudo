@@ -21,6 +21,8 @@
 #define S_IFDIR		0040000
 #endif
 #define LSM_UNSAFE_PTRACE	2
+/* include/linux/ptrace.h; a #define, so not in BTF. */
+#define PTRACE_MODE_ATTACH	0x02
 #define PR_SET_MM		35
 #define PR_SET_MM_EXE_FILE	13
 #define PR_SET_MM_MAP		14

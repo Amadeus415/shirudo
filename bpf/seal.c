@@ -240,18 +240,23 @@ int BPF_PROG(shirudo_seal_perf_event_alloc,
 	return 0;
 }
 
-/* Keep ptrace away from processes with committed exec marks. */
+/*
+ * Keep every ptrace mode away from processes with committed exec marks,
+ * but count only attach mode: journald reads /proc/<pid>/exe of every
+ * client it logs for, and ps reads /proc/<pid>/stat, so a counted read
+ * mode would make an honest node look tampered.
+ */
 SEC("lsm/ptrace_access_check")
 int BPF_PROG(shirudo_seal_ptrace_access_check,
 	     struct task_struct *child, unsigned int mode, int ret)
 {
 	if (ret)
 		return ret;
-
-	if (shirudo_marked(child))
+	if (!shirudo_marked(child))
+		return 0;
+	if (mode & PTRACE_MODE_ATTACH)
 		return shirudo_tamper_deny(TAMPER_SEAL_PTRACE, -EACCES);
-
-	return 0;
+	return -EACCES;
 }
 
 /*

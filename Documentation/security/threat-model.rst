@@ -790,8 +790,11 @@ bootstrap mark through a pidfd before the gates attach.
 An authorized process is protected against being taken over:
 
 - ``lsm/ptrace_access_check`` refuses every ptrace mode against a marked
-  task: attach, ``/proc/<pid>/mem``, ``/proc/<pid>/fd``,
-  ``pidfd_getfd(2)`` and ``process_vm_readv(2)`` (``SealPtrace``).
+  task. It counts an attach-mode access, which covers attach,
+  ``/proc/<pid>/mem``, ``pidfd_getfd(2)`` and ``process_vm_readv(2)``
+  (``SealPtrace``), and refuses a read-mode one, which covers
+  ``/proc/<pid>/exe``, ``environ``, ``maps`` and the ``fd`` links,
+  without a counter.
 - ``lsm/perf_event_alloc`` refuses a perf event bound to a marked task
   (``SealPerf``). Events on all tasks of a CPU, and events opened on a
   task before the exec that marks it, are not checked (D9).
@@ -814,6 +817,17 @@ An authorized process is protected against being taken over:
   disables core dumps, loads no OpenSSL configuration file, resolves
   host names without NSS modules and locks its memory, and refuses to
   run when the lock fails.
+
+.. note::
+
+   Every ptrace mode against a shirudo task is refused, but only an
+   attach-mode access is counted. A read-mode probe, such as journald
+   reading ``/proc/<pid>/exe`` for a log line or ``ps`` reading
+   ``/proc/<pid>/stat``, or a read of ``environ``, ``maps`` or the
+   ``fd`` links, is refused silently: the caller gets ``EACCES`` and may
+   log it, but ``SealPtrace`` and the keepalive do not move. Honest
+   system services make read-mode checks against every process that
+   logs, so counting them would make a healthy node read as tampered.
 
 .. rst-class:: facts
 

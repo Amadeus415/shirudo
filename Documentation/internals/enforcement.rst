@@ -481,10 +481,11 @@ when the record it needs is missing.
        count alike (R2).
    * - ``lsm/ptrace_access_check`` (``seal``)
      - Every ptrace access mode against a marked task, which covers
-       attach, ``/proc/<pid>/mem``, ``pidfd_getfd()`` and
-       ``process_vm_readv()``.
+       attach, ``/proc/<pid>/mem``, ``pidfd_getfd()``,
+       ``process_vm_readv()`` and the read-mode ``/proc`` files such as
+       ``exe``, ``environ`` and ``maps``.
      - ``EACCES``
-     - ``SealPtrace``
+     - ``SealPtrace``, attach mode only
      - Closed.
    * - ``lsm/perf_event_alloc`` (``seal``)
      - A perf event bound to a marked task. CPU-wide events have no task

@@ -121,8 +121,11 @@ Protecting marked tasks
 
 A mark is only worth as much as the integrity of the process that holds
 it. ``lsm/ptrace_access_check`` refuses every ptrace access to a marked
-task (``SealPtrace``), which also covers ``/proc/<pid>/mem``,
-``pidfd_getfd()`` and ``process_vm_readv()``. ``lsm/perf_event_alloc``
+task. It counts one whose mode includes ``PTRACE_MODE_ATTACH``
+(``SealPtrace``), which covers attach, ``/proc/<pid>/mem``,
+``pidfd_getfd()`` and ``process_vm_readv()``, and refuses a read-mode
+one uncounted, because journald reads ``/proc/<pid>/exe`` of every
+process it logs for and a counted read would rise on an honest node. ``lsm/perf_event_alloc``
 refuses a perf event bound to a marked task (``SealPerf``).
 ``lsm/task_kill`` lets a signal to a marked task through, since root
 may end a command that hangs and systemd stops the runs its timers

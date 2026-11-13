@@ -5,9 +5,10 @@
 # t6135 -- a running shirudo's descriptors are not root's to take. Opening
 # one through /proc/<pid>/fd and copying one with pidfd_getfd both need
 # ptrace access to the task, which the seal refuses for a task the runtime
-# image started, counted as SealPtrace; another process's descriptors stay
-# reachable as the control. Passing one with SCM_RIGHTS would need shirudo
-# to send it, which it never does. Non-destructive.
+# image started; pidfd_getfd needs attach mode and counts as SealPtrace,
+# /proc/<pid>/fd only read mode and does not. Another process's
+# descriptors stay reachable as the control. Passing one with SCM_RIGHTS
+# would need shirudo to send it, which it never does. Non-destructive.
 
 cd "$(dirname "$0")/../.."
 . ./integration-lib.sh
@@ -98,8 +99,10 @@ test_expect_success 'nor copy one with pidfd_getfd' '
 
 release
 
-test_expect_success 'every refusal is counted as SealPtrace' '
-	[ "$(counter SealPtrace)" -ge $((before + 6)) ]
+# status takes the config operation lock that the held shirudo keeps, so
+# the counter is read only once it is released.
+test_expect_success 'only the pidfd_getfd refusals count, not the /proc reads' '
+	[ "$(counter SealPtrace)" = "$((before + 3))" ]
 '
 
 test_done

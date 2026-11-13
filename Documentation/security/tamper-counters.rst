@@ -156,7 +156,10 @@ counter.
      - ``EACCES``
    * - ``SealPtrace``
      - ptrace of a shirudo task
-     - ``lsm/ptrace_access_check``
+     - ``lsm/ptrace_access_check``: an access mode that includes
+       ``PTRACE_MODE_ATTACH``, such as ``ptrace(2)`` attach,
+       ``/proc/<pid>/mem``, ``process_vm_readv(2)`` and
+       ``pidfd_getfd(2)``
      - ``EACCES``
    * - ``SealPerf``
      - perf event bound to a shirudo task
@@ -216,6 +219,17 @@ counter.
 Unless the row says every caller, a task with runtime authority is
 not refused and moves nothing.
 
+.. note::
+
+   Every ptrace mode against a shirudo task is refused, but only an
+   attach-mode access is counted. A read-mode probe, such as journald
+   reading ``/proc/<pid>/exe`` for a log line or ``ps`` reading
+   ``/proc/<pid>/stat``, or a read of ``environ``, ``maps`` or the
+   ``fd`` links, is refused silently: the caller gets ``EACCES`` and may
+   log it, but ``SealPtrace`` and the keepalive do not move. Honest
+   system services make read-mode checks against every process that
+   logs, so counting them would make a healthy node read as tampered.
+
 Refusals without a counter
 --------------------------
 
@@ -249,6 +263,10 @@ counter:
    * - Exec of a runtime file under a seccomp filter, and an exec for
        which task storage cannot be allocated
      - ``lsm.s/bprm_check_security``
+   * - A read-mode ptrace access check against a shirudo task, such as
+       a read of ``/proc/<pid>/exe``, ``environ``, ``maps`` or the
+       ``fd`` links, ``kcmp(2)`` and ``process_madvise(2)``
+     - ``lsm/ptrace_access_check``
    * - A fork that cannot copy a task mark
      - ``lsm/task_alloc``
    * - A new inode under a marked directory that cannot receive the

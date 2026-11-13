@@ -899,7 +899,7 @@ indented here:
        "bpffs_mounted": true
      },
      "tamper_attempts": {
-       "total": 35,
+       "total": 28,
        "counters": {
          "LoadNotLoader": 15,
          "LoadUnsigned": 0,
@@ -927,7 +927,7 @@ indented here:
          "SealSetattr": 0,
          "SealXattr": 0,
          "SealLabel": 0,
-         "SealPtrace": 7,
+         "SealPtrace": 0,
          "SealPerf": 0,
          "ExecTraced": 0,
          "SealEntry": 2,
@@ -982,7 +982,7 @@ of the same target read:
 .. code-block:: json
 
    {
-     "total": 51,
+     "total": 44,
      "counters": {
        "LoadNotLoader": 27, "LoadUnsigned": 0, "LoadUnverified": 0, "LoadKeyringKind": 0,
        "LoadKeyring": 0, "MapCreate": 1, "MapWrite": 0, "MapFdWrite": 0,
@@ -990,7 +990,7 @@ of the same target read:
        "ExeIdentity": 0, "KeyringWrite": 0, "PinUnlink": 1, "PinRename": 0,
        "PinXattr": 0, "BpffsUmount": 1, "BpffsUmountAbove": 0, "BpffsMount": 0,
        "SealWrite": 1, "SealUnlink": 0, "SealRename": 0, "SealSetattr": 0,
-       "SealXattr": 0, "SealLabel": 0, "SealPtrace": 7, "SealPerf": 0,
+       "SealXattr": 0, "SealLabel": 0, "SealPtrace": 0, "SealPerf": 0,
        "ExecTraced": 0, "SealEntry": 0, "PerfAttach": 0, "PinEntry": 0,
        "SealCopyUp": 0, "Kexec": 0, "TpmExtend": 0, "ObjGet": 1,
        "SealSignal": 0
