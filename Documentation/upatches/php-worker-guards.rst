@@ -89,6 +89,18 @@ resuming traffic; the VM test replaces its single idle worker after
 loading each guard. If marking fails, the probe requests ``SIGKILL``
 and counts any failed signal request.
 
+The demo's ``exec.php`` page asks PHP to start a fixed harmless program,
+with ``?method=direct`` or ``?method=shell``. Both guards refuse exec.
+PHP warns about that refusal, so the broad guard also stops the worker
+and closes the connection. The selective guard allows the script warning
+and the PHP page finishes. A
+separate signed fixture checks direct exec, a renamed worker, children,
+a new thread, ``execveat`` with a file descriptor, and the mark after
+shutdown. An unmarked task named ``apache2`` remains allowed. Signed
+unload restores the baseline. The ``exec_stats`` map counts marked tasks,
+exec refusals, inherited marks, and marking, fork and signal errors.
+These checks are part of ``t3116``.
+
 Legitimate subprocesses are refused too: a PHP application that starts
 an image converter or a mailer will fail that operation. This policy
 does not restrict code already running in the worker, files it can
@@ -110,6 +122,10 @@ the next healthy request from a replacement worker.
 +================+================+================+================+
 | Healthy PHP    | 200            | 200            | 200            |
 | page           |                |                |                |
++----------------+----------------+----------------+----------------+
+| Start a helper | Program starts | Exec refused;  | Exec refused;  |
+| or a shell     |                | connection     | PHP page       |
+|                |                | closed         | finishes       |
 +----------------+----------------+----------------+----------------+
 | Ordinary       | 200            | Connection     | 200            |
 | script warning |                | closed         |                |
@@ -136,12 +152,17 @@ the next healthy request from a replacement worker.
 
 Each guard loaded through shirudo's signed-loader path and unloaded
 through a signed directive. On PHP 8.4.26, the broad counters recorded
-one OOM, three diagnostics, and two multipart requests; the selective
+one OOM, five diagnostics, and two multipart requests; the selective
 counters recorded one OOM, one fatal diagnostic, one diagnostic outside
 application execution, and one early session operation. Both reported
 zero signal errors. The same guard test passed on PHP 8.5.11. The
 selective guard also reported zero task-state allocation errors. The
-test ended with ``APACHE_PHP_GUARD_PASS`` on both builds.
+test ended with ``APACHE_PHP_GUARD_PASS`` on both builds. Each guard
+also recorded two refused execs and two inherited worker marks, with
+zero exec-guard errors. The separate exec fixture recorded six refusals,
+covering direct exec, name changes, descendants, a new thread, a file
+descriptor, and request shutdown. The unmarked control stayed allowed.
+The README records the tested PHP build IDs and kernel image digest.
 
 These requests exercise the hook sites and show collateral damage. They
 have not established a repeatable invalid memory access in unguarded PHP

@@ -21,6 +21,7 @@ code { background: #eee; padding: .15rem .3rem; }
 <ul>
 <li><a href="/healthy.php">Healthy request</a>: keeps working in either mode.</li>
 <li><a href="/ordinary-warning.php">Ordinary warning</a>: stopped by the broad guard, allowed by the selective guard.</li>
+<li>Start a harmless program <a href="/exec.php?method=direct">directly</a> or <a href="/exec.php?method=shell">through a shell</a>: both guards refuse it. The broad guard also stops the worker when PHP reports the failure.</li>
 <li><a href="/fatal.php">Application fatal error</a>: both guards drop the connection.</li>
 <li><a href="/oom.php">Application memory limit</a>: both guards drop the connection.</li>
 <li><a href="/shutdown-warning.php">Warning during shutdown</a>: both guards drop the connection.</li>

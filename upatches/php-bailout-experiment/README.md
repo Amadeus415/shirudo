@@ -218,6 +218,8 @@ The test checks a healthy page, an ordinary warning, an ordinary multipart
 form, session upload progress, a harmless fatal error, a memory-limit error,
 and a shutdown warning. It verifies signed load and unload, worker
 replacement, the reason counters, and zero signal or task-state errors.
+It also checks the exec restriction described below, before loading, with
+each guard loaded, and after unloading.
 
 The broad guard drops the ordinary warning and multipart form. The selective
 guard preserves those requests and drops the other tested error paths. These
@@ -270,6 +272,67 @@ does not cover a child that outlives it. The VM test uses one idle prefork
 worker and replaces it after each load. This demo is for
 non-ZTS `mod_php`, where PHP runs inside the Apache worker. It does not
 establish coverage of PHP-FPM, another SAPI, or arbitrary Apache modules.
+
+### Try the new control
+
+Re-run `apache/prepare-vm.sh` to rebuild and sign the guards, then run
+`apache/guard-test.sh` with the same VM commands above. The preparation
+script also signs a small exec-only fixture. Its test checks:
+
+- an unmarked task named `apache2` can still execute `/usr/bin/true`;
+- a marked task cannot, even after changing its process name;
+- its child, grandchild and new thread inherit the restriction;
+- `execveat` with a file descriptor is refused too;
+- the restriction stays after request shutdown;
+- signed unload restores execution.
+
+In the Apache demo, open these pages inside the VM:
+
+- `http://127.0.0.1:18080/exec.php?method=direct`
+- `http://127.0.0.1:18080/exec.php?method=shell`
+
+Each asks PHP to start a fixed, harmless `printf` command, directly or
+through a shell. The request selects one of those two controls; it cannot
+supply a command.
+
+Without a guard, each prints `PROGRAM_STARTED`. Both guards refuse the
+exec. PHP reports that failure as a warning, so the broad guard also kills
+the worker and closes the connection. The selective guard allows the
+script warning and the page prints `PHP_STILL_RUNNING`. The test requires
+the exec denial counter to increase by two across the two requests. After
+signed unload, the commands work again.
+
+Inspect the counters with:
+
+```sh
+/usr/local/bin/shirudo-runtime upatch get php-guard-selective --json
+```
+
+The `exec_stats` map reports `marked`, `denied`, `inherited`,
+`mark_errors`, `fork_errors` and `signal_errors`. The last three must stay
+zero in this demo. A nonzero error means the guard did not operate as
+expected and must be investigated.
+
+### Checked in the VM
+
+The full `php2shell` VM family passed on 13 November 2026 with the exec
+restriction in both guards, on x86-64 kernel `7.4-shirudo-20261109`:
+
+| PHP version | `libphp.so` GNU build ID |
+| --- | --- |
+| 8.4.26 | `3022c6fd6a18646d60d39fc7f680a43f419ced30` |
+| 8.5.11 | `81b5fe458ddeef82a64fc692bd568ce55b4647e2` |
+
+For each build, the exec fixture recorded six refusals and three inherited
+marks. In Apache, each guard recorded two exec refusals and two inherited
+marks for the direct and shell requests. All exec-guard error counters were
+zero. The original CLI bailout tests and both Apache comparisons passed;
+each comparison ended with `APACHE_PHP_GUARD_PASS`.
+
+The run used kernel image SHA-256
+`4e1105a1689602a704f8c757f8da5d42f0102d1818f9a16d9238c8fb44e6d989`.
+The signed upatch digests are recorded in each prepared fixture directory's
+`APACHE-SHA256SUMS`. New builds must be signed and tested again.
 
 ### What this does not stop
 

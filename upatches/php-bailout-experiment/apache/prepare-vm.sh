@@ -88,7 +88,7 @@ docker run --rm --network none --user "$(id -u):$(id -g)" \
 
 build_upatch()
 {
-    local name=$1 source=$2 object load unload digest
+    local name=$1 source=$2 probe_target=${3:-$target} object load unload digest
 
     object="$work/$name.bpf.o"
     load="$work/$name.upatch"
@@ -96,7 +96,7 @@ build_upatch()
     clang -target bpf -D__TARGET_ARCH_x86 -O2 -g -Wall -Wextra -Werror \
         -Wno-missing-declarations -Wno-unused-parameter \
         -I"$repo/vendor/linux" -I"$repo/vendor/libbpf" \
-        "-DPHP_BAILOUT_TARGET=\"$target\"" \
+        "-DPHP_BAILOUT_TARGET=\"$probe_target\"" \
         -c "$source" -o "$object"
     "$builder" "$object" --name "$name" -o "$load" --keys-dir "$keys"
     digest=$("$repo/shirudo" upatch info "$load" --json |
@@ -105,6 +105,14 @@ build_upatch()
         --payload-sha256 "$digest" --keys-dir "$keys"
     install -m 0644 "$load" "$unload" "$fixtures/"
 }
+
+exec_target="$work/php-exec-target"
+cc -O2 -g -Wall -Wextra -Werror -pthread -Wl,--build-id=sha1 \
+    "$repo/testing/fixtures/php-exec-target.c" -o "$exec_target"
+build_upatch php-exec-fixture "$repo/testing/fixtures/php-exec.bpf.c" \
+    "$exec_target"
+install -m 0755 "$exec_target" "$fixtures/php-exec-target"
+printf '%s\n' "$exec_target" >"$fixtures/exec.path"
 
 build_upatch php-bailout-apache \
     "$repo/upatches/php-bailout-experiment/php-bailout.bpf.c"
@@ -130,6 +138,7 @@ printf '%s\n' "$target" >"$fixtures/apache.path"
         php-bailout-apache.unload.upatch \
         php-guard-broad.upatch php-guard-broad.unload.upatch \
         php-guard-selective.upatch php-guard-selective.unload.upatch \
-        apache.path >APACHE-SHA256SUMS
+        php-exec-fixture.upatch php-exec-fixture.unload.upatch \
+        php-exec-target exec.path apache.path >APACHE-SHA256SUMS
 )
 printf 'Apache demo ready in %s\n' "$fixtures"
