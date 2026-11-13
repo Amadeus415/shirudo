@@ -25,6 +25,12 @@
 /infra/aws/packer/.shirudo-image-assets.tar.gz
 /infra/aws/packer/.shirudo-image-assets.lock/
 
+# Terraform local state, provider cache, and per-environment variables
+/infra/aws/terraform/.terraform/
+/infra/aws/terraform/*.tfstate
+/infra/aws/terraform/*.tfstate.*
+/infra/aws/terraform/*.tfvars
+
 # Generated headers
 /vmlinux.h
 /vendor/linux/
