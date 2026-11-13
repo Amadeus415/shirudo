@@ -509,6 +509,18 @@ signed config image.
        another key, a wrong certificate, a tampered layer and a document
        ``tree sync`` would refuse with the errno sync reports, and
        writes nothing to the registry
+   * - ``t7009-bpm-tree-seal``
+     - ``bpm tree append`` seals a segment at ``--segment-ops``, a value
+       that may change between appends, or before one append would pass
+       512 operations, never splits an append, tags the sealed manifest
+       ``segment-<k>`` with its bytes unchanged and keeps a tag an earlier
+       run left, starts the next segment with the sealed head, digest and
+       a ``history_root`` recomputed independently, carries ``fixes`` and
+       selectors across a seal, refuses a current segment that does not
+       verify, refuses an XDP ``add`` whose class a live ``add`` of a
+       sealed segment selects and takes it once a later segment deleted
+       that ``add``, and fetches no sealed segment for an ``add`` without
+       XDP classes
    * - ``t7101-bpm-tree``
      - Tree sync with a selector
    * - ``t7102-bpm-tree-sequential``
@@ -629,10 +641,10 @@ signed config image.
 Unit suites and fuzz targets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The unit suites in :src:`testing/unit/` cover 29 of the modules in
+The unit suites in :src:`testing/unit/` cover 30 of the modules in
 :src:`util/`: ``attest``, ``bpm_oci``, ``bpm_package``, ``bpm_state``,
 ``bpm_tree``, ``bpm_tree_overlap``, ``bpm_tree_state``, ``chain``,
-``conditions``,
+``chain_history``, ``conditions``,
 ``eventlog``, ``format``, ``hex``, ``io``, ``json``, ``kernel_abi``,
 ``keepalive``, ``keepalive_quote``, ``kernel_build_id``,
 ``kernel_release``, ``measured``,
@@ -783,12 +795,12 @@ Coverage by area
        ``oci-http``, ``oci-manifest``, ``oci-ref``, ``registry-auth``. Unit:
        ``bpm_oci``, ``bpm_package``
    * - upatch tree
-     - ``t3011``, ``t5004``, ``t7005``, ``t7007``, ``t7008``, ``t7101``,
-       ``t7102``, ``t7103``, ``t7104``, ``t7105``, ``t7106``,
+     - ``t3011``, ``t5004``, ``t7005``, ``t7007``, ``t7008``, ``t7009``,
+       ``t7101``, ``t7102``, ``t7103``, ``t7104``, ``t7105``, ``t7106``,
        ``t7107``, ``t7109``, ``t9105``, ``t9109``. Fuzz: ``tree``,
        ``tree-state``, ``kconfig``. Unit: ``bpm_tree``,
-       ``bpm_tree_overlap``, ``bpm_tree_state``, ``kernel_build_id``,
-       ``kernel_release``
+       ``bpm_tree_overlap``, ``bpm_tree_state``, ``chain_history``,
+       ``kernel_build_id``, ``kernel_release``
    * - Policy labels
      - upatch labels and Beefile serialization: ``t3109``, ``t7006``.
        Unauthorized policy-xattr changes: ``t6111``. Task and socket

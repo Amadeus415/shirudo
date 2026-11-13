@@ -168,7 +168,7 @@ _shirudo()
 			COMPREPLY=( $(compgen -f -- "$cur") )
 		elif [[ $sub == tree && ${COMP_WORDS[3]} == append && $cur == -* ]]; then
 			COMPREPLY=( $(compgen -W "--keys-dir --key --cert --previous-cert --tree-id \
-				--reference --op" -- "$cur") )
+				--reference --op --segment-ops" -- "$cur") )
 		elif [[ $sub == tree && ${COMP_WORDS[3]} == append ]]; then
 			COMPREPLY=( $(compgen -f -X '!*.bee' -- "$cur") \
 				    $(compgen -d -- "$cur") )

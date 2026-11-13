@@ -239,6 +239,7 @@ UTIL_SRCS := \
     util/tpm_wire.c \
     util/attest.c \
     util/chain.c \
+    util/chain_history.c \
     util/hex.c \
     util/string.c \
     util/bpm_tree.c \
@@ -508,6 +509,7 @@ tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o util/config_image.o
                                    util/bpm_oci.o util/curl.o util/bpm_package.o \
                                    util/upatch_rodata.o \
                                    util/bpm_tree.o util/bpm_tree_overlap.o \
+                                   util/chain_history.o \
                                    util/kernel_release.o $(VERSION_OBJ) \
                                    $(LIBBPF_A)
 	@printf '  LD      $@\n'
@@ -1133,7 +1135,8 @@ testing/fuzz/fuzz-tpm-wire: testing/fuzz/fuzz-tpm-wire.c $(FUZZ_BASE) \
                             util/tpm_wire.c util/crypto_openssl.c util/io.c \
                             $(FUZZ_SEAL)
 testing/fuzz/fuzz-attest: testing/fuzz/fuzz-attest.c $(FUZZ_BASE) \
-                          util/attest.c util/chain.c util/nv_writer.c util/tpm.c \
+                          util/attest.c util/chain.c util/chain_history.c \
+                          util/nv_writer.c util/tpm.c \
                           util/tpm_wire.c util/eventlog.c util/timefmt.c \
                           util/crypto_openssl.c util/io.c $(FUZZ_SEAL) \
                           util/config_attest.c util/config_update.c \

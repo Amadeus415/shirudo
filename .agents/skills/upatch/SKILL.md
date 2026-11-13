@@ -142,8 +142,12 @@ shirudo bpm tree show oci://<registry>/<repository> --cert <keys>/cert.der [--re
 append` adds a load or delete operation to a signed upatch tree that
 targets sync; `Documentation/reference/cli/bpm.rst` lists its options.
 It refuses an `add` whose XDP programs select a device class another
-upatch of the tree selects on the same nodes: give each class to one
-upatch, or the two entries selectors that exclude each other. `tree
+upatch of the tree selects on the same nodes, in any segment: give each
+class to one upatch, or the two entries selectors that exclude each
+other. A segment that holds `--segment-ops` operations (64 by default,
+1 to 512) is sealed and tagged `segment-<k>`, and the append starts the
+next one; keep the `segment-*` tags in the registry, since targets walk
+back through the sealed segments by digest. `tree
 show` prints the publication verified as a target verifies it, as
 `{"manifest_digest":...,"document":...}` with the signed document
 verbatim, `fixes` included: the check that an append published what

@@ -11,6 +11,7 @@
 
 #include <stdbool.h>
 
+struct tree_operation;
 struct tree_publication;
 struct tree_selector;
 
@@ -25,7 +26,12 @@ bool tree_selectors_disjoint(const struct tree_selector *a,
 /*
  * Whether the add at index may still be loaded somewhere: no later
  * delete of its upatch reaches every node the add reaches.
+ * tree_add_withdrawn() asks the opposite of the n operations at later,
+ * which all come after the add, such as those of the segments after its
+ * own.
  */
 bool tree_add_live(const struct tree_publication *pub, int index);
+bool tree_add_withdrawn(const struct tree_operation *add,
+			const struct tree_operation *later, int n);
 
 #endif /* SHIRUDO_BPM_TREE_OVERLAP_H */

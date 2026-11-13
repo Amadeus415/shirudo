@@ -147,17 +147,21 @@ static bool selector_covers(const struct tree_selector *outer,
 			  outer->labels, outer->n_labels);
 }
 
+bool tree_add_withdrawn(const struct tree_operation *add,
+			const struct tree_operation *later, int n)
+{
+	for (int i = 0; i < n; i++) {
+		if (!strcmp(later[i].op, "delete") &&
+		    !strcmp(later[i].id, add->id) &&
+		    selector_covers(&later[i].selector, &add->selector))
+			return true;
+	}
+	return false;
+}
+
 bool tree_add_live(const struct tree_publication *pub, int index)
 {
-	const struct tree_operation *add = &pub->operations[index];
-
-	for (int i = index + 1; i < pub->n_operations; i++) {
-		const struct tree_operation *later = &pub->operations[i];
-
-		if (!strcmp(later->op, "delete") &&
-		    !strcmp(later->id, add->id) &&
-		    selector_covers(&later->selector, &add->selector))
-			return false;
-	}
-	return true;
+	return !tree_add_withdrawn(&pub->operations[index],
+				   &pub->operations[index + 1],
+				   pub->n_operations - index - 1);
 }

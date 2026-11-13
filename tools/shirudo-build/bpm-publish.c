@@ -39,6 +39,10 @@
 
 #define BPM_MANIFEST_CAP	8192u
 #define BPM_SIGN_MAX		(64u * 1024u)
+#define TREE_SEGMENT_OPS	64
+
+/* One append never splits across segments, so it fits in one. */
+BUILD_BUG_ON(BPM_BUILD_MAX_ENTRIES > TREE_MAX_OPS);
 
 static void tree_append_usage(void)
 {
@@ -47,11 +51,14 @@ static void tree_append_usage(void)
 		"                               [--keys-dir <dir>] [--key <signing_key.pem>]\n"
 		"                               [--cert <cert.der>] [--previous-cert <cert.der>]\n"
 		"                               [--tree-id <id>]\n"
-		"                               [--reference <ref>] [--op add|delete]\n\n"
+		"                               [--reference <ref>] [--op add|delete]\n"
+		"                               [--segment-ops <n>]\n\n"
 		"Publishes the [upatches.tree] entries of a built package as the next\n"
 		"operations of the signed tree at <repository>:<ref> (default stable).\n"
+		"A segment that holds --segment-ops operations (default %d, 1 to %d)\n"
+		"is sealed and the entries start the next one.\n"
 		"The key defaults to --keys-dir, SHIRUDO_KEYS_DIR or %s.\n",
-		KEYS_DIR);
+		TREE_SEGMENT_OPS, TREE_MAX_OPS, KEYS_DIR);
 }
 
 static int publish_fail(const char *action, int ret)
@@ -822,15 +829,65 @@ struct tree_xdp_classes {
 	bool	known[TREE_MAX_OPS];
 };
 
+/* The deletes of the segments after the one being checked. */
+struct tree_later {
+	struct tree_operation	*deletes;
+	int			n;
+	int			cap;
+};
+
+static void tree_later_free(struct tree_later *later)
+{
+	for (int i = 0; i < later->n; i++)
+		tree_selector_free(&later->deletes[i].selector);
+	xfree(later->deletes, (size_t)later->cap * sizeof(*later->deletes));
+	*later = (struct tree_later){};
+}
+
+static int tree_later_take(struct tree_later *later,
+			   const struct tree_publication *pub)
+{
+	for (int i = 0; i < pub->n_operations; i++) {
+		const struct tree_operation *op = &pub->operations[i];
+		struct tree_operation *deletes, *d;
+		int cap;
+
+		if (strcmp(op->op, "delete"))
+			continue;
+		if (later->n == later->cap) {
+			if (check_mul_overflow(later->cap ? later->cap : 8, 2,
+					       &cap))
+				return -E2BIG;
+			deletes = xreallocarray(later->deletes,
+						(size_t)later->cap, (size_t)cap,
+						sizeof(*deletes));
+			if (!deletes)
+				return -ENOMEM;
+			later->deletes = deletes;
+			later->cap = cap;
+		}
+		d = &later->deletes[later->n];
+		*d = (struct tree_operation){ .seq = op->seq };
+		if (tree_selector_copy(&d->selector, &op->selector))
+			return -ENOMEM;
+		bpm_copy_string(d->op, sizeof(d->op), op->op);
+		bpm_copy_string(d->id, sizeof(d->id), op->id);
+		later->n++;
+	}
+	return 0;
+}
+
 /*
  * A device runs one native XDP program. The second of two upatches that
  * select a class fails its load on every node with such a device, and
- * tree sync stops at the first operation that fails.
+ * tree sync stops at the first operation that fails. later, NULL for
+ * none, holds the deletes published after pub.
  */
 static int tree_refuse_shared_xdp_class(struct bpm_oci_client *c,
 					const char *repository,
 					const char *repo_ref,
 					const struct tree_publication *pub,
+					const struct tree_later *later,
 					struct tree_xdp_classes *seen,
 					const struct tree_operation *op,
 					__u32 classes)
@@ -841,6 +898,8 @@ static int tree_refuse_shared_xdp_class(struct bpm_oci_client *c,
 
 		if (strcmp(other->op, "add") || !strcmp(other->id, op->id) ||
 		    !tree_add_live(pub, i) ||
+		    (later && tree_add_withdrawn(other, later->deletes,
+						 later->n)) ||
 		    tree_selectors_disjoint(&other->selector, &op->selector))
 			continue;
 		if (!seen->known[i]) {
@@ -863,6 +922,246 @@ static int tree_refuse_shared_xdp_class(struct bpm_oci_client *c,
 	return 0;
 }
 
+/* What tree sync checks of a publication before it applies anything. */
+static int tree_publication_verify(const struct tree_publication *pub)
+{
+	int ret = tree_publication_check(pub);
+
+	for (int i = 0; !ret && i < pub->n_operations; i++)
+		ret = tree_operation_validate(&pub->operations[i]);
+	return ret;
+}
+
+/*
+ * The sealed segment succ names, as a node walking back fetches it: by
+ * manifest digest, signed, well formed and ending where succ starts.
+ */
+static int tree_fetch_sealed(struct bpm_oci_client *c, const char *repository,
+			     const char *cert,
+			     const struct tree_publication *succ,
+			     struct tree_publication *pred)
+{
+	struct bpm_buffer document = {};
+	char digest[BPM_MAX_DIGEST];
+	int ret;
+
+	ret = bpm_tree_fetch_document(c, repository,
+				      succ->segment_manifest_digest, cert,
+				      NULL, &document, digest, sizeof(digest));
+	if (!ret)
+		ret = tree_parse((const char *)document.data, document.len,
+				 pred);
+	if (!ret)
+		ret = tree_publication_verify(pred);
+	if (!ret)
+		ret = tree_segment_precedes(pred, digest, succ);
+	bpm_buffer_free(&document);
+	if (ret)
+		pr_err("bpm tree append: the sealed segment %s, which ends at seq %lld, does not verify",
+		       succ->segment_manifest_digest,
+		       (long long)succ->base_seq);
+	return ret;
+}
+
+/*
+ * The shared class check of an add over the sealed segments before cur,
+ * back to seq 0: sealed when this append seals it, the others fetched
+ * by digest. An add stays live until a delete of any later segment
+ * withdraws it, so the deletes of every segment walked are kept.
+ */
+static int tree_refuse_sealed_xdp_class(struct bpm_oci_client *c,
+					const char *repository,
+					const char *repo_ref, const char *cert,
+					const struct tree_publication *cur,
+					const struct tree_publication *sealed,
+					const struct tree_operation *op,
+					__u32 classes)
+{
+	const struct tree_publication *succ = cur, *segment = sealed;
+	struct tree_publication fetched[2] = {};
+	struct tree_xdp_classes *seen;
+	struct tree_later later = {};
+	int next = 0, ret;
+
+	if (cur->base_seq > TREE_MAX_JOIN_OPS) {
+		pr_err("bpm tree append: a joining node walks back %lld operations, past the limit of %d, so the XDP device classes of the sealed segments cannot be checked",
+		       (long long)cur->base_seq, TREE_MAX_JOIN_OPS);
+		return -E2BIG;
+	}
+	seen = xmalloc(sizeof(*seen));
+	if (!seen)
+		return -ENOMEM;
+	ret = tree_later_take(&later, cur);
+	while (!ret) {
+		if (!segment) {
+			if (!succ->base_seq)
+				break;
+			tree_publication_free(&fetched[next]);
+			ret = tree_fetch_sealed(c, repository, cert, succ,
+						&fetched[next]);
+			if (ret)
+				break;
+			segment = &fetched[next];
+			next ^= 1;
+		}
+		memset(seen, 0, sizeof(*seen));
+		ret = tree_refuse_shared_xdp_class(c, repository, repo_ref,
+						   segment, &later, seen, op,
+						   classes);
+		if (!ret)
+			ret = tree_later_take(&later, segment);
+		succ = segment;
+		segment = NULL;
+	}
+	tree_later_free(&later);
+	tree_publication_free(&fetched[0]);
+	tree_publication_free(&fetched[1]);
+	xfree(seen, sizeof(*seen));
+	return ret;
+}
+
+/* history_root at the head of seg: its base's, over its operations. */
+static int tree_history_at_head(const struct tree_publication *seg,
+				char out[65])
+{
+	__u8 root[32] = {}, digest[32];
+	int ret;
+
+	if (seg->base_seq && hex_decode(seg->history_root, root, sizeof(root)))
+		return -EINVAL;
+	for (int i = 0; i < seg->n_operations; i++) {
+		ret = sha256_digest_decode(seg->operations[i].operation_digest,
+					   digest);
+		if (!ret)
+			ret = chain_history_step(root, digest, root);
+		if (ret)
+			return ret;
+	}
+	hex_encode(root, sizeof(root), out);
+	return 0;
+}
+
+static int tree_segment_tag(__u64 k, char *tag, size_t tag_sz)
+{
+	return strsprintf(tag, tag_sz, "segment-%llu", k) < 0 ?
+	       -ENAMETOOLONG : 0;
+}
+
+/* The digest of the manifest segment-<k> tags, -ENOENT without the tag. */
+static int tree_segment_tag_digest(struct bpm_oci_client *c,
+				   const char *repository, __u64 k,
+				   char *digest, size_t digest_sz)
+{
+	struct bpm_buffer manifest = {};
+	char tag[32], url[PATH_MAX], hex[65];
+	int ret;
+
+	ret = tree_segment_tag(k, tag, sizeof(tag));
+	if (!ret)
+		ret = bpm_oci_url(c, repository, "manifests", tag, url,
+				  sizeof(url));
+	if (!ret)
+		ret = bpm_oci_get_memory(c, url, BPM_MANIFEST_MEDIA, &manifest);
+	if (!ret && bpm_sha256_hex(manifest.data, manifest.len, hex,
+				   sizeof(hex)))
+		ret = -EINVAL;
+	if (!ret && strsprintf(digest, digest_sz, "sha256:%s", hex) < 0)
+		ret = -ENAMETOOLONG;
+	bpm_buffer_free(&manifest);
+	return ret;
+}
+
+/*
+ * The k of the next segment-<k> tag: doubling, then halving, finds a k
+ * without a tag in about 2 log2 k requests, so no tag is ever moved. 0
+ * when the last tag already names the sealed manifest, which a run that
+ * failed after tagging leaves behind.
+ */
+static int tree_next_segment_tag(struct bpm_oci_client *c,
+				 const char *repository,
+				 const char *sealed_digest, __u64 *k)
+{
+	char digest[BPM_MAX_DIGEST], last[BPM_MAX_DIGEST] = {};
+	__u64 present = 0, absent = 1, probe;
+	bool doubling = true;
+	int ret;
+
+	while (doubling || absent - present > 1) {
+		probe = doubling ? absent : present + (absent - present) / 2;
+		ret = tree_segment_tag_digest(c, repository, probe, digest,
+					      sizeof(digest));
+		if (ret == -ENOENT) {
+			absent = probe;
+			doubling = false;
+			continue;
+		}
+		if (ret)
+			return ret;
+		present = probe;
+		bpm_copy_string(last, sizeof(last), digest);
+		if (doubling && check_mul_overflow(absent, 2, &absent))
+			return -EOVERFLOW;
+	}
+	*k = present && !strcmp(last, sealed_digest) ? 0 : absent;
+	return 0;
+}
+
+/*
+ * Tag the sealed manifest segment-<k> so that registry garbage collection
+ * keeps it; nodes walk back to it by digest and never read the tag.
+ */
+static int tree_tag_sealed(struct bpm_oci_client *c, const char *repository,
+			   const char *sealed_digest)
+{
+	char tag[32] = {}, url[PATH_MAX], digest[BPM_MAX_DIGEST], hex[65];
+	struct bpm_buffer manifest = {};
+	__u64 k;
+	int ret;
+
+	ret = tree_next_segment_tag(c, repository, sealed_digest, &k);
+	if (ret || !k)
+		goto out;
+	ret = tree_segment_tag(k, tag, sizeof(tag));
+	if (!ret)
+		ret = bpm_oci_url(c, repository, "manifests", sealed_digest,
+				  url, sizeof(url));
+	if (!ret)
+		ret = bpm_oci_get_memory(c, url, BPM_MANIFEST_MEDIA, &manifest);
+	if (!ret && (bpm_sha256_hex(manifest.data, manifest.len, hex,
+				    sizeof(hex)) ||
+		     !bpm_digest_matches(sealed_digest, hex)))
+		ret = -EKEYREJECTED;
+	if (!ret)
+		ret = bpm_oci_put_manifest(c, repository, tag, manifest.data,
+					   manifest.len, digest, sizeof(digest));
+out:
+	bpm_buffer_free(&manifest);
+	if (ret)
+		pr_err("bpm tree append: cannot tag the sealed segment %s",
+		       sealed_digest);
+	return ret;
+}
+
+/*
+ * The segment after sealed, whose manifest is sealed_digest, as it
+ * starts: at the sealed head, with the history root there.
+ */
+static int tree_start_segment(const struct tree_publication *sealed,
+			      const char *sealed_digest,
+			      struct tree_publication *pub)
+{
+	*pub = (struct tree_publication){
+		.schema = 1,
+		.generation = sealed->generation,
+		.base_seq = sealed->head_seq,
+		.head_seq = sealed->head_seq,
+	};
+	bpm_copy_string(pub->tree_id, sizeof(pub->tree_id), sealed->tree_id);
+	bpm_copy_string(pub->segment_manifest_digest,
+			sizeof(pub->segment_manifest_digest), sealed_digest);
+	return tree_history_at_head(sealed, pub->history_root);
+}
+
 static int cmd_bpm_tree_append(int argc, char **argv)
 {
 	const char *package = NULL, *raw_repository = NULL, *keys_dir_arg = NULL;
@@ -871,9 +1170,13 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 	const char *key = NULL, *cert = NULL, *tree_id = NULL;
 	const char *previous_cert = NULL;
 	const char *reference = "stable", *operation = "add";
+	const char *segment_ops_arg = NULL;
 	char key_path[PATH_MAX], cert_path[PATH_MAX];
 	char parent[BPM_MAX_DIGEST] = {}, digest[72];
+	struct tree_publication *sealed = NULL;
 	struct tree_xdp_classes *seen = NULL;
+	int segment_ops = TREE_SEGMENT_OPS;
+	size_t entries = 0;
 	struct bpm_buffer previous = {};
 	struct tree_fixes *fixes = NULL;
 	struct tree_emit_extra extra;
@@ -923,6 +1226,10 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 			operation = argv[++i];
 		} else if (!strncmp(a, "--op=", 5)) {
 			operation = a + 5;
+		} else if (!strcmp(a, "--segment-ops") && i + 1 < argc) {
+			segment_ops_arg = argv[++i];
+		} else if (!strncmp(a, "--segment-ops=", 14)) {
+			segment_ops_arg = a + 14;
 		} else if (a[0] == '-' || (package && raw_repository)) {
 			tree_append_usage();
 			return -EINVAL;
@@ -943,6 +1250,17 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 	if (tree_id && !bpm_package_name_ok(tree_id)) {
 		pr_err("bpm tree append: invalid --tree-id %s", tree_id);
 		return -EINVAL;
+	}
+	if (segment_ops_arg) {
+		__u64 n;
+
+		if (parse_u64(segment_ops_arg, strlen(segment_ops_arg),
+			      TREE_MAX_OPS, &n) || !n) {
+			pr_err("bpm tree append: --segment-ops must be 1 to %d",
+			       TREE_MAX_OPS);
+			return -EINVAL;
+		}
+		segment_ops = (int)n;
 	}
 	unload = !strcmp(operation, "delete");
 	if (!key || !cert) {
@@ -991,6 +1309,8 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 		pr_err("bpm tree append: cannot parse the Beefile of %s", package);
 		goto out;
 	}
+	for (size_t i = 0; i < spec->n_upatches; i++)
+		entries += spec->upatches[i].tree.present;
 	ret = bpm_oci_parse_push_repo(repo_ref, &c, repository, sizeof(repository));
 	if (ret) {
 		pr_err("bpm tree append: the repository must be oci://registry/repository");
@@ -1018,6 +1338,24 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 			ret = -EINVAL;
 			goto out;
 		}
+		ret = tree_publication_verify(&pub);
+		if (ret) {
+			pr_err("bpm tree append: the publication at %s:%s does not verify",
+			       repo_ref, reference);
+			goto out;
+		}
+		if (pub.n_operations >= segment_ops ||
+		    (size_t)pub.n_operations + entries > TREE_MAX_OPS) {
+			sealed = xmalloc(sizeof(*sealed));
+			if (!sealed) {
+				ret = -ENOMEM;
+				goto out;
+			}
+			*sealed = pub;
+			ret = tree_start_segment(sealed, parent, &pub);
+			if (ret)
+				goto out;
+		}
 		if (check_add_overflow(pub.generation, 1, &pub.generation) ||
 		    pub.generation == INT64_MAX) {
 			pr_err("bpm tree append: the tree's generation is exhausted");
@@ -1039,7 +1377,8 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 		ret = -ENOMEM;
 		goto out;
 	}
-	if (previous.data && tree_read_fixes(&previous, &pub, fixes)) {
+	if (previous.data && !sealed &&
+	    tree_read_fixes(&previous, &pub, fixes)) {
 		pr_err("bpm tree append: the publication at %s:%s has a fixes list bpm tree append would not write, so it cannot carry it into the next generation",
 		       repo_ref, reference);
 		ret = -EINVAL;
@@ -1095,8 +1434,14 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 			else
 				ret = tree_refuse_shared_xdp_class(&c, repository,
 								   repo_ref, &pub,
-								   seen, op,
+								   NULL, seen, op,
 								   classes);
+			if (!ret && classes)
+				ret = tree_refuse_sealed_xdp_class(&c, repository,
+								   repo_ref,
+								   previous_cert,
+								   &pub, sealed,
+								   op, classes);
 		}
 		if (!ret)
 			ret = tree_push_artifact(&c, repository, repo_ref, body,
@@ -1163,6 +1508,8 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 	json_arr_close(&e);
 	json_obj_close(&e);
 	ret = e.err;
+	if (!ret && sealed)
+		ret = tree_tag_sealed(&c, repository, parent);
 	if (!ret)
 		ret = bpm_oci_put_manifest(&c, repository, reference,
 					   (const __u8 *)manifest, e.len,
@@ -1181,6 +1528,8 @@ out:
 	xfree(fixes, n_fixes * sizeof(*fixes));
 	bpm_buffer_free(&previous);
 	tree_publication_free(&pub);
+	tree_publication_free(sealed);
+	xfree(sealed, sizeof(*sealed));
 	bpm_build_spec_free(spec);
 	xfree(beefile, len + 1);
 	xfree(info.cert, info.cert_len + 1);

@@ -150,6 +150,28 @@ entries selectors that exclude each other, such as different values of
 one label, or append the ``delete`` of the earlier upatch first.
 :doc:`/reference/cli/bpm` has the exact rule.
 
+Segments and registry retention
+-------------------------------
+
+A tree grows past what one signed document holds as a chain of
+segments. Once the current segment holds 64 operations, or the number
+``--segment-ops`` gives, ``tree append`` seals it and publishes the new
+operations as the next segment, which names the sealed one by digest.
+One append always goes into one segment, and a segment never holds more
+than 512 operations. ``<tree>:stable`` names only the current segment; a
+target that is behind fetches the sealed ones by digest.
+
+Every sealed segment is tagged ``segment-1``, ``segment-2`` and so on in
+the tree's repository. Keep the ``segment-*`` tags: a registry that
+deletes untagged manifests, or a retention policy that prunes old tags,
+would remove a segment a target still has to walk through, and the
+target then refuses to sync rather than skip it.
+
+An ``add`` whose XDP programs select a device class makes ``tree
+append`` fetch every sealed segment, so its class check covers the whole
+tree. Expect three fetches per sealed segment for such an ``add``, its
+manifest, document and signature; any other operation fetches none.
+
 What a target does with them
 ----------------------------
 

@@ -602,6 +602,7 @@ the model follows the C.
        ``historyBytes`` of ``Shirudo.Events``, which CBMC,
        ``chain-events``, checks
    * - ``Shirudo.Events``, the event encodings of :src:`util/chain.c`
+       and the history root's step of :src:`util/chain_history.c`
      - ``bytes_injective``: two admitted events hash the same bytes only
        when they are the same event; ``listing_injective``: the init
        event's listing spells one set while no name holds a newline;

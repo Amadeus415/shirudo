@@ -235,6 +235,46 @@ package as the next operations of the signed tree at
    * - ``--op``
      - ``add``
      - ``add`` or ``delete``.
+   * - ``--segment-ops``
+     - ``64``
+     - Operations after which a segment is sealed, 1 to 512. Any other
+       value is refused with ``bpm tree append: --segment-ops must be 1
+       to 512``. It may differ from one append to the next.
+
+The existing publication must pass the checks ``tree sync`` makes before
+it applies anything: the sequence numbers, the ``base`` keys and every
+operation's digest. Otherwise the append is refused with ``bpm tree
+append: the publication at <repository>:<reference> does not verify``
+and nothing is published.
+
+A tree is a chain of segments, each one publication document of at most
+512 operations; :doc:`/reference/formats/bpm-formats` has the ``base``
+keys that link them. An append never splits its operations
+across segments. Before it adds its ``n`` operations to the current
+segment, which holds ``c``, it seals that segment when ``c`` is at least
+``--segment-ops`` or ``c + n`` exceeds 512, so a segment can hold up to
+``n - 1`` operations more than ``--segment-ops``. A package holds at most
+128 tree entries, so one append always fits in a segment. Sealing:
+
+#. The current publication becomes the sealed segment, its manifest and
+   document unchanged.
+#. Its manifest is tagged ``segment-<k>``, where ``k`` counts the sealed
+   segments from 1. The tag only keeps registry garbage collection from
+   deleting the segment: a target follows ``<reference>`` and reaches the
+   sealed segments by digest. The append looks up the last tag by
+   doubling ``k`` and then halving the gap, about 2 log\ :sub:`2` ``k``
+   manifest requests, and never moves an existing tag. When the last tag
+   already names the sealed manifest, left by an append that failed after
+   tagging, it adds none.
+#. The new publication holds only the appended operations. Its
+   ``base.seq`` is the sealed ``head.seq``, ``base.segment_manifest_digest``
+   and ``parent_manifest_digest`` both name the sealed manifest, its
+   ``generation`` is one higher, and ``base.history_root`` is the sealed
+   segment's ``base.history_root``, 64 zeros for the first segment,
+   folded over the sealed operations.
+
+The tag is written after every check has passed and just before
+``<reference>`` moves, so a refused append leaves no tag.
 
 An ``add`` is refused when an XDP program of the upatch selects a device
 class that an XDP program of another upatch in the tree selects, and the
@@ -255,6 +295,21 @@ shared classes, and nothing is published.
 - The classes of the earlier upatches are read from their artifacts in
   the registry, so the append fails when one of them cannot be fetched.
   Two upatches of the package being appended are compared as well.
+- The earlier upatches are those of every segment back to ``seq`` 1. For
+  an ``add`` whose XDP programs select a class, the append fetches each
+  sealed segment by its digest, as a target that joins the tree does, and
+  checks that it verifies against ``--previous-cert``, that it is the
+  segment its successor names, ends where the successor starts and has a
+  lower generation, and it passes the checks of the current publication
+  above. A segment that fails is refused with ``bpm tree append: the
+  sealed segment <digest>, which ends at seq <n>, does not verify``.
+  A ``delete`` in any later segment withdraws an ``add`` as one in its
+  own segment does. The walk covers at most 1,048,576 operations, the
+  limit of a joining target; past it the append is refused with ``bpm
+  tree append: a joining node walks back <n> operations, past the limit
+  of 1048576, so the XDP device classes of the sealed segments cannot be
+  checked``. An ``add`` without XDP classes and a ``delete`` fetch no
+  sealed segment.
 
 An ``add`` carries the entry's ``fixes``, a ``delete`` none, and every
 earlier operation keeps its own. The append is refused, and nothing is

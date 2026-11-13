@@ -16,6 +16,15 @@
 #define TREE_MAX_SELECTOR_VALUES 16
 #define TREE_STRING_MAX 256
 
+/*
+ * The most operations a walk back through sealed segments may cover from
+ * seq 0, as a node that joins a tree does: one past it is -E2BIG. A test
+ * build sets it low.
+ */
+#ifndef TREE_MAX_JOIN_OPS
+#define TREE_MAX_JOIN_OPS 1048576
+#endif
+
 struct json_emit;
 
 struct tree_kv {

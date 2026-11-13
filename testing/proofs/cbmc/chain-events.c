@@ -2,13 +2,14 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * The event encoders of util/chain.c against testing/proofs/lean4/
- * Shirudo/Events.lean, with SHA-256 modelled as recording what it is
- * given: for every name of LEN bytes, payload, digest, sequence number
- * and register, chain_upatch_event(), chain_key_event(),
- * chain_tree_event(), chain_fold(), chain_history_step() and
- * chain_init_event() of an empty set hand SHA-256 exactly the bytes of
- * the model, and give its digest, or zeros and its error.
+ * The event encoders of util/chain.c and util/chain_history.c against
+ * testing/proofs/lean4/Shirudo/Events.lean, with SHA-256 modelled as
+ * recording what it is given: for every name of LEN bytes, payload,
+ * digest, sequence number and register, chain_upatch_event(),
+ * chain_key_event(), chain_tree_event(), chain_fold(),
+ * chain_history_step() and chain_init_event() of an empty set hand SHA-256
+ * exactly the bytes of the model, and give its digest, or zeros and its
+ * error.
  */
 
 #include "proof.h"
@@ -18,6 +19,7 @@
 #pragma CPROVER check push
 #pragma CPROVER check disable "conversion"
 #include "../../../util/chain.c"
+#include "../../../util/chain_history.c"
 #pragma CPROVER check pop
 
 /* The longest string an event hashes: a upatch of a 256-byte name. */

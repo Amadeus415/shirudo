@@ -145,12 +145,41 @@ static void an_add_lives_until_a_delete_reaches_all_its_nodes(void)
 	tree_publication_free(&pub);
 }
 
+/* The operations of the segments after the add's, held apart from it. */
+static void a_later_segment_withdraws_an_add_as_its_own_does(void)
+{
+	struct tree_publication sealed = {}, later = {};
+	struct tree_operation *add, *op;
+
+	add = operation(&sealed, "add", "x");
+	label(&add->selector, "site", "a", "b");
+	EXPECT_FALSE(tree_add_withdrawn(add, later.operations, 0));
+
+	operation(&later, "add", "x");
+	operation(&later, "delete", "y");
+	op = operation(&later, "delete", "x");
+	label(&op->selector, "site", "a", NULL);
+	EXPECT_FALSE(tree_add_withdrawn(add, later.operations,
+					later.n_operations));
+
+	op = operation(&later, "delete", "x");
+	label(&op->selector, "site", "b", "a");
+	EXPECT_TRUE(tree_add_withdrawn(add, later.operations,
+				       later.n_operations));
+	EXPECT_FALSE(tree_add_withdrawn(add, later.operations,
+					later.n_operations - 1));
+	EXPECT_TRUE(tree_add_live(&sealed, 0));
+	tree_publication_free(&later);
+	tree_publication_free(&sealed);
+}
+
 static const struct unit_case cases[] = {
 	UNIT_CASE(an_unconstrained_selector_shares_every_node),
 	UNIT_CASE(lists_without_a_common_value_are_disjoint),
 	UNIT_CASE(release_prefixes_meet_where_one_continues_the_other),
 	UNIT_CASE(a_key_with_other_values_is_disjoint),
 	UNIT_CASE(an_add_lives_until_a_delete_reaches_all_its_nodes),
+	UNIT_CASE(a_later_segment_withdraws_an_add_as_its_own_does),
 	{}
 };
 

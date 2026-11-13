@@ -338,6 +338,12 @@ Tree objects in the registry
        ``schemaVersion`` 2, ``artifactType``
        ``application/vnd.shirudo.upatch.tree.v1``, the empty config, and
        exactly one document layer and one signature layer.
+   * - Sealed segment
+     - A publication manifest that a later segment names in
+       ``base.segment_manifest_digest``, unchanged since it was the
+       current one. Tagged ``segment-<k>``, ``k`` counting the sealed
+       segments from 1, only so that registry garbage collection keeps
+       it; targets fetch it by digest and never read the tag.
    * - Document layer
      - The publication document, media type
        ``application/vnd.shirudo.upatch.tree.v1+json``.
