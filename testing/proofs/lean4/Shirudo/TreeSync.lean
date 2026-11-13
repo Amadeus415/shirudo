@@ -93,8 +93,9 @@ therefore a sync of each segment in turn, with one write fewer: the state
 `run` writes at the end of a segment, which the next segment's record at
 acceptance overwrites with the same cursor and root. Every node such a
 sync leaves is one a `Steps` history of single syncs leaves, so every
-theorem here holds across segment boundaries too. The base check and the
-prefix check
+theorem here holds across segment boundaries too; `walk_same_ops` shows
+that the segments apply the operations the unsegmented tree applies, in
+its order, with the same records. The base check and the prefix check
 of the walk only refuse more; the model leaves them out, as it does the
 digest checks.
 -/
@@ -2794,5 +2795,115 @@ theorem lastSeq_le_head [DecidableEq T] [DecidableEq M] [DecidableEq I]
     {n : Node T M I D} (hr : Reach H init Signed n) {s : State T M D}
     (hst : n.state = some s) : s.lastSeq ≤ s.headSeq :=
   (reach_oinv ha hr).head s hst
+
+/-! ### A walk applies the tree's operations -/
+
+section walk
+variable (H : D → D → D)
+
+/-- The writes that do not name a state: `pending.json`, its unlink, the
+register with its eventlog record, the tree eventlog and the outcomes
+record. -/
+def Write.core : Write T M I D → Bool
+  | .state _ => false
+  | .truncate _ => false
+  | _ => true
+
+/-- The loop over two runs of operations is the loop over the first, then
+over the second from where it left. -/
+theorem loop_append (sel : Op I D → Bool) :
+    ∀ (st : State T M D) (xs ys : List (Op I D)),
+      loop H sel st (xs ++ ys) =
+        ((loop H sel st xs).1 ++ (loop H sel (loop H sel st xs).2 ys).1,
+          (loop H sel (loop H sel st xs).2 ys).2)
+  | st, [], ys => by simp [loop]
+  | st, o :: xs, ys => by
+    simp only [List.cons_append, loop]
+    split
+    · exact loop_append sel st xs ys
+    · split
+      · rw [loop_append sel _ xs ys]
+        simp
+      · rw [loop_append sel _ xs ys]
+        simp
+
+/-- What the loop does depends on the cursor and the root of the state it
+starts from alone, not on the publication the state names. -/
+theorem loop_core_congr (sel : Op I D → Bool) :
+    ∀ (os : List (Op I D)) (s s' : State T M D),
+      s.lastSeq = s'.lastSeq → s.root = s'.root →
+      (loop H sel s os).1.filter Write.core =
+          (loop H sel s' os).1.filter Write.core ∧
+        (loop H sel s os).2.lastSeq = (loop H sel s' os).2.lastSeq ∧
+        (loop H sel s os).2.root = (loop H sel s' os).2.root
+  | [], s, s', hl, hr => by simp [loop, hl, hr]
+  | o :: os, s, s', hl, hr => by
+    simp only [loop]
+    by_cases h0 : o.seq ≤ s'.lastSeq
+    · have h0' : o.seq ≤ s.lastSeq := by omega
+      simp only [h0, h0', ↓reduceIte]
+      exact loop_core_congr sel os s s' hl hr
+    · have h0' : ¬o.seq ≤ s.lastSeq := by omega
+      simp only [h0, h0', ↓reduceIte]
+      by_cases hs : sel o = true
+      · obtain ⟨h1, h2, h3⟩ := loop_core_congr sel os
+          { s with root := H s.root o.digest, lastSeq := o.seq }
+          { s' with root := H s'.root o.digest, lastSeq := o.seq } rfl
+          (by simp [hr])
+        simp only [hs, ↓reduceIte]
+        refine ⟨?_, h2, h3⟩
+        rw [List.filter_append, List.filter_append, h1]
+        simp [List.filter_cons, Write.core, hr]
+      · obtain ⟨h1, h2, h3⟩ := loop_core_congr sel os
+          { s with lastSeq := o.seq } { s' with lastSeq := o.seq } rfl hr
+        simp only [hs, Bool.false_eq_true, ↓reduceIte]
+        refine ⟨?_, h2, h3⟩
+        rw [List.filter_append, List.filter_append, h1]
+        simp [List.filter_cons, Write.core, hr]
+
+/-- The walk forwards over the segments, oldest first: each one recorded at
+acceptance, `f`, which names the segment and keeps the cursor and the root,
+then its operations. -/
+def walkLoop (sel : Op I D → Bool) :
+    State T M D → List ((State T M D → State T M D) × List (Op I D)) →
+      List (Write T M I D) × State T M D
+  | st, [] => ([], st)
+  | st, (f, os) :: segs =>
+    let r := loop H sel (f st) os
+    let w := walkLoop sel r.2 segs
+    (.state (f st) :: r.1 ++ w.1, w.2)
+
+/-- A walk applies the operations the unsegmented tree has, in its order:
+every write but those of the state, `pending.json`, the register and its
+eventlog record, the tree eventlog and the outcomes record, is the one the
+operations of all the segments taken as one publication make, and the walk
+ends at the same cursor and projection root. Only what the state names, the
+segment and its head and base, differs. -/
+theorem walk_same_ops (sel : Op I D → Bool) :
+    ∀ (segs : List ((State T M D → State T M D) × List (Op I D)))
+      (st : State T M D),
+      (∀ p ∈ segs, ∀ s, (p.1 s).lastSeq = s.lastSeq ∧ (p.1 s).root = s.root) →
+      (walkLoop H sel st segs).1.filter Write.core =
+          (loop H sel st (segs.map Prod.snd).flatten).1.filter Write.core ∧
+        (walkLoop H sel st segs).2.lastSeq =
+          (loop H sel st (segs.map Prod.snd).flatten).2.lastSeq ∧
+        (walkLoop H sel st segs).2.root =
+          (loop H sel st (segs.map Prod.snd).flatten).2.root
+  | [], st, _ => by simp [walkLoop, loop]
+  | (f, os) :: segs, st, hf => by
+    obtain ⟨hfl, hfr⟩ := hf (f, os) List.mem_cons_self st
+    obtain ⟨c1, c2, c3⟩ := loop_core_congr H sel os (f st) st hfl hfr
+    obtain ⟨w1, w2, w3⟩ := walk_same_ops sel segs (loop H sel (f st) os).2
+      (fun p hp => hf p (List.mem_cons_of_mem _ hp))
+    obtain ⟨d1, d2, d3⟩ := loop_core_congr H sel (segs.map Prod.snd).flatten
+      (loop H sel (f st) os).2 (loop H sel st os).2 c2 c3
+    simp only [walkLoop, List.map_cons, List.flatten_cons]
+    rw [loop_append H sel st os]
+    refine ⟨?_, w2.trans d2, w3.trans d3⟩
+    simp only [List.cons_append, List.filter_cons, List.filter_append]
+    simp only [Write.core, Bool.false_eq_true, ↓reduceIte]
+    rw [c1, w1, d1]
+
+end walk
 
 end Shirudo.TreeSync

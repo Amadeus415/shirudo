@@ -786,7 +786,12 @@ the model follows the C.
        line for every operation from 1 to the cursor, in order, no line
        at or below the cursor ever changes, and the cursor never passes
        the head of the recorded publication. All of these hold across
-       segment boundaries, as a publication of any base is a sync
+       segment boundaries, as a publication of any base is a sync;
+       ``walk_same_ops``: the segments of a walk, each recorded before
+       its operations, apply the operations of the tree taken as one
+       publication, in its order, with the same ``pending.json``,
+       register, tree eventlog and outcomes writes, and end at the same
+       cursor and projection root
      - A sync that walks is one sync per segment: it leaves out only the
        state each segment but the last writes at its end, which the next
        segment's record overwrites with the same cursor and root, and
