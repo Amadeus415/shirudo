@@ -172,10 +172,10 @@ a Python companion with the same stem, such as
 before ``init``. They skip on the build host and run in a separate VM
 that the ``tpm`` family boots without the production initrd.
 
-``t9109`` carries a target number but runs on the host:
-:src:`testing/end2end/host.sh` runs it after node A's suite, against two
-other nodes (see :ref:`testing-two-nodes`), and node A's runner leaves it
-out.
+``t9109`` and ``t9110`` carry target numbers but run on the host:
+:src:`testing/end2end/host.sh` runs them after node A's suite, in that
+order, against two other nodes (see :ref:`testing-two-nodes`), and node
+A's runner leaves them out.
 
 Run the tests
 -------------
@@ -659,9 +659,10 @@ operator key and loads it with the backend's tree ingest job, which runs
 ``bpm tree show``. In the guest, ``t9107`` sends the example keepalives
 with their recorded quotes through that collector and queries
 ClickHouse, both through QEMU's address for the host. After node A,
-``host.sh`` runs ``t9109`` against the same backend, see
-:ref:`testing-pipeline`. Without ``BACKEND_DIR`` and without
-``../backend``, ``t9107`` skips and ``t9109`` does not run:
+``host.sh`` runs ``t9109`` and ``t9110`` against the same backend, see
+:ref:`testing-pipeline` and :ref:`testing-history`. Without
+``BACKEND_DIR`` and without ``../backend``, ``t9107`` skips and
+``t9109`` and ``t9110`` do not run:
 
 .. code-block:: console
 
@@ -677,8 +678,9 @@ own software TPM and so its own attestation key. Node A is the family's
 VM, named ``<name>-end2end``, and runs the target tests in number order.
 Node B, ``<name>-end2end-b``, boots beside it. With a keepalive backend,
 the fresh edge node, ``<name>-end2end-edge``, boots once node A has
-stopped, and ``t9109`` runs against it and node B. Both boot with ``make
--C testing vm-node-end2end``, ``END2END_NODE=b`` or ``edge``: the runner's
+stopped, and ``t9109`` and then ``t9110`` run against it and node B.
+Both boot with ``make -C testing vm-node-end2end``, ``END2END_NODE=b`` or
+``edge``: the runner's
 node mode prepares a node as it prepares node A, activates the config
 image of its role, runs no tests, starts no timers and leaves it running
 until ``host.sh`` stops it at the end. Each takes its role from a signed
@@ -811,6 +813,45 @@ with one byte of its body changed lands in ``rejected`` as
 :src:`testing/end2end/pipeline_checks.py` recomputes the roots, the mask,
 the loaded set and each quote's qualifying data from the formats' own
 definitions.
+
+.. _testing-history:
+
+The history over segments
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``t9110`` checks the backend's history of each node, ``node_ops`` and
+``node_sets``, on a tree longer than the keepalive window. The bundle
+builds every guest target with a window of 7 operations, a walk of 4 and
+a join of 6 (``TREE_LIMIT_CFLAGS``), so a tree of 11 operations is enough.
+``host.sh`` runs it after ``t9109``, against the same nodes and backend,
+and its output is ``build/test-vm/end2end/t9110.log``. It continues
+``t9109``'s tree, whose first segment holds operations 1 to 3, the add of
+``xfs-fix`` 1.1.0 at seq 3 with ``fixes`` included, and needs both nodes
+at seq 3 of it. It:
+
+#. empties the keepalive backend, loads its schema again and sets
+   ``window`` in ``shirudo.settings`` to 7;
+#. builds ``hist-pad``, a copy of ``xfs-fix`` that selects every node,
+   and appends add and delete of it in turn with ``--segment-ops 2``, as
+   operations 4 and 5, 6 and 7, then 8 to 11, which seal four segments;
+#. after each step loads the tree with the ingest job and syncs the
+   nodes. The edge node sends a keepalive each time, so the backend sees
+   it from seq 1. Node B syncs to seq 7, walking back one segment, and
+   sends nothing until seq 11, so the backend first sees it with a
+   window that starts at seq 4.
+
+It then checks that ``bpm tree show --walk`` and ``tree_pubs`` hold the
+five segments with their bases, ``segment-<k>`` tags and
+``history_root``, and ``tree_ops`` all 11 operations; that each node's
+newest record, its ``status --keepalive`` body and its ``outcomes`` agree
+on ``base_seq`` 4, ``base_root`` and the mask; that ``node_ops`` holds
+the edge node from seq 1 and node B from a gap row at seq 4, with the
+roots of their ``outcomes``; that both nodes are ``healthy``, the edge
+node's ``base_root`` verified and node B's log reading ``base unverified
+(gap)`` and ``set unverified (gap)``; and that ``node_vulns`` still reads
+the kernel advisory ``shielded`` by ``xfs-fix`` at seq 3, below the
+window, on the edge node and ``unknown`` on node B, as threat U20 of
+:doc:`/security/threat-model` says.
 
 Select test scripts
 ~~~~~~~~~~~~~~~~~~~

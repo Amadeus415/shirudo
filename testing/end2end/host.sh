@@ -4,8 +4,8 @@
 # testing/end2end/host.sh -- run the operator side of the end-to-end VM test.
 # Its arguments are the command that runs the suite in node A; node B, a
 # second target with a TPM of its own, boots beside it. After node A, a
-# fresh edge node boots in its place and t9109 runs here against it and
-# node B.
+# fresh edge node boots in its place and t9109 and t9110 run here against
+# it and node B.
 
 set -eu
 
@@ -116,6 +116,21 @@ assert node["image_root"] is None, node["image_root"]
 assert not config_root or node["config_root"] == config_root, node["config_root"]
 PY
 		die "node $1 does not declare the image of the end-to-end nodes"
+}
+
+# Run the test end2end/$1.sh on the host against the fresh edge node and
+# node B, with the keepalive backend, into $W/<number>.log. t9110 continues
+# what t9109 left in both nodes and the tree, so they run in that order.
+host_test() {
+	log=$W/${1%%-*}.log
+	say "${1%%-*}, on the host, against the fresh edge node and node B"
+	rc=0
+	(cd testing && E2E=$W END2END_BACKEND=$BACKEND END2END_KEYS=$KEYS \
+		NODES_DIR=$NODES_DIR NODES_HOST=$NODES_HOST \
+		sh "end2end/$1.sh") >"$log" 2>&1 || rc=$?
+	cat "$log"
+	[ "$rc" -eq 0 ] || die "${1%%-*} failed; see $log"
+	! grep -q '^1\.\.0 # SKIP' "$log" || die "${1%%-*} was skipped"
 }
 
 # The keepalive backend t9107 runs against, in $BACKEND: BACKEND_DIR, a
@@ -368,14 +383,8 @@ if [ -n "$NODE_EDGE_PID" ]; then
 		die "the fresh edge node is not labelled role=edge"
 	image_identity edge "$(node_run_dir edge)/result/keepalive.json" \
 		"$(cat "$TEST_VM_HOST_BUNDLE/verity/config-edge.root")"
-	say "t9109, on the host, against the fresh edge node and node B"
-	rc=0
-	(cd testing && E2E=$W END2END_BACKEND=$BACKEND END2END_KEYS=$KEYS \
-		NODES_DIR=$NODES_DIR NODES_HOST=$NODES_HOST \
-		sh end2end/t9109-pipeline.sh) >"$W/t9109.log" 2>&1 || rc=$?
-	cat "$W/t9109.log"
-	[ "$rc" -eq 0 ] || die "t9109 failed; see $W/t9109.log"
-	! grep -q '^1\.\.0 # SKIP' "$W/t9109.log" || die "t9109 was skipped"
+	host_test t9109-pipeline
+	host_test t9110-keepalive-history
 	node_down edge ""
 	node_clean edge
 fi

@@ -670,6 +670,14 @@ signed config image.
        and ``qA==``, each node's records against the backend's rows,
        every SBOM state, ``node_vulns`` exposure and a body altered in
        transit
+   * - ``t9110-keepalive-history``
+     - The backend's history of each node over a tree of segments, run by
+       ``host.sh`` after ``t9109`` on the same nodes: ``bpm tree append
+       --segment-ops 2`` past the lowered keepalive window, the ingest
+       job loading every segment through ``bpm tree show --walk``, a
+       running node's walk back, ``base_root`` verified against
+       ``node_ops``, a node first seen past seq 0 reading ``gap`` and
+       ``healthy``, and a shield below the window still ``shielded``
 
 Unit suites and fuzz targets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -830,7 +838,8 @@ Coverage by area
    * - upatch tree
      - ``t3011``, ``t5004``, ``t7005``, ``t7007``, ``t7008``, ``t7009``,
        ``t7101``, ``t7102``, ``t7103``, ``t7104``, ``t7105``, ``t7106``,
-       ``t7107``, ``t7108``, ``t7109``, ``t7110``, ``t9105``, ``t9109``.
+       ``t7107``, ``t7108``, ``t7109``, ``t7110``, ``t9105``, ``t9109``,
+       ``t9110``.
        Fuzz: ``tree``,
        ``tree-state``, ``kconfig``. Unit: ``bpm_tree``,
        ``bpm_tree_overlap``, ``bpm_tree_state``, ``chain_history``,
@@ -842,7 +851,8 @@ Coverage by area
    * - Telemetry
      - ``t4006``, ``t4104``, ``t6139``, ``t7109``, ``t7110``, ``t8001`` to
        ``t8006``, ``t8101`` to ``t8106``, ``t9101`` to ``t9105``,
-       ``t9107``, ``t9109``. Fuzz: ``otel``, ``quote-check``, ``serializer``.
+       ``t9107``, ``t9109``, ``t9110``. Fuzz: ``otel``, ``quote-check``,
+       ``serializer``.
        Unit: ``keepalive``, ``keepalive_quote``, ``sysinfo``
    * - Decoders
      - ``t3002``, ``t8102``, ``t9101``. Fuzz: ``decoder``

@@ -965,9 +965,11 @@ test_expect_success 'the runners split the tests by number' '
 	! sh run-tests.sh nosuch >"$WORK/nosuch.out" 2>&1 &&
 	grep -q "no tests nosuch" "$WORK/nosuch.out" &&
 	test -e end2end/t9109-pipeline.sh &&
-	grep -Fqx "	[ \"\$t\" != end2end/t9109-pipeline.sh ] || continue" \
+	test -e end2end/t9110-keepalive-history.sh &&
+	grep -Fqx "	end2end/t9109-pipeline.sh | end2end/t9110-keepalive-history.sh) continue ;;" \
 		run-target-tests.sh &&
-	grep -Fq "sh end2end/t9109-pipeline.sh" end2end/host.sh
+	grep -Fqx "	host_test t9109-pipeline" end2end/host.sh &&
+	grep -Fqx "	host_test t9110-keepalive-history" end2end/host.sh
 '
 
 test_expect_success 'test-vm rejects unknown policy modes before boot' '

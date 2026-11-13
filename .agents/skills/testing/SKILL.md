@@ -26,14 +26,15 @@ make -C testing help
 
 The end2end tier runs t9107 against the keepalive backend that
 `BACKEND_DIR` names, a checkout or a git URL, `../backend` by default;
-without one t9107 skips and t9109 does not run, so say so when reporting
-the tier. The tier boots two VMs at once, each with its own swtpm: node A
-runs the tests, node B (`make -C testing vm-node-end2end`, node mode of
-`vm/run.sh`) takes `role=core` from `config-core` and waits. With a
-backend, a fresh edge node (`END2END_NODE=edge`, `role=edge` from
-`config-edge`) boots once node A has stopped, and `host.sh` runs t9109
-on the host against it and node B; its output is
-`build/test-vm/end2end/t9109.log`. A test reaches the nodes with
+without one t9107 skips and t9109 and t9110 do not run, so say so when
+reporting the tier. The tier boots two VMs at once, each with its own
+swtpm: node A runs the tests, node B (`make -C testing vm-node-end2end`,
+node mode of `vm/run.sh`) takes `role=core` from `config-core` and waits.
+With a backend, a fresh edge node (`END2END_NODE=edge`, `role=edge` from
+`config-edge`) boots once node A has stopped, and `host.sh` runs t9109,
+then t9110, which continues t9109's tree in segments, on the host against
+it and node B; their output is `build/test-vm/end2end/t9109.log` and
+`t9110.log`. A test reaches the nodes with
 `node_sh b` or `node_sh edge` of `testing/end2end/node-lib.sh`. Their boot
 logs are `build/test-vm/end2end/node-b.log` and `node-edge.log`, their
 state `build/test-vm/vms/<name>-end2end-b/` and `-edge/`. Every node
