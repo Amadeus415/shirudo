@@ -183,7 +183,8 @@ The Apache preparation script also signs two guards for the exact
 `libphp.so` build. The broad guard stops OOM, bailout, every diagnostic,
 and every multipart request. The selective guard allows ordinary script
 warnings and multipart forms while stopping OOM, bailout, fatal or early
-diagnostics, and early session initialization.
+diagnostics, and early session initialization. Both guards also prevent a
+marked worker or its children from executing another program.
 
 Build both tested fixture sets:
 
@@ -226,3 +227,58 @@ establish complete PHP2Shell coverage.
 
 `Documentation/upatches/php-worker-guards.rst` explains the design, test
 results, limits, and relationship to the upstream PHP fix.
+
+## Prevent workers from starting other programs
+
+Both `php-guard-broad` and `php-guard-selective` include the same exec
+restriction from `php-exec.h`. The original `php-bailout-apache` upatch
+still contains only the bailout probe.
+
+The restriction works like this:
+
+```text
+php_request_startup() in the signed libphp.so target
+    -> mark this worker in BPF task storage
+
+worker forks or creates a thread
+    -> lsm/task_alloc copies the mark to the new task
+
+marked task calls execve() or execveat()
+    -> lsm/bprm_check_security returns -EPERM
+    -> the new program does not start
+```
+
+The mark lasts until the task exits. Request shutdown does not clear it;
+it is separate from the selective guard's temporary script-execution
+mark. Changing a process name does not change the decision. Unmarked
+processes, including the Apache parent and an administrator's shell,
+keep their existing exec permissions. A fork that cannot copy the mark
+fails with `ENOMEM`. If request startup cannot allocate the mark, the
+probe requests `SIGKILL` and records any failure.
+
+The load's build-ID check applies to the PHP library used to mark workers.
+It does not match a process by its name or by the program it wants to
+start. All new programs are refused from a marked worker, including
+legitimate helpers such as image converters, mailers and CGI programs
+launched directly by that worker. A separate, unmarked CGI daemon is not
+covered.
+
+Load one guard before allowing traffic. For an existing instance, stop
+Apache and its existing child processes, load the guard, then start Apache.
+Tasks that already exist are not marked retroactively; restarting a worker
+does not cover a child that outlives it. The VM test uses one idle prefork
+worker and replaces it after each load. This demo is for
+non-ZTS `mod_php`, where PHP runs inside the Apache worker. It does not
+establish coverage of PHP-FPM, another SAPI, or arbitrary Apache modules.
+
+### What this does not stop
+
+This check prevents a new executable from replacing the marked task's
+program. It does not prevent PHP code or native code from running inside
+an existing worker. It also does not restrict that worker's file access,
+network access, or communication with an unmarked service. Those need
+separate policies. The PHP error probes remain useful because they stop
+selected error paths before those paths continue inside the worker.
+
+The exec restriction adds containment. It does not turn the experiment
+into a complete fix for PHP2Shell.

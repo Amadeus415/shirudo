@@ -62,6 +62,41 @@ shirudo rejects a load if the target build ID has changed. Successful
 loads and unloads extend its TPM register. The two guards are loaded one
 at a time.
 
+Preventing a new program from starting
+--------------------------------------
+
+Both guards also include ``php-exec.h``. A uprobe at
+``php_request_startup`` marks the current worker in BPF task storage.
+That mark lasts for the task's lifetime; it is independent of the
+selective guard's script-execution mark and survives request shutdown.
+``lsm/task_alloc`` copies it to children and new threads, refusing the
+creation if copying fails. ``lsm/bprm_check_security`` refuses exec by a
+marked task with ``EPERM``, preserving any earlier LSM refusal.
+
+::
+
+   PHP request startup -> mark worker
+                              |
+                              +-> fork or new thread -> copy mark
+                              |
+                              +-> execve / execveat -> EPERM
+
+The mark comes from entry to the exact PHP library the signed upatch
+names. A process name does not grant or remove it. This leaves unrelated
+programs and the Apache parent free to exec. Loading a guard does not
+mark an existing request retroactively. Replace all old workers before
+resuming traffic; the VM test replaces its single idle worker after
+loading each guard. If marking fails, the probe requests ``SIGKILL``
+and counts any failed signal request.
+
+Legitimate subprocesses are refused too: a PHP application that starts
+an image converter or a mailer will fail that operation. This policy
+does not restrict code already running in the worker, files it can
+access, sockets it can use, or an unmarked service it can ask for work.
+PHP-FPM and a separate CGI daemon need their own coverage. The demo is
+scoped to Apache prefork with non-ZTS ``mod_php``. Blocking exec adds
+containment but does not establish complete PHP2Shell mitigation.
+
 What the Apache VM shows
 ------------------------
 

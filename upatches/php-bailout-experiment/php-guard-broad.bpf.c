@@ -7,6 +7,8 @@
 #define PHP_BAILOUT_TARGET "/tmp/shirudo-php2shell-php"
 #endif
 
+#include "php-exec.h"
+
 struct guard_stats {
 	__u64 oom;
 	__u64 bailout;

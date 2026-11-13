@@ -8,6 +8,8 @@
 #define PHP_BAILOUT_TARGET "/tmp/shirudo-php2shell-php"
 #endif
 
+#include "php-exec.h"
+
 /* E_FATAL_ERRORS from the PHP 8.4 and 8.5 zend_errors.h headers. */
 #define PHP_FATAL_ERRORS (1 | 4 | 16 | 64 | 256 | 4096)
 
