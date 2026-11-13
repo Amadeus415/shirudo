@@ -508,7 +508,10 @@ signed config image.
        document verbatim, ``fixes`` included, refuses a signature by
        another key, a wrong certificate, a tampered layer and a document
        ``tree sync`` would refuse with the errno sync reports, and
-       writes nothing to the registry
+       writes nothing to the registry; with ``--walk`` prints a tree
+       never sealed as without it and every segment of a tree sealed
+       by ``--segment-ops 1`` oldest first, stops at ``seq`` 0 from a
+       sealed segment, and refuses a tree whose sealed segment is gone
    * - ``t7009-bpm-tree-seal``
      - ``bpm tree append`` seals a segment at ``--segment-ops``, a value
        that may change between appends, or before one append would pass
@@ -562,7 +565,10 @@ signed config image.
        ending before its successor's base and a running node's walk past
        its limit are refused with nothing applied; a dry run walks and
        records nothing; ``init`` walks nothing and takes the projection
-       root one publication gives
+       root one publication gives; ``bpm tree show --walk``, run by the
+       bundle on the operator host, printed every segment of the tree
+       oldest first, each as plain ``show`` prints it and naming the
+       one before
    * - ``t7109-bpm-tree-keepalive``
      - ``status --keepalive``: the keys of the body in order, its tree
        keys and mask as ``state.json`` and the outcomes record have them,

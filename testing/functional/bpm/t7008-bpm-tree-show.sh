@@ -6,7 +6,8 @@
 # its document bytes verbatim, fixes included, after verifying it as tree
 # sync does; refuses a bad signature, a wrong certificate, a tampered
 # layer and a signed document sync would refuse with the errno sync
-# reports; and writes nothing to the registry.
+# reports; and writes nothing to the registry. With --walk it prints every
+# segment of a sealed tree, oldest first, and refuses a lost segment.
 # Needs clang, shirudo-build, python3 and an OpenSSL >= 3.5 (ML-DSA).
 
 cd "$(dirname "$0")/../.."
@@ -251,6 +252,76 @@ test_expect_success 'show without --cert is a usage error' '
 	grep -q "^usage: shirudo bpm tree show" "$WORK/err" &&
 	test ! -s "$WORK/out" &&
 	show "$TREE" --cert "$CERT"
+'
+
+test_expect_success 'show --walk of a tree never sealed prints what show prints' '
+	show "$TREE" --cert "$CERT" &&
+	mv "$WORK/out" "$WORK/plain" &&
+	show "$TREE" --cert "$CERT" --walk &&
+	cmp -s "$WORK/plain" "$WORK/out"
+'
+
+SEGS="oci://127.0.0.1:$PORT/ns/segs"
+
+# The digest of the manifest in the file $1.
+manifest_digest() {
+	printf 'sha256:%s\n' "$(sha256sum <"$1" | cut -d" " -f1)"
+}
+
+test_expect_success 'tree append with --segment-ops 1 seals a segment per append' '
+	n=0 &&
+	for op in add delete add; do
+		"$S" bpm tree append "$WORK/t7008-1.0.0.bee" "$SEGS" \
+			--keys-dir "$WORK/keys" --segment-ops 1 --op "$op" \
+			>/dev/null || return 1
+		n=$((n + 1)) &&
+		cp "$REG/ns/segs/manifests/stable" "$WORK/g$n" || return 1
+	done
+'
+
+test_expect_success 'show --walk prints every segment, oldest first, as show prints it' '
+	registry_sum >"$WORK/before" &&
+	show "$SEGS" --cert "$CERT" --walk &&
+	registry_sum >"$WORK/after" &&
+	cmp -s "$WORK/before" "$WORK/after" &&
+	test ! -s "$WORK/err" &&
+	python3 - "$REG/ns/segs" "$WORK/out" "$WORK/g1" "$WORK/g2" "$WORK/g3" <<-\PY
+	import hashlib, json, pathlib, sys
+	repo, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+	expected = b""
+	for path in sys.argv[3:]:
+	    raw = pathlib.Path(path).read_bytes()
+	    digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+	    manifest = json.loads(raw)
+	    layer = [l for l in manifest["layers"] if l["mediaType"].endswith("+json")][0]
+	    document = (repo / "blobs" / layer["digest"]).read_bytes()
+	    expected += (b"{\"manifest_digest\":\"" + digest.encode() +
+	                 b"\",\"document\":" + document + b"}\n")
+	text = out.read_bytes()
+	assert text == expected, text
+	decoder, rest, bases = json.JSONDecoder(), text.decode(), []
+	while rest.strip():
+	    shown, end = decoder.raw_decode(rest.lstrip())
+	    rest = rest.lstrip()[end:]
+	    bases.append(shown["document"]["base"]["seq"])
+	assert bases == [0, 1, 2], bases
+	PY
+'
+
+test_expect_success 'show --walk from a sealed segment stops at seq 0' '
+	g2=$(manifest_digest "$WORK/g2") &&
+	show "$SEGS" --cert "$CERT" --walk --reference "$g2" &&
+	test "$(grep -c "^{\"manifest_digest\"" "$WORK/out")" -eq 2 &&
+	tail -n1 "$WORK/out" | grep -q "^{\"manifest_digest\":\"$g2\""
+'
+
+test_expect_success 'show --walk refuses a tree whose sealed segment is gone' '
+	g1=$(manifest_digest "$WORK/g1") &&
+	mv "$REG/ns/segs/manifests/$g1" "$WORK/sealed" &&
+	{ refused "No such file or directory" "$SEGS" --cert "$CERT" --walk
+	  ret=$?; } &&
+	mv "$WORK/sealed" "$REG/ns/segs/manifests/$g1" &&
+	test "$ret" -eq 0
 '
 
 test_done

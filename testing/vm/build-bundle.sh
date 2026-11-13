@@ -730,6 +730,16 @@ build_tree_segments_registry()
 			{ kill "$pid"; die "bpm tree append $k of the segment tree failed"; }
 		cp "$repo/manifests/stable" "$repo/manifests/g$k"
 	done
+	# The guest has no shirudo-build: t7108 checks what bpm tree show
+	# --walk printed of the whole tree here against the copy it serves.
+	env -u BPM_OCI_CA_FILE -u BPM_OCI_USERNAME -u BPM_OCI_PASSWORD \
+		BPM_OCI_SCHEME=http REGISTRY_AUTH_FILE="$work/absent-auth.json" \
+		NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 \
+		SHIRUDO_BUILD="$builder" "$REPO_ROOT/shirudo" bpm tree show \
+		"oci://127.0.0.1:$port/shirudo/segments" \
+		--cert "$FIXTURE_WORK/trusted/cert.der" --walk \
+		>"$TMP_DIR/fixtures/segments-show-walk.json" ||
+		{ kill "$pid"; die "bpm tree show --walk of the segment tree failed"; }
 	kill "$pid"
 	wait "$pid" 2>/dev/null || :
 	printf '%s\n' "$port" >"$registry/port"

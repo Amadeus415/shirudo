@@ -133,7 +133,7 @@ the `.rodata` a rodata entry wrote, the quickest check of a generator.
 ```sh
 shirudo bpm push <name>-<version>.bee oci://<registry>/<namespace>/<repo> --keys-dir <keys>
 shirudo bpm tree append <name>-<version>.bee oci://<registry>/<repository> [<append-options>]
-shirudo bpm tree show oci://<registry>/<repository> --cert <keys>/cert.der [--reference <ref>]
+shirudo bpm tree show oci://<registry>/<repository> --cert <keys>/cert.der [--reference <ref>] [--walk]
 ```
 
 `push` signs the namespace's index along with the package. Pass
@@ -157,7 +157,8 @@ or rewrite an operation a target may have taken. `tree
 show` prints the publication verified as a target verifies it, as
 `{"manifest_digest":...,"document":...}` with the signed document
 verbatim, `fixes` included: the check that an append published what
-was meant.
+was meant. `--walk` prints one such object per segment, oldest first,
+after checking the chain back to `base.seq` 0 as a joining target does.
 
 ## Load it on a target
 

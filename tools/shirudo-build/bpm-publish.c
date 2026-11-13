@@ -922,40 +922,17 @@ static int tree_refuse_shared_xdp_class(struct bpm_oci_client *c,
 	return 0;
 }
 
-/* What tree sync checks of a publication before it applies anything. */
-static int tree_publication_verify(const struct tree_publication *pub)
-{
-	int ret = tree_publication_check(pub);
-
-	for (int i = 0; !ret && i < pub->n_operations; i++)
-		ret = tree_operation_validate(&pub->operations[i]);
-	return ret;
-}
-
-/*
- * The sealed segment succ names, as a node walking back fetches it: by
- * manifest digest, signed, well formed and ending where succ starts.
- */
+/* The sealed segment succ names, as a node walking back fetches it. */
 static int tree_fetch_sealed(struct bpm_oci_client *c, const char *repository,
 			     const char *cert,
 			     const struct tree_publication *succ,
 			     struct tree_publication *pred)
 {
-	struct bpm_buffer document = {};
 	char digest[BPM_MAX_DIGEST];
 	int ret;
 
-	ret = bpm_tree_fetch_document(c, repository,
-				      succ->segment_manifest_digest, cert,
-				      NULL, &document, digest, sizeof(digest));
-	if (!ret)
-		ret = tree_parse((const char *)document.data, document.len,
-				 pred);
-	if (!ret)
-		ret = tree_publication_verify(pred);
-	if (!ret)
-		ret = tree_segment_precedes(pred, digest, succ);
-	bpm_buffer_free(&document);
+	ret = build_tree_fetch_sealed(c, repository, cert, NULL, succ, pred,
+				      digest, sizeof(digest));
 	if (ret)
 		pr_err("bpm tree append: the sealed segment %s, which ends at seq %lld, does not verify",
 		       succ->segment_manifest_digest,
@@ -1331,7 +1308,7 @@ static int cmd_bpm_tree_append(int argc, char **argv)
 			ret = -EINVAL;
 			goto out;
 		}
-		ret = tree_publication_verify(&pub);
+		ret = build_tree_publication_verify(&pub);
 		if (ret) {
 			pr_err("bpm tree append: the publication at %s:%s does not verify",
 			       repo_ref, reference);

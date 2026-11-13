@@ -111,6 +111,37 @@ int build_bpm_tree(int argc, char **argv);
 int build_bpm_tree_show(int argc, char **argv);
 bool build_is_help(const char *arg);
 
+struct bpm_buffer;
+struct bpm_oci_client;
+struct trusted_set;
+
+/*
+ * What tree sync checks of a publication before it compares it with its
+ * state.
+ *
+ * build_tree_fetch_checked() fetches the publication at reference, a tag
+ * or a manifest digest, checks it against trusted, or cert_path when
+ * trusted is NULL, as tree sync does and parses it into pub. document,
+ * when not NULL, keeps the checked bytes for bpm_buffer_free().
+ *
+ * build_tree_fetch_sealed() fetches the sealed segment succ names as a
+ * node walking back does: by digest, checked, and the one that ends where
+ * succ starts.
+ */
+int build_tree_publication_verify(const struct tree_publication *pub);
+int build_tree_fetch_checked(struct bpm_oci_client *c, const char *repository,
+			     const char *reference, const char *cert_path,
+			     const struct trusted_set *trusted,
+			     struct bpm_buffer *document,
+			     struct tree_publication *pub,
+			     char *manifest_digest, size_t digest_sz);
+int build_tree_fetch_sealed(struct bpm_oci_client *c, const char *repository,
+			    const char *cert_path,
+			    const struct trusted_set *trusted,
+			    const struct tree_publication *succ,
+			    struct tree_publication *pred,
+			    char *manifest_digest, size_t digest_sz);
+
 int build_check_keys(const char *pkey, const char *cert);
 
 /* The file name of source less .bpf.c, .bpf.o or .o. 0 or -E2BIG. */

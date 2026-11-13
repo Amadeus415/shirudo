@@ -163,7 +163,7 @@ _shirudo()
 		elif [[ $sub == tree && ${COMP_WORDS[3]} == show && $prev == --cert ]]; then
 			COMPREPLY=( $(compgen -f -- "$cur") )
 		elif [[ $sub == tree && ${COMP_WORDS[3]} == show && $cur == -* ]]; then
-			COMPREPLY=( $(compgen -W "--cert --reference" -- "$cur") )
+			COMPREPLY=( $(compgen -W "--cert --reference --walk" -- "$cur") )
 		elif [[ $sub == tree && ${COMP_WORDS[3]} == append && $prev == --previous-cert ]]; then
 			COMPREPLY=( $(compgen -f -- "$cur") )
 		elif [[ $sub == tree && ${COMP_WORDS[3]} == append && $cur == -* ]]; then

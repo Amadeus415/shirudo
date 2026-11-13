@@ -2607,7 +2607,7 @@ static void bpm_tree_usage(void)
 	fprintf(stderr,
 		"usage: shirudo bpm tree sync [--dry-run] [--report=<path>]\n"
 		"       shirudo bpm tree append <package-file> <repository> [options]\n"
-		"       shirudo bpm tree show <repository> --cert <file> [--reference <ref>]\n\n"
+		"       shirudo bpm tree show <repository> --cert <file> [--reference <ref>] [--walk]\n\n"
 		"sync applies the configured tree on a target. append and show are\n"
 		"operator-only and run in shirudo-build: append publishes the\n"
 		"[upatches.tree] entries of a built package as the next operations of the\n"

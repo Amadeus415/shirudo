@@ -10,7 +10,9 @@
 # operation pending resumes with a shorter one and applies nothing twice; a
 # forked base, a forked prefix, a missing sealed segment, a broken link and
 # a walk past either limit are refused before anything applies; init reads
-# the state and walks nothing. Its own VM: the node starts without a tree.
+# the state and walks nothing. bpm tree show --walk, which the bundle ran on
+# the operator host when it published the tree, printed every segment
+# oldest first. Its own VM: the node starts without a tree.
 # The bundle lowers the limits to 4 operations from a cursor past 0 and 6
 # from 0.
 
@@ -37,6 +39,7 @@ for fixture in "$SOURCE/port" "$SOURCE/shirudo/segments/manifests/g28" \
 	"$SOURCE/shirudo/segments/manifests/fork-prefix" \
 	"$SOURCE/shirudo/segments/manifests/head-gap" \
 	"$SHIRUDO_TEST_KEY_FIXTURES/config-tree-segments.img" \
+	"$FIXTURES/segments-show-walk.json" \
 	./helper/test-oci-registry.py
 do
 	[ -s "$fixture" ] || test_skip_all "missing segment fixture: $fixture"
@@ -134,8 +137,34 @@ def agree(n):
     assert state["projection_root_tpm"] == projection.hex(), state
 
 
+# bpm tree show --walk of the tag at g28: every segment as plain show
+# prints it, oldest first, each naming the one before.
+def walked(path):
+    expected = b""
+    for k in range(2, 29, 2):
+        raw = manifest("g%d" % k)
+        layers = json.loads(raw)["layers"]
+        blob = [layer for layer in layers if layer["mediaType"] == DOC][0]
+        expected += (b'{"manifest_digest":"' + digest(raw).encode() +
+                     b'","document":' +
+                     (repo / "blobs" / blob["digest"]).read_bytes() + b"}\n")
+    shown = path.read_bytes()
+    assert shown == expected, ("bpm tree show --walk", shown)
+    decoder, text, before = json.JSONDecoder(), shown.decode(), None
+    for k in range(0, 28, 2):
+        segment, end = decoder.raw_decode(text)
+        text = text[end + 1:]
+        base = segment["document"]["base"]
+        assert base["seq"] == k, segment
+        assert base.get("segment_manifest_digest") == before, segment
+        before = segment["manifest_digest"]
+    assert text == "", text
+
+
 if sys.argv[2] == "digest":
     print(digest(manifest(sys.argv[3])))
+elif sys.argv[2] == "walked":
+    walked(pathlib.Path(sys.argv[3]))
 elif sys.argv[2] == "agree":
     agree(int(sys.argv[3]))
 else:
@@ -425,6 +454,10 @@ test_expect_success 'init mid-tree walks nothing and takes the projection root o
 	[ "$(wc -l <"$LOG")" = "$n" ] &&
 	[ "$(wc -l <"$EVENTLOG")" = "$lines" ] &&
 	segments agree 24
+'
+
+test_expect_success 'bpm tree show --walk printed every segment, oldest first' '
+	segments walked "$FIXTURES/segments-show-walk.json"
 '
 
 test_done

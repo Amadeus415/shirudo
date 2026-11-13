@@ -31,7 +31,7 @@ Usage
    shirudo bpm tree sync [--dry-run] [--report <path> | --report=<path>]
    shirudo bpm tree append <package> oci://<registry>/<repository> [<append-options>]
    shirudo bpm tree show oci://<registry>/<repository> (--cert <certificate> | --cert=<certificate>)
-                         [--reference <reference> | --reference=<reference>]
+                         [--reference <reference> | --reference=<reference>] [--walk]
    shirudo bpm key (add | fingerprint) <certificate | package | oci-reference>
    shirudo bpm key list [--json]
    shirudo bpm pull oci://<registry>/<repository>:<tag>
@@ -355,6 +355,30 @@ again, so keys a node ignores, such as ``fixes``, appear as signed. The
 document may hold newlines; read the output as a JSON value, not as a
 line.
 
+With ``--walk``, it prints every segment of the tree that way, one
+object and a newline per segment, oldest first: the segment at
+``base.seq`` 0 first and the publication ``<reference>`` names last. It
+walks back from that publication through the sealed segments by the
+``base.segment_manifest_digest`` each names, and checks each one as a
+target walking back does: fetched by its digest, verified, of the same
+tree, ending at its successor's ``base.seq`` and of a lower generation.
+It keeps only their digests and fetches each again, by digest, to print
+it, so it fetches every sealed segment twice. A tree never sealed prints
+the one object ``tree show`` prints without it. Like a joining target,
+it refuses a tree whose current segment starts more than 1,048,576
+operations in before it fetches a sealed segment, with ``bpm tree show:
+the current segment starts after seq <n>, more than the 1048576
+operations a joining node walks`` and ``Argument list too long``. A sealed segment it cannot fetch or that does not check is
+refused with ``bpm tree show: the sealed segment <digest>, which ends at
+seq <n>, cannot be fetched or does not verify``, then the errno: ``No
+such file or directory`` for one the registry no longer holds, and
+``Numerical result out of range`` for one that is not the segment before
+its successor. Nothing is printed before the whole walk back checks; a
+segment that the registry no longer serves, or serves with other bytes,
+when it is fetched again stops the output after the segments before it,
+with ``bpm tree show: the sealed segment <digest> cannot be fetched
+again or changed`` and the errno.
+
 A refusal prints ``bpm tree show: <error>`` with the errno ``tree sync``
 reports for the same publication: ``Key was rejected by service`` for a
 signature that does not verify under the certificate, a layer that does
@@ -576,6 +600,12 @@ operator certificate:
 .. code-block:: console
 
    operator$ shirudo bpm tree show oci://quay.io/example/tree --cert ~/shirudo-keys/cert.der
+
+Print every segment of that tree, oldest first:
+
+.. code-block:: console
+
+   operator$ shirudo bpm tree show oci://quay.io/example/tree --cert ~/shirudo-keys/cert.der --walk
 
 Print the fingerprint of the certificate a package carries:
 
