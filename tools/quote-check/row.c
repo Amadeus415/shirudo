@@ -209,24 +209,20 @@ static const char *const reject_reason[] = {
 
 static int emit_accept(struct json_emit *e, const struct quote_result *res)
 {
-	char ak_name[2 * TPM_NAME_LEN + 1], clock[24];
 	char ak_public[BASE64_LEN(TPM_PUBLIC_MAX) + 1];
+	char ak_name[2 * TPM_NAME_LEN + 1];
 	int ret;
 
 	ret = base64_encode(res->ak_public, res->ak_public_len, ak_public,
 			    sizeof(ak_public));
 	if (ret)
 		return ret;
-	/* json_kv_int() takes a signed value and a clock has all 64 bits. */
-	ret = strsprintf(clock, sizeof(clock), "%llu", res->clock);
-	if (ret < 0)
-		return ret;
 	hex_encode(res->ak_name, sizeof(res->ak_name), ak_name);
 	json_kv_int(e, "ok", 1);
 	json_kv_string(e, "ak_name", ak_name);
 	json_kv_string(e, "ak_public", ak_public);
 	json_kv_int(e, "reset_count", res->reset_count);
-	json_kv_raw(e, "clock", clock, (size_t)ret);
+	json_kv_u64(e, "clock", res->clock);
 	return 0;
 }
 

@@ -63,6 +63,9 @@ void json_kv_string(struct json_emit *e,
 		    const char *key, const char *val);
 void json_kv_int(struct json_emit *e,
 		 const char *key, __s64 val);
+/* json_kv_int() takes an __s64, and these all 64 bits of a __u64. */
+void json_kv_u64(struct json_emit *e, const char *key, __u64 val);
+void json_u64_value(struct json_emit *e, __u64 val);
 void json_kv_bool(struct json_emit *e,
 		  const char *key, int val);
 void json_kv_null(struct json_emit *e, const char *key);

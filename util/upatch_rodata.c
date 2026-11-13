@@ -523,11 +523,11 @@ static int json_number(struct json_emit *e, __u64 value,
 	char number[32];
 	int n;
 
-	if (is_signed)
-		n = strsprintf(number, sizeof(number), "%lld", (__s64)value);
-	else
-		n = strsprintf(number, sizeof(number), "%llu",
-			       (__u64)value);
+	if (!is_signed) {
+		json_u64_value(e, value);
+		return e->err;
+	}
+	n = strsprintf(number, sizeof(number), "%lld", (__s64)value);
 	if (n < 0)
 		return n;
 	json_raw_value(e, number, (size_t)n);

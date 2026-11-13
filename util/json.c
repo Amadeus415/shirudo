@@ -245,6 +245,23 @@ void json_kv_int(struct json_emit *e,
 	put_raw(e, num);
 }
 
+void json_u64_value(struct json_emit *e, __u64 val)
+{
+	char num[24];
+	int len = strsprintf(num, sizeof(num), "%llu", val);
+
+	if (len < 0)
+		e->err = -E2BIG;
+	else
+		json_raw_value(e, num, len);
+}
+
+void json_kv_u64(struct json_emit *e, const char *key, __u64 val)
+{
+	json_key(e, key);
+	json_u64_value(e, val);
+}
+
 void json_kv_bool(struct json_emit *e, const char *key, int val)
 {
 	sep(e);

@@ -453,6 +453,35 @@ static void emitter_takes_well_formed_utf8_only(void)
 		EXPECT_EQ(emit_string(bad[i], buf, sizeof(buf)), -EILSEQ);
 }
 
+/* All 64 bits of a __u64, as a member and as an array element. */
+static void emitter_writes_any_u64(void)
+{
+	struct json_emit e = { .max = 256 };
+	struct json_emit full = {};
+	char buf[16];
+
+	json_obj_open(&e);
+	json_kv_u64(&e, "max", ~0ULL);
+	json_kv_u64(&e, "zero", 0);
+	json_arr_open(&e, "a");
+	json_u64_value(&e, 1ULL << 63);
+	json_u64_value(&e, 7);
+	json_arr_close(&e);
+	json_obj_close(&e);
+	ASSERT_EQ(e.err, 0);
+	EXPECT_STREQ(e.buf, "{\"max\":18446744073709551615,\"zero\":0,"
+		     "\"a\":[9223372036854775808,7]}");
+	xfree(e.buf, e.cap);
+
+	full.buf = buf;
+	full.cap = sizeof(buf);
+	json_obj_open(&full);
+	json_kv_u64(&full, "v", ~0ULL);
+	EXPECT_EQ(full.err, -ENOSPC);
+	json_kv_u64(&full, "w", 1);
+	EXPECT_EQ(full.err, -ENOSPC);
+}
+
 static void emitter_grows_up_to_its_max(void)
 {
 	struct json_emit deep = { .max = 1u << 20 };
@@ -785,6 +814,7 @@ static const struct unit_case cases[] = {
 	UNIT_CASE(discarded_number_follows_the_grammar),
 	UNIT_CASE(malformed_utf8_is_refused),
 	UNIT_CASE(emitter_takes_well_formed_utf8_only),
+	UNIT_CASE(emitter_writes_any_u64),
 	UNIT_CASE(emitter_grows_up_to_its_max),
 	UNIT_CASE(lossy_writes_replace_bad_bytes),
 	UNIT_CASE(walk_reports_every_token),

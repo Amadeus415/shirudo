@@ -138,24 +138,6 @@ static void kv_string_or_null(struct json_emit *e, const char *key,
 		json_kv_string(e, key, val);
 }
 
-/* json_kv_int() takes an __s64, which a tamper counter can pass. */
-static void u64_value(struct json_emit *e, __u64 val)
-{
-	char num[24];
-	int len = strsprintf(num, sizeof(num), "%llu", val);
-
-	if (len < 0)
-		e->err = -E2BIG;
-	else
-		json_raw_value(e, num, len);
-}
-
-static void kv_u64(struct json_emit *e, const char *key, __u64 val)
-{
-	json_key(e, key);
-	u64_value(e, val);
-}
-
 static void kv_tamper(struct json_emit *e, const __u64 *tamper)
 {
 	size_t i;
@@ -166,7 +148,7 @@ static void kv_tamper(struct json_emit *e, const __u64 *tamper)
 	}
 	json_arr_open(e, "tamper");
 	for (i = 0; i < TAMPER_MAX; i++)
-		u64_value(e, tamper[i]);
+		json_u64_value(e, tamper[i]);
 	json_arr_close(e);
 }
 
@@ -189,9 +171,9 @@ static void kv_tree(struct json_emit *e, const struct keepalive_input *in)
 		return;
 	}
 	json_kv_string(e, "tree_id", in->tree_id);
-	kv_u64(e, "generation", in->generation);
-	kv_u64(e, "base_seq", in->base_seq);
-	kv_u64(e, "last_seq", in->last_seq);
+	json_kv_u64(e, "generation", in->generation);
+	json_kv_u64(e, "base_seq", in->base_seq);
+	json_kv_u64(e, "last_seq", in->last_seq);
 	kv_string_or_null(e, "base_root", in->base_root);
 	json_kv_string(e, "projection_root", in->projection_root);
 	if (in->mask)
@@ -212,13 +194,13 @@ static void body(struct json_emit *e, const struct keepalive_input *in)
 	kv_string_or_null(e, "image_version", in->image_version);
 	kv_string_or_null(e, "image_root", in->image_root);
 	json_kv_string(e, "verdict", in->verdict);
-	kv_u64(e, "cond", in->cond);
-	kv_u64(e, "flags", in->flags);
+	json_kv_u64(e, "cond", in->cond);
+	json_kv_u64(e, "flags", in->flags);
 	kv_tamper(e, in->tamper);
 	kv_tree(e, in);
 	json_kv_string(e, "set_sha256", in->set_sha256);
-	kv_u64(e, "count", in->count);
-	kv_u64(e, "not_ok", in->not_ok);
+	json_kv_u64(e, "count", in->count);
+	json_kv_u64(e, "not_ok", in->not_ok);
 	json_obj_close(e);
 }
 
