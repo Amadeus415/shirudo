@@ -17,10 +17,11 @@
 #include "bpf/lib/tamper.h"
 #include "bpm_tree.h"
 #include "conditions.h"
+#include "crypto.h"
 
 #define KEEPALIVE_MASK_OPS	512
 #define KEEPALIVE_MASK_BYTES	(KEEPALIVE_MASK_OPS / 4)
-#define KEEPALIVE_MASK_B64_MAX	(4 * ((KEEPALIVE_MASK_BYTES + 2) / 3) + 1)
+#define KEEPALIVE_MASK_B64_MAX	BASE64_SIZE(KEEPALIVE_MASK_BYTES)
 
 /*
  * The body reports the last this many operations up to the head of the

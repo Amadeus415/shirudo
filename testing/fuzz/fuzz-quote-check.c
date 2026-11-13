@@ -16,6 +16,7 @@
 
 #include <shirudo/string.h>
 
+#include "crypto.h"
 #include "hex.h"
 #include "json.h"
 #include "tools/quote-check/row.h"

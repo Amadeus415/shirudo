@@ -14,9 +14,9 @@ noinline_for_stack int
 keepalive_quote_format(const struct tpm_attestation *att,
 		       const struct tpm_key *ak, char *out, size_t cap)
 {
-	char attest[KEEPALIVE_B64_SIZE(TPM_ATTEST_MAX)];
-	char sig[KEEPALIVE_B64_SIZE(TPM_SIGNATURE_MAX)];
-	char public[KEEPALIVE_B64_SIZE(TPM_PUBLIC_MAX)];
+	char attest[BASE64_SIZE(TPM_ATTEST_MAX)];
+	char sig[BASE64_SIZE(TPM_SIGNATURE_MAX)];
+	char public[BASE64_SIZE(TPM_PUBLIC_MAX)];
 	int ret;
 
 	ret = base64_encode(att->attest, att->attest_len, attest,

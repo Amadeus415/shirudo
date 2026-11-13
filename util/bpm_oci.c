@@ -260,7 +260,7 @@ static int encode_basic(const char *user, const char *pass,
 		goto out;
 	}
 	len = strlen(raw);
-	need = 4 * ((len + 2) / 3) + 1;
+	need = BASE64_SIZE(len);
 	if (need > out_sz) {
 		ret = -ENOSPC;
 		goto out;

@@ -13,15 +13,14 @@
 
 #include <shirudo/misc.h>
 
+#include "crypto.h"
 #include "tpm.h"
-
-#define KEEPALIVE_B64_SIZE(n)	(4 * (((n) + 2) / 3) + 1)
 
 /* Holds the longest quote and its terminator. */
 #define KEEPALIVE_QUOTE_MAX	(sizeof("attest=;sig=;ak=") +		\
-				 KEEPALIVE_B64_SIZE(TPM_ATTEST_MAX) +	\
-				 KEEPALIVE_B64_SIZE(TPM_SIGNATURE_MAX) +	\
-				 KEEPALIVE_B64_SIZE(TPM_PUBLIC_MAX))
+				 BASE64_SIZE(TPM_ATTEST_MAX) +		\
+				 BASE64_SIZE(TPM_SIGNATURE_MAX) +	\
+				 BASE64_SIZE(TPM_PUBLIC_MAX))
 
 /*
  * Writes attest=<TPMS_ATTEST>;sig=<TPMT_SIGNATURE>;ak=<TPMT_PUBLIC> in

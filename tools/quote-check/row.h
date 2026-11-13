@@ -13,9 +13,9 @@
 
 #include <shirudo/misc.h>
 
+#include "crypto.h"
 #include "tpm.h"
 
-#define BASE64_LEN(n)		(4 * (((n) + 2) / 3))
 #define QUOTE_BODY_HEX_LEN	(2 * TPM_DIGEST_LEN)
 /* attest, sig, ak and body_sha256 with the three tabs between them. */
 #define QUOTE_ROW_MAX							\

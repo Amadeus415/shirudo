@@ -50,7 +50,7 @@ int keepalive_mask(const __u8 *codes, size_t n, char *b64, size_t cap)
 			return -EINVAL;
 		raw[i / CODES_PER_BYTE] |= codes[i] << (CODE_BITS * slot);
 	}
-	if (cap < 4 * ((len + 2) / 3) + 1)
+	if (cap < BASE64_SIZE(len))
 		return -E2BIG;
 	return base64_encode(raw, len, b64, cap);
 }

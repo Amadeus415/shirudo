@@ -43,7 +43,7 @@
 #define EK_CERT_MAX		4096
 #define QUOTE_ATTEMPTS		3
 #define RECORDS_MAX		4096
-#define EK_CERT_B64_MAX		(4 * ((EK_CERT_MAX + 2) / 3) + 1)
+#define EK_CERT_B64_MAX		BASE64_SIZE(EK_CERT_MAX)
 /* restricted | sign | fixedTPM | fixedParent | sensitiveDataOrigin */
 #define AK_ATTRS_REQUIRED	0x00050032u
 
@@ -85,7 +85,7 @@ static int read_file_base64(const char *path, char **out, size_t *out_cap)
 		xfree(raw, LOG_MAX_BYTES + 1);
 		return ret;
 	}
-	cap = 4 * ((len + 2) / 3) + 1;
+	cap = BASE64_SIZE(len);
 	*out = xmalloc(cap);
 	ret = *out ? base64_encode(raw, len, *out, cap) : -ENOMEM;
 	xfree(raw, LOG_MAX_BYTES + 1);
@@ -240,7 +240,7 @@ int attest_evidence_config(const __u8 *nonce, size_t nonce_len,
 	}
 	if (tpm_ek_certificate(tpm, ek_cert, EK_CERT_MAX, &ek_cert_len,
 			       &ek_cert_rsa) == 0) {
-		ek_b64_cap = 4 * ((ek_cert_len + 2) / 3) + 1;
+		ek_b64_cap = BASE64_SIZE(ek_cert_len);
 		ek_b64 = xmalloc(ek_b64_cap);
 		if (!ek_b64 || base64_encode(ek_cert, ek_cert_len, ek_b64,
 					     ek_b64_cap)) {

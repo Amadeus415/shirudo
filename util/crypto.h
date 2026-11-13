@@ -31,6 +31,13 @@ int sha256_final(struct sha256_ctx *ctx,
 void sha256_free(struct sha256_ctx *ctx);
 int sha256_buffer(const void *data, size_t len,
 		  __u8 out[CRYPTO_SHA256_LEN]) __must_check;
+/*
+ * BASE64_LEN() is the length of the base64 of n bytes and BASE64_SIZE()
+ * the out_sz base64_encode() needs for them, its terminator included.
+ */
+#define BASE64_LEN(n)	(4 * (((n) + 2) / 3))
+#define BASE64_SIZE(n)	(BASE64_LEN(n) + 1)
+
 int base64_encode(const __u8 *data, size_t len,
 		  char *out, size_t out_sz) __must_check;
 

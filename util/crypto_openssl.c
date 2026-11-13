@@ -141,7 +141,7 @@ int base64_encode(const __u8 *data, size_t len,
 
 	if (!data || !out || len > INT_MAX)
 		return -EINVAL;
-	need = 4 * ((len + 2) / 3) + 1;
+	need = BASE64_SIZE(len);
 	if (out_sz < need)
 		return -EINVAL;
 	if (EVP_EncodeBlock((__u8 *)out, data, (int)len) < 0)
