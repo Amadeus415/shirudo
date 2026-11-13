@@ -571,10 +571,19 @@ signed config image.
        one before
    * - ``t7109-bpm-tree-keepalive``
      - ``status --keepalive``: the keys of the body in order, its tree
-       keys and mask as ``state.json`` and the outcomes record have them,
+       keys and mask as ``state.json`` and the outcomes record have them
+       over the last 7 operations, the bundle's lowered window,
        flags bit 4 after a sync is killed after its load, and after the
        sync the loaded set its mask folds to and the masks of node A and
        node B
+   * - ``t7110-bpm-tree-window``
+     - In ``functional/bpm-segments/``, after ``t7108``, with the
+       keepalive window lowered to 7 operations: ``status --keepalive``
+       on a node of the segmented tree gives the ``base_seq``,
+       ``base_root`` and mask of the outcomes record over the last 7
+       operations up to the head, from inside a segment older than the
+       recorded one, as the window slides with each segment and while an
+       operation is pending, its operations past ``last_seq`` not reached
 
 ``otel`` (8)
 ~~~~~~~~~~~~
@@ -821,7 +830,8 @@ Coverage by area
    * - upatch tree
      - ``t3011``, ``t5004``, ``t7005``, ``t7007``, ``t7008``, ``t7009``,
        ``t7101``, ``t7102``, ``t7103``, ``t7104``, ``t7105``, ``t7106``,
-       ``t7107``, ``t7108``, ``t7109``, ``t9105``, ``t9109``. Fuzz: ``tree``,
+       ``t7107``, ``t7108``, ``t7109``, ``t7110``, ``t9105``, ``t9109``.
+       Fuzz: ``tree``,
        ``tree-state``, ``kconfig``. Unit: ``bpm_tree``,
        ``bpm_tree_overlap``, ``bpm_tree_state``, ``chain_history``,
        ``kernel_build_id``, ``kernel_release``
@@ -830,7 +840,7 @@ Coverage by area
        Unauthorized policy-xattr changes: ``t6111``. Task and socket
        inheritance: ``t6141``, ``t6142``
    * - Telemetry
-     - ``t4006``, ``t4104``, ``t6139``, ``t7109``, ``t8001`` to
+     - ``t4006``, ``t4104``, ``t6139``, ``t7109``, ``t7110``, ``t8001`` to
        ``t8006``, ``t8101`` to ``t8106``, ``t9101`` to ``t9105``,
        ``t9107``, ``t9109``. Fuzz: ``otel``, ``quote-check``, ``serializer``.
        Unit: ``keepalive``, ``keepalive_quote``, ``sysinfo``

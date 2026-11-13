@@ -22,6 +22,17 @@
 #define KEEPALIVE_MASK_BYTES	(KEEPALIVE_MASK_OPS / 4)
 #define KEEPALIVE_MASK_B64_MAX	(4 * ((KEEPALIVE_MASK_BYTES + 2) / 3) + 1)
 
+/*
+ * The body reports the last this many operations up to the head of the
+ * tree, whatever segments hold them. A test build lowers it so that the
+ * window of a short tree starts past seq 0, inside an older segment.
+ */
+#ifndef KEEPALIVE_WINDOW_OPS
+#define KEEPALIVE_WINDOW_OPS	KEEPALIVE_MASK_OPS
+#endif
+BUILD_BUG_ON(KEEPALIVE_WINDOW_OPS < 1 ||
+	     KEEPALIVE_WINDOW_OPS > KEEPALIVE_MASK_OPS);
+
 /* Holds the largest body and its terminator. */
 #define KEEPALIVE_BODY_MAX	4096
 

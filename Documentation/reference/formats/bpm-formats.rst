@@ -647,7 +647,9 @@ not published.
        left: the next sync drops them before it appends. It then refuses
        a state with ``last_seq`` above 0 whose ``outcomes`` is missing,
        has a gap or a malformed line, or ends before ``last_seq``
-       (``EBADMSG``). Nothing rebuilds or prunes the file.
+       (``EBADMSG``). Nothing rebuilds or prunes the file: the keepalive
+       reads its last 512 operations from it whatever segments held
+       them (:doc:`/reference/cli/status`).
    * - ``pending.json``
      - JSON object with ``schema`` (1), ``seq``, ``id`` and
        ``operation_digest`` while an operation is in progress. The next

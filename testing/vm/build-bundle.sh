@@ -339,9 +339,10 @@ cleanup()
 trap cleanup EXIT
 
 # t7108 reaches the tree walk limits: the guest runs a target that walks
-# 4 operations back from a cursor past 0 and 6 from 0.
+# 4 operations back from a cursor past 0 and 6 from 0. t7110 reaches past
+# the keepalive window, which the target lowers to the last 7 operations.
 make -C "$REPO_ROOT" -j"$jobs" \
-	TREE_LIMIT_CFLAGS="-DTREE_MAX_WALK_OPS=4 -DTREE_MAX_JOIN_OPS=6" \
+	TREE_LIMIT_CFLAGS="-DTREE_MAX_WALK_OPS=4 -DTREE_MAX_JOIN_OPS=6 -DKEEPALIVE_WINDOW_OPS=7" \
 	DESTDIR="$TMP_DIR/root" install-target
 make -C "$REPO_ROOT" -j"$jobs" -f Makefile.shirudo \
 	PROFILE=target CONFIG_MK=config-target.mk verity-test-helpers

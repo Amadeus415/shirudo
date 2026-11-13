@@ -508,13 +508,17 @@ static bool keepalive_pending(void *ctx)
 	return access(BPM_TREE_PENDING_PATH, F_OK) == 0;
 }
 
-/* The window of the last KEEPALIVE_MASK_OPS operations up to head_seq. */
+/*
+ * The window of the last KEEPALIVE_WINDOW_OPS operations up to head_seq.
+ * It reaches back past the recorded segment's base into the segments
+ * before it, whose outcomes the record keeps from seq 1.
+ */
 static void keepalive_window(struct keepalive_view *v,
 			     const struct tree_state *s)
 {
 	__u8 projection[CHAIN_DIGEST_LEN], history[CHAIN_DIGEST_LEN];
 
-	v->base_seq = max_t(__s64, s->head_seq - KEEPALIVE_MASK_OPS, 0);
+	v->base_seq = max_t(__s64, s->head_seq - KEEPALIVE_WINDOW_OPS, 0);
 	memset(v->codes, 0, sizeof(v->codes));
 	if (s->last_seq < v->base_seq || s->last_seq > s->head_seq) {
 		v->outcomes_rc = -EBADMSG;

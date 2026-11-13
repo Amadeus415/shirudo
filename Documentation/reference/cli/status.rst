@@ -117,10 +117,15 @@ last: ``00`` not evaluated, ``01`` ``OK``, ``10`` ``WARN``, ``11``
 of :doc:`/security/tamper-counters`, zeros included, in the order of
 that page.
 
-``mask`` holds two bits per operation from ``base_seq + 1`` to the head
-of the recorded publication, read from the outcomes record of
-:doc:`/reference/formats/bpm-formats`: ``01`` applied, ``10`` passed
-over, ``11`` module absent, ``00`` not reached. ``set_sha256`` is
+The tree keys report a window of the last 512 operations up to the head
+of the recorded publication, whatever segments hold them: ``base_seq``
+is the head less 512, or 0 for a tree of 512 operations or fewer, and
+``base_root`` the node's projection root after ``base_seq``, 64 zeros
+at 0. ``mask`` holds two bits per operation from ``base_seq + 1`` to the
+head: ``01`` applied, ``10`` passed over, ``11`` module absent, ``00``
+not reached. Both come from the outcomes record of
+:doc:`/reference/formats/bpm-formats`, which keeps every operation the
+node processed, those of sealed segments included. ``set_sha256`` is
 SHA-256 over a ``<payload_sha256> <name>`` line for every loaded upatch,
 sorted by name, the ``set_digest`` form of the ``init`` event.
 ``not_ok`` counts the loaded upatches the tree holds a status file for.

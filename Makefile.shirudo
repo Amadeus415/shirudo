@@ -429,10 +429,11 @@ build/target/%.o: %.c Makefile.shirudo $(CONFIG_MK_DEP)
 
 -include $(DEPS)
 
-# The tree walk limits of util/bpm_tree.h. The test VM bundle builds its
-# target with them low, TREE_LIMIT_CFLAGS='-DTREE_MAX_WALK_OPS=<n>
-# -DTREE_MAX_JOIN_OPS=<n>', so that a target test reaches them; the operator
-# profile ignores it. The objects that read them rebuild whenever the value
+# The tree walk limits of util/bpm_tree.h and the keepalive window of
+# util/keepalive.h. The test VM bundle builds its target with them low,
+# TREE_LIMIT_CFLAGS='-DTREE_MAX_WALK_OPS=<n> -DTREE_MAX_JOIN_OPS=<n>
+# -DKEEPALIVE_WINDOW_OPS=<n>', so that a target test reaches them; the
+# operator profile ignores it. The objects that read them rebuild whenever the value
 # differs from the one they were built with, so a build without it never
 # keeps the lowered limits.
 ifeq ($(PROFILE),target)
@@ -441,7 +442,8 @@ else
 override TREE_LIMIT_CFLAGS :=
 endif
 TREE_LIMIT_STAMP := build/tree-limits-$(PROFILE)
-TREE_LIMIT_OBJS := $(call obj,builtin-bpm.o) $(call obj,util/bpm_tree.o)
+TREE_LIMIT_OBJS := $(call obj,builtin-bpm.o) $(call obj,builtin-status.o) \
+		   $(call obj,util/bpm_tree.o)
 
 .PHONY: FORCE_TREE_LIMITS
 FORCE_TREE_LIMITS:

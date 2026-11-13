@@ -22,6 +22,8 @@ TREE_EVENTLOG=$TREE_DIR/tree-eventlog
 PENDING=$TREE_DIR/pending.json
 EVENTLOG=/var/lib/shirudo/eventlog
 MATCH_PIN=/run/shirudo/bpffs/upatches/shirudo-test-tree-match/link
+# The bundle lowers the keepalive window to the last 7 operations.
+WINDOW=7
 WORK=$(mktemp -d)
 HOLDER_PID=
 
@@ -107,14 +109,15 @@ PY
 }
 
 # The body in $1 is compact, has the keys of the format in their order,
-# and its tree keys are those of state.json and the outcomes record. With
+# and its tree keys are those of state.json and the outcomes record over
+# the last $WINDOW operations. With
 # settled as $2, flags bits 2, 4 and 5 are clear and the loaded set is the
 # fold of the operations the mask has applied in the publication of the
 # reference $3; with pending, flags bit 4 is set.
 keepalive_agrees()
 {
 	python3 - "$1" "$2" "$TREE_STATE_FILE" "$OUTCOMES" \
-		"$TREE_REPO" "${3:-}" <<'PY'
+		"$TREE_REPO" "${3:-}" "$WINDOW" <<'PY'
 import base64
 import hashlib
 import json
@@ -129,7 +132,7 @@ KEYS = ["schema", "boot_id", "version_id", "config_root", "kernel_release",
 TREE_LOG_MISMATCH, TREE_OP_PENDING, SNAPSHOT_UNSETTLED = 4, 16, 32
 
 body_path, mode, state_path, outcomes_path, repo = sys.argv[1:6]
-reference = sys.argv[6]
+reference, window = sys.argv[6], int(sys.argv[7])
 raw = pathlib.Path(body_path).read_bytes()
 if not raw.endswith(b"\n"):
     sys.exit("the body does not end in a newline")
@@ -146,11 +149,12 @@ lines = [json.loads(text) for text in
          pathlib.Path(outcomes_path).read_text(encoding="utf-8").splitlines()]
 outcome = {line["seq"]: line["outcome"] for line in lines}
 head, last = state["head_seq"], state["last_seq"]
-base = max(0, head - 512)
+base = max(0, head - window)
 for key in ("tree_id", "generation", "last_seq", "projection_root"):
     if body[key] != state[key]:
         sys.exit(f"{key} is {body[key]}, state.json has {state[key]}")
-if body["base_seq"] != base or body["base_root"] != "00" * 32:
+root = lines[base - 1]["projection_root"] if base else "00" * 32
+if body["base_seq"] != base or body["base_root"] != root:
     sys.exit(f"the window starts at {body['base_seq']} {body['base_root']}")
 
 mask = base64.b64decode(body["mask"], validate=True)

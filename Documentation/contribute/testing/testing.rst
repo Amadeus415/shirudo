@@ -153,6 +153,7 @@ A shell test is named ``t<F><K><NN>-<what>.sh``:
      - Package commands, Beefile policy labels, publishing and the
        upatch tree; ``bpm-segments`` boots a VM of its own, whose node
        starts without a tree, for the walk through a tree's segments
+       and the keepalive window over them
    * - 8
      - ``functional/otel/``
      - Map export, the status keepalive, OTLP transport and TLS policy
