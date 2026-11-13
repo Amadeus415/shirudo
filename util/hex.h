@@ -8,6 +8,7 @@
 #ifndef SHIRUDO_HEX_H
 #define SHIRUDO_HEX_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #include <shirudo/misc.h>
@@ -19,6 +20,11 @@ char *hex_alloc(const void *in, size_t n);
 
 /* The value of one hex digit, -1 for any other byte. */
 int hex_nibble(int c);
+/*
+ * Whether the n bytes at s are all lowercase hex digits; it reads no
+ * further than the first that is not, a terminator included.
+ */
+bool hex_is_lower(const char *s, size_t n);
 
 /* Exactly 2 * n hex digits, either case. 0 or -EINVAL. */
 int hex_decode(const char *hex, __u8 *out, size_t n);

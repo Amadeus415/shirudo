@@ -42,6 +42,17 @@ int hex_nibble(int c)
 	return -1;
 }
 
+bool hex_is_lower(const char *s, size_t n)
+{
+	size_t i;
+
+	for (i = 0; i < n; i++)
+		if (!(s[i] >= '0' && s[i] <= '9') &&
+		    !(s[i] >= 'a' && s[i] <= 'f'))
+			return false;
+	return true;
+}
+
 int hex_decode(const char *hex, __u8 *out, size_t n)
 {
 	size_t i;

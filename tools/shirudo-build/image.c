@@ -210,10 +210,8 @@ static int sign_root(const char *input, const char *output, const char *pkey,
 	close(fd);
 	if (ret)
 		return ret;
-	for (done = 0; done < 64; done++)
-		if (!((root[done] >= '0' && root[done] <= '9') ||
-		      (root[done] >= 'a' && root[done] <= 'f')))
-			return -EINVAL;
+	if (!hex_is_lower(root, 64))
+		return -EINVAL;
 	sign.insns = root;
 	sign.insns_sz = 64;
 	sign.signature = signature;

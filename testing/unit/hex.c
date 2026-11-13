@@ -42,6 +42,20 @@ static void decode_refuses_non_hex(void)
 	EXPECT_EQ(hex_decode("zz", out, 1), -EINVAL);
 }
 
+/* Lowercase digits only, and nothing read past the first other byte. */
+static void is_lower_takes_lowercase_digits_only(void)
+{
+	char stop[2] = { 'a', '\0' };
+
+	EXPECT_TRUE(hex_is_lower("0123456789abcdef", 16));
+	EXPECT_TRUE(hex_is_lower("", 0));
+	EXPECT_TRUE(hex_is_lower("ab\x01", 2));
+	EXPECT_FALSE(hex_is_lower("0123456789ABCDEF", 16));
+	EXPECT_FALSE(hex_is_lower("abcg", 4));
+	EXPECT_FALSE(hex_is_lower("ab", 3));
+	EXPECT_FALSE(hex_is_lower(stop, 64));
+}
+
 static void decode_max_takes_an_even_count_up_to_cap(void)
 {
 	__u8 out[3] = {};
@@ -88,6 +102,7 @@ static const struct unit_case cases[] = {
 	UNIT_CASE(decode_takes_either_case),
 	UNIT_CASE(decode_wants_the_exact_length),
 	UNIT_CASE(decode_refuses_non_hex),
+	UNIT_CASE(is_lower_takes_lowercase_digits_only),
 	UNIT_CASE(decode_max_takes_an_even_count_up_to_cap),
 	UNIT_CASE(sha256_digest_is_prefix_and_64_digits),
 	{}

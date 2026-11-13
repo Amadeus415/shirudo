@@ -8,6 +8,7 @@
 #include <shirudo/string.h>
 
 #include "crypto.h"
+#include "hex.h"
 #include "json.h"
 #include "keepalive.h"
 
@@ -93,15 +94,7 @@ __u16 keepalive_cond(const struct condition *conds, size_t n)
 
 static bool is_hash(const char *s)
 {
-	size_t i;
-
-	if (!s)
-		return false;
-	for (i = 0; i < HASH_HEX_LEN; i++)
-		if (!(s[i] >= '0' && s[i] <= '9') &&
-		    !(s[i] >= 'a' && s[i] <= 'f'))
-			return false;
-	return !s[HASH_HEX_LEN];
+	return s && hex_is_lower(s, HASH_HEX_LEN) && !s[HASH_HEX_LEN];
 }
 
 static bool is_absent(const char *s)

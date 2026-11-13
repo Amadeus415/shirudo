@@ -165,7 +165,6 @@ static int read_root(const char *prefix, __u8 root[32])
 {
 	char text[65] = {};
 	__u64 size;
-	__u32 i;
 	int fd, ret;
 
 	fd = open_part(prefix, ".roothash");
@@ -179,10 +178,8 @@ static int read_root(const char *prefix, __u8 root[32])
 	close(fd);
 	if (ret)
 		return ret;
-	for (i = 0; i < 64; i++)
-		if (!((text[i] >= '0' && text[i] <= '9') ||
-		      (text[i] >= 'a' && text[i] <= 'f')))
-			return -EINVAL;
+	if (!hex_is_lower(text, 64))
+		return -EINVAL;
 	return hex_decode(text, root, 32);
 }
 
