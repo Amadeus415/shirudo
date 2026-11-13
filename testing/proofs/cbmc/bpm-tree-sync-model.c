@@ -408,6 +408,13 @@ void hex_encode(const __u8 *in, size_t n, char *out)
 	out[2 * n] = '\0';
 }
 
+/* As util/hex.c has it, over the hex_encode() above. */
+void sha256_digest_encode(const __u8 in[32], char out[72])
+{
+	memcpy(out, "sha256:", 7);
+	hex_encode(in, 32, out + 7);
+}
+
 int sha256_2(const void *a, size_t a_len, const void *b, size_t b_len,
 	     __u8 out[CHAIN_DIGEST_LEN])
 {

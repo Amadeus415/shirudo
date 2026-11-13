@@ -2461,8 +2461,7 @@ static int tree_walk_forward(struct tree_source *src, struct tree_sync *sync,
 	for (size_t i = w->n; i-- > 1;) {
 		struct tree_publication seg = {};
 
-		memcpy(want, "sha256:", 7);
-		hex_encode(w->segments[i].manifest_digest, 32, want + 7);
+		sha256_digest_encode(w->segments[i].manifest_digest, want);
 		ret = tree_fetch_checked(src, want, &seg, digest,
 					 sizeof(digest));
 		if (!ret && (sha256_digest_decode(digest, got) ||

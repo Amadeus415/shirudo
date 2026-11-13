@@ -89,3 +89,9 @@ int sha256_digest_decode(const char *digest, __u8 out[32])
 		return -EINVAL;
 	return hex_decode(digest + 7, out, 32);
 }
+
+void sha256_digest_encode(const __u8 in[32], char out[72])
+{
+	memcpy(out, "sha256:", 7);
+	hex_encode(in, 32, out + 7);
+}

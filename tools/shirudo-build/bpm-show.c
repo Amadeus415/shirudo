@@ -185,14 +185,12 @@ static int tree_show_sealed(struct bpm_oci_client *c, const char *repository,
 			    const struct trusted_set *trusted,
 			    const __u8 manifest_digest[32])
 {
-	char hex[65], reference[BPM_MAX_DIGEST], digest[BPM_MAX_DIGEST];
+	char reference[BPM_MAX_DIGEST], digest[BPM_MAX_DIGEST];
 	struct tree_publication pub = {};
 	struct bpm_buffer document = {};
 	int ret;
 
-	hex_encode(manifest_digest, 32, hex);
-	if (strsprintf(reference, sizeof(reference), "sha256:%s", hex) < 0)
-		return -E2BIG;
+	sha256_digest_encode(manifest_digest, reference);
 	ret = build_tree_fetch_checked(c, repository, reference, NULL, trusted,
 				       &document, &pub, digest,
 				       sizeof(digest));

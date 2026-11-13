@@ -1021,10 +1021,11 @@ static int tree_segment_tag(__u64 k, char *tag, size_t tag_sz)
 /* The digest of the manifest segment-<k> tags, -ENOENT without the tag. */
 static int tree_segment_tag_digest(struct bpm_oci_client *c,
 				   const char *repository, __u64 k,
-				   char *digest, size_t digest_sz)
+				   char digest[72])
 {
 	struct bpm_buffer manifest = {};
-	char tag[32], url[PATH_MAX], hex[65];
+	__u8 sum[CRYPTO_SHA256_LEN];
+	char tag[32], url[PATH_MAX];
 	int ret;
 
 	ret = tree_segment_tag(k, tag, sizeof(tag));
@@ -1033,11 +1034,10 @@ static int tree_segment_tag_digest(struct bpm_oci_client *c,
 				  sizeof(url));
 	if (!ret)
 		ret = bpm_oci_get_memory(c, url, BPM_MANIFEST_MEDIA, &manifest);
-	if (!ret && bpm_sha256_hex(manifest.data, manifest.len, hex,
-				   sizeof(hex)))
+	if (!ret && sha256_buffer(manifest.data, manifest.len, sum))
 		ret = -EINVAL;
-	if (!ret && strsprintf(digest, digest_sz, "sha256:%s", hex) < 0)
-		ret = -ENAMETOOLONG;
+	if (!ret)
+		sha256_digest_encode(sum, digest);
 	bpm_buffer_free(&manifest);
 	return ret;
 }
@@ -1059,8 +1059,7 @@ static int tree_next_segment_tag(struct bpm_oci_client *c,
 
 	while (doubling || absent - present > 1) {
 		probe = doubling ? absent : present + (absent - present) / 2;
-		ret = tree_segment_tag_digest(c, repository, probe, digest,
-					      sizeof(digest));
+		ret = tree_segment_tag_digest(c, repository, probe, digest);
 		if (ret == -ENOENT) {
 			absent = probe;
 			doubling = false;

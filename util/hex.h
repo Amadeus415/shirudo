@@ -36,8 +36,10 @@ int hex_decode_max(const char *hex, __u8 *out, size_t cap, size_t *len);
 
 /*
  * An OCI digest, "sha256:" and 64 hex digits of either case, into its 32
- * bytes. 0 or -EINVAL.
+ * bytes. 0 or -EINVAL. sha256_digest_encode() writes the 32 bytes at in
+ * as one, in lowercase and terminated.
  */
 int sha256_digest_decode(const char *digest, __u8 out[32]);
+void sha256_digest_encode(const __u8 in[32], char out[72]);
 
 #endif /* SHIRUDO_HEX_H */
