@@ -648,7 +648,9 @@ upatch_tree
        replayed.
    * - ``eventlog_matches_state``
      - boolean or ``null``
-     - The replay equals ``projection_root``.
+     - The replay equals ``projection_root``; ``false`` when the tree
+       state cannot be read, as the keepalive's ``tree_log_mismatch``
+       has it, and ``null`` when the log cannot be replayed.
 
 :doc:`bpm-formats` defines the tree state.
 

@@ -1031,18 +1031,35 @@ int tree_outcomes_check(__s64 last_seq)
 	return ret == -ENOENT ? -EBADMSG : ret;
 }
 
+int tree_eventlog_matches(const struct tree_state *s, int state_rc,
+			  __u8 replay[32], bool *matches)
+{
+	__u8 live[32];
+	int ret;
+
+	ret = tree_event_replay(replay);
+	if (ret)
+		return ret;
+	*matches = !state_rc && !hex_decode(s->projection_root, live, 32) &&
+		   !memneq_explicit(live, replay, 32);
+	return 0;
+}
+
 void tree_emit_status(struct json_emit *e)
 {
 	struct tree_state s = {};
-	__u8 live[32], replay[32];
-	char hex[65];
 	bool configured = tree_configured();
+	bool matches = false;
+	__u8 replay[32];
+	char hex[65];
+	int state_rc;
 
 	json_obj_open_key(e, "upatch_tree");
 	json_kv_bool(e, "configured", configured);
 	json_kv_bool(e, "pending", access(BPM_TREE_PENDING_PATH,
 					  R_OK) == 0);
-	if (tree_state_read(&s) == 0) {
+	state_rc = tree_state_read(&s);
+	if (!state_rc) {
 		json_kv_string(e, "tree_id", s.tree_id);
 		json_kv_int(e, "generation", s.generation);
 		json_kv_int(e, "last_seq", s.last_seq);
@@ -1051,13 +1068,10 @@ void tree_emit_status(struct json_emit *e)
 	} else {
 		json_kv_null(e, "state");
 	}
-	if (tree_event_replay(replay) == 0) {
+	if (!tree_eventlog_matches(&s, state_rc, replay, &matches)) {
 		hex_encode(replay, 32, hex);
 		json_kv_string(e, "eventlog_projection_root", hex);
-		json_kv_bool(e, "eventlog_matches_state",
-			     hex_decode(s.projection_root, live,
-					32) == 0 &&
-			     !memneq_explicit(live, replay, 32));
+		json_kv_bool(e, "eventlog_matches_state", matches);
 	} else {
 		json_kv_null(e, "eventlog_projection_root");
 		json_kv_null(e, "eventlog_matches_state");

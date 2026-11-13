@@ -3,7 +3,8 @@
  * Copyright (c) 2026 Authors of shirudo
  *
  * The upatch tree's state.json, its eventlog and its outcomes record, as
- * a target reads them back before a sync.
+ * a target reads them back before a sync. The eventlog matches a state
+ * only when the state was read, and replays the same either way.
  */
 
 #include <stdlib.h>
@@ -63,18 +64,31 @@ static void outcomes_range_is_in_the_record(int fd, size_t size, __s64 lines)
 	}
 }
 
+static void eventlog_matches_a_state_read(const struct tree_state *state,
+					  int state_rc)
+{
+	__u8 root[32], again[32];
+	bool matches = false;
+	int ret;
+
+	ret = tree_event_replay(root);
+	if (tree_eventlog_matches(state, state_rc, again, &matches) != ret ||
+	    (!ret && memcmp(root, again, sizeof(root))) ||
+	    (state_rc && matches))
+		abort();
+}
+
 int LLVMFuzzerTestOneInput(const __u8 *data, size_t size)
 {
 	struct tree_state state;
-	__u8 root[32];
 	__s64 lines;
-	int fd;
+	int fd, rc;
 
 	fd = fuzz_file(data, size, fuzz_path, sizeof(fuzz_path));
 	if (fd < 0)
 		return 0;
-	tree_state_read(&state);
-	tree_event_replay(root);
+	rc = tree_state_read(&state);
+	eventlog_matches_a_state_read(&state, rc);
 	lines = outcomes_read_back_as_written(fd, size);
 	outcomes_range_is_in_the_record(fd, size, lines);
 	close(fd);

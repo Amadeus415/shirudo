@@ -495,6 +495,40 @@ static void state_needs_both_projection_roots(void)
 	drop_tree();
 }
 
+/*
+ * The tree eventlog matches a state that was read and holds its replay,
+ * and no state that could not be read; a log that does not replay
+ * leaves the answer unset.
+ */
+static void eventlog_matches_only_a_state_read(void)
+{
+	struct tree_state s = {};
+	__u8 next[64] = {}, root[32], replay[32];
+	bool matches = true;
+
+	use_tree();
+	EXPECT_EQ(tree_eventlog_matches(&s, 0, replay, &matches), -ENOENT);
+	EXPECT_TRUE(matches);
+	ASSERT_EQ(sha256_digest_decode(PENDING_DIGEST, next + 32), 0);
+	ASSERT_EQ(sha256_calc(next, sizeof(next), root), 0);
+	ASSERT_EQ(tree_event_append(1, PENDING_DIGEST, root), 0);
+	hex_encode(root, sizeof(root), s.projection_root);
+	ASSERT_EQ(tree_eventlog_matches(&s, 0, replay, &matches), 0);
+	EXPECT_TRUE(matches);
+	EXPECT_MEMEQ(replay, root, sizeof(root));
+	ASSERT_EQ(tree_eventlog_matches(&s, -EINVAL, replay, &matches), 0);
+	EXPECT_FALSE(matches);
+	s.projection_root[0] = s.projection_root[0] == '0' ? '1' : '0';
+	ASSERT_EQ(tree_eventlog_matches(&s, 0, replay, &matches), 0);
+	EXPECT_FALSE(matches);
+	s.projection_root[0] = '\0';
+	matches = true;
+	ASSERT_EQ(tree_eventlog_matches(&s, 0, replay, &matches), 0);
+	EXPECT_FALSE(matches);
+	unlink(events_path);
+	drop_tree();
+}
+
 static const struct unit_case cases[] = {
 	UNIT_CASE(long_line_is_one_line),
 	UNIT_CASE(gzip_config_is_one_whole_member),
@@ -507,6 +541,7 @@ static const struct unit_case cases[] = {
 	UNIT_CASE(outcomes_cover_the_state),
 	UNIT_CASE(state_names_its_publication_head_and_base),
 	UNIT_CASE(state_needs_both_projection_roots),
+	UNIT_CASE(eventlog_matches_only_a_state_read),
 	{}
 };
 

@@ -537,12 +537,12 @@ static void keepalive_window(struct keepalive_view *v,
 /* eventlog_matches_state of the status document, false only. */
 static bool keepalive_log_mismatch(const struct tree_state *s, int state_rc)
 {
-	__u8 live[CHAIN_DIGEST_LEN], replay[CHAIN_DIGEST_LEN];
+	__u8 replay[CHAIN_DIGEST_LEN];
+	bool matches;
 
-	if (tree_event_replay(replay))
+	if (tree_eventlog_matches(s, state_rc, replay, &matches))
 		return false;
-	return state_rc || hex_decode(s->projection_root, live, sizeof(live)) ||
-	       memneq_explicit(live, replay, sizeof(live));
+	return !matches;
 }
 
 /* A tree status file says why the tree left the upatch not loaded. */

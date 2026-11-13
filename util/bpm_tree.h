@@ -231,6 +231,14 @@ int tree_state_write(const struct tree_state *state);
 int tree_event_append(__s64 seq, const char *operation_digest,
 		      const __u8 projection_root[32]);
 int tree_event_replay(__u8 out[32]);
+/*
+ * Replays the tree eventlog into replay and sets *matches when it equals
+ * the projection root of s, which tree_state_read() returned state_rc
+ * for: a state that could not be read matches no replay. 0, or
+ * tree_event_replay()'s error, leaving *matches as it was.
+ */
+int tree_eventlog_matches(const struct tree_state *s, int state_rc,
+			  __u8 replay[32], bool *matches) __must_check;
 
 /* What a node did with a tree operation, as its outcomes record has it. */
 enum tree_outcome {
