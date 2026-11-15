@@ -52,6 +52,14 @@ the link against the metadata and pins it.
      - kprobe
      - as ``kprobe``, with the return-probe bit set
      - ``CONFIG_KPROBES``, ``CONFIG_KPROBE_EVENTS``
+   * - ``kprobe.multi/<symbol>[,<symbol>...]``
+     - kprobe
+     - ``BPF_LINK_CREATE``, ``BPF_TRACE_KPROBE_MULTI``
+     - ``CONFIG_FPROBE``
+   * - ``kretprobe.multi/<symbol>[,<symbol>...]``
+     - kprobe
+     - as ``kprobe.multi``, with ``BPF_F_KPROBE_MULTI_RETURN``
+     - ``CONFIG_FPROBE``
    * - ``uprobe/<path>:<function>[+<offset>]``, ``uprobe/<path>:0x<offset>``,
        their ``uprobe.s`` forms
      - kprobe
@@ -193,6 +201,18 @@ A kprobe may call ``bpf_override_return()`` to refuse a call. The kernel
 allows that only at the entry of a function on its error-injection list
 and with ``CONFIG_BPF_KPROBE_OVERRIDE``. Elsewhere the kernel refuses
 the link, and the load fails in phase ``link_create``.
+
+kprobe.multi and kretprobe.multi
+---------------------------------
+
+``kprobe.multi/<symbol>[,<symbol>...]`` and
+``kretprobe.multi/<symbol>[,<symbol>...]`` attach one program to the
+entry or return of each named kernel function. The builder records the
+distinct symbol names in sorted order in signed attach metadata. Globs
+and empty list elements are unsupported. The target creates a
+``BPF_TRACE_KPROBE_MULTI`` link; return probes set
+``BPF_F_KPROBE_MULTI_RETURN``. Programs receive ``struct pt_regs`` as
+regular kprobes do.
 
 uprobe and uretprobe
 --------------------
@@ -689,10 +709,25 @@ it generates a loader.
 
    * - Section
      - Message
-   * - ``kprobe``, ``kretprobe`` without a symbol, ``kprobe.multi*``,
-       ``kretprobe.multi*``
-     - ``unsupported kprobe section '<section>'; use kprobe/<symbol> or
-       kretprobe/<symbol>``
+   * - ``kprobe`` or ``kretprobe`` without a symbol, ``kprobe.multi`` or
+       ``kretprobe.multi`` without a function list, other
+       ``kprobe.multi*`` and ``kretprobe.multi*`` forms
+     - ``unsupported kprobe section '<section>'; use kprobe/<symbol>,
+       kretprobe/<symbol>, kprobe.multi/<symbol>[,<symbol>...] or
+       kretprobe.multi/<symbol>[,<symbol>...]``
+   * - ``kprobe.multi`` or ``kretprobe.multi`` with ``*`` or ``?`` in
+       the list
+     - ``invalid kprobe multi section '<section>': globs are
+       unsupported; name each function``
+   * - ``kprobe.multi`` or ``kretprobe.multi`` naming a function twice
+     - ``invalid kprobe multi section '<section>': a function is named
+       twice``
+   * - ``kprobe.multi`` or ``kretprobe.multi`` with an empty name, a
+       space, ``|``, a control or a non-ASCII byte in a name, a name of
+       512 bytes or more, or more than 1048576 names
+     - ``invalid kprobe multi section '<section>'; expected a
+       comma-separated list of 1 to 1048576 function names of at most
+       511 bytes``
    * - ``uprobe`` and ``uretprobe`` without a binary, other ``uprobe.*``
        and ``uretprobe.*`` forms, ``uprobe.session`` and
        ``uprobe.session.s`` among them
@@ -724,9 +759,9 @@ it generates a loader.
    * - every other section, ``tp/``, ``raw_tp/``, ``xdp`` and ``tc`` among
        them
      - ``unsupported section '<section>'; supported are fentry, fexit,
-       fmod_ret, lsm, tp_btf, kprobe, kretprobe, uprobe[.s],
-       uretprobe[.s], uprobe.multi[.s], uretprobe.multi[.s], cgroup_skb,
-       netfilter and xdp/<mask>``
+       fmod_ret, lsm, tp_btf, kprobe, kretprobe, kprobe.multi,
+       kretprobe.multi, uprobe[.s], uretprobe[.s], uprobe.multi[.s],
+       uretprobe.multi[.s], cgroup_skb, netfilter and xdp/<mask>``
    * - ``syscall`` with another program name
      - ``SEC("syscall") program '<name>' must be named shirudo_test__<id>``
 
@@ -754,6 +789,8 @@ signed metadata:
    * - ``kprobe``, ``kretprobe``
      - a perf event link of the kprobe or kretprobe type, with the same
        symbol and offset
+   * - ``kprobe.multi``, ``kretprobe.multi``
+     - a kprobe multi link with the same symbol count and direction
    * - ``uprobe``, ``uretprobe``
      - a perf event link of the uprobe or uretprobe type, with the recorded
        file offset and no reference counter. Not the file name: the

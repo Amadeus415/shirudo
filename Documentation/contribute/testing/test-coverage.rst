@@ -200,6 +200,12 @@ signed config image.
      - Signed XDP device-class masks, object inputs and invalid sections;
        two XDP programs of one upatch build with disjoint classes and are
        refused when they share one
+   * - ``t3013-kprobe-multi-metadata``
+     - ``kprobe.multi`` and ``kretprobe.multi`` sign their function list
+       sorted, with the return kind, beside a uprobe target block; a
+       section without a list, a glob, a name given twice, an empty
+       element, a name of ``KSYM_NAME_LEN`` bytes and ``kprobe.session``
+       are refused
    * - ``t3101-target-fixtures``
      - Prebuilt fixtures load and unload, foreign and own-keyring
        fixtures are refused, a map fixture exports
@@ -254,6 +260,10 @@ signed config image.
        pass attaches it, and the refused veth for good. The reasons and
        the verdict are covered by the ``xdp`` and ``conditions`` unit
        cases.
+   * - ``t3113-kprobe-multi``
+     - Live ``kprobe.multi`` and ``kretprobe.multi`` links attach to two
+       functions, run on entry and return, report their kind and count,
+       unload cleanly, and reject a missing target
 
 ``tpm`` (4)
 ~~~~~~~~~~~
