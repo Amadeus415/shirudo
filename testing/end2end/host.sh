@@ -306,7 +306,7 @@ if backend_find; then
 		die "the tree ingest job did not load the example tree"
 	}
 else
-	say "no keepalive backend at ../backend and no BACKEND_DIR: t9107 skips"
+	say "no keepalive backend at ../backend and no BACKEND_DIR: t9107 and t9109 to t9111 do not run"
 fi
 
 say "node A, in $VM_NAME-end2end, and node B, in $VM_NAME-end2end-b"

@@ -662,7 +662,12 @@ ClickHouse, both through QEMU's address for the host. After node A,
 ``host.sh`` runs ``t9109``, ``t9110`` and ``t9111`` against the same
 backend, see :ref:`testing-pipeline`, :ref:`testing-history` and
 :ref:`testing-walk`. Without ``BACKEND_DIR`` and without ``../backend``,
-``t9107`` skips and ``t9109`` to ``t9111`` do not run:
+none of ``t9107`` and ``t9109`` to ``t9111`` runs: ``host.sh`` writes the
+example tree's digest to ``build/test-vm/end2end/backend-tree.digest``
+only when it started the backend, and without it
+:src:`testing/run-target-tests.sh` leaves ``t9107`` out with
+``not run without a keepalive backend`` rather than failing the family
+on its skip:
 
 .. code-block:: console
 

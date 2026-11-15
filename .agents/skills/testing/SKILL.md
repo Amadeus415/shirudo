@@ -26,7 +26,7 @@ make -C testing help
 
 The end2end tier runs t9107 against the keepalive backend that
 `BACKEND_DIR` names, a checkout or a git URL, `../backend` by default;
-without one t9107 skips and t9109 to t9111 do not run, so say so when
+without one none of t9107 and t9109 to t9111 runs, so say so when
 reporting the tier. The tier boots two VMs at once, each with its own
 swtpm: node A runs the tests, node B (`make -C testing vm-node-end2end`,
 node mode of `vm/run.sh`) takes `role=core` from `config-core` and waits.
