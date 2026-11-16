@@ -112,6 +112,5 @@ int shirudo_build_main(int argc, char **argv);
 /* The file name of source less .bpf.c, .bpf.o or .o. 0 or -E2BIG. */
 int build_upatch_name(const char *source, char *out, size_t cap);
 
-int build_keys_vouch(int argc, char **argv);
 
 #endif /* SHIRUDO_BUILD_BPM_H */

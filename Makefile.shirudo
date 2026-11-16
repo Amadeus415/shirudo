@@ -261,9 +261,7 @@ BUILD_SRCS := \
     tools/shirudo-build/shirudo-build.c \
     tools/shirudo-build/package.c \
     tools/shirudo-build/bpm-build.c \
-    tools/shirudo-build/bpm-publish.c \
-    tools/shirudo-build/vouch.c \
-    tools/shirudo-build/image.c
+    tools/shirudo-build/bpm-publish.c
 
 # ----- derived names ----------------------------------------------
 
