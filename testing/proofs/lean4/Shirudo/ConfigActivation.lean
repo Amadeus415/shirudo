@@ -5,8 +5,8 @@ import Shirudo.Chain
 
 /-!
 The config image activation protocol of rust/src/util/config_update.rs,
-as `image update` (`image_update()` of util/image_runtime.c), `status`
-and `init` (`image_boot()` and `image_boot_complete()` around the upatch
+as `image update` (`update()` of rust/src/util/image_runtime.rs), `status`
+and `init` (`boot()` and `boot_complete()` around the upatch
 restore and the register binding in rust/src/builtin/init) drive it. An
 activation saves the selection as pending in `state`, extends the config
 PCR with `config_measure_event()`, reads the PCR back, appends the event
@@ -168,7 +168,7 @@ inductive Proc (B R D : Type)
   | readback (e : Event B R D) (before : List D)
   | appending (e : Event B R D)
   | activating (e : Event B R D)
-  /-- `init` after `image_boot()`, with `boot_pending` and the root it
+  /-- `init` after `image_runtime::boot()`, with `boot_pending` and the root it
   selected. -/
   | restOfInit (pending : Bool) (sel : R)
   /-- `complete()`, from `init` with the root it selected or from an
@@ -269,24 +269,25 @@ inductive StepIn (v : Variant) : Sys B R D → Sys B R D → Prop
   /-- Any other process extends any PCR (R4). -/
   | outsider (w : World B R D) (π : Proc B R D) (i : Nat) (d : D) :
       StepIn v ⟨w, π⟩ ⟨{ w with pcr := extendAt w.pcr i d }, π⟩
-  /-- `image_update()`: `current_config()`, then `config_update_begin()`
-  for another root on the same PCR. -/
+  /-- `image_runtime::update()`: `current_config()`, then
+  `config_update_begin()` for another root on the same PCR. -/
   | startUpdate (w : World B R D) (t : R) (r : Event B R D) :
       w.state = some ⟨r, false⟩ → check digest w = .ok →
       w.mounted = some r.root → r.pcr = w.cfgPcr → t ≠ r.root →
       StepIn v ⟨w, .idle⟩ ⟨w, .starting .update t (some r)⟩
-  /-- `image_boot()` when the record is of this TPM boot:
+  /-- `image_runtime::boot()` when the record is of this TPM boot:
   `config_update_boot()` refuses a pending one, otherwise checks it. -/
   | initSame (w : World B R D) (r : Event B R D) :
       w.state = some ⟨r, false⟩ → r.boot = w.boot → r.pcr = w.cfgPcr →
       check digest w = .ok →
       StepIn v ⟨w, .idle⟩ ⟨w, .restOfInit false r.root⟩
-  /-- `image_boot()` with no record: `boot_target()` takes `config.image`. -/
+  /-- `image_runtime::boot()` with no record: `boot_target()` takes
+  `config.image`. -/
   | initFirst (w : World B R D) (x : List D) :
       w.state = none → scan digest w.events = some (none, x) →
       w.torn = false → StepIn v ⟨w, .idle⟩ ⟨w, .starting .boot w.cfgImage none⟩
-  /-- `image_boot()` with a record of another TPM boot: the record's root,
-  a journal that ends with it or, pending, one it follows. -/
+  /-- `image_runtime::boot()` with a record of another TPM boot: the
+  record's root, a journal that ends with it or, pending, one it follows. -/
   | initNew (w : World B R D) (r : Event B R D) (q : Bool)
       (last : Option (Event B R D)) (x : List D) :
       w.state = some ⟨r, q⟩ → r.boot ≠ w.boot →
@@ -351,7 +352,7 @@ inductive StepIn (v : Variant) : Sys B R D → Sys B R D → Prop
   /-- A failure after the old config was unmounted. -/
   | unmount (w : World B R D) (e : Event B R D) :
       StepIn v ⟨w, .activating e⟩ ⟨{ w with mounted := none }, .idle⟩
-  /-- `image_boot_complete()` once the restore and the register binding
+  /-- `image_runtime::boot_complete()` once the restore and the register binding
   succeeded: `config_mount_check()`, then `complete()`. -/
   | initComplete (w : World B R D) (sel : R) (r : Event B R D) (q : Bool) :
       w.state = some ⟨r, q⟩ → w.mounted = some r.root →
@@ -1574,7 +1575,7 @@ theorem boot_completion {w0 : World B R D} {s s' : Sys B R D} {sel : R}
 
 /-- (e) A pending record becomes a completed one only through
 `complete()`'s save after its `check_record()`, and a boot event's only
-through `init`'s, which `image_boot_complete()` starts once the upatch
+through `init`'s, which `image_runtime::boot_complete()` starts once the upatch
 restore and the register binding have succeeded. From any journal. -/
 theorem completion_by_complete {w0 : World B R D} {s s' : Sys B R D}
     {r r' : Event B R D} (hrun : Star (Step digest shirudo) ⟨w0, .idle⟩ s)

@@ -8,9 +8,9 @@ The upatch load and unload protocol of builtin-upatch.c and the boot
 restore of rust/src/builtin/init/restore.rs, against crashes, concurrent
 commands and root.
 
-`image_enter()` admits an upatch command only once this boot's config
-activation is complete, which `image_boot_complete()` does after `init`
-restored the archive and wrote its record. A load (`cmd_upatch_load()`)
+`image_runtime::enter()` admits an upatch command only once this boot's
+config activation is complete, which `image_runtime::boot_complete()` does
+after `init` restored the archive and wrote its record. A load (`cmd_upatch_load()`)
 takes the register lock (`eventlog_lock()`) and runs the undo pass
 (`undo_unmeasured()`). The pass folds this boot's records into the
 measured set (`measured_set_boot()`), removes every pin directory whose
@@ -60,8 +60,8 @@ every move. The assumptions, each a step or the absence of one:
   `init`'s run is one step, which completes or stops anywhere without its
   record. The gate is why: no upatch command runs in a boot before an
   `init` run completed, a run after one that stopped refuses at
-  `image_boot()`, and a run after one that completed changes nothing the
-  model keeps.
+  `image_runtime::boot()`, and a run after one that completed changes
+  nothing the model keeps.
 - Root starts and kills commands at will, adds, replaces and deletes
   unlabeled archive files and brings back a file of any content under a
   free name. The seal stops every other change to the archive, the
@@ -382,9 +382,9 @@ structure Variant where
   purgeLock : Bool := true
   /-- The `measured_holds()` filter of `boot_restore()`. -/
   filter : Bool := true
-  /-- `image_enter()` admits an upatch command only once this boot's
-  config activation is complete, which `image_boot_complete()` does after
-  `init` wrote its record. -/
+  /-- `image_runtime::enter()` admits an upatch command only once this
+  boot's config activation is complete, which
+  `image_runtime::boot_complete()` does after `init` wrote its record. -/
   gate : Bool := true
 
 /-- The protocol as builtin-upatch.c and rust/src/builtin/init have it. -/
@@ -397,7 +397,7 @@ def canLock (V : Variant) (s : State Name Payload) : Prop :=
 /-- One step of one process, of root, or a reboot. -/
 inductive Step (V : Variant) :
     State Name Payload → State Name Payload → Prop where
-  /-- Root, a timer or the operator starts a command; `image_enter()`
+  /-- Root, a timer or the operator starts a command; `image_runtime::enter()`
   admits it only once this boot's init record is on the log. -/
   | spawn (s) (i c) : s.procs i = none → (V.gate = true → hasInit s = true) →
       Step V s (s.go i c .start)
@@ -2248,7 +2248,7 @@ theorem reach_inv {s : State Name Payload} (h : Reach C s) : Inv s := by
   | init => exact inv_s0
   | step _ hs ih => exact inv_step ih hs
 
-/-- `image_enter()` admits upatch commands only in a boot whose init
+/-- `image_runtime::enter()` admits upatch commands only in a boot whose init
 record is on the log. -/
 theorem commands_need_init {s : State Name Payload} (h : Reach C s) {i : Nat}
     {c : Proc Name Payload} (hi : s.procs i = some c) : hasInit s = true :=
