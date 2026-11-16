@@ -224,7 +224,6 @@ UTIL_SRCS := \
     util/image_guards.c \
     util/malloc.c \
     util/upatch_maps.c \
-    util/upatch_decode.c \
     util/upatch_resolve.c
 
 BUILTIN_SRCS := \
@@ -777,7 +776,7 @@ testing/helper/test-signed-load: testing/helper/test-signed-load.c
 	    -o $@ $^ -lcrypto
 
 testing/helper/test-otel-map: testing/helper/test-otel-map.c util/upatch_maps.o \
-                        util/upatch_decode.o util/upatch_resolve.o \
+                        util/upatch_resolve.o \
                         util/string.o util/log.o \
                         util/paths.o \
                         util/malloc.o $(LIBBPF_A) util/hex.o \
@@ -811,7 +810,7 @@ testing/helper/test-upatch-rodata: testing/helper/test-upatch-rodata.c \
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-decode: testing/helper/test-upatch-decode.c \
-			      util/upatch_decode.o util/malloc.o util/hex.o \
+			      util/malloc.o util/hex.o \
 			      util/string.o util/log.o $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
@@ -1015,9 +1014,7 @@ testing/fuzz/fuzz-serializer: testing/fuzz/fuzz-serializer.c $(FUZZ_BASE) \
 testing/fuzz/fuzz-serializer: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-serializer: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS)
 testing/fuzz/fuzz-cms: testing/fuzz/fuzz-cms.c $(FUZZ_BASE)
-testing/fuzz/fuzz-decoder: testing/fuzz/fuzz-decoder.c $(FUZZ_BASE) \
-                           util/upatch_decode.c
-testing/fuzz/fuzz-decoder: FUZZ_CFLAGS += $(LUAJIT_CFLAGS) -DHAVE_LUAJIT
+testing/fuzz/fuzz-decoder: testing/fuzz/fuzz-decoder.c $(FUZZ_BASE)
 testing/fuzz/fuzz-decoder: FUZZ_LIBS += $(LUAJIT_LIBS)
 testing/fuzz/fuzz-otel: testing/fuzz/fuzz-otel.c $(FUZZ_BASE) \
                         util/version_id.c
@@ -1038,7 +1035,6 @@ testing/fuzz/fuzz-kconfig: testing/fuzz/fuzz-kconfig.c $(FUZZ_BASE)
 # A target that reaches static parsers includes their source, which it
 # then depends on without linking it a second time.
 testing/fuzz/fuzz-serializer: FUZZ_INCLUDED := util/upatch_maps.c
-testing/fuzz/fuzz-decoder: FUZZ_INCLUDED := util/upatch_decode.c
 
 $(FUZZ_TARGETS): testing/fuzz/fuzz.h $(RUST_FUZZ_LIB)
 	@printf '  FUZZ    $@\n'
