@@ -4,10 +4,10 @@
 import Shirudo.Chain
 
 /-!
-`bpm tree sync`, `cmd_bpm_tree_sync()` of builtin-bpm.c. It reads the
+`bpm tree sync`, `sync()` of rust/src/builtin/bpm/tree.rs. It reads the
 node's state, fetches a signed tree publication, refuses one that
 `tree_parse()`, `tree_publication_check()`, `tree_operation_validate()` or
-`tree_publication_follows()` refuses, and runs `tree_recover_pending()`.
+`tree_publication_follows()` refuses, and runs `recover_pending()`.
 Then, for each operation past the cursor that its selector matches, it
 writes `pending.json`, installs the upatch, extends the register and records
 the `tree_op` event, appends a line to the tree eventlog, writes the state

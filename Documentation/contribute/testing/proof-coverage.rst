@@ -274,8 +274,8 @@ the model follows the C.
      - Review; the CBMC harness ``measured-fold-model`` of
        ``measured_event()`` and ``measured_holds()`` went with
        ``util/measured.c`` in the port to Rust
-   * - ``Shirudo.TreeSync``, ``cmd_bpm_tree_sync()`` and
-       ``tree_recover_pending()`` of :src:`builtin-bpm.c`
+   * - ``Shirudo.TreeSync``, ``sync()`` and ``recover_pending()`` of
+       :src:`rust/src/builtin/bpm/tree.rs`
      - ``generation_mono``, ``lastSeq_mono``, ``log_grows``: between any two
        points of any history of syncs of signed publications, stops after
        any write and reboots, the generation, the cursor and the tree

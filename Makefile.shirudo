@@ -237,7 +237,6 @@ BUILTIN_SRCS := \
     builtin-keys.c \
     builtin-image.c \
     builtin-upatch.c \
-    builtin-bpm.c \
     builtin-attest.c
 
 # BPF-side libbpf headers, used straight from vendor/libbpf (the BPF
@@ -884,13 +883,12 @@ testing/helper/test-image-config: testing/helper/test-image-config.c \
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LIBCRYPTO_LIBS) $(LIBSSL_LIBS) $(ZLIB_LIBS) \
 		$(RUST_TEST_LDLIBS)
 
-testing/helper/test-image-cli: testing/helper/test-image-cli.c builtin-bpm.c \
-		$(filter-out $(call obj,builtin-bpm.o),$(BUILTIN_OBJS)) \
+testing/helper/test-image-cli: testing/helper/test-image-cli.c \
+		$(BUILTIN_OBJS) \
 		$(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ \
-		$(filter-out builtin-bpm.c,$^) \
-		-Wl,--wrap=bpm_tree_fetch_publication \
+		$^ \
 		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-image-cleanup: testing/helper/test-image-cleanup.c \

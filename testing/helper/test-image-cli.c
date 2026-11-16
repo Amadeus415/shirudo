@@ -1,26 +1,17 @@
 // SPDX-License-Identifier: BSD-2-Clause
 /* Copyright (c) 2026 Authors of shirudo */
 
-#include "../../builtin-bpm.c"
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+
+#include <shirudo/string.h>
+
+#include "builtin.h"
 #include "util/config.h"
-
-int __wrap_bpm_tree_fetch_publication(struct bpm_oci_client *client,
-				      const char *repository,
-				      const char *reference,
-				      const char *certificate,
-				      struct tree_publication *pub,
-				      char *digest, size_t capacity);
-
-int __wrap_bpm_tree_fetch_publication(struct bpm_oci_client *client,
-				      const char *repository,
-				      const char *reference,
-				      const char *certificate,
-				      struct tree_publication *pub,
-				      char *digest, size_t capacity)
-{
-	puts(certificate);
-	return 0;
-}
+#include "util/image_config.h"
 
 int main(int argc, const char **argv)
 {
@@ -49,36 +40,24 @@ int main(int argc, const char **argv)
 	} else if (!strcmp(argv[2], "config")) {
 		ret = cmd_config(argc - 2, argv + 2);
 	} else if (!strcmp(argv[2], "source") && argc == 4) {
-		struct bpm_source source;
+		char content[64];
+		int kfd = bpm_source_key_open(argv[3]);
+		FILE *file = kfd < 0 ? NULL : fdopen(kfd, "r");
 
-		ret = load_source(argv[3], &source);
-		if (!ret) {
-			char content[64];
-			int kfd = image_open_relative(source.key_file,
-						      O_RDONLY);
-			FILE *file = kfd < 0 ? NULL : fdopen(kfd, "r");
-
-			if (!file) {
-				ret = kfd < 0 ? kfd : -errno;
-				if (kfd >= 0)
-					close(kfd);
-			} else {
-				if (!fgets(content, sizeof(content), file))
-					ret = -EIO;
-				else
-					fputs(content, stdout);
-				fclose(file);
-			}
+		if (!file) {
+			ret = kfd < 0 ? kfd : -errno;
+			if (kfd >= 0)
+				close(kfd);
+		} else {
+			if (!fgets(content, sizeof(content), file))
+				ret = -EIO;
+			else
+				fputs(content, stdout);
+			fclose(file);
 		}
 	} else if (!strcmp(argv[2], "tree")) {
-		struct tree_publication publication = {};
-		struct bpm_tree_config config = {};
-		char digest[BPM_MAX_DIGEST];
-
-		strscpy(config.endpoint, "oci://example.invalid/tree", sizeof(config.endpoint));
-		strscpy(config.reference, "latest", sizeof(config.reference));
-		ret = tree_fetch_publication(&config, &publication, digest,
-					     sizeof(digest));
+		puts(bpm_tree_certificate());
+		ret = 0;
 	} else {
 		ret = 2;
 	}
