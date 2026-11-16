@@ -234,8 +234,7 @@ UTIL_SRCS := \
 BUILTIN_SRCS := \
     builtin-init.c \
     builtin-status.c \
-    builtin-upatch.c \
-    builtin-attest.c
+    builtin-upatch.c
 
 # BPF-side libbpf headers, used straight from vendor/libbpf (the BPF
 # compile rule adds it to the include path so <bpf/...> resolves) and

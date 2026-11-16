@@ -1033,6 +1033,8 @@ pub(crate) use capi::{
     chain_upatch_event,
 };
 
+pub(crate) use capi::chain_init_event;
+
 mod capi {
     use core::ffi::{c_char, c_int, c_void};
 
