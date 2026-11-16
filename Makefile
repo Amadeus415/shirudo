@@ -51,7 +51,7 @@ export prefix exec_prefix bindir libexecdir sharedir libdir mandir completionsdi
        systemdunitdir udevrulesdir dracutmodulesdir SHIRUDO_TARGET_PKG_CONFIG_PATH \
        SHIRUDO_TARGET_STATIC_LIBDIR
 
-.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build quote-check docs bpf-deps install install-target install-operator clean distclean config tests proofs proofs-cbmc proofs-lean4 sparse tags cscope
+.PHONY: all help target target-deps target-deps-clean shirudo-target target-config shirudo-build quote-check quote-check-deps docs bpf-deps install install-target install-operator clean distclean config tests proofs proofs-cbmc proofs-lean4 sparse tags cscope
 
 all: config
 	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=operator CONFIG_MK=config.mk all
@@ -102,8 +102,25 @@ help:
 shirudo-build:
 	+$(Q)$(MAKE) -C tools/shirudo-build
 
-quote-check:
-	+$(Q)$(MAKE) -C tools/quote-check
+# shirudo-quote-check is a static PIE. Where the distribution ships no
+# libcrypto.a, as Fedora does not, it links a static OpenSSL built once
+# into QUOTE_CHECK_OPENSSL_PREFIX instead.
+QUOTE_CHECK_OPENSSL_PREFIX ?= $(CURDIR)/build/quote-check-openssl
+QUOTE_CHECK_SYSTEM_LIBCRYPTO_A := $(wildcard $(shell pkg-config \
+	--variable=libdir libcrypto 2>/dev/null)/libcrypto.a)
+QUOTE_CHECK_OPENSSL ?= $(if $(SANITIZE)$(QUOTE_CHECK_SYSTEM_LIBCRYPTO_A),, \
+	$(QUOTE_CHECK_OPENSSL_PREFIX))
+
+quote-check-deps:
+ifneq ($(strip $(QUOTE_CHECK_OPENSSL)),)
+	+$(Q)$(MAKE) -f Makefile.target-deps \
+		TARGET_DEPS_DIR="$(CURDIR)/build/quote-check-deps" \
+		TARGET_OPENSSL_PREFIX="$(strip $(QUOTE_CHECK_OPENSSL))" openssl
+endif
+
+quote-check: quote-check-deps
+	+$(Q)$(MAKE) -C tools/quote-check \
+		QUOTE_CHECK_OPENSSL="$(strip $(QUOTE_CHECK_OPENSSL))"
 
 sparse: config
 	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=operator CONFIG_MK=config.mk sparse
@@ -157,8 +174,9 @@ install-target: all
 	+$(Q)$(MAKE) target-config
 	+$(Q)$(MAKE) -f Makefile.shirudo PROFILE=target CONFIG_MK=config-target.mk install-target
 
-install-operator: all
-	+$(Q)$(MAKE) -f Makefile.shirudo install-operator
+install-operator: all quote-check-deps
+	+$(Q)$(MAKE) -f Makefile.shirudo install-operator \
+		QUOTE_CHECK_OPENSSL="$(strip $(QUOTE_CHECK_OPENSSL))"
 
 clean:
 	+$(Q)$(MAKE) -C Documentation clean
@@ -170,6 +188,7 @@ distclean: clean
 	$(Q)rm -f config.mk
 	$(Q)rm -f tags cscope.files cscope.out cscope.in.out cscope.po.out
 	+$(Q)$(MAKE) -f Makefile.target-deps TARGET_DEPS_DIR="$(TARGET_DEPS_DIR)" clean
+	$(Q)rm -rf build/quote-check-deps "$(QUOTE_CHECK_OPENSSL_PREFIX)"
 	$(Q)$(MAKE) -f Makefile.shirudo distclean
 
 .PHONY: vm vm-console vm-ssh vm-stop vm-clean oci telemetry stack-up stack-down

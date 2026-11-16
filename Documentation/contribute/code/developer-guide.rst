@@ -321,9 +321,18 @@ Other make targets
        ``libzstd-dev`` and ``libjitterentropy3-dev`` beside
        ``libssl-dev`` and ``zlib1g-dev``. CI installs them with
        :src:`.github/scripts/install-static-libcrypto-deps.sh`, which
-       reads that list. A ``SANITIZE=`` build links it
-       against the shared libraries, because the sanitizer runtimes do
-       not link statically. See :doc:`/reference/cli/quote-check`.
+       reads that list. Where the distribution ships no
+       ``libcrypto.a``, as Fedora does not, ``make quote-check`` and
+       ``make install-operator`` first build a static OpenSSL into
+       ``build/quote-check-openssl`` with :src:`Makefile.target-deps`,
+       which needs ``perl``, and compile the checker's objects against
+       its headers under ``build/quote-check/``; the link then needs
+       ``glibc-static``. ``QUOTE_CHECK_OPENSSL=<prefix>`` names another
+       static OpenSSL. ``shirudo`` and ``shirudo-build`` still link the
+       distribution's OpenSSL. ``make distclean`` removes that build. A
+       ``SANITIZE=`` build links the checker against the shared
+       libraries, because the sanitizer runtimes do not link
+       statically. See :doc:`/reference/cli/quote-check`.
    * - ``make install-operator``
      - Installs the operator binary, the helper under
        ``$(libexecdir)/shirudo``, ``shirudo-quote-check``, the image

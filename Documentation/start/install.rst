@@ -96,7 +96,10 @@ Build the packages
 
       $ make -C packaging bindeb-pkg PKG_ROLES=operator
 
-   ``PKG_ROLES=target`` builds only the target package.
+   ``PKG_ROLES=target`` builds only the target package. On Fedora,
+   which ships no static ``libcrypto``, the operator build also
+   downloads and builds a static OpenSSL for ``shirudo-quote-check``
+   and needs ``perl`` and ``glibc-static`` for it.
 
 Install the operator package
 ----------------------------
