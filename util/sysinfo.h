@@ -2,7 +2,8 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * The host overview of `status --include-system`, without a subprocess.
+ * The host overview of `status --include-system` and the identity of the
+ * booted image, without a subprocess.
  */
 
 #ifndef SHIRUDO_SYSINFO_H
@@ -42,5 +43,32 @@ int sysinfo_kernel_config_foreach(const char *kernel_release,
 
 void sysinfo_emit_json(struct json_emit *e,
 		       const struct sysinfo *si);
+
+#define SYSINFO_IMAGE_VALUE_MAX	256u
+#define SYSINFO_IMAGE_ROOT_MAX	65u
+
+/*
+ * IMAGE_ID and IMAGE_VERSION of os-release, and the dm-verity root hash
+ * the kernel command line names: roothash=, else usrhash=.
+ */
+struct sysinfo_image {
+	char	id[SYSINFO_IMAGE_VALUE_MAX];
+	char	version[SYSINFO_IMAGE_VALUE_MAX];
+	char	root[SYSINFO_IMAGE_ROOT_MAX];
+};
+
+/*
+ * Fill *img; a value that is absent or refused becomes "". An os-release
+ * value is unquoted as os-release(5) defines and must then be 1 to 255
+ * bytes of printable ASCII; of a key given twice the last one counts.
+ * os_release_fallback is read only when os_release does not exist. The
+ * root is 64 hex digits, in lowercase whatever the command line has.
+ */
+void sysinfo_image_read_at(const char *os_release,
+			   const char *os_release_fallback,
+			   const char *cmdline, struct sysinfo_image *img);
+
+/* The same from /etc/os-release, /usr/lib/os-release and /proc/cmdline. */
+void sysinfo_image_read(struct sysinfo_image *img);
 
 #endif /* SHIRUDO_SYSINFO_H */
