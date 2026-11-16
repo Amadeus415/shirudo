@@ -106,6 +106,8 @@ int build_bpm_tree(int argc, char **argv);
 bool build_is_help(const char *arg);
 
 int build_check_keys(const char *pkey, const char *cert);
+/* The command line, from main(): rust/src/shirudo_build/. */
+int shirudo_build_main(int argc, char **argv);
 
 /* The file name of source less .bpf.c, .bpf.o or .o. 0 or -E2BIG. */
 int build_upatch_name(const char *source, char *out, size_t cap);

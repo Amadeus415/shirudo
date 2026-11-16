@@ -259,9 +259,7 @@ BPF_SRCS := \
 # link util/sign.c.
 BUILD_SRCS := \
     tools/shirudo-build/shirudo-build.c \
-    tools/shirudo-build/compile.c \
     tools/shirudo-build/package.c \
-    tools/shirudo-build/vmlinux.c \
     tools/shirudo-build/bpm-build.c \
     tools/shirudo-build/bpm-publish.c \
     tools/shirudo-build/vouch.c \
@@ -325,31 +323,35 @@ RUST_TARGET := build/rust
 RUST_LIB    := $(RUST_TARGET)/release/libshirudo_rs.a
 RUST_SRCS   := $(shell find $(RUST_DIR)/src -name '*.rs') \
                $(RUST_DIR)/Cargo.toml $(RUST_DIR)/Cargo.lock
-RUST_LDLIBS := -static-libgcc
-# LTO leaves one object in the archive, which a link of a few util
-# objects, a test's or shirudo-build's, pulls in whole: the sections it
-# does not reach go, and with them the references to C it does not link.
-RUST_TEST_LDLIBS := $(RUST_LDLIBS) -Wl,--gc-sections
+# LTO leaves one object in the archive, which every link pulls in
+# whole: the sections it does not reach go, and with them the references
+# to C it does not link. shirudo's own link drops shirudo-build's code
+# this way, and with it every call into util/sign.c.
+RUST_LDLIBS := -static-libgcc -Wl,--gc-sections
+RUST_TEST_LDLIBS := $(RUST_LDLIBS)
 RUSTFLAGS_WERROR := $(if $(filter 1,$(WERROR)),-D warnings)
-RUST_LIBEXEC_DIR := $(RUST_TARGET)/.libexec-dir
-ifneq ($(SHIRUDO_LIBEXEC_DIR),$(shell cat $(RUST_LIBEXEC_DIR) 2>/dev/null))
-RUST_LIBEXEC_CHANGED := FORCE_RUST_LIBEXEC
+# The paths the build bakes into the Rust, as it passes the C its -D.
+# cargo inherits them from make's environment, and a change rebuilds it.
+export SHIRUDO_LIBEXEC_DIR SHIRUDO_BPF_INCDIR SHIRUDO_VMLINUX_PATH SHIRUDO_CLANG_PATH
+RUST_PATHS := $(SHIRUDO_LIBEXEC_DIR):$(SHIRUDO_BPF_INCDIR):$(SHIRUDO_VMLINUX_PATH):$(SHIRUDO_CLANG_PATH)
+RUST_PATHS_STAMP := $(RUST_TARGET)/.paths
+ifneq ($(RUST_PATHS),$(shell cat $(RUST_PATHS_STAMP) 2>/dev/null))
+RUST_PATHS_CHANGED := FORCE_RUST_PATHS
 endif
 
 rust: $(RUST_LIB)
 
-$(RUST_LIB): $(RUST_SRCS) $(RUST_LIBEXEC_CHANGED)
+$(RUST_LIB): $(RUST_SRCS) $(RUST_PATHS_CHANGED)
 	@printf '  CARGO   $@\n'
 	$(Q)RUSTFLAGS="$(RUSTFLAGS_WERROR)" \
 	    CARGO_PROFILE_RELEASE_DEBUG=$(if $(DEBUG_CFLAGS),true,false) \
-	    SHIRUDO_LIBEXEC_DIR='$(SHIRUDO_LIBEXEC_DIR)' \
 	    $(CARGO) build --quiet --release --locked --offline \
 	    --manifest-path $(RUST_DIR)/Cargo.toml --target-dir $(RUST_TARGET)
-	$(Q)printf '%s\n' '$(SHIRUDO_LIBEXEC_DIR)' > $(RUST_LIBEXEC_DIR)
+	$(Q)printf '%s\n' '$(RUST_PATHS)' > $(RUST_PATHS_STAMP)
 	$(Q)touch $@
 
-.PHONY: FORCE_RUST_LIBEXEC
-FORCE_RUST_LIBEXEC:
+.PHONY: FORCE_RUST_PATHS
+FORCE_RUST_PATHS:
 
 # Build-time only; links the vendored libbpf and dumps BTF as C.
 $(VMLINUX_GEN): tools/gen-vmlinux-h/gen-vmlinux-h.c $(LIBBPF_A)
@@ -1061,7 +1063,7 @@ testing/fuzz/fuzz-otel: testing/fuzz/fuzz-otel.c $(FUZZ_BASE) \
                         $(FUZZ_SEAL)
 testing/fuzz/fuzz-beefile: testing/fuzz/fuzz-beefile.c $(FUZZ_BASE) \
                            tools/shirudo-build/bpm-build.c $(FUZZ_PACKAGE) \
-                           util/paths.c \
+                           util/paths.c util/sign.c \
                            util/version_id.c
 testing/fuzz/fuzz-oci-http: testing/fuzz/fuzz-oci-http.c $(FUZZ_BASE) \
                             $(FUZZ_OCI)
