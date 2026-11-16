@@ -215,4 +215,83 @@ test_expect_success 'status --include-system prints kernel config' '
 	rm -rf "$work"
 '
 
+test_expect_success 'a keepalive record carries its body as a string and one quote attribute' '
+	work=$(mktemp -d) || return 1
+	quote="attest=/1RDR4AY;sig=ABgACwAg;ak=ACMACwAE" &&
+	printf "%s\303\251%s" \
+		"{\"schema\":\"shirudo.keepalive/1\",\"image_id\":\"a\\\\b \\u00e9 " \
+		"\",\"tamper\":[0,1],\"mask\":null}" >"$work/input" || return 1
+	for verdict in ok degraded init-pending reboot-pending lsm-off tampered
+	do
+		python3 helper/otel-mock.py success "$work/port" "$work/body" \
+			"$work/meta" &
+		server=$!
+		trap "kill $server 2>/dev/null || true; wait $server 2>/dev/null || true; rm -rf $work" EXIT
+		i=0
+		while test ! -s "$work/port" && test "$i" -lt 100; do
+			sleep .02
+			i=$((i + 1))
+		done
+		port=$(cat "$work/port") &&
+		"$H" send-keepalive "http://127.0.0.1:$port" "$verdict" \
+			"$work/input" "$quote" &&
+		wait "$server" &&
+		python3 - "$verdict" "$work/body" "$work/meta" "$work/input" \
+			"$quote" <<'\''PY'\'' || return 1
+import json, socket, sys
+verdict, quote = sys.argv[1], sys.argv[5]
+sent = open(sys.argv[4], "rb").read()
+assert b"\\u00e9 \xc3\xa9" in sent and b"a\\\\b" in sent, sent
+assert json.load(open(sys.argv[3]))["path"] == "/v1/logs"
+rl = json.load(open(sys.argv[2]))["resourceLogs"][0]
+resource = {item["key"]: item["value"] for item in rl["resource"]["attributes"]}
+assert resource == {"service.name": {"stringValue": "shirudo"},
+                    "service.version": {"stringValue": "test-1"},
+                    "host.name": {"stringValue": socket.gethostname()}}, resource
+assert rl["scopeLogs"][0]["scope"] == {"name": "shirudo.keepalive",
+                                       "version": "test-1"}
+record = rl["scopeLogs"][0]["logRecords"][0]
+expected = {"ok": (9, "INFO"), "degraded": (13, "WARN"),
+            "init-pending": (13, "WARN"), "reboot-pending": (13, "WARN"),
+            "lsm-off": (17, "ERROR"),
+            "tampered": (17, "ERROR")}[verdict]
+assert (record["severityNumber"], record["severityText"]) == expected
+assert record["eventName"] == "shirudo.keepalive"
+assert record["timeUnixNano"].isdigit()
+assert list(record["body"]) == ["stringValue"], record["body"]
+assert record["body"]["stringValue"].encode() == sent, record["body"]
+assert record["attributes"] == [
+    {"key": "shirudo.quote", "value": {"stringValue": quote}}
+], record["attributes"]
+PY
+		rm -f "$work/port" "$work/body" "$work/meta" || return 1
+	done
+	rm -rf "$work"
+'
+
+test_expect_success 'a keepalive body JSON cannot carry unchanged is not sent' '
+	work=$(mktemp -d) || return 1
+	printf "{\"image_id\":\"\\377\"}" >"$work/latin1" &&
+	printf "{\"image_id\":\"\\000\"}" >"$work/nul" || return 1
+	for input in latin1 nul
+	do
+		python3 helper/otel-mock.py success "$work/port" "$work/body" \
+			"$work/meta" &
+		server=$!
+		trap "kill $server 2>/dev/null || true; wait $server 2>/dev/null || true; rm -rf $work" EXIT
+		i=0
+		while test ! -s "$work/port" && test "$i" -lt 100; do
+			sleep .02
+			i=$((i + 1))
+		done
+		port=$(cat "$work/port") &&
+		! "$H" send-keepalive "http://127.0.0.1:$port" ok \
+			"$work/$input" quote &&
+		test ! -e "$work/body" || return 1
+		kill "$server" && { wait "$server" || true; } &&
+		rm -f "$work/port" || return 1
+	done
+	rm -rf "$work"
+'
+
 test_done

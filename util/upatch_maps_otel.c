@@ -513,6 +513,21 @@ static void log_close(struct json_emit *e)
 	otlp_close(e);
 }
 
+/* Ends the document log_open() began and hands its buffer over. */
+static int log_payload_take(struct json_emit *e, char **out,
+			    size_t *out_len, size_t *alloc_len)
+{
+	log_close(e);
+	if (e->err) {
+		xfree(e->buf, e->cap);
+		return e->err;
+	}
+	*out = e->buf;
+	*out_len = e->len;
+	*alloc_len = e->cap;
+	return 0;
+}
+
 static void emit_map_attributes(struct json_emit *e,
 				const struct map_view *v)
 {
@@ -1582,15 +1597,66 @@ static int build_generic_log_payload(const char *scope_name,
 	if (tamper_attempts >= 0)
 		otlp_kv_int(&e, "shirudo.tamper_attempts", tamper_attempts);
 	json_arr_close(&e);
-	log_close(&e);
-	if (e.err) {
-		xfree(e.buf, e.cap);
-		return e.err;
-	}
-	*out = e.buf;
-	*out_len = e.len;
-	*alloc_len = e.cap;
-	return 0;
+	return log_payload_take(&e, out, out_len, alloc_len);
+}
+
+/*
+ * The body goes out as a string, so that no collector can re-encode it
+ * and the bytes a signature covers arrive as they were signed. JSON
+ * cannot carry a NUL or malformed UTF-8 unchanged; both are refused.
+ */
+static int build_string_log_payload(const char *scope_name,
+				    const char *event_name,
+				    int severity_number,
+				    const char *severity_text,
+				    const char *body, size_t body_len,
+				    const char *attr_key,
+				    const char *attr_value,
+				    char **out, size_t *out_len,
+				    size_t *alloc_len)
+{
+	struct json_emit e = { .max = JSON_MAX_BYTES };
+	size_t text_len;
+	char *text;
+
+	if (!scope_name || !event_name || !severity_text || !body ||
+	    !attr_key || !attr_value || !out || !out_len || !alloc_len)
+		return -EINVAL;
+	if (memchr(body, '\0', body_len))
+		return -EILSEQ;
+	if (check_add_overflow(body_len, (size_t)1, &text_len))
+		return -EOVERFLOW;
+	text = xmalloc(text_len);
+	if (!text)
+		return -ENOMEM;
+	memcpy(text, body, body_len);
+	text[body_len] = '\0';
+	log_open(&e, scope_name, severity_number, severity_text, event_name);
+	json_obj_open_key(&e, "body");
+	json_kv_string(&e, "stringValue", text);
+	json_obj_close(&e);
+	xfree(text, text_len);
+	json_arr_open(&e, "attributes");
+	otlp_kv_string(&e, attr_key, attr_value);
+	json_arr_close(&e);
+	return log_payload_take(&e, out, out_len, alloc_len);
+}
+
+static int otel_log_open(const struct otel_opts *opts, void **state)
+{
+	return otel_open_transport(OTEL_LOG, opts ? opts->endpoint : NULL,
+				   opts, NULL, state);
+}
+
+/* Posts the payload a builder returned ret for, and releases both. */
+static int otel_log_post(void *state, int ret, char *payload,
+			 size_t payload_len, size_t alloc_len)
+{
+	if (!ret)
+		ret = otel_post(state, payload, payload_len);
+	xfree(payload, alloc_len);
+	otel_close(state);
+	return ret;
 }
 
 int otel_send_log_json(const struct otel_opts *opts,
@@ -1608,8 +1674,7 @@ int otel_send_log_json(const struct otel_opts *opts,
 	size_t payload_len = 0, alloc_len = 0;
 	int ret;
 
-	ret = otel_open_transport(OTEL_LOG,
-				  opts ? opts->endpoint : NULL, opts, NULL, &state);
+	ret = otel_log_open(opts, &state);
 	if (ret)
 		return ret;
 	ret = build_generic_log_payload(scope_name, event_name,
@@ -1618,11 +1683,30 @@ int otel_send_log_json(const struct otel_opts *opts,
 					tamper_attempts,
 					body_json, body_len,
 					&payload, &payload_len, &alloc_len);
-	if (!ret)
-		ret = otel_post(state, payload, payload_len);
-	xfree(payload, alloc_len);
-	otel_close(state);
-	return ret;
+	return otel_log_post(state, ret, payload, payload_len, alloc_len);
+}
+
+int otel_send_log_string(const struct otel_opts *opts,
+			 const char *scope_name,
+			 const char *event_name,
+			 int severity_number,
+			 const char *severity_text,
+			 const char *body, size_t body_len,
+			 const char *attr_key, const char *attr_value)
+{
+	char *payload = NULL;
+	void *state = NULL;
+	size_t payload_len = 0, alloc_len = 0;
+	int ret;
+
+	ret = otel_log_open(opts, &state);
+	if (ret)
+		return ret;
+	ret = build_string_log_payload(scope_name, event_name,
+				       severity_number, severity_text,
+				       body, body_len, attr_key, attr_value,
+				       &payload, &payload_len, &alloc_len);
+	return otel_log_post(state, ret, payload, payload_len, alloc_len);
 }
 
 struct snapshot_writer {

@@ -28,6 +28,8 @@
 
 const char shirudo_version[] = "test-1";
 
+#define KEEPALIVE_BODY_FILE_MAX	(64u * 1024u)
+
 struct fixture {
 	struct map_view view;
 	struct map_entry entry;
@@ -423,6 +425,30 @@ static int send_status(const char *url, const char *status)
 					 body, (size_t)n) != 0;
 }
 
+/* The body is sent as the bytes of the file, the quote as given. */
+static int send_keepalive(const char *url, const char *verdict,
+			  const char *body_path, const char *quote)
+{
+	struct otel_opts opts = {
+		.endpoint = url,
+		.retries = 0,
+	};
+	const char *severity_text;
+	char *body = NULL;
+	int severity, ret;
+	size_t len = 0;
+
+	if (read_file(body_path, KEEPALIVE_BODY_FILE_MAX, &body, &len))
+		return 1;
+	severity = status_otel_severity(verdict, &severity_text);
+	ret = otel_send_log_string(&opts, "shirudo.keepalive",
+				   "shirudo.keepalive", severity,
+				   severity_text, body, len,
+				   "shirudo.quote", quote);
+	xfree(body, len + 1);
+	return ret != 0;
+}
+
 /*
  * A status body of a list of count ones, which the AnyValue form spells
  * in some eight times the bytes.
@@ -701,6 +727,8 @@ int main(int argc, char **argv)
 		return send_metric_env();
 	if (argc == 4 && strcmp(argv[1], "send-status") == 0)
 		return send_status(argv[2], argv[3]);
+	if (argc == 6 && strcmp(argv[1], "send-keepalive") == 0)
+		return send_keepalive(argv[2], argv[3], argv[4], argv[5]);
 	if (argc == 4 && strcmp(argv[1], "send-wide-status") == 0)
 		return send_wide_status(argv[2], argv[3]);
 	if (argc == 4 && strcmp(argv[1], "retry-after") == 0) {
