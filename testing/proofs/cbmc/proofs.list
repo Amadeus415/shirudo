@@ -9,7 +9,5 @@ hex			--unwind 12
 paths-bpffs-name	--unwind 18
 string-number-model	--unwind 6
 log-escape		--unwind 7 LEN=0-5
-otel-header-fields	-I ../../../vendor/libbpf -I ../../../vendor/libbpf/include/uapi -D__NO_CTYPE --unwind 34 --unwindset strchr.0:17 LEN=32
-otel-retry-after	-I ../../../vendor/libbpf -I ../../../vendor/libbpf/include/uapi -D__NO_CTYPE --unwind 1 --unwindset response_header.0:33,response_header.1:33,otel_retry_after.0:33,otel_retry_after.1:33,delay.0:33,strlen.0:34,strncasecmp.0:13 LEN=32
 hex-model		--unwind 20
 paths-bpffs-name-model	--unwind 20

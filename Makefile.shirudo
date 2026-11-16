@@ -225,7 +225,6 @@ UTIL_SRCS := \
     util/malloc.c \
     util/upatch_maps.c \
     util/upatch_decode.c \
-    util/upatch_maps_otel.c \
     util/upatch_resolve.c
 
 BUILTIN_SRCS := \
@@ -778,7 +777,6 @@ testing/helper/test-signed-load: testing/helper/test-signed-load.c
 	    -o $@ $^ -lcrypto
 
 testing/helper/test-otel-map: testing/helper/test-otel-map.c util/upatch_maps.o \
-                        util/upatch_maps_otel.o \
                         util/upatch_decode.o util/upatch_resolve.o \
                         util/string.o util/log.o \
                         util/paths.o \
@@ -1022,7 +1020,6 @@ testing/fuzz/fuzz-decoder: testing/fuzz/fuzz-decoder.c $(FUZZ_BASE) \
 testing/fuzz/fuzz-decoder: FUZZ_CFLAGS += $(LUAJIT_CFLAGS) -DHAVE_LUAJIT
 testing/fuzz/fuzz-decoder: FUZZ_LIBS += $(LUAJIT_LIBS)
 testing/fuzz/fuzz-otel: testing/fuzz/fuzz-otel.c $(FUZZ_BASE) \
-                        util/upatch_maps_otel.c \
                         util/version_id.c
 testing/fuzz/fuzz-beefile: testing/fuzz/fuzz-beefile.c $(FUZZ_BASE) \
                            util/version_id.c
@@ -1040,7 +1037,6 @@ testing/fuzz/fuzz-kconfig: testing/fuzz/fuzz-kconfig.c $(FUZZ_BASE)
 
 # A target that reaches static parsers includes their source, which it
 # then depends on without linking it a second time.
-testing/fuzz/fuzz-otel: FUZZ_INCLUDED := util/upatch_maps_otel.c
 testing/fuzz/fuzz-serializer: FUZZ_INCLUDED := util/upatch_maps.c
 testing/fuzz/fuzz-decoder: FUZZ_INCLUDED := util/upatch_decode.c
 

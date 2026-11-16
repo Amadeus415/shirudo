@@ -84,16 +84,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - ``upatch_bpffs_name()``, ``upatch_name_from_bpffs()``
      - Up to 8 bytes, buffers up to 18
      - The result and the string of the Lean model ``Shirudo.PinName``
-   * - ``otel-header-fields``
-     - The OTLP header checks and ``percent_decode()``
-     - Strings up to 32 bytes
-     - Names exactly RFC 9110 tokens, values without controls but tab;
-       each ``%XX`` decoded, a stray ``%`` and ``%00`` refused
-   * - ``otel-retry-after``
-     - ``otel_retry_after()``, ``response_header()``
-     - Headers up to 32 bytes, dates modelled
-     - A delay is at most 30 seconds, the value itself when shorter; a
-       header line read only within itself
    * - ``log-escape``
      - ``escape()`` of :src:`util/log.c`
      - Messages of 0 to 5 bytes, every buffer size

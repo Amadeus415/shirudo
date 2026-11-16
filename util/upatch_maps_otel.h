@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /* Copyright (c) 2026 Authors of shirudo */
 
+/* The OpenTelemetry export, in rust/src/util/otel/. */
+
 #ifndef SHIRUDO_UTIL_UPATCH_MAPS_OTEL_H
 #define SHIRUDO_UTIL_UPATCH_MAPS_OTEL_H
 
@@ -73,5 +75,25 @@ int otel_send_log_json(const struct otel_opts *opts,
 		       const char *body_json, size_t body_len);
 int otel_retry_after(const char *value, time_t now, __u64 *seconds);
 int status_otel_severity(const char *status, const char **text);
+
+/*
+ * For the fuzzer, the parsers of what a collector and the settings hand
+ * the exporter. The header callback's reading of one response line of
+ * len bytes, 1 with a Retry-After of at most 30 seconds; the check of a
+ * 200 body for a partial success; a JSON document as an OTLP AnyValue;
+ * the header lines of OTEL_EXPORTER_OTLP_HEADERS, for
+ * curl_slist_free_all(); and the field name and value checks.
+ */
+struct curl_slist;
+struct json_emit;
+
+int otel_header_retry_after(const char *line, size_t len, __u64 *seconds);
+int otel_partial_success(enum otel_signal signal, const char *body,
+			 size_t len);
+int otel_anyvalue_from_json(struct json_emit *e, const char *json,
+			    size_t len, bool wrap);
+int otel_configured_headers(const char *input, struct curl_slist **out);
+bool otel_header_name_ok(const char *s);
+bool otel_header_value_ok(const char *s);
 
 #endif /* SHIRUDO_UTIL_UPATCH_MAPS_OTEL_H */

@@ -8,59 +8,16 @@
  */
 
 #include "fuzz.h"
-#include "upatch_maps_otel.c"
 
-/* The map decoding the exporter calls is fuzzed on its own. */
-const struct btf_type *btf__type_by_id(const struct btf *btf, __u32 id)
-{
-	return NULL;
-}
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
 
-bool upatch_map_is_percpu(__u32 type)
-{
-	return false;
-}
+#include <curl/curl.h>
 
-int upatch_decode_map_json(const struct map_view *v,
-			   char **out, size_t *out_len)
-{
-	return -EOPNOTSUPP;
-}
-
-int upatch_decode_map_json_limit(const struct map_view *v,
-				 size_t max_bytes,
-				 char **out, size_t *out_len)
-{
-	return -EOPNOTSUPP;
-}
-
-int upatch_decode_map_otel(const struct map_view *v,
-			   char **out, size_t *out_len)
-{
-	return -EOPNOTSUPP;
-}
-
-int upatch_decode_map_file_json(const char *path,
-				const struct map_view *v,
-				char **out, size_t *out_len)
-{
-	return -EOPNOTSUPP;
-}
-
-int upatch_decode_map_file_json_limit(const char *path,
-				      const struct map_view *v,
-				      size_t max_bytes, char **out,
-				      size_t *out_len)
-{
-	return -EOPNOTSUPP;
-}
-
-int upatch_decode_map_file_otel(const char *path,
-				const struct map_view *v,
-				char **out, size_t *out_len)
-{
-	return -EOPNOTSUPP;
-}
+#include "json.h"
+#include "malloc.h"
+#include "upatch_maps_otel.h"
 
 static const struct json_visitor any_value = {};
 
@@ -90,8 +47,8 @@ static size_t deepest_nesting(const char *s, size_t len)
 int LLVMFuzzerTestOneInput(const __u8 *data, size_t size)
 {
 	struct json_emit e = { .max = JSON_MAX_BYTES };
-	struct otel_response r = {};
-	struct otel_state st = {};
+	struct curl_slist *headers = NULL;
+	__u64 seconds;
 	size_t off, n;
 	char *body, *line;
 	int ret;
@@ -108,7 +65,8 @@ int LLVMFuzzerTestOneInput(const __u8 *data, size_t size)
 		if (!line)
 			return 0;
 		memcpy(line, data + off, n);
-		response_header(line, 1, n, &r);
+		if (otel_header_retry_after(line, n, &seconds) && seconds > 30)
+			abort();
 		xfree(line, n);
 	}
 
@@ -117,8 +75,8 @@ int LLVMFuzzerTestOneInput(const __u8 *data, size_t size)
 		return 0;
 	memcpy(body, data, size);
 	body[size] = '\0';
-	check_partial_success(OTEL_LOG, body, size);
-	check_partial_success(OTEL_METRIC, body, size);
+	otel_partial_success(OTEL_LOG, body, size);
+	otel_partial_success(OTEL_METRIC, body, size);
 
 	json_obj_open(&e);
 	/*
@@ -127,7 +85,7 @@ int LLVMFuzzerTestOneInput(const __u8 *data, size_t size)
 	 * which can so nest deeper than the walk goes; such output must read
 	 * back up to that depth.
 	 */
-	if (!json_anyvalue_from_document(&e, body, size, false)) {
+	if (!otel_anyvalue_from_json(&e, body, size, false)) {
 		json_obj_close(&e);
 		if (e.err == -ENOSPC)
 			abort();
@@ -141,22 +99,22 @@ int LLVMFuzzerTestOneInput(const __u8 *data, size_t size)
 	xfree(e.buf, e.cap);
 
 	if (!memchr(data, '\0', size)) {
-		if (!add_configured_headers(&st, body)) {
-			for (struct curl_slist *h = st.headers; h; h = h->next) {
+		if (!otel_configured_headers(body, &headers)) {
+			for (struct curl_slist *h = headers; h; h = h->next) {
 				char *colon = strchr(h->data, ':');
 				bool ok;
 
 				if (!colon)
 					abort();
 				*colon = '\0';
-				ok = header_name_ok(h->data) &&
-				     header_value_ok(colon + 1);
+				ok = otel_header_name_ok(h->data) &&
+				     otel_header_value_ok(colon + 1);
 				*colon = ':';
 				if (!ok)
 					abort();
 			}
 		}
-		curl_slist_free_all(st.headers);
+		curl_slist_free_all(headers);
 	}
 	xfree(body, size + 1);
 	return 0;
