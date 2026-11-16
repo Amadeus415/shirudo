@@ -62,9 +62,7 @@ parser of input from outside the host gets a target in `testing/fuzz/`.
 - The bundle compiles its BPF fixtures with the clang `shirudo-build`
   was built for, `SHIRUDO_CLANG_PATH`, `/usr/bin/clang` unless set. It
   must be clang 23; an older one stops at a release store with
-  `Cannot select: ... AtomicStore`. Make does not rebuild the helper
-  when only that variable changes: remove
-  `tools/shirudo-build/compile.o` first.
+  `Cannot select: ... AtomicStore`.
 
 ## Kernel
 

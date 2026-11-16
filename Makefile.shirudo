@@ -258,9 +258,7 @@ BPF_SRCS := \
 # plus a small subset of util/. The core shirudo binary does NOT
 # link util/sign.c.
 BUILD_SRCS := \
-    tools/shirudo-build/shirudo-build.c \
-    tools/shirudo-build/bpm-build.c \
-    tools/shirudo-build/bpm-publish.c
+    tools/shirudo-build/shirudo-build.c
 
 # ----- derived names ----------------------------------------------
 
@@ -1022,8 +1020,6 @@ testing/fuzz/fuzz-rodata: testing/fuzz/fuzz-rodata.c $(FUZZ_BASE) \
                           $(FUZZ_SEAL) $(LIBBPF_A)
 testing/fuzz/fuzz-rodata: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-rodata: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS) $(ZLIB_LIBS)
-testing/fuzz/fuzz-beefile: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
-testing/fuzz/fuzz-beefile: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS) $(ZLIB_LIBS)
 testing/fuzz/fuzz-bpm-tar: testing/fuzz/fuzz-bpm-tar.c $(FUZZ_BASE) \
                            $(FUZZ_PACKAGE)
 testing/fuzz/fuzz-bpm-package: testing/fuzz/fuzz-bpm-package.c $(FUZZ_BASE) \
@@ -1061,8 +1057,6 @@ testing/fuzz/fuzz-otel: testing/fuzz/fuzz-otel.c $(FUZZ_BASE) \
                         util/version_id.c \
                         $(FUZZ_SEAL)
 testing/fuzz/fuzz-beefile: testing/fuzz/fuzz-beefile.c $(FUZZ_BASE) \
-                           tools/shirudo-build/bpm-build.c $(FUZZ_PACKAGE) \
-                           util/paths.c util/sign.c $(LIBBPF_A) \
                            util/version_id.c
 testing/fuzz/fuzz-oci-http: testing/fuzz/fuzz-oci-http.c $(FUZZ_BASE) \
                             $(FUZZ_OCI)

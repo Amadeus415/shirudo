@@ -14,6 +14,7 @@ mod refs;
 
 use core::ffi::{CStr, c_char, c_long};
 
+pub(crate) use capi::{bpm_oci_emit_descriptor, bpm_oci_push_blob, bpm_oci_put_manifest};
 pub(crate) use client::{Buffer, Client, manifest_layers};
 pub(crate) use http::{buffer_free, get_memory, get_signed, sha256_hex};
 pub(crate) use manifest::parse_manifest;
@@ -112,7 +113,7 @@ impl HttpResponse {
 }
 
 impl Descriptor {
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Descriptor {
             media: [0; MAX_MEDIA],
             digest: [0; MAX_DIGEST],
