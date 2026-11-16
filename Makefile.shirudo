@@ -233,7 +233,6 @@ UTIL_SRCS := \
 
 BUILTIN_SRCS := \
     builtin-init.c \
-    builtin-status.c \
     builtin-upatch.c
 
 # BPF-side libbpf headers, used straight from vendor/libbpf (the BPF
