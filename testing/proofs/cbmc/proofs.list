@@ -7,9 +7,6 @@ string-suffix		--unwind 8
 string-sanitize		--unwind 8 LEN=0-6
 hex			--unwind 12
 paths-bpffs-name	--unwind 18
-upatch-loader		-I ../../../vendor/libbpf/include/uapi -I ../../../vendor/libbpf --unwind 50 LEN=4,5,25,49
-upatch-btf		-I ../../../vendor/libbpf/include/uapi -I ../../../vendor/libbpf --unwind 6 --unwindset btf_decl_printable.0:33,btf_name_printable.0:7,btf_unwrap.0:9
-upatch-btf-int		-I ../../../vendor/libbpf/include/uapi -I ../../../vendor/libbpf --unwind 2 --unwindset btf_integer.0:65
 string-number-model	--unwind 6
 bpm-tree-follows	--unwind 4
 bpm-tree-sync-model	--unwind 60 --max-field-sensitivity-array-size 257 LEN=0-2

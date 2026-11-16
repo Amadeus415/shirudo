@@ -111,24 +111,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
        failure below sync; strings of one byte
      - The writes of the Lean model ``Shirudo.TreeSync``, in its order,
        none after a failure, all of them when nothing fails
-   * - ``upatch-loader``
-     - ``loader_lddw()``, ``sys_bpf_call()``, ``map_create_slot()``,
-       ``map_update_slot()``, ``loader_store_source()``
-     - Loaders of 4, 5, 25 and 49 instructions
-     - Reads only the loader, and only instructions before the call it
-       looks back from; reports exactly what it matched; every slot
-       below the table's size
-   * - ``upatch-btf``
-     - ``btf_name_printable()``, ``btf_decl_printable()``,
-       ``btf_unwrap()``
-     - BTF of 4 types, names up to 6 bytes, libbpf modelled
-     - A printed name is printable ASCII, an accepted declaration chain
-       has no loop, an unwrapped type is 0 or has no qualifier
-   * - ``upatch-btf-int``
-     - ``btf_integer()``
-     - Every encoding and every value of up to 8 bytes
-     - The bits stay inside the integer's bytes; the value is zero- or
-       sign-extended from them
    * - ``otel-header-fields``
      - The OTLP header checks and ``percent_decode()``
      - Strings up to 32 bytes
@@ -363,9 +345,10 @@ match of :src:`rust/src/util/kernel_build_id.rs` and
 lines of :src:`rust/src/util/bpm_source_config.rs`, the bootstrap file
 and config root event of :src:`rust/src/util/image_bootstrap.rs` and
 :src:`rust/src/util/config_measure.rs`, the config image's superblock
-of :src:`rust/src/util/config_image.rs`, and the ``.upatch`` container
-reader of :src:`rust/src/util/upatch.rs`, whose CBMC proofs went with
-the C they proved when the modules moved to Rust; and how
+of :src:`rust/src/util/config_image.rs`, the ``.upatch`` container
+reader of :src:`rust/src/util/upatch.rs` and its ``.rodata`` reader of
+:src:`rust/src/util/upatch_rodata.rs`, whose CBMC proofs went with the C
+they proved when the modules moved to Rust; and how
 ``json_parse()`` dispatches objects, arrays and maps to their schemas,
 the OTLP headers a configuration adds, the registry references and URLs,
 the kernel configuration the tree selectors read, the tree log, the
@@ -373,9 +356,3 @@ evidence document beyond its PCRs, the config update record, the site
 configuration file and the config image's settings and tree. The tree
 reader is covered part by part, as the table shows; what joins those
 parts has no proof.
-
-Within the ``.rodata`` reader of :src:`util/upatch_rodata.c`, the proofs
-of ``loader_btf()``, ``find_rodata_data()`` and ``map_name_rodata()``
-went with the ``.upatch`` reader their harnesses included; they,
-``btf_dump_cost()``, the ``.rodata`` printers and the libbpf calls behind
-``btf_rodata_btf()`` have no proof.
