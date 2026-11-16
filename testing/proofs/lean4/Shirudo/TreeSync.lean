@@ -63,10 +63,11 @@ measure leaves the operation pending and unmeasured, so the next sync
 applies it again, and that goes on to measure it: `upatch_install()` takes
 the payload already loaded under the name as installed, and
 `upatch_remove()` an upatch already gone as removed.
-testing/proofs/cbmc/bpm-tree-follows.c proves
-`tree_publication_follows()` is `Follows`, and bpm-tree-sync-model.c checks
-the writes of `cmd_bpm_tree_sync()` against `run` for publications of up to
-two operations.
+The CBMC harnesses bpm-tree-follows.c, which proved
+`tree_publication_follows()` is `Follows`, and bpm-tree-sync-model.c, which
+checked the writes of `cmd_bpm_tree_sync()` against `run` for publications
+of up to two operations, went with util/bpm_tree.c when it moved to
+rust/src/util/bpm_tree.rs.
 -/
 
 namespace Shirudo.TreeSync
@@ -162,8 +163,9 @@ def Checked (pub : Pub T M I D) : Prop :=
 instance (pub : Pub T M I D) : Decidable (Checked pub) := by
   unfold Checked; infer_instance
 
-/-- `tree_publication_follows()`, as `bpm-tree-follows.c` states it and
-proves the C meets for every `__s64`: without a state, a base of 0; with
+/-- `tree_publication_follows()`, as the CBMC harness `bpm-tree-follows.c`
+stated it and proved the C met for every `__s64` before the function moved
+to rust/src/util/bpm_tree.rs: without a state, a base of 0; with
 one, the same tree, a later generation unless it is the same manifest, the
 recorded manifest as parent when it is the next generation and names one,
 and the cursor between base and head. -/

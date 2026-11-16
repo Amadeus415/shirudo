@@ -221,7 +221,6 @@ UTIL_SRCS := \
     util/log.c \
     util/hex.c \
     util/string.c \
-    util/bpm_tree.c \
     util/image_runtime.c \
     util/image_guards.c \
     util/image_keys.c \
@@ -473,7 +472,7 @@ tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o \
                                    util/malloc.o util/paths.o \
                                    util/hex.o \
                                    util/seal.o util/string.o \
-                                   util/bpm_tree.o $(VERSION_OBJ) \
+                                   $(VERSION_OBJ) \
                                    $(LIBBPF_A) $(RUST_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(LD) $(CFLAGS) $(HARDEN_LDFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ \
@@ -1009,7 +1008,7 @@ FUZZ_LIBS := $(RUST_FUZZ_LIB) $(LIBCRYPTO_LIBS) $(LIBSSL_LIBS) \
 FUZZ_BASE := util/string.c util/hex.c util/malloc.c testing/fuzz/log.c
 FUZZ_SEAL := util/seal.c
 FUZZ_OCI := $(FUZZ_SEAL)
-FUZZ_PACKAGE := util/bpm_tree.c $(FUZZ_OCI)
+FUZZ_PACKAGE := $(FUZZ_OCI)
 
 FUZZ_TARGETS := $(patsubst %.c,%,$(wildcard testing/fuzz/fuzz-*.c))
 
@@ -1019,7 +1018,7 @@ testing/fuzz/fuzz-oci-manifest: testing/fuzz/fuzz-oci-manifest.c \
 testing/fuzz/fuzz-bpm-index: testing/fuzz/fuzz-bpm-index.c \
                              $(FUZZ_BASE) $(FUZZ_PACKAGE)
 testing/fuzz/fuzz-tree: testing/fuzz/fuzz-tree.c $(FUZZ_BASE) \
-                        util/bpm_tree.c $(FUZZ_SEAL)
+                        $(FUZZ_SEAL)
 testing/fuzz/fuzz-upatch: testing/fuzz/fuzz-upatch.c $(FUZZ_BASE)
 testing/fuzz/fuzz-prog-metadata: testing/fuzz/fuzz-prog-metadata.c \
                                  $(FUZZ_BASE)
@@ -1081,8 +1080,7 @@ testing/fuzz/fuzz-image: testing/fuzz/fuzz-image.c $(FUZZ_BASE) \
 testing/fuzz/fuzz-config-update: testing/fuzz/fuzz-config-update.c \
                                  $(FUZZ_BASE) \
                                  $(FUZZ_SEAL)
-FUZZ_TREE_STATE := util/bpm_tree.c \
-                   $(FUZZ_SEAL)
+FUZZ_TREE_STATE := $(FUZZ_SEAL)
 testing/fuzz/fuzz-tree-state: testing/fuzz/fuzz-tree-state.c $(FUZZ_BASE) \
                               $(FUZZ_TREE_STATE)
 testing/fuzz/fuzz-kconfig: testing/fuzz/fuzz-kconfig.c $(FUZZ_BASE) \

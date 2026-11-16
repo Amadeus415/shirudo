@@ -9,7 +9,6 @@ use core::ptr;
 
 use crate::errno::{EINVAL, EKEYREJECTED, ENAMETOOLONG, ENOMEM};
 use crate::ffi;
-use crate::sys::bpm_tree::{TreePublication, tree_parse};
 use crate::sys::libc::PATH_MAX;
 use crate::sys::malloc::{xcalloc, xfree};
 use crate::text::{contains, cstr, strsprintf};
@@ -17,6 +16,7 @@ use crate::util::bpm_oci::{
     BpmBuffer, Descriptor, MANIFEST_MEDIA, MAX_ENTRIES, OciClient, TREE_MEDIA, TREE_SIG_MEDIA,
     buffer_free, get_memory, get_signed, parse_manifest, sha256_hex, url,
 };
+use crate::util::bpm_tree::{TreePublication, tree_parse};
 use crate::util::crypto_openssl::{Cert, cert_free, cert_read_fd, cert_read_file, verify_detached};
 
 /// A signed payload: the bytes and the signature as the caller holds

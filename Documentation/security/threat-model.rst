@@ -1036,8 +1036,7 @@ revocation does not reach tree publications (U13).
 :Tests: ``t7005``, ``t7101``, ``t7102``, ``t7103``, ``t7104``,
    ``t7105``, ``t8005``
 :Proofs: ``Shirudo.SemVer``, ``Shirudo.ArchivePath``,
-   ``Shirudo.JsonString``, ``Shirudo.TreeSync``, ``bpm-tree-follows``,
-   ``bpm-tree-sync-model``, ``bpm-tree-reader``
+   ``Shirudo.JsonString``, ``Shirudo.TreeSync``
 :Residual: R8, R9, U3, U4, U13, U15
 
 T8 Quantum-capable adversaries against the trust anchor

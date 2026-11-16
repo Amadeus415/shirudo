@@ -84,33 +84,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - ``upatch_bpffs_name()``, ``upatch_name_from_bpffs()``
      - Up to 8 bytes, buffers up to 18
      - The result and the string of the Lean model ``Shirudo.PinName``
-   * - ``bpm-tree-selector``
-     - ``tree_selector_kv_add()``, ``tree_selector_copy()``,
-       ``tree_selector_free()``, ``tree_text()``
-     - 0 or 1 pairs, every limit, allocations allowed to fail
-     - ``-E2BIG`` exactly at the limit with nothing changed; a copy owns
-       its arrays, a failed one holds nothing; text without controls
-   * - ``bpm-tree-reader``
-     - ``tree_map_pair()``, ``tree_take_operation()``
-     - Every pair and operation, into an empty or a full publication
-     - A key taken once, with a value, below its limit; an operation
-       taken exactly when whole and with room
-   * - ``bpm-tree-follows``
-     - ``tree_publication_follows()``
-     - Every sequence number and generation; strings up to 2 bytes
-     - Accepts exactly a publication of the same tree, of a later
-       generation unless the same manifest, naming the recorded parent
-       when the next generation, with the node's cursor between its base
-       and head; without a state, one that starts at 0
-   * - ``bpm-tree-sync-model``
-     - ``cmd_bpm_tree_sync()``, ``tree_recover_pending()``,
-       ``tree_publication_check()``, ``tree_publication_follows()``
-     - Every state, pending record, tree eventlog replay and record of the
-       pending operation, publications of 0 to 2 operations that
-       ``tree_parse()`` lets through, every selector answer and every
-       failure below sync; strings of one byte
-     - The writes of the Lean model ``Shirudo.TreeSync``, in its order,
-       none after a failure, all of them when nothing fails
    * - ``otel-header-fields``
      - The OTLP header checks and ``percent_decode()``
      - Strings up to 32 bytes
@@ -325,9 +298,10 @@ the model follows the C.
        (root, digest) and never 64 zeros; only sync writes the tree files,
        each write whole, one sync at a time; the unlink of ``pending.json``
        succeeds; an extend and its eventlog record are one write
-     - CBMC: ``bpm-tree-follows`` for ``tree_publication_follows()``,
-       ``bpm-tree-sync-model`` for the writes of a sync of up to two
-       operations; ``tree_parse()`` by review
+     - Review, ``tree_parse()`` included; the CBMC harnesses
+       ``bpm-tree-follows`` of ``tree_publication_follows()`` and
+       ``bpm-tree-sync-model`` of the writes of a sync of up to two
+       operations went with ``util/bpm_tree.c`` in the port to Rust
 
 Not covered yet
 ---------------
@@ -347,12 +321,11 @@ and config root event of :src:`rust/src/util/image_bootstrap.rs` and
 :src:`rust/src/util/config_measure.rs`, the config image's superblock
 of :src:`rust/src/util/config_image.rs`, the ``.upatch`` container
 reader of :src:`rust/src/util/upatch.rs` and its ``.rodata`` reader of
-:src:`rust/src/util/upatch_rodata.rs`, whose CBMC proofs went with the C
+:src:`rust/src/util/upatch_rodata.rs`, and the tree publications of
+:src:`rust/src/util/bpm_tree.rs`, whose CBMC proofs went with the C
 they proved when the modules moved to Rust; and how
 ``json_parse()`` dispatches objects, arrays and maps to their schemas,
 the OTLP headers a configuration adds, the registry references and URLs,
 the kernel configuration the tree selectors read, the tree log, the
 evidence document beyond its PCRs, the config update record, the site
-configuration file and the config image's settings and tree. The tree
-reader is covered part by part, as the table shows; what joins those
-parts has no proof.
+configuration file and the config image's settings and tree.
