@@ -579,12 +579,13 @@ signed config image.
 Unit suites and fuzz targets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The unit suites in :src:`testing/unit/` cover 26 of the modules in
+The unit suites in :src:`testing/unit/` cover 27 of the modules in
 :src:`util/`: ``attest``, ``bpm_oci``, ``bpm_package``, ``bpm_state``,
 ``bpm_tree``, ``bpm_tree_overlap``, ``bpm_tree_state``, ``chain``,
 ``conditions``,
 ``eventlog``, ``format``, ``hex``, ``io``, ``json``, ``kernel_abi``,
-``kernel_build_id``, ``kernel_release``, ``measured``, ``paths``,
+``keepalive``, ``kernel_build_id``, ``kernel_release``, ``measured``,
+``paths``,
 ``string``, ``upatch``, ``upatch_decode``, ``upatch_pins``,
 ``upatch_resolve``, ``upatch_verify`` and ``xdp``, and ``overflow`` the
 arithmetic of
@@ -977,7 +978,7 @@ Parsers and units
 
 - The dm-verity superblock check in :src:`util/config_image.c` has no
   fuzz target. ``t5001`` covers truncation and unsupported fields.
-- 42 of the 67 modules in :src:`util/` have no unit suite of their own.
+- 41 of the 68 modules in :src:`util/` have no unit suite of their own.
 
 Related
 -------

@@ -272,6 +272,7 @@ UTIL_SRCS := \
     util/help.c \
     util/timefmt.c \
     util/conditions.c \
+    util/keepalive.c \
     util/format.c \
     util/seal.c \
     util/serializer.c \
