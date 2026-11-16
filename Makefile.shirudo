@@ -252,9 +252,9 @@ BPF_SRCS := \
     bpf/seal.c \
     bpf/unload.c
 
-# shirudo-build is operator-only and links util/sign.c (CMS signer)
-# plus a small subset of util/. The core shirudo binary does NOT
-# link util/sign.c.
+# shirudo-build is operator-only: a main() and a small subset of util/,
+# its commands, the CMS signer among them, in the Rust library, from
+# which the core shirudo binary's link drops them.
 BUILD_SRCS := \
     tools/shirudo-build/shirudo-build.c
 
@@ -319,7 +319,7 @@ RUST_SRCS   := $(shell find $(RUST_DIR)/src -name '*.rs') \
 # LTO leaves one object in the archive, which every link pulls in
 # whole: the sections it does not reach go, and with them the references
 # to C it does not link. shirudo's own link drops shirudo-build's code
-# this way, and with it every call into util/sign.c.
+# this way, the CMS signer with it.
 RUST_LDLIBS := -static-libgcc -Wl,--gc-sections
 RUST_TEST_LDLIBS := $(RUST_LDLIBS)
 RUSTFLAGS_WERROR := $(if $(filter 1,$(WERROR)),-D warnings)
@@ -451,12 +451,12 @@ shirudo-target: $(MAIN_OBJ) $(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF
 util/loader.o: $(BPF_OBJS)
 build/target/util/loader.o: $(BPF_OBJS)
 
-# shirudo-build links util/sign.c (CMS signer) plus a subset of util,
+# shirudo-build links a subset of util,
 # util/loader.o for its .incbin of bpf/unload.bpf.o (used by the
 # --unload directive emission path), and the OCI client for the
 # operator-only `bpm build|push|tree append`. Not linked into the core
 # shirudo binary.
-tools/shirudo-build/shirudo-build: $(BUILD_OBJS) util/sign.o \
+tools/shirudo-build/shirudo-build: $(BUILD_OBJS) \
                                    util/log.o util/loader.o \
                                    util/malloc.o util/paths.o \
                                    util/hex.o \
