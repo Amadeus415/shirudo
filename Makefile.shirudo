@@ -223,7 +223,6 @@ UTIL_SRCS := \
     util/string.c \
     util/image_guards.c \
     util/malloc.c \
-    util/seal.c \
     util/upatch_maps.c \
     util/upatch_decode.c \
     util/upatch_maps_otel.c \
@@ -460,7 +459,7 @@ tools/shirudo-build/shirudo-build: $(BUILD_OBJS) \
                                    util/log.o util/loader.o \
                                    util/malloc.o util/paths.o \
                                    util/hex.o \
-                                   util/seal.o util/string.o \
+                                   util/string.o \
                                    $(VERSION_OBJ) \
                                    $(LIBBPF_A) $(RUST_LIB)
 	@printf '  LD      $@\n'
@@ -673,7 +672,6 @@ testing/helper/test-harden: testing/helper/test-harden.c util/log.o \
 # The register code pulls in the eventlog, which pulls in the seal
 # label writer and the JSON codec.
 REGISTER_OBJS := util/hex.o util/string.o \
-                 util/seal.o \
                  util/log.o util/malloc.o \
                  util/identity.o \
                  $(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
@@ -703,7 +701,7 @@ testing/helper/test-keys: testing/helper/test-keys.c $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
-testing/helper/test-seal: testing/helper/test-seal.c util/seal.o \
+testing/helper/test-seal: testing/helper/test-seal.c \
                           util/log.o util/string.o util/malloc.o \
                           util/hex.o $(RUST_LIB)
 	@printf '  CC      $@\n'
@@ -714,7 +712,7 @@ testing/helper/test-eventlog: testing/helper/test-eventlog.c $(REGISTER_OBJS)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
 testing/helper/test-tpm-wire: testing/helper/test-tpm-wire.c util/hex.o \
-                        util/seal.o util/malloc.o util/log.o \
+                        util/malloc.o util/log.o \
                         util/string.o $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
@@ -746,7 +744,7 @@ testing/helper/test-tpm-session: testing/helper/test-tpm-session.c \
 	$(Q)$(CC) $(CFLAGS) -o $@ $(filter-out %.h,$^) $(REGISTER_LIBS) \
 		-Wl,--wrap=enforcement_active,--wrap=identity_read
 
-testing/helper/test-config: testing/helper/test-config.c util/seal.o util/log.o util/hex.o \
+testing/helper/test-config: testing/helper/test-config.c util/log.o util/hex.o \
                             util/string.o util/malloc.o $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
@@ -781,7 +779,6 @@ testing/helper/test-signed-load: testing/helper/test-signed-load.c
 
 testing/helper/test-otel-map: testing/helper/test-otel-map.c util/upatch_maps.o \
                         util/upatch_maps_otel.o \
-                        util/seal.o \
                         util/upatch_decode.o util/upatch_resolve.o \
                         util/string.o util/log.o \
                         util/paths.o \
@@ -802,7 +799,6 @@ testing/helper/test-upatch-prog-metadata: testing/helper/test-upatch-prog-metada
 
 testing/helper/test-upatch-serializer-pages: testing/helper/test-upatch-serializer-pages.c \
                                        util/upatch_maps.o util/upatch_resolve.o \
-                                       util/seal.o \
                                        util/string.o \
                                        util/malloc.o util/paths.o \
                                        util/log.o util/hex.o \
@@ -811,7 +807,6 @@ testing/helper/test-upatch-serializer-pages: testing/helper/test-upatch-serializ
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-rodata: testing/helper/test-upatch-rodata.c \
-                               util/seal.o \
                                util/string.o util/malloc.o \
                                util/log.o util/hex.o $(RUST_LIB)
 	@printf '  CC      $@\n'
@@ -819,11 +814,11 @@ testing/helper/test-upatch-rodata: testing/helper/test-upatch-rodata.c \
 
 testing/helper/test-upatch-decode: testing/helper/test-upatch-decode.c \
 			      util/upatch_decode.o util/malloc.o util/hex.o \
-			      util/string.o util/seal.o util/log.o $(RUST_LIB)
+			      util/string.o util/log.o $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
-testing/helper/test-exec-churn: testing/helper/test-exec-churn.c util/seal.o util/malloc.o \
+testing/helper/test-exec-churn: testing/helper/test-exec-churn.c util/malloc.o \
                                  util/log.o util/string.o $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
@@ -838,7 +833,7 @@ testing/end2end/policy-exec: testing/end2end/policy_exec.c
 
 testing/helper/test-config-image: testing/helper/test-config-image.c \
 		util/malloc.o \
-		util/seal.o util/hex.o util/log.o \
+		util/hex.o util/log.o \
 		util/string.o $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
@@ -861,7 +856,7 @@ testing/helper/test-image-keys: testing/helper/test-image-keys.c \
 
 testing/helper/test-image-config: testing/helper/test-image-config.c \
 		util/hex.o \
-		util/seal.o util/log.o util/malloc.o \
+		util/log.o util/malloc.o \
 		util/string.o $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LIBCRYPTO_LIBS) $(LIBSSL_LIBS) $(ZLIB_LIBS) \
@@ -889,10 +884,9 @@ testing/helper/test-mode-objects: testing/helper/test-mode-objects.c \
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lelf -lz
 
 testing/helper/test-seal-output: testing/helper/test-seal-output.c \
-		util/seal.o util/log.o util/string.o util/malloc.o $(RUST_LIB)
+		util/log.o util/string.o util/malloc.o $(RUST_LIB)
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -Wl,--wrap=write_complete \
-		$(RUST_TEST_LDLIBS)
+	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
 test-helpers: $(TEST_HELPERS)
 
@@ -986,83 +980,63 @@ FUZZ_LIBS := $(RUST_FUZZ_LIB) $(LIBCRYPTO_LIBS) $(LIBSSL_LIBS) \
              $(LIBCURL_LIBS) $(ZLIB_LIBS) $(RUST_TEST_LDLIBS) \
              -Wl,-z,start-stop-gc
 FUZZ_BASE := util/string.c util/hex.c util/malloc.c testing/fuzz/log.c
-FUZZ_SEAL := util/seal.c
-FUZZ_OCI := $(FUZZ_SEAL)
-FUZZ_PACKAGE := $(FUZZ_OCI)
 
 FUZZ_TARGETS := $(patsubst %.c,%,$(wildcard testing/fuzz/fuzz-*.c))
 
 testing/fuzz/fuzz-json: testing/fuzz/fuzz-json.c $(FUZZ_BASE)
 testing/fuzz/fuzz-oci-manifest: testing/fuzz/fuzz-oci-manifest.c \
-                                $(FUZZ_BASE) $(FUZZ_OCI)
+                                $(FUZZ_BASE)
 testing/fuzz/fuzz-bpm-index: testing/fuzz/fuzz-bpm-index.c \
-                             $(FUZZ_BASE) $(FUZZ_PACKAGE)
-testing/fuzz/fuzz-tree: testing/fuzz/fuzz-tree.c $(FUZZ_BASE) \
-                        $(FUZZ_SEAL)
+                             $(FUZZ_BASE)
+testing/fuzz/fuzz-tree: testing/fuzz/fuzz-tree.c $(FUZZ_BASE)
 testing/fuzz/fuzz-upatch: testing/fuzz/fuzz-upatch.c $(FUZZ_BASE)
 testing/fuzz/fuzz-prog-metadata: testing/fuzz/fuzz-prog-metadata.c \
                                  $(FUZZ_BASE)
 testing/fuzz/fuzz-rodata: testing/fuzz/fuzz-rodata.c $(FUZZ_BASE) \
-                          $(FUZZ_SEAL) $(LIBBPF_A)
+                          $(LIBBPF_A)
 testing/fuzz/fuzz-rodata: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-rodata: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS) $(ZLIB_LIBS)
-testing/fuzz/fuzz-bpm-tar: testing/fuzz/fuzz-bpm-tar.c $(FUZZ_BASE) \
-                           $(FUZZ_PACKAGE)
-testing/fuzz/fuzz-bpm-package: testing/fuzz/fuzz-bpm-package.c $(FUZZ_BASE) \
-                               $(FUZZ_PACKAGE)
-testing/fuzz/fuzz-tpm-wire: testing/fuzz/fuzz-tpm-wire.c $(FUZZ_BASE) \
-                            $(FUZZ_SEAL)
+testing/fuzz/fuzz-bpm-tar: testing/fuzz/fuzz-bpm-tar.c $(FUZZ_BASE)
+testing/fuzz/fuzz-bpm-package: testing/fuzz/fuzz-bpm-package.c $(FUZZ_BASE)
+testing/fuzz/fuzz-tpm-wire: testing/fuzz/fuzz-tpm-wire.c $(FUZZ_BASE)
 testing/fuzz/fuzz-attest: testing/fuzz/fuzz-attest.c $(FUZZ_BASE) \
-                          $(FUZZ_SEAL) \
                           util/identity.c \
                           util/version_id.c \
                           $(LIBBPF_A)
 testing/fuzz/fuzz-attest: FUZZ_CFLAGS += $(TSS2_CFLAGS) $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-attest: FUZZ_LIBS += $(TSS2_LIBS) $(LIBBPF_A) $(LIBELF_LIBS) $(ZLIB_LIBS)
-testing/fuzz/fuzz-eventlog: testing/fuzz/fuzz-eventlog.c $(FUZZ_BASE) \
-                            $(FUZZ_SEAL)
+testing/fuzz/fuzz-eventlog: testing/fuzz/fuzz-eventlog.c $(FUZZ_BASE)
 testing/fuzz/fuzz-kernel: testing/fuzz/fuzz-kernel.c $(FUZZ_BASE)
 testing/fuzz/fuzz-elf: testing/fuzz/fuzz-elf.c $(FUZZ_BASE) $(LIBBPF_A)
 testing/fuzz/fuzz-elf: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-elf: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS)
 testing/fuzz/fuzz-serializer: testing/fuzz/fuzz-serializer.c $(FUZZ_BASE) \
                               util/upatch_maps.c util/upatch_resolve.c \
-                              $(FUZZ_SEAL) util/paths.c \
+                              util/paths.c \
                               $(LIBBPF_A)
 testing/fuzz/fuzz-serializer: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-serializer: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS)
-testing/fuzz/fuzz-cms: testing/fuzz/fuzz-cms.c $(FUZZ_BASE) \
-                       $(FUZZ_SEAL)
+testing/fuzz/fuzz-cms: testing/fuzz/fuzz-cms.c $(FUZZ_BASE)
 testing/fuzz/fuzz-decoder: testing/fuzz/fuzz-decoder.c $(FUZZ_BASE) \
-                           util/upatch_decode.c \
-                           $(FUZZ_SEAL)
+                           util/upatch_decode.c
 testing/fuzz/fuzz-decoder: FUZZ_CFLAGS += $(LUAJIT_CFLAGS) -DHAVE_LUAJIT
 testing/fuzz/fuzz-decoder: FUZZ_LIBS += $(LUAJIT_LIBS)
 testing/fuzz/fuzz-otel: testing/fuzz/fuzz-otel.c $(FUZZ_BASE) \
                         util/upatch_maps_otel.c \
-                        util/version_id.c \
-                        $(FUZZ_SEAL)
+                        util/version_id.c
 testing/fuzz/fuzz-beefile: testing/fuzz/fuzz-beefile.c $(FUZZ_BASE) \
                            util/version_id.c
-testing/fuzz/fuzz-oci-http: testing/fuzz/fuzz-oci-http.c $(FUZZ_BASE) \
-                            $(FUZZ_OCI)
-testing/fuzz/fuzz-oci-ref: testing/fuzz/fuzz-oci-ref.c $(FUZZ_BASE) \
-                           $(FUZZ_OCI)
+testing/fuzz/fuzz-oci-http: testing/fuzz/fuzz-oci-http.c $(FUZZ_BASE)
+testing/fuzz/fuzz-oci-ref: testing/fuzz/fuzz-oci-ref.c $(FUZZ_BASE)
 testing/fuzz/fuzz-registry-auth: testing/fuzz/fuzz-registry-auth.c \
-                                 $(FUZZ_BASE) $(FUZZ_OCI)
-testing/fuzz/fuzz-config: testing/fuzz/fuzz-config.c $(FUZZ_BASE) \
-                          util/seal.c
+                                 $(FUZZ_BASE)
+testing/fuzz/fuzz-config: testing/fuzz/fuzz-config.c $(FUZZ_BASE)
 testing/fuzz/fuzz-image: testing/fuzz/fuzz-image.c $(FUZZ_BASE) \
-                         util/paths.c \
-                         $(FUZZ_SEAL)
+                         util/paths.c
 testing/fuzz/fuzz-config-update: testing/fuzz/fuzz-config-update.c \
-                                 $(FUZZ_BASE) \
-                                 $(FUZZ_SEAL)
-FUZZ_TREE_STATE := $(FUZZ_SEAL)
-testing/fuzz/fuzz-tree-state: testing/fuzz/fuzz-tree-state.c $(FUZZ_BASE) \
-                              $(FUZZ_TREE_STATE)
-testing/fuzz/fuzz-kconfig: testing/fuzz/fuzz-kconfig.c $(FUZZ_BASE) \
-                           $(FUZZ_TREE_STATE)
+                                 $(FUZZ_BASE)
+testing/fuzz/fuzz-tree-state: testing/fuzz/fuzz-tree-state.c $(FUZZ_BASE)
+testing/fuzz/fuzz-kconfig: testing/fuzz/fuzz-kconfig.c $(FUZZ_BASE)
 
 # A target that reaches static parsers includes their source, which it
 # then depends on without linking it a second time.
