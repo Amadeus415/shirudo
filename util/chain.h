@@ -62,6 +62,13 @@ int chain_upatch_event(const char *tag, const char *name,
 int chain_tree_event(__s64 seq, const __u8 operation_digest[32],
 		     __u8 event[32]) __must_check;
 int chain_fold(__u8 chain[32], const __u8 event[32]) __must_check;
+/*
+ * A tree's history root after one more operation, whatever its outcome
+ * on this node: SHA256("shirudo-tree-history" || NUL || prev ||
+ * operation_digest), from 32 zero bytes. out may be prev.
+ */
+int chain_history_step(const __u8 prev[32], const __u8 operation_digest[32],
+		       __u8 out[32]) __must_check;
 
 /* The PCR record anchoring a register name: nvpcr-init:shirudo:0x..:<name>. */
 int chain_anchor(const __u8 name[TPM_NAME_LEN],

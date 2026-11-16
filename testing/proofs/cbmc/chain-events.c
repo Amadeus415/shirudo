@@ -6,9 +6,9 @@
  * Shirudo/Events.lean, with SHA-256 modelled as recording what it is
  * given: for every name of LEN bytes, payload, digest, sequence number
  * and register, chain_upatch_event(), chain_key_event(),
- * chain_tree_event(), chain_fold() and chain_init_event() of an empty set
- * hand SHA-256 exactly the bytes of the model, and give its digest, or
- * zeros and its error.
+ * chain_tree_event(), chain_fold(), chain_history_step() and
+ * chain_init_event() of an empty set hand SHA-256 exactly the bytes of
+ * the model, and give its digest, or zeros and its error.
  */
 
 #include "proof.h"
@@ -233,6 +233,24 @@ static void fold(void)
 	check_result(ret, 1, chain);
 }
 
+/* historyBytes: the tag and its NUL, the root before and the digest. */
+static void history_step(void)
+{
+	__u8 *prev = any_bytes(32), *operation = any_bytes(32), root[32];
+	size_t at = 0;
+	int ret;
+
+	start();
+	ret = chain_history_step(prev, operation, root);
+	if (!ret) {
+		check_tag("shirudo-tree-history", &at);
+		check_bytes(prev, 32, &at);
+		check_bytes(operation, 32, &at);
+		check_end(at);
+	}
+	check_result(ret, 1, root);
+}
+
 /*
  * chain_init_event() of an empty set: initBytes, the tag and its NUL, the
  * certificate digest, the digest of the empty listing and the tree root.
@@ -270,5 +288,6 @@ void harness(void)
 	key_event();
 	tree_event();
 	fold();
+	history_step();
 	init_event();
 }

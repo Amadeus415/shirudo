@@ -453,14 +453,15 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
        digits; a refusal marks nothing
    * - ``chain-events``
      - ``chain_upatch_event()``, ``chain_key_event()``,
-       ``chain_tree_event()``, ``chain_fold()``, ``chain_init_event()`` of
-       an empty set
+       ``chain_tree_event()``, ``chain_fold()``,
+       ``chain_history_step()``, ``chain_init_event()`` of an empty set
      - Names of 0 to 8 and 255 to 257 bytes; every payload, digest,
-       sequence number and register
+       sequence number, register and history root
      - SHA-256 is given exactly the bytes of the Lean model
        ``Shirudo.Events``: the tag and its NUL, then the fixed fields, the
        name cut at 256 bytes and the sequence number most significant byte
-       first; the event is the digest, or zeros with the error
+       first; the event, or the next history root, is the digest, or zeros
+       with the error
    * - ``measured-fold-model``
      - ``measured_event()``, ``measured_holds()``
      - Every sequence of up to six init, load and unload records over two
@@ -563,12 +564,19 @@ the model follows the C.
        registers come from the same events, tagged the same, in the same
        order; ``register_injective_on``: the same with the hash injective
        only on the pairs the two sequences fold; ``register_eq_foldl``: the
-       register folds the events in the order they came
+       register folds the events in the order they came;
+       ``history_ignores_outcomes``: a upatch tree's history root is the
+       same on two nodes that processed operations of the same digests,
+       whatever outcome each had; ``processAll_history``,
+       ``historyRoot_append_one``: it takes one step per operation
      - The hash is injective on the (register, event) pairs (for
        ``register_injective_on`` only those folded) and never yields the
        initial value; ``register_tagged_injective`` also takes the tagged
-       encoding as injective, which ``Shirudo.Events`` proves
-     - Review
+       encoding as injective, which ``Shirudo.Events`` proves; none for
+       the history root
+     - Review; the bytes of the history root's step are
+       ``historyBytes`` of ``Shirudo.Events``, which CBMC,
+       ``chain-events``, checks
    * - ``Shirudo.Events``, the event encodings of :src:`util/chain.c`
      - ``bytes_injective``: two admitted events hash the same bytes only
        when they are the same event; ``listing_injective``: the init

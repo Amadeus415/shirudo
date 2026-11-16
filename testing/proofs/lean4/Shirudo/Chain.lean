@@ -13,6 +13,13 @@ measured exactly the events the log shows, in that order.
 `register_injective_on` asks the same of `H` only on the pairs the two
 sequences fold, which a real hash can meet; `Shirudo.Events` proves the
 encodings of util/chain.c injective and builds the end theorem on it.
+
+A upatch tree has two roots of its own. A node's projection root folds
+the digests of the operations that chained on that node, so it differs
+from node to node. The history root takes one `chain_history_step()` for
+every operation, so that nodes of different selectors can compare it:
+`history_ignores_outcomes` shows it depends on the operations' digests
+alone.
 -/
 
 namespace Shirudo.Chain
@@ -119,5 +126,56 @@ theorem register_tagged_injective (H : D → D → D) (init : D)
     have ⟨hk, hp⟩ := henc _ _ _ _ he
     subst hk; subst hp; rfl
   exact map_injective _ hinj _ _ (register_injective H init hH hinit _ _ h)
+
+/-! ### The history root of a upatch tree -/
+
+/-- The history root after the operations whose digests are `digests`,
+oldest first: `chain_history_step()` folded from `zero`. -/
+def historyRoot (step : D → D → D) (zero : D) (digests : List D) : D :=
+  digests.foldl step zero
+
+/-- The history root after an operation is one step from the root before
+it. -/
+theorem historyRoot_append_one (step : D → D → D) (zero : D)
+    (digests : List D) (d : D) :
+    historyRoot step zero (digests ++ [d]) =
+      step (historyRoot step zero digests) d := by
+  simp [historyRoot]
+
+/-- One operation as a node processes it, on its projection root and its
+history root: an operation of digest `op.1` had outcome `op.2` on this
+node. The projection root folds the digest only for an outcome that
+chains; the history root takes its step for every outcome. -/
+def processOne {O : Type} (fold step : D → D → D) (chained : O → Bool)
+    (roots : D × D) (op : D × O) : D × D :=
+  (if chained op.2 then fold roots.1 op.1 else roots.1, step roots.2 op.1)
+
+/-- The two roots after `ops`, oldest first. -/
+def processAll {O : Type} (fold step : D → D → D) (chained : O → Bool)
+    (roots : D × D) (ops : List (D × O)) : D × D :=
+  ops.foldl (processOne fold step chained) roots
+
+/-- The history root a node holds is the one of the operations' digests
+alone. -/
+theorem processAll_history {O : Type} (fold step : D → D → D)
+    (chained : O → Bool) (roots : D × D) (ops : List (D × O)) :
+    (processAll fold step chained roots ops).2 =
+      historyRoot step roots.2 (ops.map Prod.fst) := by
+  induction ops generalizing roots with
+  | nil => rfl
+  | cons op ops ih => exact ih (processOne fold step chained roots op)
+
+/-- The history root does not depend on outcomes: two nodes that start
+from one history root and process operations of the same digests hold the
+same one, whatever outcome each operation had on either and whichever
+outcomes chain into their projection roots. -/
+theorem history_ignores_outcomes {O : Type} (fold step : D → D → D)
+    (chained1 chained2 : O → Bool) (roots1 roots2 : D × D)
+    (ops1 ops2 : List (D × O))
+    (hroot : roots1.2 = roots2.2)
+    (hops : ops1.map Prod.fst = ops2.map Prod.fst) :
+    (processAll fold step chained1 roots1 ops1).2 =
+      (processAll fold step chained2 roots2 ops2).2 := by
+  rw [processAll_history, processAll_history, hroot, hops]
 
 end Shirudo.Chain
