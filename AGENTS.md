@@ -306,8 +306,8 @@ one usually still compiles and passes tests.
 
 - The binary links exactly `libc`, `libcrypto`/`libssl` (OpenSSL >= 3.5;
   ML-DSA-87 is the only signing algorithm, TLS is 1.3 with hybrid ML-KEM
-  only), `libcurl`, `libtss2-esys` + `libtss2-tctildr`, `libelf`,
-  `zlib`, `libluajit`, the vendored `libbpf` and, linked in, Rust's
+  only), `libcurl`, `libtss2-esys` + `libtss2-tctildr`, `zlib`,
+  `libluajit`, the vendored `libbpf` and, linked in, Rust's
   standard library with the unwinder from `libgcc_eh`. A new library, a
   Rust crate included, must be absolutely necessary, universally available, actively maintained,
   BSD-2-Clause compatible and load-bearing for one thing. `libsystemd`,

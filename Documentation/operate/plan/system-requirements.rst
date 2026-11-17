@@ -427,7 +427,7 @@ keyrings. Any Linux kernel on which the tools below run serves.
      - ML-DSA-87 signing and hybrid ML-KEM TLS. The build refuses older
        versions.
    * - ``libcurl`` 7.75 or newer, ``tss2-esys`` 4.0 or newer,
-       ``tss2-tctildr``, ``libelf``, ``zlib``, LuaJIT with GC64
+       ``tss2-tctildr``, ``zlib``, LuaJIT with GC64
      - Linked by the ``shirudo`` binary, which is the same program on
        both roles. LuaJIT GC64 is required on the supported 64-bit
        architectures.

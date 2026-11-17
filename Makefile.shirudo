@@ -192,6 +192,10 @@ DYNAMIC_LIBS := \
 CFLAGS += $(LUAJIT_CFLAGS) -DHAVE_LUAJIT
 DYNAMIC_LIBS += $(LUAJIT_LIBS)
 
+# What the binaries link: libelf is libbpf's, which reads ELF for the
+# tests, where the binaries read it themselves (util/elf_file.rs).
+PRODUCT_LIBS = $(filter-out $(LIBELF_LIBS),$(DYNAMIC_LIBS))
+
 ifeq ($(PROFILE),target)
 CFLAGS += -fPIE
 endif
@@ -460,7 +464,7 @@ shirudo: $(MAIN_OBJ) $(VERSION_OBJ) $(RUST_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(LD) $(CFLAGS) $(HARDEN_LDFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ \
 	    $(MAIN_OBJ) $(VERSION_OBJ) \
-	    $(RUST_LIB) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
+	    $(RUST_LIB) $(PRODUCT_LIBS) $(RUST_LDLIBS)
 
 shirudo-target: $(MAIN_OBJ) $(VERSION_OBJ) $(RUST_LIB) \
                 Makefile.shirudo $(CONFIG_MK_DEP) .github/scripts/check-static-target.sh
@@ -483,7 +487,7 @@ tools/shirudo-build/shirudo-build: $(BUILD_MAIN_OBJ) \
                                    $(RUST_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(LD) $(CFLAGS) $(HARDEN_LDFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ \
-	    $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
+	    $(PRODUCT_LIBS) $(RUST_TEST_LDLIBS)
 
 # ----- install ----------------------------------------------------
 
@@ -610,7 +614,10 @@ build/verity-tests/shirudo-policy-probe: \
 
 
 ifeq ($(PROFILE),target)
-VERITY_TEST_LIBS := $(TARGET_TLS_STATIC_LINK_LIBS) \
+# The helpers that link libbpf take its libelf, static with the zstd it
+# takes, which the target itself links neither of; the zlib it takes
+# too comes after.
+VERITY_TEST_LIBS := $(TARGET_TLS_STATIC_LINK_LIBS) -lelf -lzstd \
 		    $(TARGET_STATIC_RUNTIME_LINK_LIBS)
 VERITY_TEST_LDFLAGS := $(HARDEN_STATIC_PIE_LDFLAGS) -static-pie -static-libgcc
 else
