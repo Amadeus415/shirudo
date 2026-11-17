@@ -62,18 +62,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - Names up to 6 bytes, suffixes up to 3
      - True exactly when the name's last bytes are the suffix and at
        least one byte comes before them
-   * - ``hex``
-     - ``hex_encode()``, ``hex_decode()``, ``hex_decode_max()``
-     - Up to 4 bytes, strings up to 9 characters
-     - Lowercase hex that decodes back to the input; a decode takes
-       exactly ``2 * n`` hex digits of either case and yields their
-       value, and ``hex_decode_max()`` any even count up to ``2 * cap``,
-       reading no further than the digit after them
-   * - ``hex-model``
-     - ``hex_encode()``, ``hex_decode()``, ``hex_decode_max()``
-     - Up to 8 bytes, strings up to 17 characters, counts and capacities
-       up to 8 and past ``SIZE_MAX / 2``
-     - The result and the bytes of the Lean model ``Shirudo.Hex``
    * - ``paths-bpffs-name``
      - ``upatch_bpffs_name()``, ``upatch_name_from_bpffs()``
      - Names up to 4 bytes, pin names up to 8
@@ -188,7 +176,7 @@ the model follows the C.
        count, size and path length are left out
      - Review; the CBMC model of the two checks went with
        ``util/bpm_package.c`` in the port to Rust
-   * - ``Shirudo.Hex``, :src:`util/hex.c`
+   * - ``Shirudo.Hex``, :src:`rust/src/util/hex.rs`
      - ``decode_encode``, ``length_encode``, ``encode_lower``: an encoding
        is lowercase hex twice its length that decodes back;
        ``decode_spec``: ``hex_decode()`` takes exactly ``2 * n`` hex
@@ -196,7 +184,8 @@ the model follows the C.
        lowercase; ``decodeMax_spec``: ``hex_decode_max()`` takes exactly
        the even runs of at most ``2 * cap``; ``encode_injective``
      - A string is shorter than ``SIZE_MAX``
-     - CBMC, ``hex-model``, up to 8 bytes and 17 digits
+     - None since the port to Rust; the CBMC model went with
+       ``util/hex.c``
    * - ``Shirudo.JsonString``, the strict ``put_string()`` that
        ``json_str()`` calls and ``Cursor::string()`` of
        :src:`rust/src/util/json/`

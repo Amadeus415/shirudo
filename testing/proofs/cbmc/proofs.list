@@ -5,9 +5,7 @@ string-utf8		--unwind 10
 string-copy		--unwind 10
 string-suffix		--unwind 8
 string-sanitize		--unwind 8 LEN=0-6
-hex			--unwind 12
 paths-bpffs-name	--unwind 18
 string-number-model	--unwind 6
 log-escape		--unwind 7 LEN=0-5
-hex-model		--unwind 20
 paths-bpffs-name-model	--unwind 20

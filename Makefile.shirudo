@@ -217,7 +217,6 @@ UTIL_SRCS := \
     util/loader.c \
     util/paths.c \
     util/log.c \
-    util/hex.c \
     util/string.c \
     util/malloc.c
 
@@ -447,7 +446,6 @@ build/target/util/loader.o: $(BPF_OBJS)
 tools/shirudo-build/shirudo-build: $(BUILD_OBJS) \
                                    util/log.o util/loader.o \
                                    util/malloc.o util/paths.o \
-                                   util/hex.o \
                                    util/string.o \
                                    $(VERSION_OBJ) \
                                    $(LIBBPF_A) $(RUST_LIB)
@@ -657,10 +655,9 @@ testing/helper/test-harden: testing/helper/test-harden.c util/log.o \
 # The register, in the Rust library, reads and extends through the TPM
 # client (libtss2), so the symbols must resolve even for a helper that
 # never extends.
-# util/malloc.o brings in x*/libc_free that the Rust library uses.
 # The register code pulls in the eventlog, which pulls in the seal
 # label writer and the JSON codec.
-REGISTER_OBJS := util/hex.o util/string.o \
+REGISTER_OBJS := util/string.o \
                  util/log.o util/malloc.o \
                  $(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
 REGISTER_LIBS := $(LIBCRYPTO_LIBS) $(LIBSSL_LIBS) $(TSS2_LIBS) \
@@ -691,7 +688,7 @@ testing/helper/test-keys: testing/helper/test-keys.c $(REGISTER_OBJS)
 
 testing/helper/test-seal: testing/helper/test-seal.c \
                           util/log.o util/string.o util/malloc.o \
-                          util/hex.o $(RUST_LIB)
+                          $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
@@ -699,7 +696,7 @@ testing/helper/test-eventlog: testing/helper/test-eventlog.c $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
-testing/helper/test-tpm-wire: testing/helper/test-tpm-wire.c util/hex.o \
+testing/helper/test-tpm-wire: testing/helper/test-tpm-wire.c \
                         util/malloc.o util/log.o \
                         util/string.o $(RUST_LIB)
 	@printf '  CC      $@\n'
@@ -733,7 +730,7 @@ testing/helper/test-tpm-session: testing/helper/test-tpm-session.c \
 		-Wl,--wrap=prctl,--wrap=bpf_obj_get,--wrap=bpf_obj_get_info_by_fd \
 		-Wl,--wrap=bpf_map_lookup_elem
 
-testing/helper/test-config: testing/helper/test-config.c util/log.o util/hex.o \
+testing/helper/test-config: testing/helper/test-config.c util/log.o \
                             util/string.o util/malloc.o $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
@@ -769,39 +766,39 @@ testing/helper/test-signed-load: testing/helper/test-signed-load.c
 testing/helper/test-otel-map: testing/helper/test-otel-map.c \
                         util/string.o util/log.o \
                         util/paths.o \
-                        util/malloc.o $(LIBBPF_A) util/hex.o \
+                        util/malloc.o $(LIBBPF_A) \
                         $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-map-types: testing/helper/test-upatch-map-types.c \
                                     util/malloc.o util/string.o \
-                                    util/hex.o util/log.o $(RUST_LIB)
+                                    util/log.o $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-prog-metadata: testing/helper/test-upatch-prog-metadata.c \
                                     util/malloc.o util/string.o \
-                                    util/hex.o util/log.o $(RUST_LIB)
+                                    util/log.o $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-serializer-pages: testing/helper/test-upatch-serializer-pages.c \
                                        util/string.o \
                                        util/malloc.o util/paths.o \
-                                       util/log.o util/hex.o \
+                                       util/log.o \
                                        $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-rodata: testing/helper/test-upatch-rodata.c \
                                util/string.o util/malloc.o \
-                               util/log.o util/hex.o $(RUST_LIB)
+                               util/log.o $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-decode: testing/helper/test-upatch-decode.c \
-			      util/malloc.o util/hex.o \
+			      util/malloc.o \
 			      util/string.o util/log.o $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
@@ -821,7 +818,7 @@ testing/end2end/policy-exec: testing/end2end/policy_exec.c
 
 testing/helper/test-config-image: testing/helper/test-config-image.c \
 		util/malloc.o \
-		util/hex.o util/log.o \
+		util/log.o \
 		util/string.o $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
@@ -843,7 +840,6 @@ testing/helper/test-image-keys: testing/helper/test-image-keys.c \
 		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-image-config: testing/helper/test-image-config.c \
-		util/hex.o \
 		util/log.o util/malloc.o \
 		util/string.o $(RUST_LIB)
 	@printf '  CC      $@\n'
@@ -966,7 +962,7 @@ $(RUST_FUZZ_LIB): $(RUST_SRCS)
 FUZZ_LIBS := $(RUST_FUZZ_LIB) $(LIBCRYPTO_LIBS) $(LIBSSL_LIBS) \
              $(LIBCURL_LIBS) $(ZLIB_LIBS) $(RUST_TEST_LDLIBS) \
              -Wl,-z,start-stop-gc
-FUZZ_BASE := util/string.c util/hex.c util/malloc.c testing/fuzz/log.c
+FUZZ_BASE := util/string.c util/malloc.c testing/fuzz/log.c
 
 FUZZ_TARGETS := $(patsubst %.c,%,$(wildcard testing/fuzz/fuzz-*.c))
 

@@ -12,8 +12,8 @@ use super::tar::{
 };
 use crate::errno::{E2BIG, EFBIG, EINVAL, EIO, ENAMETOOLONG, ENOENT, ENOMEM, EPERM};
 use crate::ffi;
+use crate::heap::{xfree, xmalloc};
 use crate::sys::libc::{O_CREAT, O_EXCL, O_WRONLY, PATH_MAX, close, errno, fchmod};
-use crate::sys::malloc::{xfree, xmalloc};
 use crate::sys::zlib::{GzFileS, Z_OK, gzclose, gzdirect, gzopen, gzread};
 use crate::text::{at, cstr, strsprintf};
 use crate::util::bpm_oci::{MAX_PACKAGE_BYTES, MAX_PACKAGE_ENTRIES};
