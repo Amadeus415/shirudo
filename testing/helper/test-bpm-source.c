@@ -60,14 +60,14 @@ int main(void)
 		return 1;
 	printf("tree endpoint=%s\ntree reference=%s\n", endpoint, reference);
 	/* A value that does not fit is refused, not cut. */
-	if (strsprintf(long_line, sizeof(long_line),
-		       "reference = sha256:%0*d\n", (int)sizeof(reference), 0) < 0)
+	if (snprintf(long_line, sizeof(long_line),
+		     "reference = sha256:%0*d\n", (int)sizeof(reference), 0) < 0)
 		return 1;
 	if (bpm_parse_tree_line(long_line, endpoint, sizeof(endpoint),
 				reference, sizeof(reference)) != -E2BIG)
 		return 1;
-	if (strsprintf(long_line, sizeof(long_line), "key_file = /%0*d\n",
-		       (int)sizeof(key_file), 0) < 0)
+	if (snprintf(long_line, sizeof(long_line), "key_file = /%0*d\n",
+		     (int)sizeof(key_file), 0) < 0)
 		return 1;
 	if (bpm_parse_source_line(long_line, endpoint, sizeof(endpoint),
 				  index_repository,

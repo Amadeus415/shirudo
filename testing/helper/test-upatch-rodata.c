@@ -55,7 +55,7 @@ static int typedefs(struct btf *btf, const char *prefix, int n, int type)
 	char name[16];
 
 	while (type > 0 && n--) {
-		if (strsprintf(name, sizeof(name), "%s%d", prefix, n) < 0)
+		if (snprintf(name, sizeof(name), "%s%d", prefix, n) < 0)
 			return -1;
 		type = btf__add_typedef(btf, name, type);
 	}

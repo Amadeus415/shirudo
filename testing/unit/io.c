@@ -19,8 +19,8 @@ static int log_with(const char *text, size_t len)
 	char path[4096];
 	int fd;
 
-	ASSERT_TRUE(strsprintf(path, sizeof(path), "%s/shirudo-unit-io-XXXXXX",
-			       dir && dir[0] ? dir : "/tmp") > 0);
+	ASSERT_TRUE(snprintf(path, sizeof(path), "%s/shirudo-unit-io-XXXXXX",
+			     dir && dir[0] ? dir : "/tmp") > 0);
 	fd = mkstemp(path);
 	ASSERT_TRUE(fd >= 0);
 	ASSERT_EQ(unlink(path), 0);
@@ -101,7 +101,7 @@ static void lock_exclusive_keeps_others_out(void)
 	int fd = log_with("", 0), other;
 	char path[64];
 
-	ASSERT_TRUE(strsprintf(path, sizeof(path), "/proc/self/fd/%d", fd) > 0);
+	ASSERT_TRUE(snprintf(path, sizeof(path), "/proc/self/fd/%d", fd) > 0);
 	other = open(path, O_RDONLY | O_CLOEXEC);
 	ASSERT_TRUE(other >= 0);
 	EXPECT_EQ(lock_exclusive(fd), 0);

@@ -118,8 +118,8 @@ helpers to use.
   its kin goes above the first shirudo header, which poisons them.
 - Use the helpers of `util/` and `include/shirudo/` over libc and open
   code: `parse_u64()` and its kin for numbers, `<shirudo/overflow.h>`
-  for sizes, `strscpy()` and `strsprintf()` with their `-E2BIG`
-  checked, the `xmalloc()` family, `min()` and `max()`,
+  for sizes, `strscpy()` with its `-E2BIG` checked,
+  the `xmalloc()` family, `min()` and `max()`,
   `memzero_explicit()` and `memneq_explicit()` for secrets,
   `util/json.h` for all JSON and `rust/src/log.rs` for all logging. The libc names
   they replace are poisoned. Code that a second place needs moves into

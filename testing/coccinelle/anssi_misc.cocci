@@ -71,7 +71,7 @@ coccilib.report.print_report(p[0], "a floating-point loop counter")
 
 @varnull@
 identifier f = {printf, fprintf, dprintf, pr_err, pr_warn, pr_info,
-		pr_debug, pr_audit, pr_hint, strsprintf, xasprintf, execl,
+		pr_debug, pr_audit, pr_hint, execl,
 		execlp, execle};
 position p;
 @@

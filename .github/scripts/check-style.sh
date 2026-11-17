@@ -187,11 +187,7 @@ locate_checkpatch() {
 # its kin from <shirudo/string.h>, which take a length, read nothing past
 # it and refuse a sign, blank or base prefix. So is a string copied with
 # strcpy() and its kin or with snprintf("%s") on one line: strscpy() always
-# terminates and says when it cut. Any other call to sprintf(),
-# snprintf() or their va_list forms is reported outside the tests and
-# the two files that implement strsprintf() and xasprintf() with them:
-# strsprintf() and vstrsprintf() refuse output that does not fit rather
-# than cut it.
+# terminates and says when it cut.
 check_spellings() {
 	awk '
 	function c_names_kept(f) {
@@ -199,10 +195,6 @@ check_spellings() {
 	}
 	function parsers_kept(f) {
 		return f ~ /^(bpf|upatches|testing)\// || f ~ /\.bpf\.c$/
-	}
-	function formatters_kept(f) {
-		return parsers_kept(f) || f == "util/string.c" ||
-		       f == "util/malloc.c"
 	}
 	/^\+\+\+ / {
 		file = $0
@@ -292,13 +284,6 @@ check_spellings() {
 			sub(/\(.*/, "", fn)
 			gsub(/[^A-Za-z0-9_]/, "", fn)
 			printf "ERROR:STRING_COPY: copy strings with strscpy() from <shirudo/string.h>, not %s()\n#%d: FILE: %s:%d:\n%s\n\n",
-				fn, NR, file, line, $0
-			bad = 1
-		} else if (!formatters_kept(file) &&
-			   match(code, /(^|[^A-Za-z0-9_])v?sn?printf[ \t]*\(/)) {
-			fn = substr(code, RSTART, RLENGTH)
-			gsub(/[^A-Za-z0-9_]/, "", fn)
-			printf "ERROR:STRING_FORMAT: format into a buffer with strsprintf() or vstrsprintf() from <shirudo/string.h>, not %s()\n#%d: FILE: %s:%d:\n%s\n\n",
 				fn, NR, file, line, $0
 			bad = 1
 		}
@@ -474,7 +459,7 @@ list_types() {
 	{
 		LC_ALL=C comm -23 "$work/all" "$work/ignored"
 		printf '%s\n' KERNEL_INT_TYPES NETDEV_BLOCK_COMMENT NUMBER_PARSING \
-			STRING_COPY STRING_FORMAT
+			STRING_COPY
 	} | LC_ALL=C sort
 }
 

@@ -23,8 +23,8 @@ static void write_config(const char *text, bool gz)
 	const char *tmp = getenv("TMPDIR");
 	int fd;
 
-	ASSERT_TRUE(strsprintf(path, sizeof(path), "%s/shirudo-unit-kconfig-XXXXXX",
-			       tmp && tmp[0] ? tmp : "/tmp") > 0);
+	ASSERT_TRUE(snprintf(path, sizeof(path), "%s/shirudo-unit-kconfig-XXXXXX",
+			     tmp && tmp[0] ? tmp : "/tmp") > 0);
 	fd = mkstemp(path);
 	ASSERT_TRUE(fd >= 0);
 	if (gz) {

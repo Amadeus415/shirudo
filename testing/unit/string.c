@@ -195,51 +195,6 @@ static void strscpy_cuts_and_says_so(void)
 	EXPECT_EQ(none[0], 'x');
 }
 
-static void strsprintf_writes_what_fits_whole(void)
-{
-	char eight[8], big[64];
-
-	EXPECT_EQ(strsprintf(eight, sizeof(eight), "<%s>", "hello"), 7);
-	EXPECT_STREQ(eight, "<hello>");
-	EXPECT_EQ(strsprintf(big, sizeof(big), "<%s>", ""), 2);
-	EXPECT_STREQ(big, "<>");
-}
-
-static void strsprintf_leaves_nothing_when_cut(void)
-{
-	char seven[7] = { 'x' }, one[1] = { 'x' }, none[1] = { 'x' };
-
-	EXPECT_EQ(strsprintf(seven, sizeof(seven), "<%s>", "hello"), -E2BIG);
-	EXPECT_STREQ(seven, "");
-	EXPECT_EQ(strsprintf(one, sizeof(one), "<%s>", "hello"), -E2BIG);
-	EXPECT_STREQ(one, "");
-	EXPECT_EQ(strsprintf(none, 0, "<%s>", "hello"), -E2BIG);
-	EXPECT_EQ(none[0], 'x');
-}
-
-static void xasprintf_allocates_the_size_needed(void)
-{
-	char text[301], want[310], *s;
-
-	s = xasprintf("<%s|%d>", "hello", 42);
-	ASSERT_TRUE(s);
-	EXPECT_STREQ(s, "<hello|42>");
-	xstrfree(s);
-
-	s = xasprintf("<%s|%d>", "", 42);
-	ASSERT_TRUE(s);
-	EXPECT_STREQ(s, "<|42>");
-	xstrfree(s);
-
-	memset(text, '0', sizeof(text) - 1);
-	text[sizeof(text) - 1] = '\0';
-	ASSERT_EQ(strsprintf(want, sizeof(want), "<%s|42>", text), 305);
-	s = xasprintf("<%s|%d>", text, 42);
-	ASSERT_TRUE(s);
-	EXPECT_STREQ(s, want);
-	xstrfree(s);
-}
-
 static void dns_name_is_ldh_labels_and_no_address(void)
 {
 	char label[65], name[300];
@@ -264,20 +219,20 @@ static void dns_name_is_ldh_labels_and_no_address(void)
 
 	memset(label, 'a', 63);
 	label[63] = '\0';
-	ASSERT_TRUE(strsprintf(name, sizeof(name), "%s.example", label) > 0);
+	ASSERT_TRUE(snprintf(name, sizeof(name), "%s.example", label) > 0);
 	EXPECT_TRUE(dns_name_valid(name));
 	memset(label, 'a', 64);
 	label[64] = '\0';
-	ASSERT_TRUE(strsprintf(name, sizeof(name), "%s.example", label) > 0);
+	ASSERT_TRUE(snprintf(name, sizeof(name), "%s.example", label) > 0);
 	EXPECT_FALSE(dns_name_valid(name));
 
 	memset(label, 'a', 63);
 	label[63] = '\0';
-	ASSERT_TRUE(strsprintf(name, sizeof(name), "%s.%s.%s.%.61s", label,
-			       label, label, label) == 253);
+	ASSERT_TRUE(snprintf(name, sizeof(name), "%s.%s.%s.%.61s", label,
+			     label, label, label) == 253);
 	EXPECT_TRUE(dns_name_valid(name));
-	ASSERT_TRUE(strsprintf(name, sizeof(name), "%s.%s.%s.%.62s", label,
-			       label, label, label) == 254);
+	ASSERT_TRUE(snprintf(name, sizeof(name), "%s.%s.%s.%.62s", label,
+			     label, label, label) == 254);
 	EXPECT_FALSE(dns_name_valid(name));
 }
 
@@ -501,9 +456,6 @@ static const struct unit_case cases[] = {
 	UNIT_CASE(signed_number_keeps_bounds_and_form),
 	UNIT_CASE(strscpy_copies_what_fits_whole),
 	UNIT_CASE(strscpy_cuts_and_says_so),
-	UNIT_CASE(strsprintf_writes_what_fits_whole),
-	UNIT_CASE(strsprintf_leaves_nothing_when_cut),
-	UNIT_CASE(xasprintf_allocates_the_size_needed),
 	UNIT_CASE(dns_name_is_ldh_labels_and_no_address),
 	UNIT_CASE(utf8_width_takes_well_formed_characters_only),
 	UNIT_CASE(utf8_width_takes_the_scalar_values_alone),

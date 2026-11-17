@@ -18,9 +18,8 @@ its BPF programs, with these rules of its own, which
   ``parse_x64()`` from ``<shirudo/string.h>``, which take a length and
   refuse a sign, a blank or a base prefix. ``strtoul()``, ``atoi()`` and
   their kin are refused.
-- Copy strings with ``strscpy()`` and format into a fixed buffer with
-  ``strsprintf()``, and check their results. ``strcpy()``, ``strncpy()``,
-  ``sprintf()``, ``snprintf()`` and their kin are refused.
+- Copy strings with ``strscpy()`` and check its result. ``strcpy()``,
+  ``strncpy()``, ``sprintf()`` and their kin are refused.
 - Check size arithmetic with the helpers of ``<shirudo/overflow.h>``,
   not by hand.
 - No ``(void)`` cast. A result a caller must not drop belongs to a

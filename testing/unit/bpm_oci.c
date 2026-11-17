@@ -16,9 +16,9 @@ static int manifest_of(const char *layers, int *n)
 	struct bpm_descriptor descs[4];
 	char text[1024];
 
-	ASSERT_TRUE(strsprintf(text, sizeof(text),
-			       "{\"schemaVersion\":2,\"layers\":[%s]}",
-			       layers) > 0);
+	ASSERT_TRUE(snprintf(text, sizeof(text),
+			     "{\"schemaVersion\":2,\"layers\":[%s]}",
+			     layers) > 0);
 	*n = -1;
 	return bpm_oci_parse_manifest((const __u8 *)text, strlen(text), descs,
 				      ARRAY_SIZE(descs), n, NULL, 0);

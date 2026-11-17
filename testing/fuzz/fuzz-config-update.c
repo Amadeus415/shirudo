@@ -31,8 +31,8 @@ int LLVMFuzzerInitialize(int *argc, char ***argv)
 {
 	const char *tmp = getenv("TMPDIR");
 
-	if (strsprintf(dir, sizeof(dir), "%s/shirudo-fuzz-config-update-XXXXXX",
-		       tmp && tmp[0] ? tmp : "/tmp") < 0 || !mkdtemp(dir))
+	if (snprintf(dir, sizeof(dir), "%s/shirudo-fuzz-config-update-XXXXXX",
+		     tmp && tmp[0] ? tmp : "/tmp") < 0 || !mkdtemp(dir))
 		abort();
 	dir_fd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 	if (dir_fd < 0 || atexit(remove_dir))

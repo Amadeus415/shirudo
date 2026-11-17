@@ -182,8 +182,8 @@ int main(int argc, char **argv)
 			argv[0]);
 		return 2;
 	}
-	if (strsprintf(keys, sizeof(keys), "%s/%s", argv[2],
-		       CERT_FILE) < 0)
+	if (snprintf(keys, sizeof(keys), "%s/%s", argv[2],
+		     CERT_FILE) < 0)
 		return 2;
 	ret = read_cert(keys, &own);
 	if (!ret)

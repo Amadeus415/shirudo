@@ -30,9 +30,9 @@ static int swap_dir(void)
 	const char *slash = strrchr(path, '/');
 
 	if (!slash ||
-	    strsprintf(parent, sizeof(parent), "%.*s", (int)(slash - path),
-		       path) < 0 ||
-	    strsprintf(moved, sizeof(moved), "%s.moved", parent) < 0 ||
+	    snprintf(parent, sizeof(parent), "%.*s", (int)(slash - path),
+		     path) < 0 ||
+	    snprintf(moved, sizeof(moved), "%s.moved", parent) < 0 ||
 	    rename(parent, moved) || symlink(dir, parent))
 		return -errno;
 	return 0;
@@ -43,7 +43,7 @@ static int swap_file(void)
 	char moved[4096 + 8];
 	int fd;
 
-	if (strsprintf(moved, sizeof(moved), "%s.moved", path) < 0 ||
+	if (snprintf(moved, sizeof(moved), "%s.moved", path) < 0 ||
 	    rename(path, moved))
 		return -errno;
 	fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);

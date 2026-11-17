@@ -2,8 +2,7 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Zeroing allocator: zero on alloc, scrub on free. In rust/src/heap.rs,
- * but for xasprintf() in util/malloc.c.
+ * Zeroing allocator: zero on alloc, scrub on free. In rust/src/heap.rs.
  */
 
 #ifndef SHIRUDO_MALLOC_H
@@ -41,9 +40,6 @@ void *xreallocarray(void *ptr, size_t old_nmemb, size_t new_nmemb,
  */
 char *xstrdup(const char *s);
 char *xstrndup(const char *s, size_t n);
-
-/* A formatted string, freed with xstrfree(); NULL if formatting fails. */
-char *xasprintf(const char *fmt, ...) __printf(1, 2);
 
 /*
  * Scrubs, so key material, signatures and TPM auth do not linger in

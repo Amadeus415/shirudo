@@ -19,14 +19,14 @@ static void use_log(void)
 {
 	const char *tmp = getenv("TMPDIR");
 
-	ASSERT_TRUE(strsprintf(dir, sizeof(dir),
-			       "%s/shirudo-unit-eventlog-XXXXXX",
-			       tmp && tmp[0] ? tmp : "/tmp") > 0);
+	ASSERT_TRUE(snprintf(dir, sizeof(dir),
+			     "%s/shirudo-unit-eventlog-XXXXXX",
+			     tmp && tmp[0] ? tmp : "/tmp") > 0);
 	ASSERT_TRUE(mkdtemp(dir));
-	ASSERT_TRUE(strsprintf(log_path, sizeof(log_path), "%s/eventlog",
-			       dir) > 0);
-	ASSERT_TRUE(strsprintf(pending_path, sizeof(pending_path),
-			       "%s/pending", dir) > 0);
+	ASSERT_TRUE(snprintf(log_path, sizeof(log_path), "%s/eventlog",
+			     dir) > 0);
+	ASSERT_TRUE(snprintf(pending_path, sizeof(pending_path),
+			     "%s/pending", dir) > 0);
 	ASSERT_EQ(setenv("SHIRUDO_EVENTLOG_PATH", log_path, 1), 0);
 	ASSERT_EQ(setenv("SHIRUDO_EVENTLOG_PENDING_PATH", pending_path, 1), 0);
 }
@@ -63,7 +63,7 @@ static void replay_of(const char *a, const char *b, __u8 out[32])
 	char text[2048];
 	int len;
 
-	len = strsprintf(text, sizeof(text), "%s\n%s%s", a, b, b[0] ? "\n" : "");
+	len = snprintf(text, sizeof(text), "%s\n%s%s", a, b, b[0] ? "\n" : "");
 	ASSERT_TRUE(len > 0);
 	write_log(text, (size_t)len);
 	ASSERT_EQ(eventlog_replay(out), 0);
@@ -86,14 +86,14 @@ static void unfinished_append_is_no_record(void)
 	replay_of(init, "", alone);
 	replay_of(init, unload, both);
 
-	len = strsprintf(text, sizeof(text), "%s\n%.*s", init,
-			 (int)strlen(load) - 1, load);
+	len = snprintf(text, sizeof(text), "%s\n%.*s", init,
+		       (int)strlen(load) - 1, load);
 	ASSERT_TRUE(len > 0);
 	write_log(text, (size_t)len);
 	ASSERT_EQ(eventlog_replay(got), 0);
 	EXPECT_MEMEQ(got, alone, 32);
 
-	len = strsprintf(text, sizeof(text), "%s\n%s", init, load);
+	len = snprintf(text, sizeof(text), "%s\n%s", init, load);
 	ASSERT_TRUE(len > 0);
 	write_log(text, (size_t)len);
 	ASSERT_EQ(eventlog_replay(got), 0);
@@ -114,7 +114,7 @@ static void nul_in_the_log_is_refused(void)
 	use_log();
 	record(init, sizeof(init), "init", 1);
 	record(unload, sizeof(unload), "upatch_unload", 3);
-	len = strsprintf(text, sizeof(text), "%s\n_%s\n", init, unload);
+	len = snprintf(text, sizeof(text), "%s\n_%s\n", init, unload);
 	ASSERT_TRUE(len > 0);
 	text[strlen(init) + 1] = '\0';
 	write_log(text, (size_t)len);
@@ -153,13 +153,13 @@ static void tree_op_measured_this_boot(void)
 	record(init, sizeof(init), "init", 1);
 	tree_record(tree, sizeof(tree), 3, OPERATION);
 	EXPECT_EQ(eventlog_tree_op_measured(3, OPERATION), 0);
-	len = strsprintf(text, sizeof(text), "%s\n%s\n", init, tree);
+	len = snprintf(text, sizeof(text), "%s\n%s\n", init, tree);
 	ASSERT_TRUE(len > 0);
 	write_log(text, (size_t)len);
 	EXPECT_EQ(eventlog_tree_op_measured(3, OPERATION), 1);
 	EXPECT_EQ(eventlog_tree_op_measured(4, OPERATION), 0);
 	EXPECT_EQ(eventlog_tree_op_measured(3, OPERATION "0"), 0);
-	len = strsprintf(text, sizeof(text), "%s\n", tree);
+	len = snprintf(text, sizeof(text), "%s\n", tree);
 	ASSERT_TRUE(len > 0);
 	write_log(text, (size_t)len);
 	EXPECT_EQ(eventlog_tree_op_measured(3, OPERATION), 0);
@@ -214,7 +214,7 @@ static void set_counts_in_an_init_record_alone(void)
 	use_log();
 	set_record(init, sizeof(init), "init", "fix");
 	set_record(other, sizeof(other), "key_revoke", "ghost");
-	len = strsprintf(text, sizeof(text), "%s\n%s\n", init, other);
+	len = snprintf(text, sizeof(text), "%s\n%s\n", init, other);
 	ASSERT_TRUE(len > 0);
 	write_log(text, (size_t)len);
 	ASSERT_EQ(eventlog_boot_upatches(count_upatch, &s), 0);
@@ -222,7 +222,7 @@ static void set_counts_in_an_init_record_alone(void)
 	EXPECT_EQ(s.loads, 1);
 	EXPECT_STREQ(s.last, "fix");
 	set_record(init, sizeof(init), "init", "../fix");
-	len = strsprintf(text, sizeof(text), "%s\n", init);
+	len = snprintf(text, sizeof(text), "%s\n", init);
 	ASSERT_TRUE(len > 0);
 	write_log(text, (size_t)len);
 	EXPECT_EQ(eventlog_boot_upatches(count_upatch, &s), -EINVAL);

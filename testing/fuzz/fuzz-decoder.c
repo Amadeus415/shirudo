@@ -47,8 +47,8 @@ int LLVMFuzzerInitialize(int *argc, char ***argv)
 	if (strscpy(self, (*argv)[0], sizeof(self)) < 0)
 		abort();
 	for (size_t i = 0; i < ARRAY_SIZE(sources); i++) {
-		if (strsprintf(path, sizeof(path), "%s/%s", dirname(self),
-			       sources[i]) < 0)
+		if (snprintf(path, sizeof(path), "%s/%s", dirname(self),
+			     sources[i]) < 0)
 			abort();
 		strscpy(self, (*argv)[0], sizeof(self));
 		if (read_file(path, 1 << 20, &src, &len))

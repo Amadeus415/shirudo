@@ -142,8 +142,8 @@ static void overlong_string_is_enospc(void)
 
 	memset(big, '0', sizeof(big) - 1);
 	big[sizeof(big) - 1] = '\0';
-	ASSERT_TRUE(strsprintf(text, sizeof(text), "{\"digest\":\"%s\"}",
-			       big) > 0);
+	ASSERT_TRUE(snprintf(text, sizeof(text), "{\"digest\":\"%s\"}",
+			     big) > 0);
 	EXPECT_EQ(parse(text, &d), -ENOSPC);
 }
 
@@ -359,8 +359,8 @@ static void integer_takes_json_integers_only(void)
 	struct doc d;
 
 	for (size_t i = 0; i < ARRAY_SIZE(bad); i++) {
-		ASSERT_TRUE(strsprintf(text, sizeof(text), "{\"schema\":%s}",
-				       bad[i]) > 0);
+		ASSERT_TRUE(snprintf(text, sizeof(text), "{\"schema\":%s}",
+				     bad[i]) > 0);
 		EXPECT_EQ(parse(text, &d), -EINVAL);
 	}
 }
@@ -388,8 +388,8 @@ static void discarded_number_follows_the_grammar(void)
 	ASSERT_EQ(parse("{\"x\":[1.5e+10,-0.0E-1,2e5,0],\"schema\":2}", &d), 0);
 	EXPECT_EQ(d.schema, 2);
 	for (size_t i = 0; i < ARRAY_SIZE(bad); i++) {
-		ASSERT_TRUE(strsprintf(text, sizeof(text),
-				       "{\"x\":%s,\"schema\":2}", bad[i]) > 0);
+		ASSERT_TRUE(snprintf(text, sizeof(text),
+				     "{\"x\":%s,\"schema\":2}", bad[i]) > 0);
 		EXPECT_EQ(parse(text, &d), -EINVAL);
 	}
 }
@@ -412,15 +412,15 @@ static void malformed_utf8_is_refused(void)
 	ASSERT_EQ(parse("{\"type\":\"caf\xc3\xa9 \xf0\x9f\x90\x9d\"}", &d), 0);
 	EXPECT_STREQ(d.type, "caf\xc3\xa9 \xf0\x9f\x90\x9d");
 	for (i = 0; i < ARRAY_SIZE(bad); i++) {
-		ASSERT_TRUE(strsprintf(text, sizeof(text),
-				       "{\"type\":\"%s\"}", bad[i]) > 0);
+		ASSERT_TRUE(snprintf(text, sizeof(text),
+				     "{\"type\":\"%s\"}", bad[i]) > 0);
 		EXPECT_EQ(parse(text, &d), -EINVAL);
-		ASSERT_TRUE(strsprintf(text, sizeof(text),
-				       "{\"x\":\"%s\",\"type\":\"t\"}",
-				       bad[i]) > 0);
+		ASSERT_TRUE(snprintf(text, sizeof(text),
+				     "{\"x\":\"%s\",\"type\":\"t\"}",
+				     bad[i]) > 0);
 		EXPECT_EQ(parse(text, &d), -EINVAL);
-		ASSERT_TRUE(strsprintf(text, sizeof(text),
-				       "{\"%s\":1,\"type\":\"t\"}", bad[i]) > 0);
+		ASSERT_TRUE(snprintf(text, sizeof(text),
+				     "{\"%s\":1,\"type\":\"t\"}", bad[i]) > 0);
 		EXPECT_EQ(parse(text, &d), -EINVAL);
 	}
 	EXPECT_EQ(parse("{\"type\":\"\xe2\x82", &d), -EINVAL);
@@ -540,8 +540,8 @@ static int trace_number(void *ctx, const char *text, size_t len,
 {
 	char num[64];
 
-	if (strsprintf(num, sizeof(num), "%s:%.*s ", integer ? "i" : "d",
-		       (int)len, text) < 0)
+	if (snprintf(num, sizeof(num), "%s:%.*s ", integer ? "i" : "d",
+		     (int)len, text) < 0)
 		return -E2BIG;
 	return trace_put(ctx, num);
 }
@@ -649,8 +649,8 @@ static int member_key(void *ctx, const char *key)
 
 	if (strstr(m->keys, key))
 		return -EEXIST;
-	if (strsprintf(entry, sizeof(entry), "%s=%d ", key,
-		       m->slot->seen ? m->values : -1) < 0 ||
+	if (snprintf(entry, sizeof(entry), "%s=%d ", key,
+		     m->slot->seen ? m->values : -1) < 0 ||
 	    strlen(m->keys) + strlen(entry) >= sizeof(m->keys))
 		return -E2BIG;
 	memcpy(m->keys + strlen(m->keys), entry, strlen(entry) + 1);

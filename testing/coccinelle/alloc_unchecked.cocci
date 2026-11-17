@@ -9,10 +9,9 @@ virtual report
 @r exists@
 expression E, E1;
 identifier fld;
-identifier alloc = {xmalloc, xcalloc, xreallocarray, xstrdup, xstrndup,
-		    xasprintf};
+identifier alloc = {xmalloc, xcalloc, xreallocarray, xstrdup, xstrndup};
 identifier f = {strlen, strcmp, strncmp, strchr, strrchr, strstr, memcpy,
-		memmove, memcmp, memset, strscpy, strsprintf};
+		memmove, memcmp, memset, strscpy};
 position p1, p2;
 @@
   E = alloc@p1(...);

@@ -2,10 +2,9 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Bounded number parsing, string copies and formatting, file name
- * suffixes, DNS names, UTF-8 characters and text for a terminal, from
- * rust/src/text.rs but for the formatters of util/string.c, and the
- * scrub and compare for secrets.
+ * Bounded number parsing and string copies, file name suffixes, DNS
+ * names, UTF-8 characters and text for a terminal, from rust/src/text.rs,
+ * and the scrub and compare for secrets.
  */
 
 #ifndef SHIRUDO_STRING_H
@@ -43,16 +42,6 @@ int parse_s64(const char *s, size_t len, __s64 min, __s64 max, __s64 *out);
  * as much of it as did.
  */
 ssize_t strscpy(char *dst, const char *src, size_t size);
-
-/*
- * snprintf() into the size bytes at buf: the length written, or -E2BIG,
- * with buf left empty, when the output did not fit. vstrsprintf() takes
- * the arguments as a va_list.
- */
-int strsprintf(char *buf, size_t size, const char *fmt, ...)
-	__printf(3, 4) __must_check;
-int vstrsprintf(char *buf, size_t size, const char *fmt, va_list ap)
-	__printf(3, 0) __must_check;
 
 /*
  * Whether the len bytes at name are a stem of at least one byte and then
@@ -116,8 +105,8 @@ static inline int memneq_explicit(const void *a, const void *b, size_t size)
 /*
  * What the functions above replace, refused once the headers included
  * above have declared it, so that a later include of those still works;
- * util/string.c and the xasprintf() of util/malloc.c opt out with
- * STRING_INTERNAL.
+ * a file that must name one opts out with STRING_INTERNAL. sprintf() and
+ * vsprintf() write past any buffer; snprintf() bounds itself.
  */
 #ifndef STRING_INTERNAL
 # pragma GCC poison strtol strtoll strtoul strtoull strtoimax strtoumax
@@ -125,8 +114,7 @@ static inline int memneq_explicit(const void *a, const void *b, size_t size)
 # pragma GCC poison strcpy strncpy strcat strncat strlcpy
 /* Fortified glibc makes these macros for clang; poison the names alone. */
 # undef sprintf
-# undef snprintf
-# pragma GCC poison sprintf vsprintf snprintf vsnprintf
+# pragma GCC poison sprintf vsprintf
 # pragma GCC poison explicit_bzero
 #endif
 

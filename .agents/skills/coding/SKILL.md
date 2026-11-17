@@ -99,13 +99,13 @@ extra check left to the caller, and move one found in a builtin into
 | Need | Use |
 |---|---|
 | Parse a number | `parse_u64()`, `parse_s64()`, `parse_x64()`, `digits()` (`<shirudo/string.h>`) |
-| Copy or format a string | `strscpy()`, `strsprintf()`, `vstrsprintf()`, and check `-E2BIG` |
+| Copy a string | `strscpy()`, and check `-E2BIG` |
 | An upatch's pin directory or a pin in it | `upatch_pin_path()` (`util/paths.h`) |
 | A file name's extension | `name_has_suffix()` (`<shirudo/string.h>`), `upatch_select()` for a scandir of upatches |
 | Text from outside on a terminal | `text_sanitize()`; UTF-8 with `utf8_width()` |
 | Sizes and lengths | `check_add_overflow()` and kin, `size_add()`, `size_mul()`, `struct_size()` (`<shirudo/overflow.h>`) |
 | Smaller or larger | `min()`, `max()` (`<shirudo/misc.h>`) |
-| Memory | `xmalloc()`, `xcalloc()`, `xreallocarray()`, `xstrndup()`, `xasprintf()`, `xfree(p, size)` (`util/malloc.h`) |
+| Memory | `xmalloc()`, `xcalloc()`, `xreallocarray()`, `xstrndup()`, `xfree(p, size)` (`util/malloc.h`) |
 | Secrets | `memzero_explicit()`, `memneq_explicit()` |
 | Files | `read_file()`, `read_fd()`, `write_complete()`, `append_line()`, `lines_len()`, `open_beneath()`, `lock_exclusive()` (`util/io.h`) |
 | Sealed state and paths root names | `seal_open()`, `seal_lock()`, `seal_append_line()`, `seal_write_file()`; `seal_output_create()` and `seal_output_commit()` for a report or export (`util/seal.h`) |

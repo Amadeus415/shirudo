@@ -185,7 +185,6 @@ test_expect_success '--types lists what stays enabled' '
 	grep -qx "KERNEL_INT_TYPES" "$W/out" &&
 	grep -qx "NUMBER_PARSING" "$W/out" &&
 	grep -qx "STRING_COPY" "$W/out" &&
-	grep -qx "STRING_FORMAT" "$W/out" &&
 	! grep -qx "CAMELCASE" "$W/out" &&
 	! grep -qx "GIT_COMMIT_ID" "$W/out"
 '
@@ -240,30 +239,6 @@ test_expect_success 'strings are copied with strscpy() outside the tests' '
 		"void name(char *d, const char *s)" "{" "	strcpy(d, s);" "}" &&
 	check --files testing/helper/name.c &&
 	rm -r "$R/tools" "$R/testing"
-'
-
-test_expect_success 'strings are formatted with strsprintf() outside the tests' '
-	printf "%s\n" "/* snprintf() in a comment */" \
-		"static const char *op = \"sprintf(a, b)\";" "" \
-		"void fmt(char *d, const char *s, va_list ap)" "{" \
-		"	snprintf(d, 8, \"%d\", 1);" "	sprintf(d, \"%d\", 1);" \
-		"	vsnprintf(d, 8, s, ap);" "	vsprintf(d, s, ap);" \
-		"	snprintf(d, 8, \"%s\", s);" \
-		"	(void)strsprintf(d, 8, \"%d\", 1);" "}" \
-		>>"$R/good.c" &&
-	! check --diff &&
-	grep -q "^ERROR:STRING_FORMAT: format into a buffer with strsprintf() or vstrsprintf() from <shirudo/string.h>, not snprintf()" "$W/out" &&
-	grep -q "^ERROR:STRING_FORMAT: .*, not vsprintf()" "$W/out" &&
-	[ "$(grep -c "^ERROR:STRING_FORMAT" "$W/out")" = 4 ] &&
-	[ "$(grep -c "^ERROR:STRING_COPY" "$W/out")" = 1 ] &&
-	git -C "$R" checkout -q -- good.c &&
-	for f in util/string.c util/malloc.c testing/helper/fmt.c; do
-		put $f "// SPDX-License-Identifier: BSD-2-Clause" "" \
-			"int fmt(char *d)" "{" \
-			"	return snprintf(d, 8, \"%d\", 1);" "}" || return 1
-	done &&
-	check --files util/string.c util/malloc.c testing/helper/fmt.c &&
-	rm -r "$R/util" "$R/testing"
 '
 
 test_expect_success 'a BPF program keeps the kernel'"'"'s argument types' '

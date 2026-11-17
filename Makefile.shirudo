@@ -214,9 +214,7 @@ CLANG_BPF := $(CLANG) -target bpf -mcpu=v4 -fno-jump-tables -O2 -g -Wall -Wextra
 # ----- source manifests -------------------------------------------
 
 UTIL_SRCS := \
-    util/loader.c \
-    util/string.c \
-    util/malloc.c
+    util/loader.c
 
 # BPF-side libbpf headers, used straight from vendor/libbpf (the BPF
 # compile rule adds it to the include path so <bpf/...> resolves) and
@@ -443,8 +441,6 @@ build/target/util/loader.o: $(BPF_OBJS)
 # shirudo binary.
 tools/shirudo-build/shirudo-build: $(BUILD_OBJS) \
                                    util/loader.o \
-                                   util/malloc.o \
-                                   util/string.o \
                                    $(VERSION_OBJ) \
                                    $(LIBBPF_A) $(RUST_LIB)
 	@printf '  LD      $@\n'
@@ -641,12 +637,12 @@ TEST_HELPERS += testing/helper/test-keyring-seal
 TEST_HELPERS += testing/helper/test-tpm-preopened
 
 testing/helper/test-conditions: testing/helper/test-conditions.c \
-                                util/string.o util/malloc.o $(RUST_LIB)
+                                $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
 testing/helper/test-harden: testing/helper/test-harden.c \
-		util/string.o util/malloc.o $(RUST_LIB)
+		$(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LIBCRYPTO_LIBS) $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
 
@@ -655,8 +651,7 @@ testing/helper/test-harden: testing/helper/test-harden.c \
 # never extends.
 # The register code pulls in the eventlog, which pulls in the seal
 # label writer and the JSON codec.
-REGISTER_OBJS := util/string.o \
-                 util/malloc.o \
+REGISTER_OBJS := \
                  $(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
 REGISTER_LIBS := $(LIBCRYPTO_LIBS) $(LIBSSL_LIBS) $(TSS2_LIBS) \
                  $(LIBBPF_A) $(LIBELF_LIBS) $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
@@ -685,7 +680,6 @@ testing/helper/test-keys: testing/helper/test-keys.c $(REGISTER_OBJS)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
 testing/helper/test-seal: testing/helper/test-seal.c \
-                          util/string.o util/malloc.o \
                           $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
@@ -695,8 +689,7 @@ testing/helper/test-eventlog: testing/helper/test-eventlog.c $(REGISTER_OBJS)
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
 testing/helper/test-tpm-wire: testing/helper/test-tpm-wire.c \
-                        util/malloc.o \
-                        util/string.o $(RUST_LIB)
+                        $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
 
@@ -729,11 +722,11 @@ testing/helper/test-tpm-session: testing/helper/test-tpm-session.c \
 		-Wl,--wrap=bpf_map_lookup_elem
 
 testing/helper/test-config: testing/helper/test-config.c \
-                            util/string.o util/malloc.o $(RUST_LIB)
+                            $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
-testing/helper/test-bpm-source: testing/helper/test-bpm-source.c util/string.o \
+testing/helper/test-bpm-source: testing/helper/test-bpm-source.c \
                                 $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
@@ -762,45 +755,38 @@ testing/helper/test-signed-load: testing/helper/test-signed-load.c
 	    -o $@ $^ -lcrypto
 
 testing/helper/test-otel-map: testing/helper/test-otel-map.c \
-                        util/string.o \
-                        util/malloc.o $(LIBBPF_A) \
+                        $(LIBBPF_A) \
                         $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-map-types: testing/helper/test-upatch-map-types.c \
-                                    util/malloc.o util/string.o \
                                     $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-prog-metadata: testing/helper/test-upatch-prog-metadata.c \
-                                    util/malloc.o util/string.o \
                                     $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-serializer-pages: testing/helper/test-upatch-serializer-pages.c \
-                                       util/string.o \
-                                       util/malloc.o \
                                        $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-rodata: testing/helper/test-upatch-rodata.c \
-                               util/string.o util/malloc.o \
                                $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-decode: testing/helper/test-upatch-decode.c \
-			      util/malloc.o \
-			      util/string.o $(RUST_LIB)
+			      $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
-testing/helper/test-exec-churn: testing/helper/test-exec-churn.c util/malloc.o \
-                                 util/string.o $(RUST_LIB)
+testing/helper/test-exec-churn: testing/helper/test-exec-churn.c \
+                                 $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
@@ -813,8 +799,7 @@ testing/end2end/policy-exec: testing/end2end/policy_exec.c
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
 testing/helper/test-config-image: testing/helper/test-config-image.c \
-		util/malloc.o \
-		util/string.o $(RUST_LIB)
+		$(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
 
@@ -835,8 +820,7 @@ testing/helper/test-image-keys: testing/helper/test-image-keys.c \
 		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-image-config: testing/helper/test-image-config.c \
-		util/malloc.o \
-		util/string.o $(RUST_LIB)
+		$(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LIBCRYPTO_LIBS) $(LIBSSL_LIBS) $(ZLIB_LIBS) \
 		$(RUST_TEST_LDLIBS)
@@ -862,7 +846,7 @@ testing/helper/test-mode-objects: testing/helper/test-mode-objects.c \
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lelf -lz
 
 testing/helper/test-seal-output: testing/helper/test-seal-output.c \
-		util/string.o util/malloc.o $(RUST_LIB)
+		$(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
@@ -958,7 +942,7 @@ $(RUST_FUZZ_LIB): $(RUST_SRCS)
 FUZZ_LIBS := $(RUST_FUZZ_LIB) $(LIBCRYPTO_LIBS) $(LIBSSL_LIBS) \
              $(LIBCURL_LIBS) $(ZLIB_LIBS) $(RUST_TEST_LDLIBS) \
              -Wl,-z,start-stop-gc
-FUZZ_BASE := util/string.c util/malloc.c
+FUZZ_BASE :=
 
 FUZZ_TARGETS := $(patsubst %.c,%,$(wildcard testing/fuzz/fuzz-*.c))
 
