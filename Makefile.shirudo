@@ -4,7 +4,7 @@
 # Makefile.shirudo -- main build graph.
 #
 # Five strict build phases:
-#   1. vendored libbpf (vendor/libbpf) and the vmlinux.h generator
+#   1. vendored libbpf (vendor/libbpf), for the vmlinux.h generator
 #   2. generated headers   (vendor/linux/vmlinux.h)
 #   3. compiled objects    (util/*.o, shirudo.o, bpf/*.bpf.o)
 #   4. embedded BPF        (bpf/*.lskel from tools/bpf-lskel; util/loader.o,
@@ -177,8 +177,10 @@ CFLAGS := $(CFLAGS_BASE) $(INCLUDES) \
           $(LIBELF_CFLAGS) $(ZLIB_CFLAGS) $(LIBCURL_CFLAGS) \
           $(CRYPTO_CFLAGS)
 
-# libbpf is always linked from its archive. The normal shirudo binary keeps
-# the existing dynamic OpenSSL/libcurl profile for operator builds.
+# libbpf, linked from its archive, is for the tests that make BTF and
+# objects with it: the binaries link none, rust/src/bpf/ reading objects
+# and BTF and issuing bpf() itself. The normal shirudo binary keeps the
+# existing dynamic OpenSSL/libcurl profile for operator builds.
 STATIC_LIBS = \
     $(LIBBPF_A)
 
@@ -436,22 +438,20 @@ util/version_id.c:
 
 # ----- phase 5: link ---------------------------------------------
 
-shirudo: $(MAIN_OBJ) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A) \
-         $(RUST_LIB)
+shirudo: $(MAIN_OBJ) $(UTIL_OBJS) $(VERSION_OBJ) $(RUST_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(LD) $(CFLAGS) $(HARDEN_LDFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ \
 	    $(MAIN_OBJ) $(UTIL_OBJS) $(VERSION_OBJ) \
-	    $(RUST_LIB) $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
+	    $(RUST_LIB) $(DYNAMIC_LIBS) $(RUST_LDLIBS)
 
-shirudo-target: $(MAIN_OBJ) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A) \
-                $(RUST_LIB) \
+shirudo-target: $(MAIN_OBJ) $(UTIL_OBJS) $(VERSION_OBJ) $(RUST_LIB) \
                 Makefile.shirudo $(CONFIG_MK_DEP) .github/scripts/check-static-target.sh
 	@printf '  LD      $@ (static PIE)\n'
 	$(Q)$(LD) $(CFLAGS) $(TARGET_TLS_CFLAGS) \
 	    $(HARDEN_STATIC_PIE_LDFLAGS) $(LDFLAGS) \
 	    -static-pie -static-libgcc -o $@ \
 	    $(MAIN_OBJ) $(UTIL_OBJS) $(VERSION_OBJ) \
-	    $(RUST_LIB) $(STATIC_LIBS) $(TARGET_TLS_STATIC_LINK_LIBS) \
+	    $(RUST_LIB) $(TARGET_TLS_STATIC_LINK_LIBS) \
 	    $(TARGET_STATIC_RUNTIME_LINK_LIBS) $(RUST_LDLIBS)
 	$(Q)sh .github/scripts/check-static-target.sh $@ || \
 	    { rm -f $@; exit 1; }
@@ -468,10 +468,10 @@ build/target/util/loader.o: $(BPF_OBJS) $(BPF_LSKELS)
 tools/shirudo-build/shirudo-build: $(BUILD_OBJS) \
                                    util/loader.o \
                                    $(VERSION_OBJ) \
-                                   $(LIBBPF_A) $(RUST_LIB)
+                                   $(RUST_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(LD) $(CFLAGS) $(HARDEN_LDFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ \
-	    $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
+	    $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 # ----- install ----------------------------------------------------
 

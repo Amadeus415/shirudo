@@ -214,15 +214,6 @@ logging, including during bootstrap.
      - Destination of those logs: ``stderr`` (default), ``stdout`` or
        ``-``, or a file opened for appending. Refused on a target.
        TPM connection setup always clears it before library initialization.
-   * - ``LIBBPF_LOG_LEVEL``
-     - libbpf
-     - ``warn``, ``info`` (default) or ``debug`` for libbpf's messages
-       on standard error.
-   * - ``LIBBPF_BPF_TOKEN_PATH``
-     - libbpf
-     - bpffs path from which libbpf creates a BPF token when ``init``
-       loads its own BPF objects. Set to a non-empty value, a failure to
-       create the token fails the load.
    * - ``OPENSSL_CONF``
      - OpenSSL
      - Not read. shirudo initializes OpenSSL without its configuration

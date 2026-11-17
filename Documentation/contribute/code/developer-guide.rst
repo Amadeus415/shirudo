@@ -295,9 +295,13 @@ a change needs a newer libbpf or UAPI:
 ``<kernel-tree>`` is a kernel checkout. Without ``KERNEL_SRC``,
 :src:`tools/bpf-deps/bpf-deps.sh` makes a shallow clone of bpf-next.
 
-The source revision is recorded in ``vendor/libbpf/COMMIT``. After
-refreshing, reapply the sole local change: set ``MAX_USED_PROGS`` in
-``vendor/libbpf/bpf/gen_loader.c`` to 64 for the kernel-obs package.
+The source revision is recorded in ``vendor/libbpf/COMMIT``. The
+binaries link no libbpf: :src:`rust/src/bpf/` reads objects and BTF,
+generates loaders and dumps values as this libbpf does, and the vendored
+copy builds the ``vmlinux.h`` generator and the tests that make BTF with
+it. After refreshing, reapply its local changes to
+``vendor/libbpf/bpf/gen_loader.c`` and ``btf_dump.c``, and check
+:src:`rust/src/bpf/` against the new libbpf.
 
 Other make targets
 ------------------

@@ -52,7 +52,7 @@ finds it through ``SHIRUDO_BUILD``, the compiled-in libexec directory or
 ``PATH``.
 
 On the target, commands use linked libraries and kernel interfaces only:
-libbpf for ``bpf()``, raw ``keyctl(2)`` for keyrings, tpm2-tss over the
+raw ``bpf(2)`` and ``keyctl(2)`` for BPF and keyrings, tpm2-tss over the
 kernel TPM device for the register, libcrypto for digests and
 certificates, libcurl for registries and OTLP. No target command starts
 another program. Every command is a one-shot process; there is no daemon

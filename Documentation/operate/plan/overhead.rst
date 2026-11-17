@@ -71,7 +71,7 @@ Files and images
      - 17.0 MiB as built, 12.7 MiB without symbols, 3.8 MiB compressed
        with ``xz -9``
      - Static PIE. It contains OpenSSL, libcurl, tpm2-tss, libelf, zlib,
-       zstd, LuaJIT, libbpf and the guard BPF objects. ``make
+       zstd, LuaJIT and the guard BPF objects. ``make
        install-target``, the tarballs and the Debian package install it as
        built. ``shirudo-gen-runtime`` strips it for the runtime image.
    * - Binary in the initrd
