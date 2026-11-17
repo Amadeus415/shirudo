@@ -71,13 +71,13 @@ Run the proofs
    .. code-block:: console
 
       $ make proofs-lean4
-      $ make proofs-cbmc PROOFS="string-number log-escape"
+      $ make proofs-cbmc PROOFS="paths-bpffs-name log-escape"
 
 3. Read why a CBMC proof failed:
 
    .. code-block:: console
 
-      $ testing/proofs/cbmc/run.sh -v string-number
+      $ testing/proofs/cbmc/run.sh -v paths-bpffs-name
 
    ``-v`` prints CBMC's whole output, with the trace of each failed
    check: the input that breaks it and the steps that lead there. Lean
@@ -151,8 +151,8 @@ Write a Lean 4 proof
 
 3. Where CBMC can, add a CBMC proof that the C computes what the model
    computes, for every input up to a bound, as
-   :src:`testing/proofs/cbmc/string-number-model.c` does for the number
-   parser; elsewhere the model follows the C by review, and the coverage
+   :src:`testing/proofs/cbmc/paths-bpffs-name-model.c` does for the pin
+   name encoding; elsewhere the model follows the C by review, and the coverage
    page says so.
 
 4. Add a row to :doc:`proof-coverage`.

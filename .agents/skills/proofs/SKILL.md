@@ -17,7 +17,7 @@ a proof or to what it covers updates the coverage page too.
 
 ```sh
 make proofs                                  # CBMC and Lean 4
-make proofs-cbmc PROOFS="string-number hex"  # some CBMC proofs
+make proofs-cbmc PROOFS="log-escape"         # some CBMC proofs
 testing/proofs/cbmc/run.sh -v <proof>        # whole output and traces
 make proofs-lean4                            # the Lean 4 proofs
 ```
@@ -114,8 +114,8 @@ determining its events.
 - The lakefile makes every warning an error, so a `sorry`, a deprecated
   name or an unused `simp` argument fails the build.
 - Link the model to the C with a CBMC proof where one is cheap, as
-  `string-number-model.c` checks `parse_u64()` against `Number.lean` up
-  to 4 bytes; the coverage page says which models follow the C by review.
+  `paths-bpffs-name-model.c` checks the pin name encoding against
+  `PinName.lean` up to 8 bytes; the coverage page says which models follow the C by review.
 - The toolchain is the one `lean-toolchain` names; elan installs it.
 
 ## When it fails

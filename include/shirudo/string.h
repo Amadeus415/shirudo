@@ -4,7 +4,8 @@
  *
  * Bounded number parsing, string copies and formatting, file name
  * suffixes, DNS names, UTF-8 characters and text for a terminal, from
- * util/string.c, and the scrub and compare for secrets.
+ * rust/src/text.rs but for the formatters of util/string.c, and the
+ * scrub and compare for secrets.
  */
 
 #ifndef SHIRUDO_STRING_H
