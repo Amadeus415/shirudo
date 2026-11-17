@@ -2,9 +2,13 @@
 /* Copyright (c) 2026 Authors of shirudo */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+#include <linux/bpf.h>
 
 #include "tpm_internal.h"
 
@@ -13,6 +17,7 @@
 
 #include "chain.h"
 #include "crypto.h"
+#include "paths.h"
 #include "tpm-session.h"
 
 #define TEST_INDEX 0x01818E02u
@@ -25,11 +30,43 @@
 
 static struct identity identity;
 static int identity_error;
+static int identity_fd = -1;
 
-int __wrap_identity_read(struct identity *out)
+/* The identity map init would have pinned: the test's, or its error. */
+int __real_bpf_obj_get(const char *path);
+int __wrap_bpf_obj_get(const char *path)
 {
-	*out = identity;
-	return identity_error;
+	if (strcmp(path, IDENTITY_PIN))
+		return __real_bpf_obj_get(path);
+	if (identity_error) {
+		errno = -identity_error;
+		return identity_error;
+	}
+	identity_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+	return identity_fd;
+}
+
+int __real_bpf_obj_get_info_by_fd(int fd, void *info, __u32 *len);
+int __wrap_bpf_obj_get_info_by_fd(int fd, void *info, __u32 *len)
+{
+	struct bpf_map_info *map = info;
+
+	if (identity_fd < 0 || fd != identity_fd)
+		return __real_bpf_obj_get_info_by_fd(fd, info, len);
+	memset(info, 0, *len);
+	map->key_size = sizeof(__u32);
+	map->value_size = sizeof(identity);
+	map->max_entries = 1;
+	return 0;
+}
+
+int __real_bpf_map_lookup_elem(int fd, const void *key, void *value);
+int __wrap_bpf_map_lookup_elem(int fd, const void *key, void *value)
+{
+	if (identity_fd < 0 || fd != identity_fd)
+		return __real_bpf_map_lookup_elem(fd, key, value);
+	memcpy(value, &identity, sizeof(identity));
+	return 0;
 }
 
 enum fault_mode {

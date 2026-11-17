@@ -215,7 +215,6 @@ CLANG_BPF := $(CLANG) -target bpf -mcpu=v4 -fno-jump-tables -O2 -g -Wall -Wextra
 
 UTIL_SRCS := \
     util/loader.c \
-    util/identity.c \
     util/paths.c \
     util/log.c \
     util/hex.c \
@@ -669,7 +668,6 @@ testing/helper/test-harden: testing/helper/test-harden.c util/log.o \
 # label writer and the JSON codec.
 REGISTER_OBJS := util/hex.o util/string.o \
                  util/log.o util/malloc.o \
-                 util/identity.o \
                  $(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
 REGISTER_LIBS := $(LIBCRYPTO_LIBS) $(LIBSSL_LIBS) $(TSS2_LIBS) \
                  $(LIBBPF_A) $(LIBELF_LIBS) $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
@@ -691,7 +689,7 @@ testing/helper/test-tpm-preopened: testing/helper/test-tpm-preopened.c \
                                  $(TPM_CLIENT_SRCS) $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $(filter-out %.h,$^) $(REGISTER_LIBS) \
-		-Wl,--wrap=enforcement_active
+		-Wl,--wrap=prctl
 
 testing/helper/test-keys: testing/helper/test-keys.c $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
@@ -717,7 +715,7 @@ testing/helper/test-register: testing/helper/test-register.c \
                         $(TPM_CLIENT_SRCS) $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $(filter-out %.h,$^) $(REGISTER_LIBS) \
-		-Wl,--wrap=enforcement_active
+		-Wl,--wrap=prctl
 
 testing/helper/test-register-cli: testing/helper/test-register-cli.c \
 		$(BUILTIN_OBJS) $(UTIL_OBJS) $(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
@@ -732,13 +730,14 @@ testing/helper/test-nv-cphash: testing/helper/test-nv-cphash.c \
 		$(TPM_CLIENT_SRCS) $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $(filter-out %.h,$^) $(REGISTER_LIBS) \
-		-Wl,--wrap=enforcement_active
+		-Wl,--wrap=prctl
 
 testing/helper/test-tpm-session: testing/helper/test-tpm-session.c \
 		$(TPM_CLIENT_SRCS) $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $(filter-out %.h,$^) $(REGISTER_LIBS) \
-		-Wl,--wrap=enforcement_active,--wrap=identity_read
+		-Wl,--wrap=prctl,--wrap=bpf_obj_get,--wrap=bpf_obj_get_info_by_fd \
+		-Wl,--wrap=bpf_map_lookup_elem
 
 testing/helper/test-config: testing/helper/test-config.c util/log.o util/hex.o \
                             util/string.o util/malloc.o $(RUST_LIB)
@@ -994,7 +993,6 @@ testing/fuzz/fuzz-bpm-tar: testing/fuzz/fuzz-bpm-tar.c $(FUZZ_BASE)
 testing/fuzz/fuzz-bpm-package: testing/fuzz/fuzz-bpm-package.c $(FUZZ_BASE)
 testing/fuzz/fuzz-tpm-wire: testing/fuzz/fuzz-tpm-wire.c $(FUZZ_BASE)
 testing/fuzz/fuzz-attest: testing/fuzz/fuzz-attest.c $(FUZZ_BASE) \
-                          util/identity.c \
                           util/version_id.c \
                           $(LIBBPF_A)
 testing/fuzz/fuzz-attest: FUZZ_CFLAGS += $(TSS2_CFLAGS) $(LIBELF_CFLAGS)

@@ -81,10 +81,11 @@ struct mount_record {
 BUILD_BUG_ON(sizeof(struct mount_record) != 8);
 
 /*
- * The identity map init populated, froze and pinned this boot. -ENOENT
- * when init has not run, another -errno when the pin cannot be read.
+ * In rust/src/util/identity.rs. enforcement_active(): 1 when this boot
+ * enforces, 0 before init, otherwise -errno. identity_read(): the
+ * identity map init populated, froze and pinned this boot; -ENOENT when
+ * init has not run, another -errno when the pin cannot be read.
  */
-/* 1 when enforcement is active, 0 before init, otherwise -errno. */
 int enforcement_active(void);
 int identity_read(struct identity *out);
 
