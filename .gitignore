@@ -12,6 +12,7 @@
 /*.spdx.json
 /tools/shirudo-build/shirudo-build
 *.o
+/bpf/*.lskel
 *.d
 *.a
 *.so
