@@ -828,8 +828,9 @@ Commands and procedures
   stale ``--expect-chain``. Only ``attest verify`` is tested with that
   option.
 - ``status --include-eventlog`` and ``--show-full``.
-- ``upatch rewrite-rodata`` in ``shirudo-build``, which
-  ``kernel-obs`` uses to rewrite its watch lists.
+- ``upatch set`` in ``shirudo-build``, which ``kernel-obs`` uses to
+  rewrite its watch lists. ``bpm build`` tests the code it shares when it
+  fills the ``.rodata`` a Beefile generates.
 - The ``kernel-cve`` package. Its Beefile is a seed of the ``beefile``
   fuzz target only.
 - The recovery, upgrade and decommissioning procedures of
