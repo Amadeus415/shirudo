@@ -121,7 +121,7 @@ helpers to use.
   for sizes, `strscpy()` and `strsprintf()` with their `-E2BIG`
   checked, the `xmalloc()` family, `min()` and `max()`,
   `memzero_explicit()` and `memneq_explicit()` for secrets,
-  `util/json.h` for all JSON and `pr_*()` for all logging. The libc names
+  `util/json.h` for all JSON and `rust/src/log.rs` for all logging. The libc names
   they replace are poisoned. Code that a second place needs moves into
   `util/` with unit cases rather than being copied.
 - `ret` names a return code and `err` an errno kept beside the value a

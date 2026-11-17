@@ -111,7 +111,7 @@ extra check left to the caller, and move one found in a builtin into
 | Sealed state and paths root names | `seal_open()`, `seal_lock()`, `seal_append_line()`, `seal_write_file()`; `seal_output_create()` and `seal_output_commit()` for a report or export (`util/seal.h`) |
 | Bytes on the wire | `get_le32()`, `put_be32()`, `le32_to_cpu()` and kin (`<shirudo/byteorder.h>`), `hex_encode()`, `hex_decode()`, `hex_decode_max()`, `sha256_digest_decode()` (`util/hex.h`) |
 | JSON | `util/json.h`: `json_parse()` with a schema, `json_walk()`, `struct json_emit` |
-| Messages | `pr_err()`, `pr_warn()`, `pr_info()`, `pr_audit()` (`util/log.h`) |
+| Messages | `log::err()`, `warn()`, `info()`, `audit()`, and `log_c!` for a C format (`rust/src/log.rs`) |
 
 Code that a second place needs moves into `util/<m>.c`, declared in
 `util/<m>.h`, or in `include/shirudo/` for the project's basics, with
@@ -164,7 +164,7 @@ code, signing and the package builder, stays out of the core binary.
   one `__sensitive`: a check then wants every local of that struct
   scrubbed the same way, member filled by a parser and all.
 - All JSON goes through `util/json.h`; text from outside is written
-  with its lossy writers. All logging goes through `pr_*()` to syslog;
+  with its lossy writers. All logging goes through `rust/src/log.rs` to syslog;
   shirudo writes no log file of its own.
 - Fields of a little- or big-endian format are read and written with
   `le32_to_cpu()`, `get_le32()` and their kin; sparse refuses the rest.
@@ -211,7 +211,7 @@ its contract while any C caller uses it.
   calls and ioctls, libcurl, zlib, OpenSSL past `util/crypto.h` and the
   `util/` modules not ported yet, is declared in `rust/src/sys/`, one
   module for each header, which goes when the C it declares does. A
-  message goes through `pr_err()` and reads as the C's did.
+  message goes through `rust/src/log.rs` and reads as the C's did.
 - Before the C file goes, compare the two: build the old file from git
   with its functions renamed, link it beside the archive and run both on
   the same random and corpus inputs until they agree on every result and
@@ -221,7 +221,7 @@ its contract while any C caller uses it.
   AGENTS.md's dependency rules admit it, vendored and pinned in
   `rust/Cargo.lock` so that cargo builds offline. Rust allocations go through the allocator of
   `rust/src/heap.rs`, which zeroes and scrubs as its `xmalloc()` family
-  for C does; a buffer C frees with `xfree()` comes from that family. A panic reports through `pr_err()`
+  for C does; a buffer C frees with `xfree()` comes from that family. A panic reports through `log::err()`
   and aborts: the crate unwinds only so that a Lua error can cross a
   `"C-unwind"` callback. Overflow checks and LTO hold in every release
   build, and arithmetic that input can overflow is checked.

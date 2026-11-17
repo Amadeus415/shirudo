@@ -12,21 +12,7 @@
 
 #include <shirudo/compiler.h>
 
+/* In rust/src/log.rs: opens syslog for the messages to come. */
 void log_init(void);
-
-/*
- * In rust/src/log.rs: the message msg logged at syslog priority, escaped,
- * to syslog and stderr.
- */
-void log_emit(int priority, const char *msg);
-
-void pr_err(const char *fmt, ...)
-	__printf(1, 2);
-void pr_warn(const char *fmt, ...)
-	__printf(1, 2);
-void pr_info(const char *fmt, ...)
-	__printf(1, 2);
-void pr_audit(const char *fmt, ...)
-	__printf(1, 2);
 
 #endif /* SHIRUDO_LOG_H */
