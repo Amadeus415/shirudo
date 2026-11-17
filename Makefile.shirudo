@@ -219,8 +219,7 @@ UTIL_SRCS := \
     util/log.c \
     util/hex.c \
     util/string.c \
-    util/malloc.c \
-    util/upatch_maps.c
+    util/malloc.c
 
 BUILTIN_SRCS := \
     builtin-upatch.c
@@ -771,7 +770,7 @@ testing/helper/test-signed-load: testing/helper/test-signed-load.c
 	$(Q)$(CC) $(CFLAGS) -I$(BPF_UAPI_INCLUDE) \
 	    -o $@ $^ -lcrypto
 
-testing/helper/test-otel-map: testing/helper/test-otel-map.c util/upatch_maps.o \
+testing/helper/test-otel-map: testing/helper/test-otel-map.c \
                         util/string.o util/log.o \
                         util/paths.o \
                         util/malloc.o $(LIBBPF_A) util/hex.o \
@@ -779,9 +778,11 @@ testing/helper/test-otel-map: testing/helper/test-otel-map.c util/upatch_maps.o 
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
-testing/helper/test-upatch-map-types: testing/helper/test-upatch-map-types.c
+testing/helper/test-upatch-map-types: testing/helper/test-upatch-map-types.c \
+                                    util/malloc.o util/string.o \
+                                    util/hex.o util/log.o $(RUST_LIB)
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-prog-metadata: testing/helper/test-upatch-prog-metadata.c \
                                     util/malloc.o util/string.o \
@@ -790,7 +791,6 @@ testing/helper/test-upatch-prog-metadata: testing/helper/test-upatch-prog-metada
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-serializer-pages: testing/helper/test-upatch-serializer-pages.c \
-                                       util/upatch_maps.o \
                                        util/string.o \
                                        util/malloc.o util/paths.o \
                                        util/log.o util/hex.o \
@@ -1002,11 +1002,11 @@ testing/fuzz/fuzz-elf: testing/fuzz/fuzz-elf.c $(FUZZ_BASE) $(LIBBPF_A)
 testing/fuzz/fuzz-elf: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-elf: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS)
 testing/fuzz/fuzz-serializer: testing/fuzz/fuzz-serializer.c $(FUZZ_BASE) \
-                              util/upatch_maps.c \
                               util/paths.c \
                               $(LIBBPF_A)
 testing/fuzz/fuzz-serializer: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
-testing/fuzz/fuzz-serializer: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS)
+testing/fuzz/fuzz-serializer: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS) \
+	-Wl,--wrap=bpf_map_lookup_elem
 testing/fuzz/fuzz-cms: testing/fuzz/fuzz-cms.c $(FUZZ_BASE)
 testing/fuzz/fuzz-decoder: testing/fuzz/fuzz-decoder.c $(FUZZ_BASE)
 testing/fuzz/fuzz-decoder: FUZZ_LIBS += $(LUAJIT_LIBS)
@@ -1025,10 +1025,6 @@ testing/fuzz/fuzz-config-update: testing/fuzz/fuzz-config-update.c \
                                  $(FUZZ_BASE)
 testing/fuzz/fuzz-tree-state: testing/fuzz/fuzz-tree-state.c $(FUZZ_BASE)
 testing/fuzz/fuzz-kconfig: testing/fuzz/fuzz-kconfig.c $(FUZZ_BASE)
-
-# A target that reaches static parsers includes their source, which it
-# then depends on without linking it a second time.
-testing/fuzz/fuzz-serializer: FUZZ_INCLUDED := util/upatch_maps.c
 
 $(FUZZ_TARGETS): testing/fuzz/fuzz.h $(RUST_FUZZ_LIB)
 	@printf '  FUZZ    $@\n'
