@@ -3,9 +3,12 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <linux/bpf.h>
@@ -32,41 +35,54 @@ static struct identity identity;
 static int identity_error;
 static int identity_fd = -1;
 
-/* The identity map init would have pinned: the test's, or its error. */
-int __real_bpf_obj_get(const char *path);
-int __wrap_bpf_obj_get(const char *path)
+/*
+ * The identity map init would have pinned, the test's or its error,
+ * faked at the bpf() syscall.
+ */
+long __wrap_syscall(long number, ...)
 {
-	if (strcmp(path, IDENTITY_PIN))
-		return __real_bpf_obj_get(path);
-	if (identity_error) {
-		errno = -identity_error;
-		return identity_error;
+	struct bpf_map_info *map;
+	union bpf_attr *attr;
+	va_list ap;
+	long a[6];
+	int i;
+
+	va_start(ap, number);
+	for (i = 0; i < 6; i++)
+		a[i] = va_arg(ap, long);
+	va_end(ap);
+	if (number != SYS_bpf)
+		goto real;
+	attr = (union bpf_attr *)a[1];
+	switch (a[0]) {
+	case BPF_OBJ_GET:
+		if (strcmp((const char *)(uintptr_t)attr->pathname, IDENTITY_PIN))
+			break;
+		if (identity_error) {
+			errno = -identity_error;
+			return -1;
+		}
+		identity_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+		return identity_fd;
+	case BPF_OBJ_GET_INFO_BY_FD:
+		if (identity_fd < 0 || (int)attr->info.bpf_fd != identity_fd)
+			break;
+		map = (struct bpf_map_info *)(uintptr_t)attr->info.info;
+		memset(map, 0, attr->info.info_len);
+		map->key_size = sizeof(__u32);
+		map->value_size = sizeof(identity);
+		map->max_entries = 1;
+		return 0;
+	case BPF_MAP_LOOKUP_ELEM:
+		if (identity_fd < 0 || (int)attr->map_fd != identity_fd)
+			break;
+		memcpy((void *)(uintptr_t)attr->value, &identity, sizeof(identity));
+		return 0;
+	default:
+		break;
 	}
-	identity_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
-	return identity_fd;
-}
-
-int __real_bpf_obj_get_info_by_fd(int fd, void *info, __u32 *len);
-int __wrap_bpf_obj_get_info_by_fd(int fd, void *info, __u32 *len)
-{
-	struct bpf_map_info *map = info;
-
-	if (identity_fd < 0 || fd != identity_fd)
-		return __real_bpf_obj_get_info_by_fd(fd, info, len);
-	memset(info, 0, *len);
-	map->key_size = sizeof(__u32);
-	map->value_size = sizeof(identity);
-	map->max_entries = 1;
-	return 0;
-}
-
-int __real_bpf_map_lookup_elem(int fd, const void *key, void *value);
-int __wrap_bpf_map_lookup_elem(int fd, const void *key, void *value)
-{
-	if (identity_fd < 0 || fd != identity_fd)
-		return __real_bpf_map_lookup_elem(fd, key, value);
-	memcpy(value, &identity, sizeof(identity));
-	return 0;
+real:
+	return __real_syscall(number, a[0], a[1], a[2], a[3], a[4], a[5]);
 }
 
 enum fault_mode {

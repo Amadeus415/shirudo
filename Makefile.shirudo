@@ -614,7 +614,7 @@ build/verity-tests/shirudo-image-fault: testing/helper/image-fault.c \
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) \
 		$(VERITY_TEST_LDFLAGS) -o $@ $(filter-out %.h,$^) \
 		-Wl,--wrap=main,--wrap=Esys_PCR_Extend \
-		-Wl,--wrap=bpf_obj_get,--wrap=bpf_map_update_elem \
+		-Wl,--wrap=syscall \
 		$(STATIC_LIBS) $(VERITY_TEST_LIBS) $(RUST_TEST_LDLIBS)
 
 verity-test-helpers: $(VERITY_TEST_HELPERS) build/verity-tests/shirudo-image-fault
@@ -744,8 +744,7 @@ testing/helper/test-tpm-session: testing/helper/test-tpm-session.c \
 		$(TPM_CLIENT_SRCS) $(REGISTER_OBJS)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $(filter-out %.h,$^) $(REGISTER_LIBS) \
-		-Wl,--wrap=prctl,--wrap=bpf_obj_get,--wrap=bpf_obj_get_info_by_fd \
-		-Wl,--wrap=bpf_map_lookup_elem
+		-Wl,--wrap=prctl,--wrap=syscall
 
 testing/helper/test-config: testing/helper/test-config.c \
                             $(RUST_LIB)
@@ -1002,7 +1001,7 @@ testing/fuzz/fuzz-serializer: testing/fuzz/fuzz-serializer.c $(FUZZ_BASE) \
                                                         $(LIBBPF_A)
 testing/fuzz/fuzz-serializer: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-serializer: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS) \
-	-Wl,--wrap=bpf_map_lookup_elem
+	-Wl,--wrap=syscall
 testing/fuzz/fuzz-cms: testing/fuzz/fuzz-cms.c $(FUZZ_BASE)
 testing/fuzz/fuzz-decoder: testing/fuzz/fuzz-decoder.c $(FUZZ_BASE)
 testing/fuzz/fuzz-decoder: FUZZ_LIBS += $(LUAJIT_LIBS)
