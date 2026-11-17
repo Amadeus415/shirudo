@@ -13,6 +13,7 @@
 /tools/shirudo-build/shirudo-build
 *.o
 /bpf/*.lskel
+/bpf/*.skel.rs
 *.d
 *.a
 *.so

@@ -127,9 +127,11 @@ jobs:
           key: fuzz-corpus-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: fuzz-corpus-
 
-      # The targets need no BPF objects, but the toolchain the other jobs
-      # build in comes with the LVH guest. A push or a pull request gets a
-      # minute per target, the nightly run ten.
+      # The Rust library the targets link includes the types of bpf2's and
+      # the seal's maps, read from the BPF objects, which need the BTF of
+      # the LVH guest's kernel, and the toolchain the other jobs build in
+      # comes with it. A push or a pull request gets a minute per target,
+      # the nightly run ten.
       - name: Fuzz the parsers of input from outside the host in LVH VM
         id: fuzz
         uses: cilium/little-vm-helper@c8b0bfbae3bdda7bc69fb9cd370e4b74ce84986d # v0.0.33
