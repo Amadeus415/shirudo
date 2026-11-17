@@ -1,5 +1,4 @@
 # Each harness of this directory and the CBMC options it runs with.
 # --unwind must exceed the longest loop the harness's bound allows.
 paths-bpffs-name	--unwind 18
-log-escape		--unwind 7 LEN=0-5
 paths-bpffs-name-model	--unwind 20

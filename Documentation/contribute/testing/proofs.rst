@@ -71,7 +71,7 @@ Run the proofs
    .. code-block:: console
 
       $ make proofs-lean4
-      $ make proofs-cbmc PROOFS="paths-bpffs-name log-escape"
+      $ make proofs-cbmc PROOFS="paths-bpffs-name paths-bpffs-name-model"
 
 3. Read why a CBMC proof failed:
 

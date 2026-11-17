@@ -40,12 +40,6 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
      - ``upatch_bpffs_name()``, ``upatch_name_from_bpffs()``
      - Up to 8 bytes, buffers up to 18
      - The result and the string of the Lean model ``Shirudo.PinName``
-   * - ``log-escape``
-     - ``escape()`` of :src:`util/log.c`
-     - Messages of 0 to 5 bytes, every buffer size
-     - Terminated printable ASCII, every backslash a ``\\`` or three octal
-       digits, decoding to the message or to a prefix cut between
-       characters
 
 Lean 4 proofs
 -------------

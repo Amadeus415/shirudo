@@ -14,6 +14,12 @@
 
 void log_init(void);
 
+/*
+ * In rust/src/log.rs: the message msg logged at syslog priority, escaped,
+ * to syslog and stderr.
+ */
+void log_emit(int priority, const char *msg);
+
 void pr_err(const char *fmt, ...)
 	__printf(1, 2);
 void pr_warn(const char *fmt, ...)

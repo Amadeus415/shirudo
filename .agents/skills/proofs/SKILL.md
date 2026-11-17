@@ -17,7 +17,7 @@ a proof or to what it covers updates the coverage page too.
 
 ```sh
 make proofs                                  # CBMC and Lean 4
-make proofs-cbmc PROOFS="log-escape"         # some CBMC proofs
+make proofs-cbmc PROOFS="paths-bpffs-name"   # some CBMC proofs
 testing/proofs/cbmc/run.sh -v <proof>        # whole output and traces
 make proofs-lean4                            # the Lean 4 proofs
 ```
