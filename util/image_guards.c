@@ -23,7 +23,7 @@
 #include "image_guards.h"
 #include "log.h"
 #include "paths.h"
-#include "tamper.h"
+#include "bpf/lib/tamper.h"
 
 const struct image_guard
 shirudo_seal_guards[SEAL_HOOK_COUNT] = {

@@ -5,7 +5,7 @@
 # t6003 -- the tamper points are the one enum the LSM counts with and
 # status names them from (bpf/lib/tamper.h), and a counter is
 # only as good as its name; this keeps every member in the table of
-# names and meanings util/tamper.c holds. Also checks that status
+# names and meanings rust/src/util/tamper.rs holds. Also checks that status
 # reports the counters as absent, not as an error, where init has not
 # run.
 
@@ -19,8 +19,8 @@ trap 'rm -rf "$W"' EXIT
 test_expect_success 'every point has a name and a meaning' '
 	sed -n "s/^\tTAMPER_\([A-Z_]*\),$/\1/p" \
 		../bpf/lib/tamper.h >"$W/points" &&
-	sed -n "s/^\t\[TAMPER_\([A-Z_]*\)\] = { \"[A-Za-z]*\",$/\1/p" \
-		../util/tamper.c >"$W/table" &&
+	sed -n "s/^ *\/\/ TAMPER_\([A-Z_]*\)$/\1/p" \
+		../rust/src/util/tamper.rs >"$W/table" &&
 	[ -s "$W/points" ] &&
 	cmp "$W/points" "$W/table"
 '

@@ -66,7 +66,7 @@ done <"$work/categories"
 
 # Every tamper counter has an entry, and a page names no other.
 counters=Documentation/security/tamper-counters.rst
-grep -oE '= \{ "[A-Za-z]+",' util/tamper.c | sed -E 's/.*"([A-Za-z]+)".*/\1/' |
+grep -oE 'name: "[A-Za-z]+"' rust/src/util/tamper.rs | sed -E 's/.*"([A-Za-z]+)".*/\1/' |
 	sort -u >"$work/counters"
 while IFS= read -r counter; do
 	grep -qF "\`\`$counter\`\`" "$counters" ||
