@@ -215,7 +215,6 @@ CLANG_BPF := $(CLANG) -target bpf -mcpu=v4 -fno-jump-tables -O2 -g -Wall -Wextra
 
 UTIL_SRCS := \
     util/loader.c \
-    util/paths.c \
     util/string.c \
     util/malloc.c
 
@@ -444,7 +443,7 @@ build/target/util/loader.o: $(BPF_OBJS)
 # shirudo binary.
 tools/shirudo-build/shirudo-build: $(BUILD_OBJS) \
                                    util/loader.o \
-                                   util/malloc.o util/paths.o \
+                                   util/malloc.o \
                                    util/string.o \
                                    $(VERSION_OBJ) \
                                    $(LIBBPF_A) $(RUST_LIB)
@@ -764,7 +763,6 @@ testing/helper/test-signed-load: testing/helper/test-signed-load.c
 
 testing/helper/test-otel-map: testing/helper/test-otel-map.c \
                         util/string.o \
-                        util/paths.o \
                         util/malloc.o $(LIBBPF_A) \
                         $(RUST_LIB)
 	@printf '  CC      $@\n'
@@ -784,7 +782,7 @@ testing/helper/test-upatch-prog-metadata: testing/helper/test-upatch-prog-metada
 
 testing/helper/test-upatch-serializer-pages: testing/helper/test-upatch-serializer-pages.c \
                                        util/string.o \
-                                       util/malloc.o util/paths.o \
+                                       util/malloc.o \
                                        $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
@@ -991,8 +989,7 @@ testing/fuzz/fuzz-elf: testing/fuzz/fuzz-elf.c $(FUZZ_BASE) $(LIBBPF_A)
 testing/fuzz/fuzz-elf: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-elf: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS)
 testing/fuzz/fuzz-serializer: testing/fuzz/fuzz-serializer.c $(FUZZ_BASE) \
-                              util/paths.c \
-                              $(LIBBPF_A)
+                                                        $(LIBBPF_A)
 testing/fuzz/fuzz-serializer: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-serializer: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS) \
 	-Wl,--wrap=bpf_map_lookup_elem
@@ -1008,8 +1005,7 @@ testing/fuzz/fuzz-oci-ref: testing/fuzz/fuzz-oci-ref.c $(FUZZ_BASE)
 testing/fuzz/fuzz-registry-auth: testing/fuzz/fuzz-registry-auth.c \
                                  $(FUZZ_BASE)
 testing/fuzz/fuzz-config: testing/fuzz/fuzz-config.c $(FUZZ_BASE)
-testing/fuzz/fuzz-image: testing/fuzz/fuzz-image.c $(FUZZ_BASE) \
-                         util/paths.c
+testing/fuzz/fuzz-image: testing/fuzz/fuzz-image.c $(FUZZ_BASE)
 testing/fuzz/fuzz-config-update: testing/fuzz/fuzz-config-update.c \
                                  $(FUZZ_BASE)
 testing/fuzz/fuzz-tree-state: testing/fuzz/fuzz-tree-state.c $(FUZZ_BASE)
