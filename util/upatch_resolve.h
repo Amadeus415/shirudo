@@ -2,7 +2,7 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * The hook string and load time of a loaded upatch, from its pin.
+ * Where a loaded upatch attaches, from its pins.
  */
 
 #ifndef SHIRUDO_UTIL_UPATCH_RESOLVE_H
@@ -15,19 +15,11 @@ struct btf;
 #define UPATCH_LOCATION_MAX	160
 
 /*
- * Open the first pinned link for an upatch. Single-program upatches use
- * "link"; multi-program upatches use "link_0", "link_1", ...
- * Returns a link fd on success, negative errno on failure.
+ * The SEC()-style hook upatch name attaches to, as a C string into the
+ * cap bytes at out: 0 or -errno. vbtf may be NULL; the location then
+ * degrades to the bare prefix. In rust/src/util/upatch_resolve.rs.
  */
-int upatch_open_first_link(const char *name);
-
-/* vbtf may be NULL; the location then degrades to the bare prefix. */
 int upatch_resolve_location(struct btf *vbtf, const char *name,
 			    char *out, size_t cap);
-
-void upatch_loaded_at(const char *name, char *out, size_t cap);
-
-/* Empty on any failure. */
-void upatch_payload_sha256(const char *name, char *out, size_t cap);
 
 #endif /* SHIRUDO_UTIL_UPATCH_RESOLVE_H */

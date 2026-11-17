@@ -223,8 +223,7 @@ UTIL_SRCS := \
     util/string.c \
     util/image_guards.c \
     util/malloc.c \
-    util/upatch_maps.c \
-    util/upatch_resolve.c
+    util/upatch_maps.c
 
 BUILTIN_SRCS := \
     builtin-upatch.c
@@ -776,7 +775,6 @@ testing/helper/test-signed-load: testing/helper/test-signed-load.c
 	    -o $@ $^ -lcrypto
 
 testing/helper/test-otel-map: testing/helper/test-otel-map.c util/upatch_maps.o \
-                        util/upatch_resolve.o \
                         util/string.o util/log.o \
                         util/paths.o \
                         util/malloc.o $(LIBBPF_A) util/hex.o \
@@ -795,7 +793,7 @@ testing/helper/test-upatch-prog-metadata: testing/helper/test-upatch-prog-metada
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-serializer-pages: testing/helper/test-upatch-serializer-pages.c \
-                                       util/upatch_maps.o util/upatch_resolve.o \
+                                       util/upatch_maps.o \
                                        util/string.o \
                                        util/malloc.o util/paths.o \
                                        util/log.o util/hex.o \
@@ -1008,7 +1006,7 @@ testing/fuzz/fuzz-elf: testing/fuzz/fuzz-elf.c $(FUZZ_BASE) $(LIBBPF_A)
 testing/fuzz/fuzz-elf: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-elf: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS)
 testing/fuzz/fuzz-serializer: testing/fuzz/fuzz-serializer.c $(FUZZ_BASE) \
-                              util/upatch_maps.c util/upatch_resolve.c \
+                              util/upatch_maps.c \
                               util/paths.c \
                               $(LIBBPF_A)
 testing/fuzz/fuzz-serializer: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
