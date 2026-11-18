@@ -300,38 +300,12 @@ mod tests;
 pub(crate) mod capi {
     use core::ffi::{CStr, c_char};
 
-    use crate::errno::E2BIG;
-    use crate::sys::libc::strnlen;
-
     /// # Safety
     ///
     /// `s` holds `len` bytes.
     unsafe fn bytes<'a>(s: *const c_char, len: usize) -> &'a [u8] {
         // SAFETY: as the caller passes them.
         unsafe { crate::ffi::slice(s.cast::<u8>(), len) }
-    }
-
-    /// # Safety
-    ///
-    /// `dst` is room for `size` bytes, and `src` a C string or `size`
-    /// readable bytes.
-    pub unsafe extern "C" fn strscpy(dst: *mut c_char, src: *const c_char, size: usize) -> isize {
-        if size == 0 {
-            return -(E2BIG as isize);
-        }
-        // SAFETY: the caller's string, read no further than size bytes,
-        // and the caller's room.
-        let (src, dst) = unsafe {
-            let len = strnlen(src, size);
-            (
-                bytes(src, len),
-                core::slice::from_raw_parts_mut(dst.cast::<u8>(), size),
-            )
-        };
-        match super::strscpy(dst, src) {
-            Ok(n) => n as isize,
-            Err(e) => e as isize,
-        }
     }
 
     /// # Safety
