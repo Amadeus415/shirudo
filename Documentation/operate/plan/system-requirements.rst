@@ -427,7 +427,7 @@ keyrings. Any Linux kernel on which the tools below run serves.
      - ML-DSA-87 signing and hybrid ML-KEM TLS. The build refuses older
        versions.
    * - ``libcurl`` 7.75 or newer, ``tss2-esys`` 4.0 or newer,
-       ``tss2-tctildr``, ``zlib``, LuaJIT with GC64
+       ``tss2-tctildr``, LuaJIT with GC64
      - Linked by the ``shirudo`` binary, which is the same program on
        both roles. LuaJIT GC64 is required on the supported 64-bit
        architectures.
@@ -482,11 +482,11 @@ target-deps`` first.
        to use prebuilt ones.
    * - autoconf, automake, libtool and autoconf-archive
      - tpm2-tss's ``bootstrap`` script.
-   * - Static ``libz.a`` and ``libluajit-5.1.a`` with GC64, and for the
-       VM tests' fault helper ``libelf.a`` and ``libzstd.a``
+   * - Static ``libluajit-5.1.a`` with GC64, and for the VM tests'
+       fault helper ``libelf.a``, ``libz.a`` and ``libzstd.a``
      - Taken from the first of ``/usr/lib/<multiarch>``, ``/usr/lib64``
-       and ``/usr/lib`` that holds ``libz.a``; the helper's from the
-       linker's own search path.
+       and ``/usr/lib`` that holds ``libluajit-5.1.a``; the helper's from
+       the linker's own search path.
        ``TARGET_SYSTEM_LIBDIR=`` names another directory.
    * - Static glibc, ``libm``, startup objects and compiler runtime with
        static PIE support (``libc6-dev`` on Debian, ``glibc-static`` on

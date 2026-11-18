@@ -13,7 +13,6 @@ tss=/tmp/shirudo-target-deps
 
 install_distro_archives()
 {
-	install -m 0644 /usr/lib/x86_64-linux-gnu/libz.a "$tss/lib/libz.a"
 	install -m 0644 /usr/lib/x86_64-linux-gnu/libluajit-5.1.a \
 		"$tss/lib/libluajit-5.1.a"
 }
@@ -21,7 +20,7 @@ install_distro_archives()
 if [ -s "$cache/openssl/lib/libcrypto.a" ] &&
 	[ -s "$cache/curl/lib/libcurl.a" ] &&
 	[ -s "$cache/lib/libtss2-esys.a" ] &&
-	[ -s "$cache/lib/libz.a" ]; then
+	[ -s "$cache/lib/libluajit-5.1.a" ]; then
 	rm -rf "$openssl" "$curl_prefix" "$tss"
 	cp -a "$cache/openssl" "$openssl"
 	cp -a "$cache/curl" "$curl_prefix"
@@ -58,7 +57,7 @@ LDFLAGS="-L$openssl/lib" \
 	--with-ca-path=/etc/ssl/certs \
 	--enable-static \
 	--disable-shared \
-	--without-libpsl --without-brotli --without-zstd \
+	--without-zlib --without-libpsl --without-brotli --without-zstd \
 	--without-nghttp2 --without-nghttp3 --without-ngtcp2 \
 	--without-libidn2 --without-librtmp --without-libssh2 \
 	--without-libssh --without-libgsasl --without-winidn \

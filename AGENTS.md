@@ -306,8 +306,8 @@ one usually still compiles and passes tests.
 
 - The binary links exactly `libc`, `libcrypto`/`libssl` (OpenSSL >= 3.5;
   ML-DSA-87 is the only signing algorithm, TLS is 1.3 with hybrid ML-KEM
-  only), `libcurl`, `libtss2-esys` + `libtss2-tctildr`, `zlib`,
-  `libluajit`, the vendored `libbpf` and, linked in, Rust's
+  only), `libcurl`, `libtss2-esys` + `libtss2-tctildr`, `libluajit`,
+  the vendored `libbpf` and, linked in, Rust's
   standard library with the unwinder from `libgcc_eh` and the crates
   vendored in `rust/vendor`: `miniz_oxide`, with `adler2`, which deflates
   the gzip `rust/src/util/gzip.rs` writes. A new library, a

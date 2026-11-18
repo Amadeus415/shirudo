@@ -401,7 +401,7 @@ and UKI (A6); the TPM (A15); the initrd and every unit it runs before
 ``shirudo-initrd.service`` completes; and the runtime image. The
 runtime image holds the shirudo binary with its two embedded BPF
 objects, ``bpf2`` and ``seal``, the libraries it links (OpenSSL,
-libcurl, tpm2-tss, zlib, LuaJIT, the C library),
+libcurl, tpm2-tss, LuaJIT, the C library),
 every other executable on the image (A14), the certificates
 and the bootstrap settings. The memory of every task with runtime
 authority is in the TCB too, the Lua decoders it runs included.

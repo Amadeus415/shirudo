@@ -35,23 +35,24 @@ TSS_VERSION ?= 4.2.0
 TARGET_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || gcc -print-multiarch)
 
 # The multiarch directory on Debian, /usr/lib64 on Fedora and RHEL: the
-# first that holds libz.a, else the first candidate.
+# first that holds libluajit-5.1.a, else the first candidate.
 TARGET_SYSTEM_ROOT ?= /usr
 TARGET_SYSTEM_LIBDIRS := \
 	$(if $(TARGET_MULTIARCH),$(TARGET_SYSTEM_ROOT)/lib/$(TARGET_MULTIARCH)) \
 	$(TARGET_SYSTEM_ROOT)/lib64 $(TARGET_SYSTEM_ROOT)/lib
 TARGET_SYSTEM_LIBDIR ?= $(firstword \
-	$(foreach d,$(TARGET_SYSTEM_LIBDIRS),$(if $(wildcard $(d)/libz.a),$(d))) \
+	$(foreach d,$(TARGET_SYSTEM_LIBDIRS),$(if $(wildcard $(d)/libluajit-5.1.a),$(d))) \
 	$(TARGET_SYSTEM_LIBDIRS))
 
 OPENSSL_PKG_CONFIG_PATH := $(TARGET_OPENSSL_PREFIX)/lib/pkgconfig
 
 # shirudo's clients speak HTTPS to OCI registries and OTLP/S3 endpoints
 # and nothing else. Pin every optional libcurl dependency off so the
-# static closure does not change with the build host's -dev packages
-# (zlib stays: it is already part of the target runtime archives).
+# static closure does not change with the build host's -dev packages,
+# zlib among them: shirudo gzips and gunzips itself, and asks libcurl to
+# decode no response.
 CURL_FEATURE_FLAGS ?= \
-	--without-libpsl --without-brotli --without-zstd \
+	--without-zlib --without-libpsl --without-brotli --without-zstd \
 	--without-nghttp2 --without-nghttp3 --without-ngtcp2 \
 	--without-libidn2 --without-librtmp --without-libssh2 \
 	--without-libssh --without-libgsasl --without-winidn \
@@ -73,7 +74,6 @@ STATIC_ARCHIVES_STAMP := $(TARGET_STATIC_LIBDIR)/.system-archives-staged
 ENV_FILE := $(TARGET_DEPS_DIR)/target.env
 
 SYSTEM_ARCHIVES := \
-	$(TARGET_SYSTEM_LIBDIR)/libz.a \
 	$(TARGET_SYSTEM_LIBDIR)/libluajit-5.1.a
 
 OPENSSL_ARCHIVES := \
@@ -115,7 +115,7 @@ $(OPENSSL_STAMP):
 	@$(MAKE) -C "$(OPENSSL_SOURCE)" DESTDIR= install_sw
 	@touch "$@"
 
-$(CURL_STAMP): $(OPENSSL_STAMP)
+$(CURL_STAMP): Makefile.target-deps $(OPENSSL_STAMP)
 	@mkdir -p "$(TARGET_SOURCE_DIR)" "$(TARGET_CURL_PREFIX)"
 	@if test ! -f "$(CURL_TARBALL)"; then \
 		curl -fsSL "https://curl.se/download/curl-$(CURL_VERSION).tar.xz" \

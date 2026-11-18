@@ -616,10 +616,9 @@ build/verity-tests/shirudo-policy-probe: \
 
 
 ifeq ($(PROFILE),target)
-# The helpers that link libbpf take its libelf, static with the zstd it
-# takes, which the target itself links neither of; the zlib it takes
-# too comes after.
-VERITY_TEST_LIBS := $(TARGET_TLS_STATIC_LINK_LIBS) -lelf -lzstd \
+# The helpers that link libbpf take its libelf, static with the zlib and
+# zstd it takes, which the target itself links none of.
+VERITY_TEST_LIBS := $(TARGET_TLS_STATIC_LINK_LIBS) -lelf -lz -lzstd \
 		    $(TARGET_STATIC_RUNTIME_LINK_LIBS)
 VERITY_TEST_LDFLAGS := $(HARDEN_STATIC_PIE_LDFLAGS) -static-pie -static-libgcc
 else
