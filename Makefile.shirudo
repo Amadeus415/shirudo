@@ -1159,14 +1159,11 @@ FUZZ_TARGETS := $(patsubst testing/fuzz/%.c,$(FUZZ_OUT)/%, \
                 $(wildcard testing/fuzz/fuzz-*.c))
 
 testing/fuzz/fuzz-json: testing/fuzz/fuzz-json.c $(FUZZ_BASE)
-testing/fuzz/fuzz-oci-manifest: testing/fuzz/fuzz-oci-manifest.c \
-                                $(FUZZ_BASE)
 testing/fuzz/fuzz-tree: testing/fuzz/fuzz-tree.c $(FUZZ_BASE)
 testing/fuzz/fuzz-rodata: testing/fuzz/fuzz-rodata.c $(FUZZ_BASE) \
                           $(LIBBPF_A)
 testing/fuzz/fuzz-rodata: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-rodata: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS) $(ZLIB_LIBS)
-testing/fuzz/fuzz-tpm-wire: testing/fuzz/fuzz-tpm-wire.c $(FUZZ_BASE)
 testing/fuzz/fuzz-attest: testing/fuzz/fuzz-attest.c $(FUZZ_BASE) \
                           $(VERSION_OBJ) \
                           $(LIBBPF_A)
@@ -1190,11 +1187,6 @@ testing/fuzz/fuzz-otel: testing/fuzz/fuzz-otel.c $(FUZZ_BASE) \
                         $(VERSION_OBJ)
 testing/fuzz/fuzz-beefile: \
                            $(VERSION_OBJ)
-testing/fuzz/fuzz-oci-http: testing/fuzz/fuzz-oci-http.c $(FUZZ_BASE)
-testing/fuzz/fuzz-oci-ref: testing/fuzz/fuzz-oci-ref.c $(FUZZ_BASE)
-testing/fuzz/fuzz-registry-auth: testing/fuzz/fuzz-registry-auth.c \
-                                 $(FUZZ_BASE)
-testing/fuzz/fuzz-config: testing/fuzz/fuzz-config.c $(FUZZ_BASE)
 testing/fuzz/fuzz-config-update: testing/fuzz/fuzz-config-update.c \
                                  $(FUZZ_BASE)
 testing/fuzz/fuzz-kconfig: testing/fuzz/fuzz-kconfig.c $(FUZZ_BASE)
@@ -1208,7 +1200,7 @@ $(FUZZ_TARGETS): testing/fuzz/fuzz.h $(RUST_FUZZ_LIB)
 # The targets written in Rust: functions of the fuzz build of the library,
 # each run by an entry object made from testing/fuzz/target.rs.in.
 FUZZ_RUST := kernel beefile elf tree-state image prog-metadata upatch \
-	     bpm-tar bpm-index bpm-package
+	     bpm-tar bpm-index bpm-package oci-manifest oci-http oci-ref registry-auth config tpm-wire
 FUZZ_MAIN_DIR := build/fuzz-main
 FUZZ_RUST_TARGETS := $(addprefix $(FUZZ_OUT)/fuzz-,$(FUZZ_RUST))
 
