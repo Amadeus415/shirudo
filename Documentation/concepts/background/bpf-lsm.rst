@@ -54,12 +54,12 @@ and IMA and EVM, when built in, still run last. No other LSM then
 refuses an operation before shirudo's programs see and count it, and
 on an upstream kernel without the carried xattr patch none can hide a
 seal label by refusing the read of it (see :doc:`/security/threat-model`).
-The security code the target runs shrinks to what shirudo uses. One more LSM
-matters: the threat model assumes ``lockdown=integrity``, and lockdown is
-an LSM as well. A kernel built with
+The security code the target runs shrinks to what shirudo uses.
+Lockdown is an LSM as well, and shirudo's ``bpf2`` object refuses what
+its integrity mode refuses from ``init`` on, so the target needs no
+lockdown LSM. Where one runs, a kernel built with
 ``CONFIG_SECURITY_LOCKDOWN_LSM_EARLY`` starts it before it reads the
-list, so ``lsm=bpf`` keeps it; on any other kernel, use
-``lsm=lockdown,bpf``.
+list, so ``lsm=bpf`` keeps it, and it decides before shirudo.
 
 BPF programs on LSM hooks
 -------------------------

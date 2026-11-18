@@ -41,6 +41,8 @@ A Beefile is a small subset of TOML, read line by line.
 
 ``bpm build`` reports every error in the file, of syntax or of content,
 as ``bpm build: <file> is not a valid Beefile``, without a line number.
+For a ``fixes`` it refuses, a ``Beefile: fixes ...`` line before that one
+says what is wrong with the list.
 
 Keys
 ----
@@ -238,7 +240,10 @@ that reads it. The header is installed beside the shirudo BPF headers.
 The signed ``SHPL`` section opts the upatch into these bindings;
 declaring the maps without policy tables leaves them as ordinary
 upatch-owned maps. Signed BPF programs can write the maps, so enforcement
-programs must treat them as read-only by contract.
+programs must treat them as read-only by contract. Root can give its own
+processes any bit, through a file system it mounts whose executables
+carry the xattr, so let a bit restrict what a task may do, never exempt
+it from a rule.
 
 The generator and the updater run on the operator host with the
 operator's rights. The target receives only the signed result. Without
@@ -277,6 +282,24 @@ tree operation.
      - no
      - The member that a ``delete`` publishes. Default:
        ``unload_target``.
+   * - ``fixes``
+     - array of strings
+     - no
+     - The IDs of the advisories the upatch fixes, such as
+       ``fixes = ["EXAMPLE-0101"]``: 1 to 16 IDs, each once and of 1 to
+       255 bytes of letters, digits, ``.``, ``_``, ``:`` and ``-``. The
+       key may appear once.
+
+``fixes`` is a convention of the keepalive backend, which reads it to say
+which nodes are exposed to an advisory. Nodes ignore it: it selects
+nothing, and no target reads, checks or measures it. ``bpm build``
+checks the form of each ID, not that the advisory exists, and refuses a
+list that breaks the rules above, an empty list and a value that is not
+an array of strings. It keeps the Beefile as written; the order of the
+IDs does not matter, because the list is published in byte order.
+``bpm tree append`` writes it on the operation it publishes as an
+``add``, outside the operation digest, and never on a ``delete``
+(:doc:`publishing`).
 
 ``[upatches.tree.selector]``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -371,22 +394,30 @@ Limits and reserved names
      - 16
    * - values per selector key
      - 16
+   * - IDs in ``fixes``
+     - 16, of 255 bytes each
    * - keys in each of ``kconfig`` and ``labels``
      - 64
    * - length of a string in a selector or command
      - 255 bytes
    * - package version, ``--version``
-     - 1 to 127 characters of letters, digits, ``.``, ``_``, ``-`` and
-       ``+``, starting with a letter or a digit
+     - A SemVer 2.0.0 version of at most 127 characters, such as
+       ``1.2.0``, ``1.2.0-rc.1`` or ``1.2.0+build.5``
    * - member path including ``<name>-<version>/``
      - 99 bytes, the limit of a ustar name
    * - ``.bee`` file
-     - 256 MiB per member file
+     - 256 MiB for all member files together
 
-Every member path must be unique. ``Beefile``, ``README.md``,
-``cert.der`` and ``build-environment.json`` are reserved for the members
-``bpm build`` writes itself. A member path longer than the ustar limit
-fails the build with ``bpm build: File name too long``.
+Every member path must be unique, and none may lie below another: a
+name is a file or a directory, not both, so ``a`` and ``a/b`` do not go
+into one package. ``Beefile``, ``README.md``, ``cert.der`` and
+``build-environment.json`` are reserved for the members ``bpm build``
+writes itself, and no member path lies below one of them either. A
+member path longer than the ustar limit fails the build with ``bpm
+build: File name too long``, and members of more than 256 MiB together,
+or one of that size alone, with ``bpm build: the members of the package
+are more than 256 MiB together, the most a target installs``: a target
+unpacks no more.
 
 Example
 -------

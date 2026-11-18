@@ -2,3 +2,12 @@ name: shirudo CodeQL configuration
 
 paths-ignore:
   - vendor
+
+# Rules the tree's style contradicts: option parsers advance their index
+# inside the loop, and the coding style keeps comments to what the code
+# cannot say, so neither finding is a defect.
+query-filters:
+  - exclude:
+      id: cpp/loop-variable-changed
+  - exclude:
+      id: cpp/poorly-documented-function

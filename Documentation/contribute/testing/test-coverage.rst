@@ -55,12 +55,24 @@ signed config image.
        file, line and rule, the vendored sources left out, a rule named
        alone, the rewrite of ``-D patch``, a case for each rule taken
        from CERT C, a case for each BPF hazard rule beside the safe
-       form it leaves alone, and the tree itself
+       form it leaves alone, a dead store beside the reads
+       ``dead_store`` leaves alone, a file a rule gives up on at its
+       time limit named rather than failed, and the tree itself
    * - ``t0007-check-operator-linkage``
      - ``check-operator-linkage.sh``: the libraries an operator binary
        may link and its own interpreter, another loader, a library
        outside the list or named like one on it, and the operator
        binaries when built
+   * - ``t0008-check-docs``
+     - ``check-docs.sh``: the whole of each field of a threat's fact
+       box, a hook by its section, each tamper and integrity counter's
+       entry on its page, the source files a proof reads or the proof
+       coverage page lists as read by none, and the tree itself
+   * - ``t0009-check-unused``
+     - ``check-unused.sh``: an extern function nothing calls, with its
+       type on its line or the one above, a header's declaration that is
+       no call, the calls that count and the definitions it leaves
+       alone, and the tree itself
 
 ``build`` (1)
 ~~~~~~~~~~~~~
@@ -92,7 +104,9 @@ signed config image.
        ``--dry-run`` plan
    * - ``t1007-test-vm-cli``
      - Test VM scripts: kernel selection, host dependencies, arm64
-       boot settings, the bundle stamp
+       boot settings, the bundle stamp, the build container, serve mode,
+       node mode only for a core or edge node of the end-to-end tier, the
+       operator VM's role and its signing key
    * - ``t1008-kernel-ami-config``
      - The slim kernel configuration for NitroTPM CRB, EC2, EFI and SSM
    * - ``t1009-upatch-isa``
@@ -102,6 +116,14 @@ signed config image.
    * - ``t1010-test-filter``
      - Script regex matching through ``-t`` and ``TEST_FILTER``, command-line
        precedence, empty and invalid patterns, ordering and failure status
+
+   * - ``t1010-local-stack``
+     - VM-first service configuration and stable public trust across starts
+   * - ``t1011-completion``
+     - The bash completion: commands and subcommands from ``--list-cmds``,
+       options from ``--list-opts``, a value by its placeholder, and a
+       command without subcommands that answers ``--list-cmds`` with
+       nothing and logs nothing
 
 ``signing`` (2)
 ~~~~~~~~~~~~~~~
@@ -119,7 +141,8 @@ signed config image.
        keys, a one-bit change in the signed bytes
    * - ``t2003-keys-set``
      - The trusted set and its digest, revoked certificates left out,
-       ``attest predict`` agreement
+       ``attest predict`` agreement, signatures accepted from either
+       active signer and refused after that signer is revoked
    * - ``t2004-keys-vouch``
      - ``keys vouch``, and ``keys add`` admitting only vouched
        certificates
@@ -157,7 +180,10 @@ signed config image.
    * - ``t3006-cgroup-skb-metadata``
      - ``cgroup_skb`` ingress and egress attach metadata
    * - ``t3007-uprobe-multi-metadata``
-     - ``uprobe.multi`` globs to file offsets and the target's build ID
+     - ``uprobe`` and ``uretprobe`` functions, function offsets and raw
+       file offsets, ``uprobe.multi`` and ``uretprobe.multi`` globs,
+       sleepable ``.s`` forms included, to file offsets and the target's
+       build ID, and the uprobe forms the builder refuses
    * - ``t3008-override-metadata``
      - kprobe override and ``fmod_ret`` attach metadata
    * - ``t3009-netfilter-metadata``
@@ -166,6 +192,10 @@ signed config image.
      - Attach kinds the builder refuses
    * - ``t3011-string-bounds``
      - Names and the tree repository are refused rather than cut
+   * - ``t3012-xdp-metadata``
+     - Signed XDP device-class masks, object inputs and invalid sections;
+       two XDP programs of one upatch build with disjoint classes and are
+       refused when they share one
    * - ``t3101-target-fixtures``
      - Prebuilt fixtures load and unload, foreign and own-keyring
        fixtures are refused, a map fixture exports
@@ -180,7 +210,11 @@ signed config image.
    * - ``t3106-upatch-get``
      - ``upatch get`` source lines and JSON
    * - ``t3107-uprobe-multi``
-     - A live ``uprobe.multi`` load, refusal after a build ID change
+     - A live ``uprobe.multi`` load, refusal after a build ID change, a
+       live ``uretprobe.multi`` load that runs and unloads, a live
+       sleepable ``uprobe.multi.s`` load that reads user memory, and live
+       ``uprobe`` and ``uretprobe`` loads that run once, report their
+       checked ``/proc/self/fd/<n>`` target paths and unload
    * - ``t3108-status-many``
      - ``status --json`` with eighty loaded upatches lists all of them
    * - ``t3109-policy-labels``
@@ -190,6 +224,32 @@ signed config image.
        maps
    * - ``t3110-double-load``
      - A second load of a loaded upatch is refused as ``already_loaded``
+   * - ``t3111-xdp``
+     - Native XDP class selection, veth pair deduplication with both
+       endpoint index orderings, cross-namespace pairs, a bridge without
+       native XDP skipped and listed under ``XdpCovered``, rollback, signed unload and descriptor
+       and alternate-attachment lockdown; a repeated init adopts the
+       archived XDP without another event. A veth with a peer MTU of 9000
+       and the ``virtio_net`` guest adapter at MTU 9000 attach, which only a
+       multi-buffer program can. A veth with too few rx queues, which its
+       driver refuses with ``ENOSPC``, fails the load as
+       ``xdp_driver_refused`` and leaves nothing, and an occupied device
+       fails it as ``xdp_device_occupied``. Each case cleans up its state
+       so a failed assertion does not contaminate later cases.
+   * - ``t3112-xdp-reconcile``
+     - ``upatch reconcile`` attaches a device added after load, adds no
+       pin or event on a second pass, leaves a device another program
+       occupies, without a warning, while ``status`` lists it under
+       ``XdpCovered``, and attaches it once that program is unloaded, does not read a gone device as tampering, removes its
+       pin without reusing a live index, does nothing after unload, and leaves the link on a veth
+       end moved to another namespace. A changed archive is covered by
+       the ``upatch_verify`` unit cases. An unload racing a pass is not
+       reported as tampering, and a veth with too few rx queues, which
+       its driver refuses, is warned about without stopping the pass.
+       ``status`` lists a selected device under ``XdpCovered`` until a
+       pass attaches it, and the refused veth for good. The reasons and
+       the verdict are covered by the ``xdp`` and ``conditions`` unit
+       cases.
 
 ``tpm`` (4)
 ~~~~~~~~~~~
@@ -220,6 +280,14 @@ signed config image.
        An unsalted negative control accepts a forged acknowledgment
        with an empty or SHA-256 response HMAC; malformed lengths are refused.
        Salted sessions reject it and leave the real measured value unchanged
+   * - ``t4006-keepalive-quotes``
+     - The quotes of :src:`testing/fixtures/keepalive/quotes.tsv`: each
+       row's ``body_sha256`` is SHA-256 of its body file, and fails on
+       a body altered by one byte; every row verifies under
+       ``shirudo-quote-check`` without a TPM, node A's rows under one
+       key and node B's under another; a quote over an altered body is
+       ``body_mismatch``; with the libtpms simulator built, the capture
+       script rebuilds a file that verifies
    * - ``t4101-initrd``
      - The production configuration: ``init`` from the initrd, adoption,
        PCR 11 after the binding, pins under ``/run``
@@ -230,6 +298,11 @@ signed config image.
      - The ``tpm_command`` guard: root without authority cannot extend
        the register, through inherited and nonblocking descriptors
        too
+   * - ``t4104-keepalive-quote``
+     - The keepalive quote under ``shirudo-quote-check``: it covers the
+       body, its signer is the attestation key of ``attest`` under the
+       endorsement hierarchy, a later quote has a later clock, and a
+       body altered by one byte is ``body_mismatch``
 
 ``image`` (5)
 ~~~~~~~~~~~~~
@@ -243,7 +316,7 @@ signed config image.
    * - ``t5001-config-image``
      - Image builder and ``veritysetup`` format, superblock and size
        checks, the ML-DSA-87 root signature, runtime acceptance by the
-       exact root, the generator scripts
+       exact root, the generator scripts and multiple config certificates
    * - ``t5002-image-config``
      - Settings a config may set, symbolic links and special files
    * - ``t5003-image-keys``
@@ -254,20 +327,31 @@ signed config image.
    * - ``t5005-image-cleanup``
      - Candidate removal and its ``EBUSY`` retries
    * - ``t5006-image-bootstrap``
-     - Bootstrap settings in the initrd
+     - Bootstrap settings in the initrd, ordered config verification keys,
+       duplicate paths and too many keys
    * - ``t5007-config-update``
      - Activation events, the pending latch, interruption, locks,
        symbolic links in state
    * - ``t5008-text-lines``
      - Long lines and NUL bytes in settings files
+   * - ``t5009-config-stage``
+     - Staging without activation or measurement, selection on the next
+       TPM boot, cancellation, stale parents, malformed records and
+       process death while replacing a staged selection
+   * - ``t5100-verity-stage``
+     - A new signer may be staged without live enrollment, activation or
+       measurement; same-boot init leaves it staged and cancellation is
+       idempotent
    * - ``t5101-verity-boot-signers``
      - The ``.dm-verity`` keyring, boot enrollment of a vouched signer
    * - ``t5102-verity-config``
-     - Config classification, corruption, live activation from A to B
+     - Config classification, corruption, live activation from A to B,
+       refusal of a kernel-trusted config signer not named by the runtime
    * - ``t5103-verity-cli``
      - Key and repository changes require a signed config
    * - ``t5104-verity-revocation``
-     - Signed revocation unlinks the signer and purges its upatch
+     - Signed revocation unlinks the signer and purges its measured
+       tracing and XDP upatches and their archives
    * - ``t5105-verity-interruption``
      - An interruption after measurement blocks changes and attestation
 
@@ -286,7 +370,7 @@ signed config image.
    * - ``t6002-seal-seccomp``
      - The seal builds with either seccomp layout in ``vmlinux.h``
    * - ``t6003-tamper-points``
-     - Every tamper counter has a name and a meaning
+     - Every tamper and integrity counter has a name and a meaning
    * - ``t6004-conditions``
      - Status conditions: both keyrings, register, pins, config
        activation
@@ -373,7 +457,8 @@ signed config image.
    * - ``t6133-seal-init-xattr``
      - Labels at inode creation
    * - ``t6134-seal-task``
-     - ``ptrace`` and perf events on a running shirudo
+     - ``ptrace``, ``/proc`` reads and perf events on a running
+       shirudo; only attach mode counts
    * - ``t6135-task-descriptors``
      - Descriptors through ``/proc`` and ``pidfd_getfd``
    * - ``t6136-secure-exec``
@@ -394,12 +479,61 @@ signed config image.
      - Task policy is inherited by a listener and its accepted socket
    * - ``t6143-unmeasured-load``
      - A load stopped before its extend is counted, reported by status
-       and undone by the next upatch command
+       and undone by the next upatch load or unload
    * - ``t6144-returned-archive``
      - The archive directory with its mark evicted takes nothing and
        lets no labeled archive out; an archive without a record of its
        load is reported, not restored by init and removed by the next
        upatch command
+   * - ``t6145-core-dump``
+     - An exec of the runtime that fails after its mark is committed
+       dumps core without authority: the dump cannot unlink a pin or
+       replace a sealed file, and ``SealCoreDump`` counts it
+   * - ``t6146-uprobe``
+     - A uprobe set through tracefs on the runtime binary leaves the
+       commands it reaches without authority, counted as
+       ``SealUprobe``, until it is removed
+   * - ``t6147-forged-records``
+     - A load in a namespace with a ``/run`` of root's making and a
+       forged pending record, or another boot ID bound over ``/proc``,
+       detaches nothing: the undo pass takes only the records the
+       register vouches for
+   * - ``t6148-read-once``
+     - A load and an unload stage nothing in sealed state, and the
+       archive holds the bytes the load read
+   * - ``t6149-config-root``
+     - A directory of the config image bound in place of its mount, in a
+       namespace with a ``/run`` of root's making, is refused as the
+       config
+   * - ``t6150-ancestor-rename``
+     - The directories above the state root carry the ancestor mark; a
+       rename of one and the removal of the mark are refused and counted,
+       and a directory beside the state root still renames
+   * - ``t6151-personality``
+     - Started under ``setarch --uname-2.6``, shirudo still reads the
+       kernel's release
+   * - ``t6152-exec-shared``
+     - The exec of the runtime binary by a task that shares its
+       ``fs_struct`` is refused and counted; another program's is not
+   * - ``t6153-xfs-attrmulti``
+     - The ``XFS_IOC_ATTRMULTI_BY_HANDLE`` number on another file system
+       is not refused or counted, and on an XFS image it is refused and
+       counted. The XFS case needs XFS in the kernel and ``mkfs.xfs``,
+       which the slim test VM kernel lacks
+   * - ``t6154-lockdown``
+     - A module without its signature, a PCI config write,
+       ``/proc/kcore`` and ``/dev/mem``, where the kernel has them, are
+       refused, all but the last counted on their integrity counters,
+       which ``status``, its JSON and the keepalive report, and a read
+       of ``/sys/power/state`` counts nothing
+   * - ``t6155-mountpoint-removal``
+     - From a namespace without ``/run``, an ``rmdir`` and a rename of
+       the directory init's ``/run`` covers are refused and counted, and
+       the private bpffs stays mounted
+   * - ``t6156-rlimit``
+     - A command writes past the file size limit it was started with,
+       outlives an interval timer set before its exec, and refuses
+       another task's ``prlimit``, counted as ``SealRlimit``
 
 ``bpm`` (7)
 ~~~~~~~~~~~
@@ -414,7 +548,9 @@ signed config image.
      - Subcommands, reference validation before network access, source
        and tree configuration lines
    * - ``t7002-bpm-info``
-     - READMEs of local and OCI packages, archive integrity
+     - READMEs of local and OCI packages, archive integrity, a download
+       kept in a memory file rather than in ``/tmp``, and one key
+       fingerprint from a certificate, a package and a download
    * - ``t7003-bpm-key``
      - ``bpm key`` from files and OCI references, ``bpm pull``, which
        replaces no file, not even after a failed digest, and names none
@@ -423,11 +559,52 @@ signed config image.
      - The repository update unit and timer and their package
        scriptlets, as text
    * - ``t7005-bpm-publish``
-     - ``bpm build``, ``bpm push`` with a signed index, ``bpm tree
-       append``
+     - ``bpm build``, the ``fixes`` lists it takes and refuses, and its
+       refusal of a target below another member and of members a target
+       could not unpack together, ``bpm push`` with a signed index,
+       ``bpm tree append`` and its refusal of an XDP device class two
+       upatches of a tree select and of an entry no target would take,
+       each before anything is uploaded, its refusal to extend a tree
+       without ``--tree-id`` or with another tree's id, A-to-B tree
+       signing-key rotation with explicit predecessor verification
    * - ``t7006-policy-labels``
      - Beefile policy declarations are serialized into the signed
        upatch section
+   * - ``t7007-bpm-tree-fixes``
+     - ``bpm tree append`` writes ``fixes`` on an ``add`` in byte order,
+       after ``artifact`` and outside ``operation_digest``, none on a
+       ``delete``, carries every earlier operation's list into the next
+       generation, and refuses to carry a list it would not write
+   * - ``t7008-bpm-tree-show``
+     - ``bpm tree show`` prints the manifest digest and the signed
+       document verbatim, ``fixes`` included, refuses a signature by
+       another key, a wrong certificate, a tampered layer and a document
+       ``tree sync`` would refuse with the errno sync reports, and
+       writes nothing to the registry; with ``--walk`` prints a tree
+       never sealed as without it and every segment of a tree sealed
+       by ``--segment-ops 1`` oldest first, stops at ``seq`` 0 from a
+       sealed segment, and refuses a tree whose sealed segment is gone;
+       ``bpm tree append`` refuses the ``beta`` tree served in place of
+       ``stable``
+   * - ``t7009-bpm-tree-seal``
+     - ``bpm tree append`` seals a segment at ``--segment-ops``, a value
+       that may change between appends, or before one append would pass
+       512 operations, never splits an append, tags the sealed manifest
+       ``segment-<k>`` with its bytes unchanged and keeps a tag an earlier
+       run left, starts the next segment with the sealed head, digest and
+       a ``history_root`` recomputed independently, carries ``fixes`` and
+       selectors across a seal, refuses a current segment that does not
+       verify, refuses an XDP ``add`` whose class a live ``add`` of a
+       sealed segment selects and takes it once a later segment deleted
+       that ``add``, and fetches no sealed segment for an ``add`` without
+       XDP classes
+   * - ``t7010-bpm-slow-registry``
+     - A registry that trickles a package fast enough for the low-speed
+       limit is cut off at the transfer's total deadline
+   * - ``t7011-bpm-config-base``
+     - ``bpm config update`` refuses an ``oci://`` base package without
+       ``--base-digest``, the option with a local base, a malformed
+       digest and a registry that serves another manifest
    * - ``t7101-bpm-tree``
      - Tree sync with a selector
    * - ``t7102-bpm-tree-sequential``
@@ -440,6 +617,54 @@ signed config image.
    * - ``t7105-bpm-tree-loaded``
      - An add whose upatch is already loaded with its payload counts as
        installed; a direct load of it is still refused
+   * - ``t7106-bpm-tree-outcomes``
+     - The outcomes record: a line for an applied, an unmatched and a
+       module-absent operation, one line for each ``seq`` after a sync
+       killed between the register extend and its state, and the
+       accepted publication on record after a sync that failed at a
+       fetch; the record agrees with the tree eventlog and the
+       operations' digests throughout
+   * - ``t7107-bpm-tree-fixes-ignored``
+     - A publication whose operations carry ``fixes``, well-formed and
+       malformed, on an ``add``, a ``delete`` and an operation without a
+       match, syncs with the outcomes, state and tree eventlog of the
+       same operations without it
+   * - ``t7108-bpm-tree-segments``
+     - In ``functional/bpm-segments/``, a VM of its own, so that the node
+       starts without a tree, on a tree ``bpm tree append --segment-ops
+       2`` published and a bundle that lowers the walk limits to 4 and 6
+       operations. A new node refuses a walk past its limit before it
+       fetches a sealed segment, then walks back through four segments,
+       past the running limit, and applies them with the tree eventlog,
+       ``tree_op`` records, projection root and outcomes of the
+       operations taken as one publication; a node inside the current
+       segment fetches only it; a walk stopped between two segments, at
+       a registry request held, or with an operation pending, resumes
+       with a shorter walk and applies no operation twice; a forked
+       predecessor fails the base check and a forked current segment the
+       prefix check; a sealed segment the registry lost, a predecessor
+       ending before its successor's base and a running node's walk past
+       its limit are refused with nothing applied; a dry run walks and
+       records nothing; ``init`` walks nothing and takes the projection
+       root one publication gives; ``bpm tree show --walk``, run by the
+       bundle on the operator host, printed every segment of the tree
+       oldest first, each as plain ``show`` prints it and naming the
+       one before
+   * - ``t7109-bpm-tree-keepalive``
+     - ``status --keepalive``: the keys of the body in order, its tree
+       keys and mask as ``state.json`` and the outcomes record have them
+       over the last 7 operations, the bundle's lowered window,
+       flags bit 4 after a sync is killed after its load, and after the
+       sync the loaded set its mask folds to and the masks of node A and
+       node B
+   * - ``t7110-bpm-tree-window``
+     - In ``functional/bpm-segments/``, after ``t7108``, with the
+       keepalive window lowered to 7 operations: ``status --keepalive``
+       on a node of the segmented tree gives the ``base_seq``,
+       ``base_root`` and mask of the outcomes record over the last 7
+       operations up to the head, from inside a segment older than the
+       recorded one, as the window slides with each segment and while an
+       operation is pending, its operations past ``last_seq`` not reached
 
 ``otel`` (8)
 ~~~~~~~~~~~~
@@ -448,6 +673,10 @@ signed config image.
    :header-rows: 1
    :widths: 36 64
 
+   * - ``t7111-bpm-tree-manifest``
+     - The signed layers of a publication served under a manifest that
+       is not the one ``bpm tree append`` writes are refused before the
+       node records anything, and the publisher's form is taken again
    * - Test
      - Covers
    * - ``t8001-otel-map``
@@ -458,11 +687,16 @@ signed config image.
    * - ``t8003-systemd-map-export``
      - Exporter units and timers and their package scriptlets, as text
    * - ``t8004-status-otel``
-     - The keepalive log record
+     - ``status --keepalive``, ``status --otel`` without a TPM or an
+       endpoint, and the keepalive log record: its string body, its one
+       quote attribute and a body JSON cannot carry
    * - ``t8005-tls-policy``
      - TLS 1.3 with ``X25519MLKEM768`` only
    * - ``t8006-otel-transport``
      - OTLP environment variables, headers and limits
+   * - ``t8007-keepalive-fixtures``
+     - Every digest, root, set hash, mask and tree key of the keepalive
+       fixtures recomputes from their example tree
    * - ``t8101-map-export-all``
      - ``upatch map --all`` and JSON lines
    * - ``t8102-otel-backend``
@@ -474,6 +708,10 @@ signed config image.
        export
    * - ``t8105-export-tls``
      - CA and client certificate selection, the S3 CA
+   * - ``t8106-status-otel-quote``
+     - ``status --otel`` on a target: one record, the body as a string
+       with its keys in order, the quote as the one attribute and the
+       severity of the verdict
 
 ``end2end`` (9)
 ~~~~~~~~~~~~~~~
@@ -496,25 +734,69 @@ signed config image.
    * - ``t9104-kernel-obs-dns-matrix``
      - DNS over loopback in maps, OTLP and ClickHouse
    * - ``t9105-delivery``
-     - Registry, tree sync, load, export and attestation end to end
+     - The operator package built and installed in an operator VM
+       without a TPM, which publishes ``kernel-obs`` and verifies the
+       evidence; registry, tree sync, load, export and attestation on
+       the target
    * - ``t9106-policy-exec-graph``
      - A signed SHPL section labels five executables; its BPF policy
        allows unlabeled tasks to exec unlabeled files and 0x1, allows
        0x1 to exec 0x2, and denies 0x1 and socket policy B from execing
        unlabeled files; socket-storage bits allow 127.0.0.1 for policy A
        and deny it for B; final evidence includes the loaded policy upatch
+   * - ``t9107-keepalive-backend``
+     - The keepalive backend that ``BACKEND_DIR`` names: its tree ingest
+       job loads the example publication through ``bpm tree show``, the
+       example keepalives of node A and node B with their recorded quotes
+       pass its collector and ``shirudo-quote-check``, and
+       ``node_status`` gives the example's results; a body altered in
+       transit is ``body_mismatch``, a replayed record collapses and an
+       older one does not become the latest
+   * - ``t9109-pipeline``
+     - The whole keepalive pipeline on a fresh edge node and node B, run
+       by ``host.sh`` on the host: ``bpm build`` and ``bpm tree append``
+       of an upatch with ``fixes``, tree sync on both nodes, quoted
+       keepalives through the backend's collector and checker, its tree
+       ingest and sbom-scan jobs, ``node_status`` with the masks ``VA==``
+       and ``qA==``, each node's records against the backend's rows,
+       every SBOM state, ``node_vulns`` exposure and a body altered in
+       transit
+   * - ``t9110-keepalive-history``
+     - The backend's history of each node over a tree of segments, run by
+       ``host.sh`` after ``t9109`` on the same nodes: ``bpm tree append
+       --segment-ops 2`` past the lowered keepalive window, the ingest
+       job loading every segment through ``bpm tree show --walk``, a
+       running node's walk back, ``base_root`` verified against
+       ``node_ops``, a node first seen past seq 0 reading ``gap`` and
+       ``healthy``, and a shield below the window still ``shielded``
+   * - ``t9111-pipeline-segments``
+     - A backward walk on real data, run by ``host.sh`` after ``t9110`` on
+       a second fresh edge node and node B: ``bpm tree append
+       --segment-ops 2`` sealing three segments, a node without tree state
+       and a node behind inside a sealed segment both fetching it by its
+       digest, as the registry's access log shows, then applying forwards
+       with the masks ``VQ==`` and ``mg==``, no walk once both are at the
+       new segment's base, keepalives over all three segments and both
+       nodes ``healthy``
 
 Unit suites and fuzz targets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The unit suites in :src:`testing/unit/` cover twenty of the modules in
+The unit suites in :src:`testing/unit/` cover 32 of the modules in
 :src:`util/`: ``attest``, ``bpm_oci``, ``bpm_package``, ``bpm_state``,
-``bpm_tree``, ``bpm_tree_state``, ``chain``, ``eventlog``, ``format``,
-``hex``, ``io``, ``json``, ``kernel_abi``, ``kernel_build_id``,
-``kernel_release``, ``measured``, ``paths``, ``string``, ``upatch`` and
-``upatch_decode``, and ``overflow`` the arithmetic of
-:src:`include/shirudo/overflow.h`. The other modules
-are reached through the test helpers, the fuzz targets and the binaries
+``bpm_tree``, ``bpm_tree_overlap``, ``bpm_tree_state``, ``chain``,
+``chain_history``, ``conditions``, ``crypto_openssl``,
+``eventlog``, ``format``, ``hex``, ``io``, ``json``, ``kernel_abi``,
+``keepalive``, ``keepalive_quote``, ``kernel_build_id``,
+``kernel_release``, ``measured``, ``options``,
+``paths``, ``string``, ``sysinfo``, ``upatch``, ``upatch_decode``,
+``upatch_pins``, ``upatch_resolve``, ``upatch_verify`` and ``xdp``, and
+``overflow`` the arithmetic of
+:src:`include/shirudo/overflow.h`. ``quote_check`` covers the rows of
+``shirudo-quote-check`` in :src:`tools/quote-check/row.c`, on quotes a
+software P-256 key signs: every reject reason, the signer's qualified
+name, the empty PCR selection and the base64 of each field. The other
+modules are reached through the test helpers, the fuzz targets and the binaries
 the functional tests run.
 
 .. list-table::
@@ -564,6 +846,9 @@ the functional tests run.
      - OTLP collector responses and ``OTEL_EXPORTER_OTLP_HEADERS``
    * - ``prog-metadata``
      - A load upatch's program metadata
+   * - ``quote-check``
+     - A row of ``shirudo-quote-check``: a keepalive quote and the
+       digest of its body
    * - ``registry-auth``
      - The container auth file
    * - ``rodata``
@@ -575,7 +860,7 @@ the functional tests run.
    * - ``tree``
      - An upatch tree publication
    * - ``tree-state``
-     - The tree's ``state.json`` and eventlog
+     - The tree's ``state.json``, eventlog and outcome lines
    * - ``upatch``
      - A ``.upatch`` container and its decoder table
 
@@ -610,7 +895,8 @@ Coverage by area
      - Offline metadata: ``t3006``, ``t3007``, ``t3008``, ``t3009``,
        ``t3010``. Loaded on a target: fentry (fixtures), ``lsm``
        (``t9101``), ``cgroup_skb`` and netfilter (``t6116``),
-       ``uprobe.multi`` (``t3107``)
+       ``uprobe``, ``uretprobe``, ``uprobe.multi``, ``uretprobe.multi`` and
+       ``uprobe.multi.s`` (``t3107``)
    * - bpffs pins and mounts
      - ``t4101``, ``t6105``, ``t6106``, ``t6108``, ``t6120``,
        ``t6121``
@@ -632,7 +918,7 @@ Coverage by area
        ``t6125``, ``t6128``, ``t6143``, ``t6144``. Unit: ``chain``
    * - Attestation
      - ``t2003``, ``t2005``, ``t4003``, ``t4004``, ``t4102``,
-       ``t9105``. Fuzz: ``attest``, ``tpm-wire``
+       ``t4104``, ``t9105``. Fuzz: ``attest``, ``tpm-wire``
    * - Eventlog
      - ``t4002``, ``t4102``, ``t5007``, ``t6114``, ``t6128``. Fuzz:
        ``eventlog``. Unit: ``eventlog``, ``io``
@@ -650,17 +936,25 @@ Coverage by area
        ``oci-http``, ``oci-manifest``, ``oci-ref``, ``registry-auth``. Unit:
        ``bpm_oci``, ``bpm_package``
    * - upatch tree
-     - ``t3011``, ``t5004``, ``t7005``, ``t7101``, ``t7102``,
-       ``t7103``, ``t7104``, ``t7105``, ``t9105``. Fuzz: ``tree``,
-       ``tree-state``, ``kconfig``. Unit: ``bpm_tree``, ``bpm_tree_state``,
+     - ``t3011``, ``t5004``, ``t7005``, ``t7007``, ``t7008``, ``t7009``,
+       ``t7101``, ``t7102``, ``t7103``, ``t7104``, ``t7105``, ``t7106``,
+       ``t7107``, ``t7108``, ``t7109``, ``t7110``, ``t9105``, ``t9109``,
+       ``t9110``, ``t9111``.
+       Fuzz: ``tree``,
+       ``tree-state``, ``kconfig``. Unit: ``bpm_tree``,
+       ``bpm_tree_overlap``, ``bpm_tree_state``, ``chain_history``,
        ``kernel_build_id``, ``kernel_release``
    * - Policy labels
      - upatch labels and Beefile serialization: ``t3109``, ``t7006``.
        Unauthorized policy-xattr changes: ``t6111``. Task and socket
        inheritance: ``t6141``, ``t6142``
    * - Telemetry
-     - ``t6139``, ``t8001`` to ``t8006``, ``t8101`` to ``t8105``,
-       ``t9101`` to ``t9105``. Fuzz: ``otel``, ``serializer``
+     - ``t4006``, ``t4104``, ``t6139``, ``t7109``, ``t7110``, ``t8001`` to
+       ``t8007``, ``t8101`` to ``t8106``, ``t9101`` to ``t9105``,
+       ``t9107``, ``t9109``, ``t9110``, ``t9111``. Fuzz: ``otel``,
+       ``quote-check``,
+       ``serializer``.
+       Unit: ``keepalive``, ``keepalive_quote``, ``sysinfo``
    * - Decoders
      - ``t3002``, ``t8102``, ``t9101``. Fuzz: ``decoder``
    * - Tamper counters
@@ -668,14 +962,14 @@ Coverage by area
        ``t6120``, ``t6121``, ``t6124``, ``t6126``, ``t6135``,
        ``t6137``
    * - CLI
-     - ``t1001``, ``t1002``, ``t2001``, ``t3005``, ``t3106``,
+     - ``t1001``, ``t1002``, ``t1011``, ``t2001``, ``t3005``, ``t3106``,
        ``t3108``, ``t5004``, ``t5103``, ``t6007``, ``t6114``,
        ``t7001``, ``t8001``
    * - Build and packaging
      - ``t0005``, ``t0007``, ``t1003``, ``t1004``, ``t1005``,
        ``t1008``, ``t7004``, ``t8003``
    * - CI scripts
-     - ``t0001`` to ``t0007``
+     - ``t0001`` to ``t0008``
    * - Parsers
      - ``t3001``, ``t3011``, ``t5002``, ``t5006``, ``t5008``. Unit:
        ``hex``, ``json``, ``string``. Every fuzz target
@@ -713,7 +1007,8 @@ The threats are those of :doc:`/security/threat-model`.
      - ``t1006``, ``t4101``, ``t6115``, ``t6126``
    * - T7 The delivery path
      - ``t7002``, ``t7003``, ``t7005``, ``t7101``, ``t7102``,
-       ``t7103``, ``t7104``, ``t7105``, ``t8005``, ``t9105``
+       ``t7103``, ``t7104``, ``t7105``, ``t7106``, ``t7107``, ``t7108``,
+       ``t8005``, ``t9105``
    * - T8 Quantum-capable adversaries
      - ``t2001``, ``t2002``, ``t5001``, ``t8005``
    * - T9 A target lying about its state
@@ -745,7 +1040,7 @@ tests assert that a refusal moves its counter:
        ``BpfCommand``, ``PinUnlink``, ``PinRename``, ``BpffsUmount``
      - ``t6108``
    * - ``BpffsUmountAbove``
-     - ``t6120``
+     - ``t6120``, ``t6155``
    * - ``PinEntry``
      - ``t6121``
    * - ``PerfAttach``
@@ -755,13 +1050,30 @@ tests assert that a refusal moves its counter:
    * - ``SealCopyUp``
      - ``t6124``
    * - ``SealPtrace``
-     - ``t6135``
+     - ``t6134``, ``t6135``
    * - ``SealSignal``
      - ``t6143``
    * - ``ExecTraced``
      - ``t6137``
+   * - ``ExecShared``
+     - ``t6152``
+   * - ``XattrHandle``
+     - ``t6153``, on a kernel with XFS
+   * - ``SealRlimit``
+     - ``t6156``
    * - ``Kexec``
      - ``t6126``
+
+Coverage of integrity counters
+------------------------------
+
+``t6003`` checks that every integrity counter has a name and a meaning.
+``t6154`` asserts that a refusal moves ``ModuleSignature``, ``Kcore``
+and ``PciAccess``, the last two where the kernel has them, and that
+``status``, its JSON and the keepalive report the counters. No test
+moves the others. The test guest boots without UEFI firmware, so it has
+no efivarfs for ``HibernateLocation``, and ``KexecSignature`` cannot
+move while the ``Kexec`` guard refuses every kexec image first.
 
 Not covered
 -----------
@@ -797,22 +1109,22 @@ Most of these attacks are open threats in
   with ``CONFIG_LSM="bpf"`` alone.
 - ``bpm config update --base-package`` running commands from a package
   fetched from a registry.
-- A boot restore that fails part way.
+- A boot restore that fails part way, among them one that finds a
+  device another XDP program holds: only a reboot runs the restore.
+  ``t3111`` covers the load, which attaches through the same code.
 - Loading an older artifact signed by the same key, and an unload
   directive signed by another trusted key than the load.
 - Stopping a running shirudo with ``SIGSTOP``, ``mount_setattr(2)``,
   hibernation and ``/dev/snapshot``, ``/dev/mem``, and TPM access over
   ``i2c-dev`` or ``spidev``.
+- A write of the ``HibernateLocation`` EFI variable: the test guest
+  boots without UEFI firmware and has no efivarfs.
 
 Tests that assert behavior the threat model lists as a threat to
 resolve. They change when that threat is resolved:
 
-- ``t5102`` asserts that a config root signed under a kernel built-in
-  certificate is accepted.
 - ``t2003`` and ``t5003`` assert that a revoked signer's earlier
   vouches stay valid.
-- ``t5004`` asserts that tree publications verify against the runtime
-  trust anchor.
 - ``t7003`` adds a certificate from an OCI reference without a
   fingerprint to compare it with.
 

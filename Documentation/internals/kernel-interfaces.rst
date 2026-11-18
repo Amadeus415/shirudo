@@ -58,9 +58,30 @@ bpf-next contains the signed-loader ABI at merge ``0867b7bfa9de``.
 later. shirudo defines ``KEY_SPEC_DM_VERITY_KEYRING`` (-10) itself when
 the UAPI headers lack it. The ``tpm_command`` LSM hook, the label reads
 without the calling task's permission, the sleepable form of six inode
-hooks and the trusted ``d_parent`` are not in bpf-next;
+hooks, the trusted ``d_parent`` and the ``mm_read_access`` LSM hook are
+not in bpf-next;
 :doc:`kernel-patches` lists the patches the test kernel carries. A
 kernel is admitted by the ABI check below, not by its release string.
+
+XDP attachment
+--------------
+
+XDP uses ``BPF_LINK_CREATE`` with ``attach_type=BPF_XDP``,
+``target_ifindex`` from runtime discovery and ``flags=XDP_FLAGS_DRV_MODE``.
+shirudo verifies ``BPF_LINK_TYPE_XDP`` and the returned ``xdp.ifindex``
+before pinning. Discovery uses kernel ``RTM_GETLINK`` replies,
+``ETHTOOL_GDRVINFO`` and devlink ``DEVLINK_CMD_PORT_GET``; it does not
+read sysfs to classify devices. The program a device runs, in any mode,
+comes from the ``IFLA_XDP`` attributes of the same dump:
+``IFLA_XDP_DRV_PROG_ID``, and ``IFLA_XDP_SKB_PROG_ID`` or
+``IFLA_XDP_HW_PROG_ID`` for a program shirudo did not attach. Before attaching, shirudo reads
+``NETDEV_A_DEV_XDP_FEATURES`` with ``NETDEV_CMD_DEV_GET`` on the ``netdev``
+generic netlink family and refuses a device that reports
+``NETDEV_XDP_ACT_BASIC`` without ``NETDEV_XDP_ACT_RX_SG``, as the kernel
+never compares a program's multi-buffer flag with the device's. The
+``lsm/bpf_prog`` guard refuses XDP
+descriptors to unauthorized callers, including ``BPF_PROG_GET_FD_BY_ID``,
+because netlink accepts these descriptors outside ``bpf()``.
 
 Signing ABI check
 -----------------
@@ -90,6 +111,10 @@ running kernel's BTF and requires:
 The pre-flight runs it as ``signed_loader_kernel_abi``, and every
 ``upatch load`` and ``upatch unload`` without ``--no-precheck`` runs it
 before ``BPF_PROG_LOAD``. A failure is ``kernel_abi_unsupported``.
+Beside it the pre-flight runs ``kernel_lsm_hooks``: it reads the hooks
+of every ``lsm`` and ``lsm.s`` program from the embedded ``bpf2`` and
+``seal`` objects and refuses a kernel whose BTF has no
+``bpf_lsm_<hook>`` for one, naming the hooks it lacks.
 ``lsm/bpf_prog_load`` compares ``sig.verdict`` with ``BPF_SIG_VERIFIED``
 and ``sig.keyring_type`` with ``BPF_SIG_KEYRING_BPF``; these enum values
 are compiled into ``bpf2`` from the ``vmlinux.h`` of the build.
@@ -179,21 +204,32 @@ where the caller is the loader.
        ``attach_type`` ``BPF_MODIFY_RETURN``. Kinds 3 and 4,
        ``cgroup_skb``: ``target_fd`` an ``O_DIRECTORY`` descriptor of
        ``/sys/fs/cgroup``, ``attach_type`` ``BPF_CGROUP_INET_INGRESS`` or
-       ``BPF_CGROUP_INET_EGRESS``. Kinds 1 and 2, kprobe and kretprobe:
+       ``BPF_CGROUP_INET_EGRESS``. Kinds 1 and 2, kprobe and kretprobe,
+       and kinds 10 and 11, uprobe and uretprobe with their ``.s`` forms:
        ``target_fd`` a perf event, ``attach_type`` ``BPF_PERF_EVENT``.
        Kind 6, netfilter: ``attach_type`` ``BPF_NETFILTER``, ``pf`` 10
        (``NFPROTO_IPV6``), ``hooknum`` 0 (``NF_INET_PRE_ROUTING``),
        ``priority`` -450 (``NF_IP6_PRI_RAW_BEFORE_DEFRAG``), ``flags`` 0.
-       Kind 7, ``uprobe.multi``: ``attach_type``
-       ``BPF_TRACE_UPROBE_MULTI``, ``offsets``, ``cnt``, ``flags``
-       ``BPF_F_UPROBE_MULTI_PATH_FD``, ``path_fd`` a descriptor of the
-       target binary opened and checked by build ID.
+       Kinds 7 and 9, ``uprobe.multi`` and ``uretprobe.multi`` and their
+       sleepable ``.s`` forms, whose ``BPF_F_SLEEPABLE`` the signed loader
+       sets at load:
+       ``attach_type`` ``BPF_TRACE_UPROBE_MULTI``, ``offsets``, ``cnt``,
+       ``flags`` ``BPF_F_UPROBE_MULTI_PATH_FD``, with
+       ``BPF_F_UPROBE_MULTI_RETURN`` for kind 9, ``path_fd`` a descriptor
+       of the target binary opened and checked by build ID.
+       Kind 8, XDP: ``target_ifindex`` a selected device,
+       ``attach_type`` ``BPF_XDP``, ``flags`` ``XDP_FLAGS_DRV_MODE``.
    * - ``BPF_OBJ_GET_INFO_BY_FD``
      - On each link before it is pinned. Cgroup links: ``cgroup_id`` 1.
        Netfilter: ``pf``, ``hooknum``, ``priority`` as set, and the
        caller's network namespace cookie (``SO_NETNS_COOKIE``) 7. Kprobe:
        perf event type, function name and offset as signed. Uprobe:
-       offset count. ``fmod_ret``: ``BPF_MODIFY_RETURN``.
+       perf event type, the file offset as signed and ``ref_ctr_offset``
+       0. Uprobe multi: offset count and the return flag. ``fmod_ret``:
+       ``BPF_MODIFY_RETURN``.
+       XDP: ``BPF_LINK_TYPE_XDP`` and ``xdp.ifindex`` matching the selected
+       device; the initial namespace, device class and peer scope are
+       rechecked around attachment.
    * - ``BPF_OBJ_PIN``
      - Links at ``upatches/<name>/link`` or ``link_<n>``, serializer
        programs at ``serializers/<map>``, the test-run program at
@@ -203,7 +239,10 @@ A kprobe link's perf event comes from ``perf_event_open(2)`` with
 ``type`` read from ``/sys/bus/event_source/devices/kprobe/type``,
 ``config1`` the symbol, ``config2`` the offset, the bit named in
 ``.../kprobe/format/retprobe`` set in ``config`` for a kretprobe, ``pid``
--1, ``cpu`` 0 and ``PERF_FLAG_FD_CLOEXEC``.
+-1, ``cpu`` 0 and ``PERF_FLAG_FD_CLOEXEC``. A uprobe link's comes from
+the same call on the uprobe PMU, ``/sys/bus/event_source/devices/uprobe``,
+with ``config1`` the path ``/proc/self/fd/<n>`` of the target binary's
+checked descriptor and ``config2`` the recorded file offset.
 
 An unload directive makes the first four calls and no others.
 
@@ -254,11 +293,14 @@ LSM hooks
    * - ``tpm_command``
      - ``bpf2``
      - Carried patch
+   * - ``mm_read_access``
+     - ``seal``
+     - Carried patch
    * - ``task_prctl``, ``bprm_check_security``, ``inode_unlink``,
        ``inode_rmdir``, ``inode_mkdir``, ``inode_symlink``,
        ``inode_link``, ``inode_rename``, ``inode_setxattr``,
        ``inode_removexattr``, ``kernel_load_data``, ``kernel_read_file``,
-       ``file_open``, ``sb_umount``, ``move_mount``, ``sb_mount``,
+       ``locked_down``, ``file_open``, ``sb_umount``, ``move_mount``, ``sb_mount``,
        ``sb_remount``, ``file_ioctl``, ``file_ioctl_compat``,
        ``bdev_setintegrity`` (sleepable), ``bdev_free_security``
      - ``bpf2``
@@ -271,7 +313,8 @@ LSM hooks
        ``inode_rmdir``, ``inode_setattr``, ``inode_setxattr``,
        ``inode_removexattr``, ``inode_post_setxattr``,
        ``inode_post_removexattr`` (all sleepable); ``task_alloc``,
-       ``task_kill``, ``ptrace_access_check``, ``socket_post_create``,
+       ``task_kill``, ``task_setrlimit``, ``ptrace_access_check``,
+       ``socket_post_create``,
        ``inode_init_security``, ``mmap_file``, ``file_mprotect``
      - ``seal``
      - None
@@ -299,7 +342,8 @@ Kfuncs and helpers
    * - Kfunc
      - Use
    * - ``bpf_get_file_xattr()``, ``bpf_get_dentry_xattr()``
-     - Read ``security.bpf.shirudo`` and ``security.bpf.shirudo.policy``.
+     - Read ``security.bpf.shirudo``, ``security.bpf.shirudo.policy``
+       and ``security.bpf.shirudo.ancestor``.
        Sleepable; upstream they check ``MAY_READ`` for the calling task
        first, which the carried patch 0002 skips for ``security.bpf.``
        names.
@@ -343,7 +387,7 @@ Keyrings
        ``add_key(..., KEY_SPEC_DM_VERITY_KEYRING)``,
        ``keyctl(KEYCTL_RESTRICT_KEYRING, KEY_SPEC_DM_VERITY_KEYRING, ...)``
      - The same for ``.dm-verity`` (-10) and the config verification
-       certificate.
+       certificates.
    * - ``keyctl(KEYCTL_READ, <ring>)``, ``keyctl(KEYCTL_DESCRIBE, <key>)``
      - List a keyring and compare it with the expected set.
    * - ``keyctl(KEYCTL_UNLINK, <key>, <ring>)``
@@ -392,6 +436,15 @@ Process setup and prctl
      - Enforcement probe. ``lsm/task_prctl`` fails it with errno 1002
        when ``bpf2`` is attached; ``EINVAL`` or ``ENOSYS`` means it is
        not.
+   * - ``personality(PER_LINUX)``
+     - Drops the personality flags the caller passed down, ``UNAME26``
+       among them, which would have ``uname()`` report a 2.6 release to
+       the tree selector. A failure ends the command.
+   * - ``setrlimit(RLIMIT_FSIZE, RLIMIT_CPU)`` to unlimited,
+       ``setitimer()`` of the three interval timers to zero
+     - Exec keeps the limits and timers the caller set, with which the
+       kernel would stop the command by ``SIGXFSZ``, ``SIGXCPU`` or
+       ``SIGALRM``. A failure ends the command.
    * - ``prctl(PR_SET_DUMPABLE, 0)``, ``prctl(PR_SET_NO_NEW_PRIVS, 1)``,
        ``prctl(PR_SET_PTRACER, 0)``
      - Process hardening before every command.
@@ -496,7 +549,7 @@ Kernel command line
        keyring is sealed empty at boot and ``init`` fails.
    * - ``dm_verity.keyring_unsealed=1``
      - The kernel leaves ``.dm-verity`` open for ``init`` to enroll the
-       config verification certificate and seal.
+       config verification certificates and seal.
    * - ``lsm=`` including ``bpf``
      - When ``CONFIG_LSM`` does not include it.
 

@@ -20,12 +20,40 @@ make -C testing unit/<suite>                # one unit suite
 make -C testing functional/<family>         # one family, its VM tests too
 make tests VM=0                             # without the target tests
 make tests VM=0 SANITIZE=address,undefined  # CI: once with gcc, once with clang
-make -C testing fuzz [FUZZ_SECONDS=60]
+make tests VM=0 SANITIZE=thread CC=clang    # CI: TSan, for threads and handlers
+sh .github/scripts/msan-deps.sh             # MSan: instrumented libraries once,
+sh .github/scripts/msan-tests.sh [60]       # then unit and fuzz from a clean tree
+make -C testing fuzz [FUZZ_SECONDS=60] [FUZZERS=<target>...]
+.github/scripts/afl-deps.sh                 # AFL++ for clang 23, into build/afl
+PATH=$PWD/build/afl/bin:$PATH make -C testing afl [AFL_SECONDS=600]
 make -C testing help
 ```
 
+The end2end tier runs t9107 against the keepalive backend that
+`BACKEND_DIR` names, a checkout or a git URL, `../backend` by default;
+without one none of t9107 and t9109 to t9111 runs, so say so when
+reporting the tier. The tier boots two VMs at once, each with its own
+swtpm: node A runs the tests, node B (`make -C testing vm-node-end2end`,
+node mode of `vm/run.sh`) takes `role=core` from `config-core` and waits.
+With a backend, a fresh edge node (`END2END_NODE=edge`, `role=edge` from
+`config-edge`) boots once node A has stopped, and `host.sh` runs t9109,
+then t9110, which continues t9109's tree in segments, on the host against
+it and node B. Then a second fresh pair boots in their place, as
+`<name>-2-end2end-edge` and `-b`, the registry restarts empty, and
+`host.sh` runs t9111, the backward walk over sealed segments, against
+them. Their output is `build/test-vm/end2end/t9109.log` to `t9111.log`.
+A test reaches the nodes with `node_sh b` or `node_sh edge` of
+`testing/end2end/node-lib.sh`, and does to them, the registry and the
+backend what `testing/end2end/pipeline-lib.sh` offers. Their boot logs
+are `build/test-vm/end2end/node-b.log` and `node-edge.log`, with `-2`
+for the second pair, their state `build/test-vm/vms/<name>-end2end-b/`
+and `-edge/`. Every node
+declares the image of `testing/vm/files/end2end.os-release` without a
+root hash, so the backend binds them `declared`.
+
 Host tests run as they are. A target test, `t?1??`, runs in a fresh VM
-per family, which needs root, KVM, the test kernel and the bundle; see
+per family, which needs KVM, an unlimited `ulimit -l`, the test kernel
+and the bundle, but not root; see
 below. The VM always boots the dm-verity runtime and the signed config
 from a dracut initrd. The runner caches the initrd by kernel, bundle and
 initrd inputs, while each family keeps its own VM and guest state. CI
@@ -43,7 +71,15 @@ parser of input from outside the host gets a target in `testing/fuzz/`.
 - A family's target tests print only `[test-vm] result: PASS` or
   `FAIL`. Their TAP output is in
   `build/test-vm/vms/<name>/result/guest.log`, the exit status in
-  `result/status`.
+  `result/status`. The end-to-end VM's tests run over SSH from the
+  host, which appends their output to the same `guest.log`; there
+  `result/status` is only the guest's preparation, and `the SSH session
+  that ran the target tests failed` is the channel failing, not a test.
+- `end2end` runs an operator VM, `end2end-<pid>-operator`, around node
+  A and node B. A failure there reads `host.sh failed with status <n>`;
+  the `end2end operator:` lines say which step, the package build log
+  is its `result/operator-build.log`, and what it published and verified
+  is in its `result/end2end/`.
 - A fuzz failure leaves its input in `testing/fuzz/crash-<target>-*`.
   Run the target binary on that file to reproduce it. An `abort()` in
   the harness is a property that failed, which can be the harness's own.
@@ -56,13 +92,59 @@ parser of input from outside the host gets a target in `testing/fuzz/`.
   artifact directory, needs gigabytes of disk and takes long, and a
   checkout or rebase that touches the script triggers it. Compare the
   times before starting and tell the user when a rebuild is due.
-- The bundle is built in the checkout from the working tree, so
-  uncommitted changes are tested. Edit nothing and run no other build in
-  that checkout until it is built.
-- The bundle compiles its BPF fixtures with the clang `shirudo-build`
-  was built for, `SHIRUDO_CLANG_PATH`, `/usr/bin/clang` unless set. It
-  must be clang 23; an older one stops at a release store with
-  `Cannot select: ... AtomicStore`.
+- The bundle builds in the build container (`testing/container/`) from
+  a copy of the files git sees in the checkout, tracked and untracked but
+  not ignored, so uncommitted changes are tested; edit nothing until the
+  copy is made. The first build makes the image, with network access,
+  and the static target dependencies, which takes minutes; say so.
+- With `BUILD_CONTAINER=0` the bundle builds in the checkout itself: edit
+  nothing and run no other build there until it is built. It then
+  compiles its BPF fixtures with the clang `shirudo-build` was built
+  for, `SHIRUDO_CLANG_PATH`, `/usr/bin/clang` unless set. It must be
+  clang 23; an older one stops at a release store with
+  `Cannot select: ... AtomicStore`. Make does not rebuild the helper
+  when only that variable changes: remove
+  `tools/shirudo-build/compile.o` first.
+- `end2end` prepares the operator VM's image on first use, with network
+  access for clang 23 from apt.llvm.org, and caches it beside the
+  runtime image; every run then builds the operator package in that VM,
+  which takes minutes. Say so before starting.
+
+## Run unconfined
+
+No VM goal needs root. A terminal installed as a snap, such as
+Alacritty, gives everything it starts its `snap.<name>` AppArmor label
+(`cat /proc/self/attr/current`), and Ubuntu's `swtpm` profile takes
+signals only from unconfined processes and from `swtpm`: Ctrl-C, the
+runner's cleanup and `vm-stop` then leave `swtpm` running. Run the goal
+as a transient user service, which runs unconfined. It starts with the
+environment and limits of the user manager, not the shell's. The
+families build the host tier on the host, and so does the bundle with
+`BUILD_CONTAINER=0`; pass on the `PATH` and `LD_LIBRARY_PATH` a host
+with an older OpenSSL or clang than the tree needs for that. `end2end`
+builds nothing on the host and needs neither. Check that `systemctl
+--user show -p DefaultLimitMEMLOCK` reads `infinity`, the unlimited
+`ulimit -l` a VM goal needs.
+
+```sh
+systemd-run --user --pipe --same-dir --wait --collect \
+	--setenv=PATH="$PATH" --setenv=LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
+	--setenv=PKG_CONFIG_PATH="$PKG_CONFIG_PATH" \
+	--setenv=SHIRUDO_CLANG_PATH="${SHIRUDO_CLANG_PATH:-/usr/bin/clang}" \
+	make -C testing <goal>
+```
+
+- `make -C testing vm` adds `-p KillMode=process`, so that QEMU and
+  `swtpm`, started inside the unit, outlive it. Leave it out for the
+  families and `end2end`, whose VM ends with the run: stopping the unit,
+  `systemctl --user stop run-u<N>.service` with the name `systemd-run`
+  prints, then stops everything the run started.
+- Run `vm-stop` and `vm-clean` the same way. `vm-ssh` and `vm-console`
+  need the terminal and signal nothing; run them from the shell.
+- A leftover `swtpm` dies the same way, by PID:
+  `systemd-run --user --wait --collect --quiet kill <pid>...`. A
+  `pkill -f <pattern>` also matches the shell whose command line
+  carries the pattern, and kills it.
 
 ## Kernel
 
@@ -83,6 +165,10 @@ checkout's `build/test-vm/vms/<name>/`, and the guest mounts that
 checkout's source. Consider only VMs of the current checkout. Other QEMU
 processes on the host, such as little-vm-helper guests, are not shirudo
 targets.
+
+A VM named `<name>-operator` or `<name>-end2end` belongs to an
+end-to-end run, which stops it when it ends; `vm-ssh` reaches it while
+the run lasts, but never reuse, stop or clean it.
 
 A VM under `build/test-vm/vms/<name>/` can be reused when all of these
 hold:
@@ -117,7 +203,7 @@ anyway. Never stop, replace or clean a VM without that answer.
 
 ## Commands
 
-Run each as root, as the testing guide does.
+Run each as yourself, as above; root is not needed.
 
 ```sh
 make -C testing vm VM_NAME=<name> [KERNEL=<kernel>]
@@ -129,7 +215,9 @@ make -C testing vm-clean VM_NAME=<name>
 
 Adding `VM_SSH_COMMAND='<command>'` to `vm-ssh` runs one command in the
 guest and returns. In the guest, `shirudo-runtime` is the runtime the
-initrd verified; `shirudo-runtime status` shows an initialized target.
+initrd verified; `shirudo-runtime status` shows an initialized target,
+and `. /etc/shirudo-test-vm.env` sets the environment a family run
+gives the target tests.
 The checkout is mounted read-only at `/workspace/shirudo`. Without
 `VM_NAME`, `vm-clean` removes all of `build/test-vm/`, the bundles and
 the cached runtime image included, so always name the VM.

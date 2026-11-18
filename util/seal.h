@@ -34,6 +34,12 @@ int seal_label(const char *path);
 int seal_label_tree(bool allow_first);
 
 /*
+ * Mark the directories above the state root at root, up to the root of
+ * its file system, so that the seal refuses to rename them.
+ */
+int seal_mark_ancestors(const char *root);
+
+/*
  * Creating under a sealed directory. The directory decides: an inode
  * created under a labelled directory carries that directory's label,
  * which the seal writes inside the transaction that creates it, on the
@@ -57,8 +63,18 @@ int seal_mkdir_p(const char *path, mode_t mode);
  */
 int seal_open_read(const char *path);
 
+/*
+ * seal_open_read() of an entry whose directory must carry the label:
+ * one of root's making, which no task without authority can label,
+ * holds nothing shirudo takes for its own. -EPERM when it does not.
+ */
+int seal_open_sealed(const char *path);
+
 /* Whether seal_open_read() would succeed. */
 bool seal_owns(const char *path);
+
+/* Whether the directory path names an entry of carries the seal label. */
+bool seal_parent_labeled(const char *path);
 
 int seal_write_file(const char *path, const void *data, size_t len,
 		    mode_t mode);

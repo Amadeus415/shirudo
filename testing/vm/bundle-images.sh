@@ -11,7 +11,9 @@ work=$2
 keys=$3
 boot_keys=$4
 "$source_dir/testing/vm/image-fixtures.sh" --keys-dir "$keys" \
-	--boot-keys-dir "$boot_keys" --output "$work/verity"
+	--boot-keys-dir "$boot_keys" \
+	--segments-port "$(cat "$bundle/fixtures/segments-oci/port")" \
+	--output "$work/verity"
 mkdir "$bundle/verity"
 cp -a "$work/verity/public/." "$bundle/verity/"
 sed 's/@config_image@/config-boot-keys/g' "$templates/runtime.conf.in" \
@@ -19,7 +21,8 @@ sed 's/@config_image@/config-boot-keys/g' "$templates/runtime.conf.in" \
 "$source_dir/tools/gen-image/shirudo-gen-runtime" \
 	--binary "$bundle/root/usr/local/bin/shirudo" \
 	--bootstrap-conf "$work/runtime.conf" --cert "$keys/cert.der" \
-	--config-cert "$keys/cert.der" --output "$bundle/verity/runtime" \
+	--config-cert "$work/verity/public/config-c.der" \
+	--config-cert "$work/verity/public/config-d.der" --output "$bundle/verity/runtime" \
 	--keys-dir "$keys" --builder "$source_dir/tools/shirudo-build/shirudo-build" \
 	--size 64 \
 	--extra-binary "$source_dir/build/verity-tests/shirudo-policy-probe" \

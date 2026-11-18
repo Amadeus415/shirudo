@@ -416,10 +416,12 @@ Append its tree entry to a tree that targets follow:
 .. code-block:: console
 
    operator$ shirudo bpm tree append rpl-shield-1.0.0.bee \
-       oci://<registry>/<namespace>/<tree> --keys-dir <keys-dir>
+       oci://<registry>/<namespace>/<tree> --tree-id <tree-id> \
+       --keys-dir <keys-dir>
 
 ``<registry>`` and ``<namespace>`` name your registry and repository path,
-and ``<tree>`` the repository of the tree. ``bpm push`` prints the pushed
+``<tree>`` the repository of the tree and ``<tree-id>`` its id, which an
+append to an existing tree must name. ``bpm push`` prints the pushed
 reference, ``bpm tree append`` the tree's reference and manifest digest.
 A package signed with the test bundle's key is for test targets only.
 Sign what a fleet runs with your own key.

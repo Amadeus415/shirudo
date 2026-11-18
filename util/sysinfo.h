@@ -2,8 +2,9 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * The host overview of `status --include-system`, without a subprocess,
- * which rust/src/util/sysinfo.rs gathers.
+ * The host overview of `status --include-system` and the identity of the
+ * booted image, without a subprocess, which rust/src/util/sysinfo.rs
+ * gathers.
  */
 
 #ifndef SHIRUDO_SYSINFO_H
@@ -11,9 +12,12 @@
 
 #include "kernel_build_id.h"
 
+#define SYSINFO_IMAGE_VALUE_MAX	256u
+#define SYSINFO_IMAGE_ROOT_MAX	65u
+
 struct sysinfo {
 	char	hostname[256];
-	char	os_pretty[256];		/* /etc/os-release PRETTY_NAME */
+	char	os_pretty[SYSINFO_IMAGE_VALUE_MAX];	/* PRETTY_NAME */
 	char	kernel_release[96];	/* uname -r */
 	char	kernel_version[256];	/* uname -v */
 	char	kernel_build_id[KERNEL_BUILD_ID_STRING_MAX];
@@ -43,5 +47,24 @@ int sysinfo_kernel_config_foreach(const char *kernel_release,
 
 void sysinfo_emit_json(struct json_emit *e,
 		       const struct sysinfo *si);
+
+struct sysinfo_image {
+	char	id[SYSINFO_IMAGE_VALUE_MAX];
+	char	version[SYSINFO_IMAGE_VALUE_MAX];
+	char	root[SYSINFO_IMAGE_ROOT_MAX];
+};
+
+/*
+ * A value that is absent or refused is "". An os-release value is
+ * unquoted as os-release(5) defines and must then be 1 to 255 bytes of
+ * printable ASCII; of a key given twice the last one counts, as a shell
+ * reading the file has it. The root is roothash=, else usrhash=, in
+ * lowercase, and none from a command line that does not fit.
+ */
+void sysinfo_image_read_at(const char *os_release,
+			   const char *os_release_fallback,
+			   const char *cmdline, struct sysinfo_image *img);
+
+void sysinfo_image_read(struct sysinfo_image *img);
 
 #endif /* SHIRUDO_SYSINFO_H */

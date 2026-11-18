@@ -216,18 +216,56 @@ One log record in ``resourceLogs[0].scopeLogs[0].logRecords``:
    * - ``eventName``
      - ``shirudo.keepalive``
    * - ``body``
-     - The :doc:`status-json` document as an OTLP value: objects as
-       ``kvlistValue``, arrays as ``arrayValue``, strings as
-       ``stringValue``, integers as ``intValue``, other numbers as
-       ``doubleValue``, booleans as ``boolValue``, ``null`` as an empty
-       value. The timer adds ``--include-system``.
-   * - Attribute ``shirudo.status``
-     - The verdict.
-   * - Attribute ``shirudo.version_id``
-     - ``SHIRUDO_VERSION_ID`` of the binary.
-   * - Attribute ``shirudo.tamper_attempts``
-     - ``tamper_attempts.total``. Absent when the counters cannot be
-       read.
+     - ``{"stringValue": <body>}``: the keepalive body that ``status
+       --keepalive`` prints (:doc:`/reference/cli/status`), the compact
+       JSON object as one string, never a ``kvlistValue``. A collector
+       may re-encode a structure, and the quote covers these exact
+       bytes.
+   * - Attribute ``shirudo.quote``
+     - The one attribute, a string: the TPM quote of the body, below.
+
+``timeUnixNano`` and the resource attributes are for display only. They
+identify nothing and order nothing; the quote does both.
+
+``shirudo.quote`` has three fields in this order, separated by ``;``
+with no blanks, each in standard base64 with padding:
+
+.. code-block:: none
+
+   attest=<TPMS_ATTEST>;sig=<TPMT_SIGNATURE>;ak=<TPMT_PUBLIC>
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 86
+
+   * - Field
+     - Value
+   * - ``attest``
+     - The ``TPMS_ATTEST`` the TPM signed, without the ``TPM2B`` size: a
+       ``TPM2_Quote`` whose qualifying data is the SHA-256 of the body
+       bytes and whose PCR selection is one SHA-256 bank with no PCR set.
+       Its clock information, ``resetCount`` and ``clock``, orders the
+       keepalives of one node.
+   * - ``sig``
+     - The marshalled ``TPMT_SIGNATURE`` over ``attest``: ECDSA with
+       SHA-256.
+   * - ``ak``
+     - The marshalled ``TPMT_PUBLIC`` of the attestation key, without
+       the ``TPM2B`` size: the fixed-template P-256 ECDSA primary under
+       the endorsement hierarchy that :doc:`/reference/cli/attest` uses.
+       ``000b`` and the SHA-256 of these bytes is the key's name, which
+       identifies the node. The quote's signer is the key's qualified
+       name under the endorsement hierarchy.
+
+:doc:`/reference/cli/quote-check` checks a quote against its body without
+a TPM. An attestation quote always selects a PCR, so it cannot pass as
+a keepalive quote. A quote that checks proves that the body is
+unchanged since the key signed it, not that the key lives in a TPM.
+
+When no TPM answers or the quote fails, ``status --otel`` sends nothing.
+A body that JSON cannot carry unchanged, one with a NUL byte or
+malformed UTF-8, is not sent either; the body ``status`` builds is never
+one.
 
 The keepalive uses ``map_export.otel_endpoint``,
 ``map_export.tenant_id``, ``map_export.otel_insecure``,
@@ -440,8 +478,8 @@ Keepalive structure
 -------------------
 
 The keepalive of a target with verdict ``ok``, as the code builds it.
-Angle brackets mark values that vary, and the ``body`` values are
-shortened to the first entries:
+Angle brackets mark values that vary, and the body string is shortened
+to its first keys:
 
 .. code-block:: json
 
@@ -466,18 +504,10 @@ shortened to the first entries:
                  "severityText": "INFO",
                  "eventName": "shirudo.keepalive",
                  "body": {
-                   "kvlistValue": {
-                     "values": [
-                       {"key": "schema", "value": {"intValue": "1"}},
-                       {"key": "version_id", "value": {"stringValue": "<version-id>"}},
-                       {"key": "is_target", "value": {"boolValue": true}}
-                     ]
-                   }
+                   "stringValue": "{\"schema\":\"shirudo.keepalive/1\",\"boot_id\":\"<boot-id>\",\"version_id\":\"<version-id>\",...}"
                  },
                  "attributes": [
-                   {"key": "shirudo.status", "value": {"stringValue": "ok"}},
-                   {"key": "shirudo.version_id", "value": {"stringValue": "<version-id>"}},
-                   {"key": "shirudo.tamper_attempts", "value": {"intValue": "<total>"}}
+                   {"key": "shirudo.quote", "value": {"stringValue": "attest=<base64>;sig=<base64>;ak=<base64>"}}
                  ]
                }
              ]
@@ -492,6 +522,7 @@ Related
 
 - :doc:`/operate/run/telemetry`
 - :doc:`/reference/cli/status`
+- :doc:`/reference/cli/quote-check`
 - :doc:`/reference/cli/upatch-map`
 - :doc:`/upatches/write/decoders`
 - :doc:`status-json`

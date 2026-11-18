@@ -162,8 +162,12 @@ publication and fetches each artifact by the manifest and layer digests
 the publication names.
 
 The client follows redirects for blob requests only and never sends
-the ``Authorization`` header to another host. It accepts no response
-larger than 256 MiB. Credentials come from ``BPM_OCI_USERNAME`` and
+the ``Authorization`` header to another host. It reads no response
+larger than 16 MiB into memory and writes no package larger than 256 MiB
+to disk. Each transfer ends after a minute plus the time the most it may
+carry takes at 128 KiB a second, so that a registry that answers a few
+bytes at a time cannot hold a command, and the config operation lock it
+holds, any longer. Credentials come from ``BPM_OCI_USERNAME`` and
 ``BPM_OCI_PASSWORD``, or from the registry's ``auth`` entry in
 ``REGISTRY_AUTH_FILE``, ``$DOCKER_CONFIG/config.json`` or
 ``$HOME/.docker/config.json``, and ``BPM_OCI_BEARER_TOKEN`` supplies a

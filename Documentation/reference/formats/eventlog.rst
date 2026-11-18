@@ -261,9 +261,25 @@ this boot's records the same way:
   last ``init`` record and the records after it.
 - A boot without an ``init`` record has no replay.
 
-The upatches this boot measured are folded from the same records: an
-``init`` record starts the set over with its ``set``, and an
-``upatch_load`` or ``upatch_unload`` record adds or removes its upatch.
+The upatches this boot measured are folded from the records the register
+vouches for, which the undo pass of ``upatch load`` and ``upatch
+unload``, ``upatch reconcile`` and the ``UpatchesMeasured`` condition of
+``status`` read. A boot ID read by path is root's to replace in a mount
+namespace of its own, so they select the boot by the TPM instead:
+
+- They start at the last ``init`` record whose ``nv_name`` is the name
+  of the live index and whose ``tpm_reset_count`` is the TPM's reset
+  count, both read over the session ``init`` pinned.
+- They derive each record's digest from its fields, as the extend that
+  wrote it computed it (see `Event digests`_), and refuse a record whose
+  ``digest`` differs and a type no writer uses.
+- They fold the records from zero and refuse unless the result is the
+  value the TPM reports for the register.
+
+A refusal is ``tampered`` for a load or an unload and an ``ALERT`` of
+``UpatchesMeasured`` in ``status``. An ``init`` record starts the set
+over with its ``set``, and an ``upatch_load`` or ``upatch_unload``
+record adds or removes its upatch.
 Only an ``init`` record's ``set`` counts. Lean 4 proves the fold holds an
 upatch exactly when the last record that bears on it, an ``init`` record
 or a load or unload of it, leaves it loaded: its load, or an ``init``
@@ -286,7 +302,10 @@ Pending record
 root file system. The ``init`` run of ``shirudo.service`` on the root
 file system adopts it: it appends each pending line that this boot's
 part of the eventlog does not already hold, then removes the pending
-file. Any other append adopts a pending record first.
+file. Any other append adopts a pending record first. Every reader
+takes the pending record only from a ``/run/shirudo`` that carries the
+seal label, and only when the file carries it too: a ``/run`` of root's
+making, in a mount namespace of its own, cannot carry it.
 
 Size limits
 -----------

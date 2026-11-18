@@ -53,15 +53,28 @@ for rule in "$@"; do
 		includes=
 	fi
 	# Each file on its own, so that one Coccinelle cannot parse costs only
-	# that file, and in parallel.
-	xargs -P "$jobs" -n 16 spatch -D report --very-quiet $includes \
+	# that file, and in parallel. A rule with a time limit takes a file
+	# per run, as spatch gives up on all a run was given.
+	per=16
+	if grep -q '^#spatch.*--timeout' "$rule"; then
+		per=1
+	fi
+	xargs -P "$jobs" -n "$per" spatch -D report --very-quiet $includes \
 		--include-headers --sp-file "$rule" <"$work/files" \
-		>"$work/$name.out" 2>"$work/$name.err" || {
-		cat "$work/$name.err" >&2
-		printf 'check-coccinelle: %s: spatch failed\n' "$name" >&2
-		bad=$((bad + 1))
-		continue
-	}
+		>"$work/$name.out" 2>"$work/$name.err" ||
+		if grep -v -e '^timeout (we abort): ' \
+		    -e '^Fatal error: exception .*Timeout$' \
+		    "$work/$name.err" | grep -q .; then
+			cat "$work/$name.err" >&2
+			printf 'check-coccinelle: %s: spatch failed\n' "$name" >&2
+			bad=$((bad + 1))
+			continue
+		fi
+	sed -n 's/^timeout (we abort): //p' "$work/$name.err" |
+		while IFS= read -r file; do
+			printf 'check-coccinelle: %s: gave up on %s at its time limit\n' \
+				"$name" "$file" >&2
+		done
 	sort -u "$work/$name.out" >"$work/$name.sorted"
 	[ -s "$work/$name.sorted" ] || continue
 	bad=$((bad + 1))

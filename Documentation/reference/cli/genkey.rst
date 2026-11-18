@@ -100,7 +100,9 @@ Exit status
        unsafe or not writable, generating or writing failed, or shirudo
        enforces on this host.
    * - 2
-     - An unknown option, or ``--keys-dir`` without a value.
+     - A usage error: an unknown option, an option given twice,
+       ``--keys-dir`` without a value or with an empty one, or an
+       argument.
 
 Files and environment
 ---------------------

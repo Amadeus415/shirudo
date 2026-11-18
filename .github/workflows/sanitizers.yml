@@ -7,8 +7,6 @@ on:
     tags:
       - '*'
   pull_request:
-  schedule:
-    - cron: '0 2 * * *'
   workflow_dispatch:
 
 permissions:
@@ -20,23 +18,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ThreadSanitizer finds data races and, in a signal handler, a call
+  # that is not async-signal-safe or a changed errno. shirudo starts no
+  # thread and installs no handler today; the leg is there for the first.
   tests:
-    name: ASan+UBSan (${{ matrix.compiler }})
-    if: github.event_name != 'schedule'
+    name: ${{ matrix.name }} (${{ matrix.compiler }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        compiler:
-          - gcc
-          - clang
+        include:
+          - name: ASan+UBSan
+            sanitize: address,undefined
+            compiler: gcc
+          - name: ASan+UBSan
+            sanitize: address,undefined
+            compiler: clang
+          - name: TSan
+            sanitize: thread
+            compiler: clang
 
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The build does not depend on the compiler under test, so one cache
-      # entry serves both matrix legs.
+      # The build does not depend on the compiler or the sanitizer under
+      # test, so one cache entry serves every matrix leg.
       - name: Restore the sanitizer OpenSSL build
         id: sanitizer-openssl
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -50,7 +57,7 @@ jobs:
       - name: Build with sanitizers and run the host-side suite in LVH VM
         uses: cilium/little-vm-helper@c8b0bfbae3bdda7bc69fb9cd370e4b74ce84986d # v0.0.33
         with:
-          test-name: shirudo-sanitizers-${{ matrix.compiler }}
+          test-name: shirudo-sanitizers-${{ matrix.compiler }}-${{ matrix.sanitize == 'thread' && 'tsan' || 'asan' }}
           image: kind
           image-version: bpf-next-20260603.072225
           kernel-version: bpf-next-main
@@ -91,10 +98,10 @@ jobs:
             export LD_LIBRARY_PATH=/tmp/shirudo-openssl/lib
             export CC=${{ matrix.compiler }}
 
-            make -j4 SANITIZE=address,undefined
-            make SANITIZE=address,undefined shirudo-build
-            make -C testing SANITIZE=address,undefined test-helpers
-            make tests VM=0 SANITIZE=address,undefined
+            make -j4 SANITIZE=${{ matrix.sanitize }}
+            make SANITIZE=${{ matrix.sanitize }} shirudo-build
+            make -C testing SANITIZE=${{ matrix.sanitize }} test-helpers
+            make tests VM=0 SANITIZE=${{ matrix.sanitize }}
 
       - name: Save the sanitizer OpenSSL build
         if: always() && steps.sanitizer-openssl.outputs.cache-hit != 'true' && hashFiles('build/sanitizer-openssl/lib/libcrypto.so') != ''
@@ -102,6 +109,88 @@ jobs:
         with:
           path: build/sanitizer-openssl
           key: ${{ steps.sanitizer-openssl.outputs.cache-primary-key }}
+
+  # MemorySanitizer finds reads of memory never written, which ASan and
+  # UBSan do not, and needs every library the code reads from rebuilt with
+  # it, which msan-deps.sh does and the cache keeps. The suite leaves out
+  # what runs Lua, as LuaJIT's interpreter cannot be instrumented.
+  msan:
+    name: MSan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Restore the MemorySanitizer libraries
+        id: msan-deps
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/msan-deps
+          key: msan-deps-${{ hashFiles('.github/scripts/msan-deps.sh') }}
+
+      # The unit tests link the util objects, whose build needs the BTF of
+      # a signed-BPF capable bpf-next kernel, as the other jobs do. A push
+      # or a pull request gets a minute per fuzz target, a run by hand
+      # ten.
+      - name: Build under MSan and run the unit tests and fuzz targets in LVH VM
+        uses: cilium/little-vm-helper@c8b0bfbae3bdda7bc69fb9cd370e4b74ce84986d # v0.0.33
+        with:
+          test-name: shirudo-msan
+          image: kind
+          image-version: bpf-next-20260603.072225
+          kernel-version: bpf-next-main
+          host-mount: ${{ github.workspace }}
+          images-folder-parent: ${{ github.workspace }}/../lvh
+          install-dependencies: true
+          cmd: |
+            grep -aq 'signature_size' /sys/kernel/btf/vmlinux || {
+              echo 'kernel BTF lacks bpf_attr.signature_size; needs a signed-BPF capable bpf-next kernel' >&2
+              exit 1
+            }
+            cd /host
+
+            apt-get update
+            apt-get install -y --no-install-recommends \
+              autoconf \
+              autoconf-archive \
+              automake \
+              bison \
+              build-essential \
+              ca-certificates \
+              curl \
+              flex \
+              gawk \
+              git \
+              libltdl-dev \
+              libluajit-5.1-dev \
+              libtool \
+              m4 \
+              pkg-config \
+              python3 \
+              xz-utils
+            sh .github/scripts/install-clang.sh libclang-rt-23-dev
+
+            git config --global --add safe.directory /host
+
+            sh .github/scripts/msan-deps.sh
+            sh .github/scripts/msan-tests.sh \
+              ${{ github.event_name == 'workflow_dispatch' && 600 || 60 }}
+
+      - name: Save the MemorySanitizer libraries
+        if: always() && steps.msan-deps.outputs.cache-hit != 'true' && hashFiles('build/msan-deps/lib/libcrypto.so') != ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/msan-deps
+          key: ${{ steps.msan-deps.outputs.cache-primary-key }}
+
+      - name: Upload the crash inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: msan-crashes
+          path: testing/fuzz/crash-*
+          if-no-files-found: ignore
 
   libfuzzer:
     name: libFuzzer
@@ -118,7 +207,7 @@ jobs:
           path: build/host-openssl
           key: host-openssl-lvh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/vm-toolchain.sh') }}
 
-      # Every run starts from the corpus the last nightly run kept; the
+      # Every run starts from the corpus the last push to main kept; the
       # newest one is restored, as each is saved under a key of its own.
       - name: Restore the fuzz corpora
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -130,8 +219,8 @@ jobs:
       # The Rust library the targets link includes the types of bpf2's and
       # the seal's maps, read from the BPF objects, which need the BTF of
       # the LVH guest's kernel, and the toolchain the other jobs build in
-      # comes with it. A push or a pull request gets a minute per target,
-      # the nightly run ten.
+      # comes with it. A push or a pull request gets a minute per target, a
+      # run by hand ten.
       - name: Fuzz the parsers of input from outside the host in LVH VM
         id: fuzz
         uses: cilium/little-vm-helper@c8b0bfbae3bdda7bc69fb9cd370e4b74ce84986d # v0.0.33
@@ -148,7 +237,7 @@ jobs:
             .github/scripts/vm-toolchain.sh libclang-rt-23-dev
             . build/vm-toolchain.env
             make -j"\$(nproc)" -C testing fuzz \
-              FUZZ_SECONDS=${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 600 || 60 }} \
+              FUZZ_SECONDS=${{ github.event_name == 'workflow_dispatch' && 600 || 60 }} \
               FUZZ_CORPUS=/host/build/fuzz-corpus
 
       - name: Save the LVH OpenSSL toolchain
@@ -158,10 +247,10 @@ jobs:
           path: build/host-openssl
           key: ${{ steps.lvh-openssl.outputs.cache-primary-key }}
 
-      # Only the nightly and manual runs save, so that each push does not
-      # add a corpus to the cache the kernel and the VM images share.
+      # A push to main and a run by hand save; a pull request starts from
+      # main's corpus and keeps what it finds to itself.
       - name: Save the fuzz corpora
-        if: always() && steps.fuzz.outcome != 'skipped' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        if: always() && steps.fuzz.outcome != 'skipped' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/fuzz-corpus
@@ -173,4 +262,81 @@ jobs:
         with:
           name: fuzz-crashes
           path: testing/fuzz/crash-*
+          if-no-files-found: ignore
+
+  # The same targets under AFL++, whose comparison logging and mutators
+  # find inputs libFuzzer does not, for a minute a target on a push or a
+  # pull request and ten by hand. It shares the corpus with the libFuzzer
+  # job through the cache: each starts from what the newest run of
+  # either kept on main.
+  afl-fuzz:
+    name: afl-fuzz
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Restore the LVH OpenSSL toolchain
+        id: lvh-openssl
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/host-openssl
+          key: host-openssl-lvh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/vm-toolchain.sh') }}
+
+      - name: Restore the AFL++ build
+        id: afl
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/afl
+          key: afl-lvh-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/afl-deps.sh') }}
+
+      - name: Restore the fuzz corpora
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/fuzz-corpus
+          key: fuzz-corpus-afl-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-corpus-
+
+      - name: Fuzz the parsers of input from outside the host with AFL++ in LVH VM
+        id: fuzz
+        uses: cilium/little-vm-helper@c8b0bfbae3bdda7bc69fb9cd370e4b74ce84986d # v0.0.33
+        with:
+          test-name: shirudo-afl-fuzz
+          image: kind
+          image-version: bpf-next-20260603.072225
+          kernel-version: bpf-next-main
+          host-mount: ${{ github.workspace }}
+          images-folder-parent: ${{ github.workspace }}/../lvh
+          install-dependencies: true
+          cmd: |
+            cd /host
+            .github/scripts/vm-toolchain.sh libclang-rt-23-dev llvm-23-dev
+            . build/vm-toolchain.env
+            .github/scripts/afl-deps.sh
+            PATH=/host/build/afl/bin:\$PATH make -j"\$(nproc)" -C testing afl \
+              AFL_SECONDS=${{ github.event_name == 'workflow_dispatch' && 600 || 60 }} \
+              FUZZ_CORPUS=/host/build/fuzz-corpus
+
+      - name: Save the AFL++ build
+        if: always() && steps.afl.outputs.cache-hit != 'true' && hashFiles('build/afl/.built') != ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/afl
+          key: ${{ steps.afl.outputs.cache-primary-key }}
+
+      - name: Save the fuzz corpora
+        if: always() && steps.fuzz.outcome != 'skipped' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/fuzz-corpus
+          key: fuzz-corpus-afl-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload the crash inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: afl-fuzz-crashes
+          path: testing/fuzz/crash-afl-*
           if-no-files-found: ignore

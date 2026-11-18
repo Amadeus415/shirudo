@@ -59,10 +59,21 @@ static void struct_size_counts_the_flexible_array(void)
 	EXPECT_UEQ(struct_size(p, tail, SIZE_MAX / 4), SIZE_MAX);
 }
 
+static void div_round_up_never_wraps(void)
+{
+	EXPECT_UEQ(DIV_ROUND_UP(0U, 8U), 0);
+	EXPECT_UEQ(DIV_ROUND_UP(1U, 8U), 1);
+	EXPECT_UEQ(DIV_ROUND_UP(8U, 8U), 1);
+	EXPECT_UEQ(DIV_ROUND_UP(9U, 8U), 2);
+	EXPECT_UEQ(DIV_ROUND_UP(UINT32_MAX, 8U), 0x20000000);
+	EXPECT_UEQ(DIV_ROUND_UP(SIZE_MAX, (size_t)2), SIZE_MAX / 2 + 1);
+}
+
 static const struct unit_case cases[] = {
 	UNIT_CASE(check_overflow_judges_by_the_destination),
 	UNIT_CASE(sizes_stick_at_size_max),
 	UNIT_CASE(struct_size_counts_the_flexible_array),
+	UNIT_CASE(div_round_up_never_wraps),
 	{}
 };
 

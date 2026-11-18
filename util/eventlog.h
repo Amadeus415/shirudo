@@ -108,6 +108,18 @@ int eventlog_upatches(int (*cb)(enum eventlog_upatch_event event,
 		      void *ctx);
 
 /*
+ * The sealed log and the pending record after it, xmalloc'd to *len + 1
+ * bytes, for a reader that checks each record against the register.
+ */
+int eventlog_read(char **out, size_t *len);
+/* One record of that log to cb, as eventlog_upatches() would give it. */
+int eventlog_upatches_record(const char *line, size_t len, bool is_init,
+			     int (*cb)(enum eventlog_upatch_event event,
+				       const char *name,
+				       const char *payload_hex, void *ctx),
+			     void *ctx);
+
+/*
  * 1 if appending one more event would push the eventlog past max_bytes;
  * 0 if it fits or max_bytes is 0 (unlimited). The register and the log
  * must stay in lockstep, so a caller refuses the whole operation (no

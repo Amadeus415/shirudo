@@ -1,3 +1,10 @@
+# Source indexes (make tags, make cscope)
+/tags
+/cscope.files
+/cscope.out
+/cscope.in.out
+/cscope.po.out
+
 # Build artefacts
 /build/
 /shirudo
@@ -11,6 +18,7 @@
 /shirudo-operator-*.rpm
 /*.spdx.json
 /tools/shirudo-build/shirudo-build
+/tools/quote-check/shirudo-quote-check
 *.o
 /bpf/*.lskel
 /bpf/*.skel.rs
@@ -37,6 +45,7 @@
 /systemd/shirudo-initrd.service
 /systemd/shirudo-map-export.service
 /systemd/shirudo-keepalive.service
+/systemd/shirudo-xdp-reconcile.service
 /systemd/shirudo-bpm-repo-update.service
 /systemd/shirudo-bpm-tree-sync.service
 
@@ -58,10 +67,12 @@
 !/testing/helper/test-bpm-key.py
 !/testing/helper/test-bpm-info.py
 !/testing/helper/test-seal-seccomp.py
+!/testing/helper/capture-keepalive-quotes.sh
 
 # libFuzzer targets and the inputs that crashed them
 /testing/fuzz/fuzz-*
 !/testing/fuzz/fuzz-*.c
+/testing/fuzz/.fuzz-flags
 /testing/fuzz/crash-*
 
 # Local config (PLAN.md "Build system": Makefile.config is a committed

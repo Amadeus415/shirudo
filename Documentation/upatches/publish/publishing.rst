@@ -80,8 +80,9 @@ Push it to a repository
    ``<namespace>/bpm-index:stable`` in the same registry, signs the index
    with your key, and tags the package with its version. The index
    namespace is the package repository path without its final name. It
-   prints the pushed reference,
-   ``oci://<registry>/<namespace>/<name>:<version>``.
+   prints the pushed reference and the manifest's digest,
+   ``oci://<registry>/<namespace>/<name>:<version> sha256:<digest>``;
+   ``bpm config update`` takes that digest to build on the package.
 
    The first package of a namespace needs ``--new-index``: ``bpm push``
    refuses a namespace without an index otherwise, so that a registry that
@@ -110,20 +111,26 @@ Append it to the tree
    .. code-block:: console
 
       operator$ shirudo bpm tree append <name>-<version>.bee \
-          oci://<registry>/<namespace>/<tree> --keys-dir <keys-dir>
+          oci://<registry>/<namespace>/<tree> --tree-id <tree-id> \
+          --keys-dir <keys-dir>
 
    ``<tree>`` is the tree's repository. The command fetches the current
    publication at ``<tree>:stable`` and verifies its signature against
    your certificate. For every entry it checks that the artifact is a
    load directive whose upatch name equals the entry's ``id``, pushes the
    artifact as an artifact of its own, and appends an operation with the
-   entry's selector. It then signs the next generation, which names the
-   previous publication's digest as its parent, and prints the tree's
-   reference and new digest.
+   entry's selector and, when the entry has one, its ``fixes`` list. It
+   then signs the next generation, which names the previous
+   publication's digest as its parent, and prints the tree's reference
+   and new digest. Every earlier operation goes into the new generation
+   as it was, its ``fixes`` included.
 
    A repository without a publication starts a new tree at generation 1,
-   with the package name as tree id or the id ``--tree-id`` gives. For an
-   existing tree, ``--tree-id`` must name the id it has. ``--reference
+   with the id ``--tree-id`` gives, else the package name at ``stable``
+   and ``<package>-<reference>`` at another reference, so that a canary
+   tree has an id of its own. To extend an existing tree, ``--tree-id``
+   must name the id it has, from your own records: a registry that serves
+   another tree your key signs at that reference is refused. ``--reference
    <ref>`` publishes to another tag than ``stable``, such as a canary
    tree.
 
@@ -132,13 +139,45 @@ Append it to the tree
    .. code-block:: console
 
       operator$ shirudo bpm tree append <name>-<version>.bee \
-          oci://<registry>/<namespace>/<tree> --keys-dir <keys-dir> --op delete
+          oci://<registry>/<namespace>/<tree> --tree-id <tree-id> \
+          --keys-dir <keys-dir> --op delete
 
    Nothing is ever removed from the tree: a ``delete`` is a new operation
-   after the ``add``. To replace a loaded upatch with a new build of the
-   same name, append the ``delete`` of the old package first and the
-   ``add`` of the new one after it, since a target cannot load a second
-   upatch under a name that is already loaded.
+   after the ``add``, and carries no ``fixes``. To replace a loaded
+   upatch with a new build of the same name, append the ``delete`` of the
+   old package first and the ``add`` of the new one after it, since a
+   target cannot load a second upatch under a name that is already
+   loaded.
+
+``tree append`` refuses an ``add`` whose XDP programs select a device
+class that another upatch of the tree selects on the same nodes, since a
+device runs one native XDP program and the second load would stop every
+such node's ``tree sync``. Give each class to one upatch, give the two
+entries selectors that exclude each other, such as different values of
+one label, or append the ``delete`` of the earlier upatch first.
+:doc:`/reference/cli/bpm` has the exact rule.
+
+Segments and registry retention
+-------------------------------
+
+A tree grows past what one signed document holds as a chain of
+segments. Once the current segment holds 64 operations, or the number
+``--segment-ops`` gives, ``tree append`` seals it and publishes the new
+operations as the next segment, which names the sealed one by digest.
+One append always goes into one segment, and a segment never holds more
+than 512 operations. ``<tree>:stable`` names only the current segment; a
+target that is behind fetches the sealed ones by digest.
+
+Every sealed segment is tagged ``segment-1``, ``segment-2`` and so on in
+the tree's repository. Keep the ``segment-*`` tags: a registry that
+deletes untagged manifests, or a retention policy that prunes old tags,
+would remove a segment a target still has to walk through, and the
+target then refuses to sync rather than skip it.
+
+An ``add`` whose XDP programs select a device class makes ``tree
+append`` fetch every sealed segment, so its class check covers the whole
+tree. Expect three fetches per sealed segment for such an ``add``, its
+manifest, document and signature; any other operation fetches none.
 
 What a target does with them
 ----------------------------

@@ -29,7 +29,6 @@
 #define INITRD_KEYS_DIR		"/etc/shirudo/keys"
 #define INITRD_CERT_PATH	INITRD_KEYS_DIR "/" CERT_FILE
 #define UPATCHES_DIR		VAR_LIB "/upatches"
-#define INCOMING_DIR		VAR_LIB "/incoming"
 #define LOCKS_DIR		VAR_LIB "/locks"
 #define EVENTLOG_PATH		VAR_LIB "/eventlog"
 /*
@@ -40,6 +39,8 @@
  */
 #define RUN_DIR			"/run/shirudo"
 #define BPFFS_DIR		RUN_DIR "/bpffs"
+#define XDP_PROG_PIN_PREFIX	"xdp_prog_"
+#define LINK_PIN_PREFIX		"link_"
 /* The init record written from the initrd, until the root adopts it. */
 #define EVENTLOG_PENDING_PATH	RUN_DIR "/eventlog.pending"
 /* On a target with a config image these are the image's, opened from its root. */
@@ -55,6 +56,7 @@
 #define BPM_TREE_VAR_DIR	BPM_VAR_DIR "/upatch-tree"
 #define BPM_TREE_STATE_PATH	BPM_TREE_VAR_DIR "/state.json"
 #define BPM_TREE_EVENTLOG_PATH BPM_TREE_VAR_DIR "/tree-eventlog"
+#define BPM_TREE_OUTCOMES_PATH BPM_TREE_VAR_DIR "/outcomes"
 #define BPM_TREE_PENDING_PATH BPM_TREE_VAR_DIR "/pending.json"
 #define BPM_TREE_ARTIFACTS_DIR BPM_TREE_VAR_DIR "/artifacts"
 #define BPM_TREE_STATUS_DIR BPM_TREE_VAR_DIR "/status"
@@ -62,6 +64,7 @@
 #define LSM_LINK_PIN		BPFFS_DIR "/lsm_link"
 #define LSM_PROG_LOAD_LINK_PIN	BPFFS_DIR "/bpf2_bpf_prog_load_link"
 #define LSM_BPF_MAP_LINK_PIN	BPFFS_DIR "/bpf2_bpf_map_link"
+#define LSM_BPF_PROG_LINK_PIN	BPFFS_DIR "/bpf2_bpf_prog_link"
 #define SB_UMOUNT_LINK_PIN	BPFFS_DIR "/bpf2_sb_umount_link"
 #define MOVE_MOUNT_LINK_PIN	BPFFS_DIR "/bpf2_move_mount_link"
 #define SB_MOUNT_LINK_PIN	BPFFS_DIR "/bpf2_sb_mount_link"
@@ -104,6 +107,7 @@
 #define BPFFS_UPATCHES_DIR	BPFFS_DIR "/upatches"
 #define IDENTITY_PIN		BPFFS_DIR "/identity"
 #define TAMPER_PIN		BPFFS_DIR "/tamper"
+#define INTEGRITY_PIN		BPFFS_DIR "/integrity"
 #define POLICY_PIN		BPFFS_DIR "/task_policy"
 #define SEAL_SOCKET_POST_CREATE_PIN \
 	BPFFS_DIR "/seal_socket_post_create_link"
@@ -124,6 +128,7 @@
 
 #define XATTR_SEAL		"security.bpf.shirudo"
 #define XATTR_POLICY		"security.bpf.shirudo.policy"
+#define XATTR_ANCESTOR		"security.bpf.shirudo.ancestor"
 
 /*
  * Per-upatch payload_sha256 recorded on the pin directory in bpffs.
@@ -218,6 +223,9 @@ static inline int upatch_name_from_bpffs(char *out, size_t out_sz,
  */
 int upatch_pin_path(char *out, size_t cap, const char *name,
 		    const char *const *parts);
+
+/* dir, a slash and name: 0, or -ENAMETOOLONG with out empty. */
+int path_join(char *out, size_t cap, const char *dir, const char *name);
 
 bool path_exists(const char *path);
 

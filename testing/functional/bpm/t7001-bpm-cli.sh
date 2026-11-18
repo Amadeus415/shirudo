@@ -44,7 +44,7 @@ test_expect_success 'bpm pull without a reference prints OCI usage' '
 	if out=$($SHIRUDO bpm pull 2>&1); then
 		false
 	else
-		echo "$out" | grep -q "The package reference must start with oci://" &&
+		echo "$out" | grep -q "a package reference starting with oci://" &&
 		echo "$out" | grep -q "oci://quay.io/namespace/package:tag"
 	fi
 '

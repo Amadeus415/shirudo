@@ -49,7 +49,8 @@ program types against a second run and not others:
      - Can be preempted with preemptible RCU. The kernel skips a run of a
        program that is already running on the CPU, so a program does not
        nest in itself, but other programs can run in between.
-   * - ``lsm``, ``uprobe.multi``
+   * - ``lsm``, ``uprobe``, ``uretprobe``, ``uprobe.multi``,
+       ``uretprobe.multi``
      - Can be preempted with preemptible RCU and are not guarded: a
        second run of the same program can start on the CPU before the
        first one ends, and an ``lsm`` hook a softirq calls can run on top
@@ -57,7 +58,8 @@ program types against a second run and not others:
    * - ``syscall``
      - Run with only migration disabled on any kernel and are not
        guarded: another task can preempt a run.
-   * - ``lsm.s``, ``fentry.s``, ``fexit.s``, ``fmod_ret.s``
+   * - ``lsm.s``, ``fentry.s``, ``fexit.s``, ``fmod_ret.s``, ``uprobe.s``,
+       ``uretprobe.s``, ``uprobe.multi.s``, ``uretprobe.multi.s``
      - Can be preempted and sleep on any kernel. Another run can take the
        CPU at any sleeping call.
    * - ``cgroup_skb``, ``netfilter``
@@ -66,6 +68,12 @@ program types against a second run and not others:
        egress run on the same CPU, and an ingress run in a softirq can
        run on top of it. ``netfilter`` programs run at IPv6
        pre-routing, mostly in a softirq.
+   * - ``xdp``
+     - Run in a device's NAPI poll with bottom halves disabled, and are not
+       guarded. No task and no other softirq comes between on one CPU,
+       except on ``PREEMPT_RT``, where a bottom-half section can be
+       preempted. An interrupt or NMI can run other programs on top. The
+       receive queues of a device run on different CPUs at once.
 
 The table covers the attach kinds ``shirudo build`` accepts, which
 :doc:`/upatches/write/attach-kinds` lists.
@@ -104,7 +112,8 @@ kernel.
        ``syscall`` and sleepable programs, and where a program that an
        interrupt, a softirq or an NMI runs shares the memory with one
        that a process runs. Not where only ``kprobe`` and ``kretprobe``
-       programs use it, nor where one guarded program uses it alone.
+       programs use it, nor where one guarded program uses it alone, nor,
+       outside ``PREEMPT_RT``, where only ``xdp`` programs use it.
    * - Updates of shared values, inserting a missing key,
        compare-and-swap, using a value after deleting its entry, reading
        user memory twice

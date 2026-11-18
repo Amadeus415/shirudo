@@ -38,18 +38,18 @@ test_expect_success 'map export timer waits five seconds between runs' '
 		../systemd/shirudo-map-export.timer
 '
 
-test_expect_success 'keepalive service exports status with TPM and system data' '
+test_expect_success 'keepalive service sends the quoted keepalive' '
 	grep -q "^After=shirudo.service$" \
 		../systemd/shirudo-keepalive.service.in &&
 	grep -q "^EnvironmentFile=-/etc/shirudo/map-export.env$" \
 		../systemd/shirudo-keepalive.service.in &&
-	grep -q "^ExecStart=@bindir@/shirudo status --otel --include-system$" \
+	grep -q "^ExecStart=@bindir@/shirudo status --otel$" \
 		../systemd/shirudo-keepalive.service.in
 '
 
-test_expect_success 'keepalive timer waits five seconds between runs' '
+test_expect_success 'keepalive timer waits a minute between runs' '
 	grep -q "^OnBootSec=5s$" ../systemd/shirudo-keepalive.timer &&
-	grep -q "^OnUnitInactiveSec=5s$" \
+	grep -q "^OnUnitInactiveSec=60s$" \
 		../systemd/shirudo-keepalive.timer &&
 	grep -q "^Unit=shirudo-keepalive.service$" \
 		../systemd/shirudo-keepalive.timer &&
@@ -71,7 +71,7 @@ test_expect_success 'target install resolves and stages exporter units' '
 	) &&
 	grep -q "^ExecStart=/opt/shirudo/bin/shirudo upatch map --all$" \
 		"$GENERATED" &&
-	grep -q "^ExecStart=/opt/shirudo/bin/shirudo status --otel --include-system$" \
+	grep -q "^ExecStart=/opt/shirudo/bin/shirudo status --otel$" \
 		"$GENERATED_KEEPALIVE" &&
 	grep -q "systemd/shirudo-map-export.service" "$WORK/target.plan" &&
 	grep -q "systemd/shirudo-map-export.timer" "$WORK/target.plan" &&

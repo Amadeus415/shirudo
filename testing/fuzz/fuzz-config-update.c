@@ -24,6 +24,7 @@ static int dir_fd = -1;
 static void remove_dir(void)
 {
 	unlinkat(dir_fd, "events", 0);
+	unlinkat(dir_fd, "next-boot", 0);
 	rmdir(dir);
 }
 

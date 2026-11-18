@@ -49,9 +49,9 @@ Comparison
        ``-mbranch-protection=standard``, in the C code
      - None
    * - Carried kernel patches
-     - ``kernel/0001`` to ``kernel/0004``
-     - ``kernel/0001`` to ``kernel/0004``
-     - ``kernel/0001`` to ``kernel/0004``
+     - ``kernel/0001`` to ``kernel/0005``
+     - ``kernel/0001`` to ``kernel/0005``
+     - ``kernel/0001`` to ``kernel/0005``
    * - BPF trampolines (``lsm``, ``fentry``, ``fexit``, ``fmod_ret``)
      - 36 programs per function
      - 37 programs per function
@@ -161,7 +161,7 @@ shirudo
 Linux kernel
 ~~~~~~~~~~~~
 
-- Get ``kernel/0001`` to ``kernel/0004`` upstream. None of them is in
+- Get ``kernel/0001`` to ``kernel/0005`` upstream. None of them is in
   bpf-next; :doc:`/internals/kernel-patches` describes each.
 - riscv64: BPF trampolines on a kernel built with ``CONFIG_CFI``.
 - riscv64: arenas on CPUs without Zacas.

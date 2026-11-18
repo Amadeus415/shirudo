@@ -16,7 +16,7 @@ source commit in `COMMIT`, and rebuilds `libbpf.a` as a check.
 |---|---|---|
 | `bpf/*.c`, `bpf/*.h` | `tools/lib/bpf/` (verbatim, but see below) | `LGPL-2.1 OR BSD-2-Clause`; shirudo consumes the BSD branch |
 | `bpf/bpf_helper_defs.h` | generated from `bpf.h` by `scripts/bpf_doc.py` | as libbpf |
-| `include/uapi/linux/*.h` | `tools/include/uapi/linux/` (verbatim) | `GPL-2.0 WITH Linux-syscall-note`, `netdev.h` also `OR BSD-3-Clause`: the syscall note permits user programs to include them |
+| `include/uapi/linux/*.h` | `tools/include/uapi/linux/` (verbatim, but see below) | `GPL-2.0 WITH Linux-syscall-note`, `netdev.h` also `OR BSD-3-Clause`: the syscall note permits user programs to include them |
 | `include/linux/*.h`, `include/asm/*.h` | shirudo-owned shims replacing the kernel's `tools/include` internals | BSD-2-Clause |
 | `Makefile`, `README.md` | shirudo-owned | BSD-2-Clause |
 
@@ -33,9 +33,16 @@ commit: `MAX_USED_PROGS` is 64 instead of 32, as required by the
 kernel-obs package. In addition `gen_loader.c` also supports reusing a
 signer-selected map FD supplied through the loader context.
 `bpf/btf_dump.c` preserves complete native GNU attribute spellings without
-wrapping them twice. `bpf-deps`
-overwrites these files, so re-apply those changes after a refresh until
-they are upstream.
+wrapping them twice, and reads an enum value at an address its size does
+not divide by copying it to an aligned buffer, as it reads such an int,
+where upstream reads it as a bitfield of no bits and shifts a `__u64` by
+64. `include/uapi/linux/types.h` defines `__s128` and
+`__u128` as the kernel's own `include/uapi/linux/types.h` does: it
+shadows the system's copy, and the arm64 `asm/sigcontext.h` of current
+kernel headers, which `<signal.h>` pulls in, uses `__u128`. In the
+kernel tree `tools/include/linux/types.h` defines them first, which the
+shims do not stand in for. `bpf-deps` overwrites these files, so
+re-apply those changes after a refresh until they are upstream.
 
 `.github/scripts/check-spdx.sh` holds every vendored `.c` and `.h` to
 the licences in this table, so a refresh that brings in a file under

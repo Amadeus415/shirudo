@@ -1,6 +1,6 @@
 ---
 name: docs
-description: Keep Documentation/ in step with a change to shirudo. Covers which pages describe a command, option, message, failure category, tamper counter, LSM hook, file, unit, environment variable, setting, format, Beefile key, test, kernel patch or threat, how to write the change in the voice of its page, and how to check the result. Use whenever code changes behavior a page describes, when a test is added or removed, and when writing or reviewing a page.
+description: Keep Documentation/ in step with a change to shirudo. Covers which pages describe a command, option, message, failure category, tamper or integrity counter, LSM hook, file, unit, environment variable, setting, format, Beefile key, test, kernel patch or threat, how to write the change in the voice of its page, and how to check the result. Use whenever code changes behavior a page describes, when a test is added or removed, and when writing or reviewing a page.
 ---
 
 # Documentation
@@ -26,6 +26,7 @@ Then go through the pages each kind of change has:
 | Command, option, usage | `reference/cli/<command>.rst`, the command's help text, `completion/shirudo.bash`, `reference/cheat-sheet.rst`, the guides that run it |
 | Error message, exit status, failure category | `reference/failure-categories.rst` |
 | Tamper counter | `security/tamper-counters.rst` |
+| Integrity counter | `security/integrity-counters.rst` |
 | LSM hook | `internals/enforcement.rst`, the fact boxes of `security/threat-model.rst` |
 | File or directory | `reference/files.rst` |
 | systemd unit | `reference/systemd-units.rst` |
@@ -62,6 +63,9 @@ make docs                         # renders and serves on 127.0.0.1:8000
 ```
 
 `check-docs.sh` checks the options of console examples, the failure
-categories, tamper counters, hooks, tests, proofs and units the pages
-name, and that every proof has a row on the proof coverage page. It
-cannot check the prose: read each changed paragraph against the code.
+categories, tamper and integrity counters, hooks, tests, proofs and
+units the pages name, the whole of each field of a threat's fact box
+with a hook by its section name, and that every proof has a row on the
+proof coverage page and every source file a proof that reads it or a
+line among the files without one. It cannot check the prose: read each changed paragraph
+against the code.

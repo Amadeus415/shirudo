@@ -105,7 +105,6 @@ if [[ "$PACKAGE_FORMAT" == deb ]]; then
     libelf-dev
     libncurses-dev
     libssl-dev
-    llvm
     openssl
     pahole
     python3
@@ -390,7 +389,7 @@ CONFIG_SYSTEM_TRUSTED_KEYS=""
 CONFIG_SYSTEM_REVOCATION_KEYS=""
 CONFIG_UTS_NS=y
 CONFIG_MODULE_SIG=y
-CONFIG_MODULE_SIG_ALL=n
+CONFIG_MODULE_SIG_ALL=y
 CONFIG_CRYPTO_RSA=y
 CONFIG_CRYPTO_SHA256=y
 CONFIG_CRYPTO_MLDSA=y
@@ -567,6 +566,9 @@ require_config CONFIG_SECCOMP y
 require_config CONFIG_SECCOMP_FILTER y
 require_config CONFIG_CROSS_MEMORY_ATTACH y
 require_config CONFIG_SYSTEM_DATA_VERIFICATION y
+# shirudo refuses unsigned modules once init runs, and the guest loads its
+# networking modules after that.
+require_config CONFIG_MODULE_SIG_ALL y
 require_config CONFIG_PKCS8_PRIVATE_KEY_PARSER y
 require_config CONFIG_CRYPTO_RSA y
 require_config CONFIG_UPROBES y

@@ -29,7 +29,7 @@ PIN="/run/shirudo/bpffs/upatches/$NAME/link"
 restore() {
 	rm -f "$ARCHIVE/t6118.upatch" "$ARCHIVE/t6118-link.upatch" \
 		"$ARCHIVE/t6118-linked.upatch" "$S/t6118-link" \
-		"$S/incoming/t6118-stage" 2>/dev/null || true
+		2>/dev/null || true
 	rmdir "$S/t6118-dir" 2>/dev/null || true
 	rm -rf "$STAGE"
 }
@@ -100,12 +100,6 @@ test_expect_success 'a link cannot slip in while the directory mark is evicted' 
 	"$SHIRUDO_BIN" init >/dev/null 2>&1 &&
 	[ ! -e "$PIN" ] &&
 	[ "$(chain)" = "$CHAIN" ]
-'
-
-test_expect_success 'root cannot plant a link where shirudo stages' '
-	[ -d "$S/incoming" ] &&
-	! ln -s "$STAGE" "$S/incoming/t6118-stage" 2>/dev/null &&
-	[ ! -L "$S/incoming/t6118-stage" ]
 '
 
 test_done

@@ -154,8 +154,8 @@ Exit status
        the other maps are still handled. Also, with ``--all``, the
        configuration cannot be loaded.
    * - 2
-     - A usage error: an unknown or repeated option, an option given last
-       without its value, an invalid value, positional arguments with
+     - A usage error: an unknown or repeated option, a value missing,
+       empty or invalid, positional arguments with
        ``--all``, ``--otel`` without a map, OTLP options without
        ``--otel``, an invalid upatch name, or with ``--all`` an invalid
        ``map_export`` configuration.

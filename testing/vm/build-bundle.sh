@@ -4,6 +4,8 @@
 #
 # Build the host-side payload imported by testing/vm/run.sh. The bundle is
 # shared by all VMs, while TPM state and the test workspace remain per-VM.
+# The host prepares the VM images; build-bundle-payload.sh builds and signs
+# the rest, in the build container unless BUILD_CONTAINER=0.
 
 set -euo pipefail
 
@@ -30,6 +32,7 @@ OPERATOR_KEYS_DIR="${HOST_PRIVATE_DIR}/operator-keys"
 RUNTIME_PREP_VERSION=4
 TEST_VM_MODE=${TEST_VM_MODE:-verity}
 RUNTIME_DISK_SIZE="${TEST_VM_RUNTIME_DISK_SIZE:-8G}"
+BUILD_CONTAINER="${BUILD_CONTAINER:-1}"
 
 log()
 {
@@ -212,7 +215,7 @@ for dependency in \
 	"sha256sum:coreutils:coreutils" "awk:gawk:gawk" \
 	"qemu-img:qemu-utils:qemu-img" \
 	"virt-customize:libguestfs-tools:guestfs-tools" \
-	"openssl:openssl:openssl" "gzip:gzip:gzip" "depmod:kmod:kmod"; do
+	"gzip:gzip:gzip" "depmod:kmod:kmod"; do
 	IFS=: read -r command_name deb_package rpm_package <<<"$dependency"
 	require_command "$command_name" "$deb_package" "$rpm_package"
 done
@@ -220,8 +223,6 @@ done
 # which Ubuntu 24.04 no longer installs; without it apt in the appliance
 # reaches nothing.
 [[ "$TEST_VM_HOST_PKG" != apt ]] || require_command dhclient isc-dhcp-client
-require_command veritysetup cryptsetup-bin cryptsetup
-require_command mkfs.ext4 e2fsprogs e2fsprogs
 check_libguestfs_host
 
 resolve_rootfs()
@@ -299,6 +300,36 @@ bundle_is_current()
 	return 0
 }
 
+# The container builds from a copy of the checkout, so that it shares no
+# objects with the host's build, and keeps the static target dependencies it
+# builds for its image and Makefile.target-deps. A file it reads from the
+# host goes into the fixture work first, where the container sees it.
+build_payload_in_container()
+{
+	local container="$REPO_ROOT/testing/container/run.sh" deps name
+	local -a pass=(-e TARGET_DEPS_DIR -e TEST_VM_ARCH)
+
+	deps="$WORK_DIR/cache/target-deps/$({
+		"$container" --image
+		cat "$REPO_ROOT/Makefile.target-deps"
+	} | sha256sum | cut -c1-16)"
+	mkdir -p "$deps"
+	install -d -m 0700 "$FIXTURE_WORK/inputs"
+	"$REPO_ROOT/testing/vm/list-source.sh" "$FIXTURE_WORK/inputs/source-files"
+	for name in BPF_VMLINUX_BTF TEST_VM_PACKAGE_CERT \
+		TEST_VM_BUILTIN_SIGNING_KEY TEST_VM_BUILTIN_SIGNING_CERT; do
+		[[ -n "${!name:-}" ]] || continue
+		install -m 0600 "${!name}" "$FIXTURE_WORK/inputs/$name"
+		export "$name=$FIXTURE_WORK/inputs/$name"
+		pass+=(-e "$name")
+	done
+	log "building the payload in $("$container" --image)"
+	TARGET_DEPS_DIR="$deps" "$container" -v "$TMP_DIR" -v "$FIXTURE_WORK" \
+		-v "$deps" "${pass[@]}" -- \
+		"$REPO_ROOT/testing/vm/build-bundle-payload.sh" --from-copy \
+		"$FIXTURE_WORK/inputs/source-files" "$TMP_DIR" "$FIXTURE_WORK"
+}
+
 command -v flock >/dev/null 2>&1 ||
 	die "flock is required; install it with: $(test_vm_install_cmd util-linux)"
 
@@ -308,21 +339,24 @@ validate_package_cert
 mkdir -p "$(dirname "$BUNDLE_DIR")"
 exec 9>"$LOCK_FILE"
 flock 9
+# The stamp takes the time before the build reads its inputs, so that one
+# changed while it runs is newer and the next VM goal builds again.
+STAMP_TIME="$(date +%s.%N)"
 validate_host_private_dir
 
 resolve_rootfs
 prepare_runtime_image
+# run.sh prepares the operator VM's image with prepare-runtime.sh as well,
+# and needs the appliance kernel chosen above.
+mkdir -p "$WORK_DIR/cache/libguestfs"
+for name in SUPERMIN_KERNEL SUPERMIN_MODULES SUPERMIN_KERNEL_VERSION; do
+	[[ -z "${!name:-}" ]] || printf 'export %s=%q\n' "$name" "${!name}"
+done >"$WORK_DIR/cache/libguestfs/supermin.env"
 
 if bundle_is_current; then
 	log "reusing current host bundle: $BUNDLE_DIR"
 	exit 0
 fi
-
-jobs=$(nproc)
-log "building host shirudo payload and test helpers"
-make -C "$REPO_ROOT" -j"$jobs" all
-make -C "$REPO_ROOT" -j"$jobs" shirudo-build
-make -C "$REPO_ROOT/testing" -j"$jobs" test-helpers
 
 TMP_DIR="$(mktemp -d "${BUNDLE_DIR}.tmp.XXXXXX")"
 FIXTURE_WORK="$(mktemp -d "${HOST_PRIVATE_DIR}/fixtures.XXXXXX")"
@@ -331,537 +365,11 @@ cleanup()
 	rm -rf -- "$TMP_DIR" "$FIXTURE_WORK"
 }
 trap cleanup EXIT
-
-make -C "$REPO_ROOT" -j"$jobs" DESTDIR="$TMP_DIR/root" install-target
-make -C "$REPO_ROOT" -j"$jobs" -f Makefile.shirudo \
-	PROFILE=target CONFIG_MK=config-target.mk verity-test-helpers
-
-install -d "$TMP_DIR/test-helpers/testing/helper" \
-	"$TMP_DIR/test-helpers/testing/fixtures" \
-	"$TMP_DIR/test-helpers/testing/end2end"
-while IFS= read -r helper; do
-	install -m 0755 "$REPO_ROOT/$helper" "$TMP_DIR/test-helpers/$helper"
-done <<'EOF'
-testing/helper/test-register
-testing/helper/test-register-cli
-testing/helper/test-config-attest
-testing/helper/test-config-update
-testing/helper/tpmsim-cmd
-testing/helper/test-tpm-wire
-testing/helper/test-nv-cphash
-testing/helper/test-nv-writer
-testing/helper/test-keyring-seal
-testing/helper/test-tpm-preopened
-testing/helper/test-config
-testing/helper/test-bpf-load
-testing/helper/test-bpf-cmd
-testing/helper/test-perf-attach
-testing/helper/test-otel-map
-testing/helper/test-upatch-map-types
-testing/helper/test-upatch-prog-metadata
-testing/helper/test-upatch-decode
-testing/helper/test-upatch-serializer-pages
-testing/helper/test-signed-load
-testing/helper/test-upatch-link-lockdown
-testing/helper/test-exec-churn
-testing/end2end/exec-paths
-testing/end2end/policy-exec
-testing/helper/otel-mock.py
-testing/helper/test-oci-registry.py
-EOF
-
-# A second TPM for t6125: the host's emulator and the libraries of its own.
-if swtpm="$(command -v swtpm)"; then
-	install -d "$TMP_DIR/test-helpers/swtpm"
-	install -m 0755 "$swtpm" "$TMP_DIR/test-helpers/swtpm/"
-	while IFS= read -r lib; do
-		install -m 0644 "$lib" "$TMP_DIR/test-helpers/swtpm/"
-	done < <(ldd "$swtpm" | awk '/libtpms|libswtpm/ { print $3 }')
-fi
-
-
-wait_fixture_jobs()
-{
-	local failed=0
-	local pid
-
-	for pid in "${pids[@]}"; do
-		wait "$pid" || failed=1
-	done
-	((failed == 0)) || die "building fixtures failed"
-	pids=()
-}
-
-queue_fixture()
-{
-	"$@" &
-	pids+=("$!")
-	if ((${#pids[@]} == jobs)); then
-		wait_fixture_jobs
-	fi
-}
-
-build_fixture()
-{
-	local source="$1"
-	local name="$2"
-	local keys_dir="$3"
-
-	(
-		cd "$REPO_ROOT"
-		"$REPO_ROOT/tools/shirudo-build/shirudo-build" \
-			"$REPO_ROOT/testing/fixtures/$source" \
-			-o "$TMP_DIR/fixtures/$name.upatch" \
-			--name "$name" --vmlinux "$REPO_ROOT/vendor/linux/vmlinux.h" \
-			--extra-cflags "-I$REPO_ROOT/vendor/libbpf" \
-			--key "$keys_dir/signing_key.pem" \
-			--cert "$keys_dir/cert.der"
-	)
-}
-
-build_many_fixture()
-{
-	local name="shirudo-test-many-$1"
-	local payload
-	cd "$REPO_ROOT"
-	"$REPO_ROOT/tools/shirudo-build/shirudo-build" \
-		"$REPO_ROOT/testing/fixtures/status-many.bpf.c" \
-		-o "$TMP_DIR/fixtures/many/$name.upatch" \
-		--name "$name" --vmlinux "$REPO_ROOT/vendor/linux/vmlinux.h" \
-		--extra-cflags "-I$REPO_ROOT/vendor/libbpf" \
-		--key "$FIXTURE_WORK/trusted/signing_key.pem" \
-		--cert "$FIXTURE_WORK/trusted/cert.der" >/dev/null
-	payload="$($REPO_ROOT/shirudo upatch info \
-		"$TMP_DIR/fixtures/many/$name.upatch" --json |
-		python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-	"$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
-		"$name" --payload-sha256 "$payload" \
-		-o "$TMP_DIR/fixtures/many/$name.unload.upatch" \
-		--key "$FIXTURE_WORK/trusted/signing_key.pem" \
-		--cert "$FIXTURE_WORK/trusted/cert.der" >/dev/null
-}
-
-build_tree_test_registry()
-{
-	local registry_dir="$TMP_DIR/fixtures/tree-oci"
-	local payloads="$FIXTURE_WORK/tree-payload"
-	local reference
-
-	# One append-only tree that t7101 to t7104 walk in order:
-	# the tree state a target writes is sealed, so no test can start
-	# over, and each generation extends the one before it.
-	python3 - "$registry_dir" \
-		"$TMP_DIR/fixtures/shirudo-test-tree-match.upatch" \
-		"$TMP_DIR/fixtures/shirudo-test-tree-skip.upatch" \
-		"$TMP_DIR/fixtures/shirudo-test-tree-match.unload.upatch" \
-		"$payloads" "$tree_match_payload" "$tree_skip_payload" \
-		"$tree_match_unload_payload" "$TEST_VM_ARCH" <<'PY'
-import hashlib
-import json
-import pathlib
-import sys
-
-registry, match_path, skip_path, match_unload_path, payloads = \
-    map(pathlib.Path, sys.argv[1:6])
-match_payload, skip_payload, match_unload_payload, node_arch = sys.argv[6:10]
-
-
-def digest(body):
-    return "sha256:" + hashlib.sha256(body).hexdigest()
-
-
-def write(path, body):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(body)
-
-
-# payload_sha256 is the upatch header's digest of loader_insns || data,
-# which the target compares against the fetched artifact's header; an
-# unload directive carries its own, not its load's. The layer digest
-# covers the whole file and is a different value again.
-def artifact(repository, path, title, payload_sha256):
-    body = path.read_bytes()
-    layer_digest = digest(body)
-    manifest = {
-        "schemaVersion": 2,
-        "mediaType": "application/vnd.oci.image.manifest.v1+json",
-        "layers": [{
-            "mediaType": "application/vnd.shirudo.upatch.v1",
-            "digest": layer_digest,
-            "size": len(body),
-            "annotations": {"org.opencontainers.image.title": title},
-        }],
-    }
-    manifest_body = json.dumps(manifest, separators=(",", ":")).encode()
-    manifest_digest = digest(manifest_body)
-    repo_root = registry.joinpath(*repository.split("/"))
-    write(repo_root / "manifests" / manifest_digest, manifest_body)
-    write(repo_root / "blobs" / layer_digest, body)
-    return {
-        "repository": "oci://127.0.0.1:5443/" + repository,
-        "manifest_digest": manifest_digest,
-        "layer_digest": layer_digest,
-        "payload_sha256": "sha256:" + payload_sha256,
-    }
-
-
-def operation(seq, name, selector, artifact_info, op="add"):
-    unsigned = {
-        "seq": seq,
-        "op": op,
-        "id": name,
-        "selector": selector,
-        "artifact": artifact_info,
-    }
-    operation_digest = digest(json.dumps(unsigned, separators=(",", ":"))
-                              .encode())
-    return dict(unsigned, operation_digest=operation_digest)
-
-
-match_artifact = artifact("shirudo/tree-match", match_path,
-                         "shirudo-test-tree-match.upatch", match_payload)
-skip_artifact = artifact("shirudo/tree-skip", skip_path,
-                        "shirudo-test-tree-skip.upatch", skip_payload)
-match_unload_artifact = artifact("shirudo/tree-match-unload",
-                                 match_unload_path,
-                                 "shirudo-test-tree-match.unload.upatch",
-                                 match_unload_payload)
-
-this_node = {"architecture": [node_arch], "labels": {"env": ["tree-test"]}}
-other_node = {"architecture": [node_arch],
-              "labels": {"env": ["not-this-node"]}}
-# Selected by the kernel config alone, which t7104 takes away and gives.
-kconfig_node = {"architecture": [node_arch], "kconfig": {"CONFIG_BPF": ["y"]}}
-operations = [
-    operation(1, "shirudo-test-tree-match", {}, match_artifact),
-    operation(2, "shirudo-test-tree-skip", other_node, skip_artifact),
-    operation(3, "shirudo-test-tree-skip", this_node, skip_artifact),
-    operation(4, "shirudo-test-tree-match", this_node,
-              match_unload_artifact, op="delete"),
-    operation(5, "shirudo-test-tree-match", this_node, match_artifact),
-    operation(6, "shirudo-test-tree-match", kconfig_node,
-              match_unload_artifact, op="delete"),
-    # t7105 loads this upatch by hand first.
-    operation(7, "shirudo-test-tree-match", this_node, match_artifact),
-]
-references = ("stable", "updated", "deleted", "restored", "kconfig",
-              "reloaded")
-for generation, reference in enumerate(references, start=1):
-    head = generation + 1
-    publication = {
-        "schema": 1,
-        "tree_id": "shirudo-test-tree",
-        "generation": generation,
-        "base": {"seq": 0},
-        "operations": operations[:head],
-        "head": {"seq": head},
-    }
-    payloads.with_name(payloads.name + "-" + reference + ".json") \
-        .write_bytes(json.dumps(publication, separators=(",", ":"))
-                     .encode())
-PY
-
-	for reference in stable updated deleted restored kconfig reloaded; do
-		openssl cms -sign -binary -md sha512 \
-			-in "$payloads-$reference.json" \
-			-signer "$FIXTURE_WORK/trusted/cert.der" \
-			-inkey "$FIXTURE_WORK/trusted/signing_key.pem" \
-			-outform DER -out "$payloads-$reference.sig" \
-			-nosmimecap -nocerts -keyid
-	done
-
-	python3 - "$registry_dir" "$payloads" <<'PY'
-import hashlib
-import json
-import pathlib
-import sys
-
-registry, payloads = map(pathlib.Path, sys.argv[1:3])
-repo = registry / "shirudo" / "upatch-tree"
-
-
-def digest(body):
-    return "sha256:" + hashlib.sha256(body).hexdigest()
-
-
-def write(path, body):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(body)
-
-
-for reference in ("stable", "updated", "deleted", "restored", "kconfig",
-                  "reloaded"):
-    stem = payloads.name + "-" + reference
-    payload = payloads.with_name(stem + ".json").read_bytes()
-    signature = payloads.with_name(stem + ".sig").read_bytes()
-    payload_digest = digest(payload)
-    signature_digest = digest(signature)
-    write(repo / "blobs" / payload_digest, payload)
-    write(repo / "blobs" / signature_digest, signature)
-    manifest = {
-        "schemaVersion": 2,
-        "mediaType": "application/vnd.oci.image.manifest.v1+json",
-        "layers": [
-            {"mediaType": "application/vnd.shirudo.upatch.tree.v1+json",
-             "digest": payload_digest, "size": len(payload)},
-            {"mediaType": "application/vnd.shirudo.upatch.tree.signature.v1",
-             "digest": signature_digest, "size": len(signature)},
-        ],
-    }
-    write(repo / "manifests" / reference,
-          json.dumps(manifest, separators=(",", ":")).encode())
-PY
-}
-
-build_obs_fixture()
-{
-	local keys_dir="$1"
-	local source_dir="$FIXTURE_WORK/kernel-obs"
-
-	# The fixture watches reserved addresses so attempts against the
-	# watch list can be exercised without external network state.
-	mkdir -p "$source_dir/decoders"
-	for source in \
-		kernel-obs.bpf.c obs_common.h obs_table.h obs_priv.bpf.c \
-		obs_exec.bpf.c obs_net.bpf.c obs_dns.bpf.c obs_file.bpf.c \
-		gen_watch.py gen_file_watch.py file-watch.list; do
-		cp "$REPO_ROOT/upatches/kernel-obs/$source" "$source_dir/$source"
-	done
-	cp "$REPO_ROOT/upatches/kernel-obs/decoders/"*.lua "$source_dir/decoders/"
-	cat >"$source_dir/watch.list" <<'EOF'
-203.0.113.10/32
-2001:db8::10/128
-EOF
-	python3 "$source_dir/gen_watch.py" \
-		"$source_dir/watch.list" "$source_dir/watch_generated.h"
-	python3 "$source_dir/gen_file_watch.py" \
-		"$source_dir/file-watch.list" "$source_dir/file_watch_generated.h"
-
-	(
-		cd "$REPO_ROOT"
-		"$REPO_ROOT/tools/shirudo-build/shirudo-build" \
-			"$source_dir/kernel-obs.bpf.c" \
-			-o "$TMP_DIR/fixtures/kernel-obs.upatch" \
-			--name kernel-obs --vmlinux "$REPO_ROOT/vendor/linux/vmlinux.h" \
-			--extra-cflags "-I$REPO_ROOT/vendor/libbpf" \
-		--key "$keys_dir/signing_key.pem" \
-		--cert "$keys_dir/cert.der"
-	)
-	sed 's/^#define BPF_NO_KFUNC_PROTOTYPES/#define TEST_CRED_ANOMALY\
-#define BPF_NO_KFUNC_PROTOTYPES/' \
-		"$source_dir/kernel-obs.bpf.c" \
-		>"$source_dir/kernel-obs-cred-anomaly.bpf.c"
-	(
-		cd "$REPO_ROOT"
-		"$REPO_ROOT/tools/shirudo-build/shirudo-build" \
-			"$source_dir/kernel-obs-cred-anomaly.bpf.c" \
-			-o "$TMP_DIR/fixtures/kernel-obs-cred-anomaly.upatch" \
-			--name kernel-obs --vmlinux "$REPO_ROOT/vendor/linux/vmlinux.h" \
-			--extra-cflags "-I$REPO_ROOT/vendor/libbpf" \
-			--key "$keys_dir/signing_key.pem" \
-			--cert "$keys_dir/cert.der"
-	)
-}
-
-build_policy_labels_fixture()
-{
-	local source_dir="$FIXTURE_WORK/policy-labels"
-	local package="$FIXTURE_WORK/policy-labels-1.0.0.bee"
-
-	mkdir -p "$source_dir"
-	cp "$REPO_ROOT/testing/fixtures/policy-labels/Beefile" \
-		"$REPO_ROOT/testing/fixtures/policy-labels/policy-labels.bpf.c" \
-		"$source_dir/"
-	ln -s "$REPO_ROOT/vendor" "$source_dir/vendor"
-	ln -s "$REPO_ROOT/bpf" "$source_dir/bpf"
-	(
-		cd "$FIXTURE_WORK"
-		SHIRUDO_BUILD="$REPO_ROOT/tools/shirudo-build/shirudo-build" \
-			"$REPO_ROOT/shirudo" bpm build "$source_dir" \
-			--version 1.0.0 --keys-dir "$FIXTURE_WORK/trusted" \
-			--vmlinux "$REPO_ROOT/vendor/linux/vmlinux.h"
-	)
-	tar -xOf "$package" \
-		policy-labels-1.0.0/upatches/policy-labels.upatch \
-		>"$TMP_DIR/fixtures/shirudo-test-policy-labels.upatch"
-	tar -xOf "$package" \
-		policy-labels-1.0.0/upatches/policy-labels.unload.upatch \
-		>"$TMP_DIR/fixtures/shirudo-test-policy-labels.unload.upatch"
-}
-
-build_policy_exec_graph_fixture()
-{
-	local source_dir="$FIXTURE_WORK/policy-exec-graph"
-	local package="$FIXTURE_WORK/policy-exec-graph-1.0.0.bee"
-
-	mkdir -p "$source_dir"
-	cp "$REPO_ROOT/testing/fixtures/policy-exec-graph/Beefile" \
-		"$REPO_ROOT/testing/fixtures/policy-exec-graph/policy-exec-graph.bpf.c" \
-		"$source_dir/"
-	ln -s "$REPO_ROOT/vendor" "$source_dir/vendor"
-	ln -s "$REPO_ROOT/bpf" "$source_dir/bpf"
-	(
-		cd "$FIXTURE_WORK"
-		SHIRUDO_BUILD="$REPO_ROOT/tools/shirudo-build/shirudo-build" \
-			"$REPO_ROOT/shirudo" bpm build "$source_dir" \
-			--version 1.0.0 --keys-dir "$FIXTURE_WORK/trusted" \
-			--vmlinux "$REPO_ROOT/vendor/linux/vmlinux.h"
-	)
-	tar -xOf "$package" \
-		policy-exec-graph-1.0.0/upatches/policy-exec-graph.upatch \
-		>"$TMP_DIR/fixtures/shirudo-test-policy-exec-graph.upatch"
-	tar -xOf "$package" \
-		policy-exec-graph-1.0.0/upatches/policy-exec-graph.unload.upatch \
-		>"$TMP_DIR/fixtures/shirudo-test-policy-exec-graph.unload.upatch"
-}
-
-log "building target-test fixtures on the operator host"
-mkdir -p "$TMP_DIR/fixtures/decoders" "$FIXTURE_WORK/trusted" \
-	"$FIXTURE_WORK/foreign" "$FIXTURE_WORK/own" "$FIXTURE_WORK/third"
-# Fixture keys are ML-DSA-87 like every shirudo key; the host OpenSSL must
-# be 3.5 or newer, which the operator build already requires.
-"$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/trusted" >/dev/null
-"$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/foreign" >/dev/null
-"$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/own" >/dev/null
-"$REPO_ROOT/shirudo" genkey --keys-dir "$FIXTURE_WORK/third" >/dev/null
-
-"${CC:-cc}" -O0 -g -Wl,--build-id=sha1 \
-	-o /tmp/shirudo-test-uprobe-target \
-	"$REPO_ROOT/testing/fixtures/uprobe-target.c"
-
-pids=()
-queue_fixture build_fixture basic.bpf.c shirudo-test-basic "$FIXTURE_WORK/trusted"
-queue_fixture build_fixture basic.bpf.c shirudo-test-lifecycle "$FIXTURE_WORK/trusted"
-queue_fixture build_fixture basic.bpf.c shirudo-test-tree-match "$FIXTURE_WORK/trusted"
-queue_fixture build_fixture basic.bpf.c shirudo-test-tree-skip "$FIXTURE_WORK/trusted"
-queue_fixture build_fixture marker.bpf.c shirudo-test-marker "$FIXTURE_WORK/trusted"
-queue_fixture build_fixture map-export.bpf.c shirudo-test-map-export "$FIXTURE_WORK/trusted"
-queue_fixture build_fixture otel-backend.bpf.c shirudo-test-otel-backend "$FIXTURE_WORK/trusted"
-queue_fixture build_fixture serialized-metric.bpf.c shirudo-test-serialized-metric "$FIXTURE_WORK/trusted"
-queue_fixture build_fixture arena-tree-serializer.bpf.c shirudo-test-arena-tree "$FIXTURE_WORK/trusted"
-queue_fixture build_fixture uprobe-multi.bpf.c shirudo-test-uprobe-multi "$FIXTURE_WORK/trusted"
-queue_fixture build_fixture scope-netfilter.bpf.c shirudo-test-scope-netfilter "$FIXTURE_WORK/trusted"
-queue_fixture build_fixture scope-cgroup.bpf.c shirudo-test-scope-cgroup "$FIXTURE_WORK/trusted"
-queue_fixture build_fixture scope-kprobe.bpf.c shirudo-test-scope-kprobe "$FIXTURE_WORK/trusted"
-queue_fixture build_fixture basic.bpf.c shirudo-test-foreign "$FIXTURE_WORK/foreign"
-queue_fixture build_fixture basic.bpf.c shirudo-test-own-keyring "$FIXTURE_WORK/own"
-queue_fixture build_policy_labels_fixture
-queue_fixture build_policy_exec_graph_fixture
-queue_fixture build_obs_fixture "$FIXTURE_WORK/trusted"
-wait_fixture_jobs
-
-basic_payload="$($REPO_ROOT/shirudo upatch info \
-	"$TMP_DIR/fixtures/shirudo-test-basic.upatch" --json |
-	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-marker_payload="$($REPO_ROOT/shirudo upatch info \
-	"$TMP_DIR/fixtures/shirudo-test-marker.upatch" --json |
-	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-map_export_payload="$($REPO_ROOT/shirudo upatch info \
-	"$TMP_DIR/fixtures/shirudo-test-map-export.upatch" --json |
-	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-lifecycle_payload="$($REPO_ROOT/shirudo upatch info \
-	"$TMP_DIR/fixtures/shirudo-test-lifecycle.upatch" --json |
-	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-tree_match_payload="$($REPO_ROOT/shirudo upatch info \
-	"$TMP_DIR/fixtures/shirudo-test-tree-match.upatch" --json |
-	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-tree_skip_payload="$($REPO_ROOT/shirudo upatch info \
-	"$TMP_DIR/fixtures/shirudo-test-tree-skip.upatch" --json |
-	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-uprobe_payload="$($REPO_ROOT/shirudo upatch info \
-	"$TMP_DIR/fixtures/shirudo-test-uprobe-multi.upatch" --json |
-	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-otel_backend_payload="$($REPO_ROOT/shirudo upatch info \
-	"$TMP_DIR/fixtures/shirudo-test-otel-backend.upatch" --json |
-	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-serialized_metric_payload="$($REPO_ROOT/shirudo upatch info \
-	"$TMP_DIR/fixtures/shirudo-test-serialized-metric.upatch" --json |
-	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-arena_tree_payload="$($REPO_ROOT/shirudo upatch info \
-	"$TMP_DIR/fixtures/shirudo-test-arena-tree.upatch" --json |
-	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-observability_payload="$($REPO_ROOT/shirudo upatch info \
-	"$TMP_DIR/fixtures/kernel-obs.upatch" --json |
-	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-observability_anomaly_payload="$($REPO_ROOT/shirudo upatch info \
-	"$TMP_DIR/fixtures/kernel-obs-cred-anomaly.upatch" --json |
-	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-for scope in netfilter cgroup kprobe; do
-	scope_payload="$($REPO_ROOT/shirudo upatch info \
-		"$TMP_DIR/fixtures/shirudo-test-scope-$scope.upatch" --json |
-		python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-	queue_fixture "$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
-		"shirudo-test-scope-$scope" --payload-sha256 "$scope_payload" \
-		-o "$TMP_DIR/fixtures/shirudo-test-scope-$scope.unload.upatch" \
-		--key "$FIXTURE_WORK/trusted/signing_key.pem" \
-		--cert "$FIXTURE_WORK/trusted/cert.der"
-done
-wait_fixture_jobs
-# Enough loaded upatches to outgrow the fixed part of a status document.
-mkdir -p "$TMP_DIR/fixtures/many"
-pids=()
-for i in $(seq -w 1 80); do
-	queue_fixture build_many_fixture "$i"
-done
-wait_fixture_jobs
-pids=()
-while read -r name payload output; do
-	queue_fixture "$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload \
-		"$name" --payload-sha256 "$payload" \
-		-o "$TMP_DIR/fixtures/$output" \
-		--key "$FIXTURE_WORK/trusted/signing_key.pem" \
-		--cert "$FIXTURE_WORK/trusted/cert.der"
-done <<EOF
-shirudo-test-basic $basic_payload shirudo-test-basic.unload.upatch
-shirudo-test-basic $(printf 'aa%.0s' {1..32}) shirudo-test-basic-mismatch.unload.upatch
-shirudo-test-marker $marker_payload shirudo-test-marker.unload.upatch
-shirudo-test-lifecycle $lifecycle_payload shirudo-test-lifecycle.unload.upatch
-shirudo-test-tree-match $tree_match_payload shirudo-test-tree-match.unload.upatch
-shirudo-test-tree-skip $tree_skip_payload shirudo-test-tree-skip.unload.upatch
-shirudo-test-map-export $map_export_payload shirudo-test-map-export.unload.upatch
-shirudo-test-otel-backend $otel_backend_payload shirudo-test-otel-backend.unload.upatch
-shirudo-test-serialized-metric $serialized_metric_payload shirudo-test-serialized-metric.unload.upatch
-shirudo-test-arena-tree $arena_tree_payload shirudo-test-arena-tree.unload.upatch
-kernel-obs $observability_payload kernel-obs.unload.upatch
-kernel-obs $observability_anomaly_payload kernel-obs-cred-anomaly.unload.upatch
-shirudo-test-uprobe-multi $uprobe_payload shirudo-test-uprobe-multi.unload.upatch
-EOF
-wait_fixture_jobs
-
-tree_match_unload_payload="$($REPO_ROOT/shirudo upatch info \
-	"$TMP_DIR/fixtures/shirudo-test-tree-match.unload.upatch" --json |
-	python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
-build_tree_test_registry
-
-mv /tmp/shirudo-test-uprobe-target \
-	"$TMP_DIR/fixtures/shirudo-test-uprobe-target"
-
-cp "$FIXTURE_WORK/trusted/cert.der" "$TMP_DIR/fixtures/cert.der"
-cp "$FIXTURE_WORK/own/cert.der" "$TMP_DIR/fixtures/own.der"
-# The own certificate joins the enrolled set vouched for by the trusted
-# key; the third one is for the tests of `keys add` at runtime.
-cp "$FIXTURE_WORK/third/cert.der" "$TMP_DIR/fixtures/third.der"
-for vouched in own third; do
-	"$REPO_ROOT/tools/shirudo-build/shirudo-build" keys vouch \
-		"$TMP_DIR/fixtures/$vouched.der" \
-		-o "$TMP_DIR/fixtures/$vouched.vouch" \
-		--key "$FIXTURE_WORK/trusted/signing_key.pem" \
-		--cert "$FIXTURE_WORK/trusted/cert.der" >/dev/null
-done
-if [[ -n "$PACKAGE_CERT" ]]; then
-	install -m 0644 "$PACKAGE_CERT" "$TMP_DIR/fixtures/package-cert.der"
+if [[ "$BUILD_CONTAINER" == 0 ]]; then
+	"$REPO_ROOT/testing/vm/build-bundle-payload.sh" "$TMP_DIR" "$FIXTURE_WORK"
 else
-	install -m 0644 "$FIXTURE_WORK/trusted/cert.der" \
-		"$TMP_DIR/fixtures/package-cert.der"
+	build_payload_in_container
 fi
-(
-	cd "$TMP_DIR/fixtures"
-	sha256sum -- *.upatch cert.der own.der own.vouch third.der \
-		third.vouch package-cert.der > manifest
-)
-
-"$REPO_ROOT/testing/vm/bundle-images.sh" "$TMP_DIR" "$FIXTURE_WORK" \
-	"$FIXTURE_WORK/trusted" "$FIXTURE_WORK/own"
 printf '%s\n' "$TEST_VM_MODE" >"$TMP_DIR/test-mode"
 
 printf 'shirudo-test-vm-bundle-v1\n' >"$TMP_DIR/format"
@@ -878,6 +386,6 @@ chmod 0600 "$OPERATOR_KEYS_DIR/keys/signing_key.pem"
 
 rm -rf -- "$BUNDLE_DIR"
 mv -- "$TMP_DIR" "$BUNDLE_DIR"
-touch "$STAMP_FILE"
+touch -d "@$STAMP_TIME" "$STAMP_FILE"
 trap - EXIT
 log "ready: $BUNDLE_DIR"

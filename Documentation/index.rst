@@ -7,7 +7,7 @@ shirudo documentation
 
 .. rst-class:: etymology
 
-shirudo (Japanese シールド, pronounced "shee-roo-doh") means "shield"
+shirudo (Japanese シールド, pronounced "shee-roo-doh") means "shield".
 
 shirudo is a BPF-based security platform: Linux targets run only the BPF
 their operator signed, every change is measured into the TPM, and
@@ -55,6 +55,31 @@ developers write on top of shirudo.
       do. shirudo runs on x86-64, arm64 and riscv64 and adds little to the
       trusted computing base beyond the kernel.
 
+Properties
+----------
+
+shirudo is built on a set of properties for a BPF security platform:
+
+- Always on: the platform is part of the trusted computing base and starts
+  from initrd in early boot
+- Signed and sealed: BPF is admitted only through loaders signed against
+  the sealed BPF keyring, and the platform guards its own assets against
+  a root user who does not hold the signing key
+- In-kernel control plane: every load and unload is a signed loader the
+  kernel verifies before it runs
+- Measured: a TPM-backed register records every operation on upatches,
+  and the TPM signs it for a remote verifier
+- Lightweight core: shirudo protects its own assets and nothing else.
+  Everything else ships as upatches
+- Plain BPF C: upatches are small BPF C programs that engineers and
+  agents can read, generate and maintain. Commands take and produce
+  structured data
+- Pull in, push out: targets pull upatches from OCI registries and push
+  telemetry to collectors; nothing on a target listens for connections
+
+The :doc:`security/threat-model` states where each of these mechanisms
+stops.
+
 Defense in depth
 ----------------
 
@@ -74,32 +99,6 @@ can take part in the first: they can remove attack surface and block a
 known vulnerable code path until a fixed kernel is deployed. They do
 not replace mitigations built into the kernel that make memory
 corruption hard to exploit.
-
-Properties
-----------
-
-shirudo is built on a set of properties for a BPF security platform:
-
-- Always on: the platform is part of the trusted computing base and starts
-  from initrd in early boot
-- Signed and sealed: BPF is admitted only through loaders signed against
-  the sealed BPF keyring, and the platform guards its own assets against
-  a root user who does not hold the signing key
-- In-kernel control plane: every load and unload is a signed loader the
-  kernel verifies before it runs
-- Measured: a TPM-backed register records every operation on upatches,
-  and the TPM signs it for a remote verifier
-- Platform, not policy: shirudo protects only its own assets. Everything
-  else ships as upatches: signed BPF light skeletons, a loader and its
-  assets
-- Code, not DSLs: upatches are plain BPF C in small pieces that engineers
-  and agents can read, generate and maintain, and commands take and
-  produce structured data
-- Pull in, push out: targets pull upatches from OCI registries and push
-  telemetry to collectors; nothing on a target listens for connections
-
-The :doc:`security/threat-model` states where each of these mechanisms
-stops.
 
 By role
 -------

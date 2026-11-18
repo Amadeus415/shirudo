@@ -83,7 +83,8 @@ Exit status
    * - 1
      - The file cannot be opened or is not a valid ``.upatch``.
    * - 2
-     - No file, a second file or an unknown option.
+     - A usage error: no file, a second file, an unknown option or
+       ``--json`` given twice.
 
 Examples
 --------

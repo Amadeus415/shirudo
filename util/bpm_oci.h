@@ -27,7 +27,8 @@ struct json_emit;
 #define BPM_MAX_MEDIA 192
 #define BPM_MAX_ENTRIES 512
 #define BPM_MAX_STATE 256
-#define BPM_MAX_HTTP_BODY (256u * 1024u * 1024u)
+/* The largest response read into memory, an upatch artifact. */
+#define BPM_MAX_HTTP_BODY (16u * 1024u * 1024u)
 #define BPM_MAX_PACKAGE_BYTES (256u * 1024u * 1024u)
 #define BPM_MAX_PACKAGE_ENTRIES 4096u
 #define BPM_OCI_USERNAME_SIZE 256
@@ -94,6 +95,9 @@ bool bpm_name_ok(const char *s);
 bool bpm_version_ok(const char *s);
 bool bpm_package_name_ok(const char *s);
 int bpm_sha256_hex(const void *data, size_t len, char *hex, size_t hex_sz);
+/* "sha256:<hex>" of the data, the form a registry names a blob by. */
+int bpm_sha256_digest(const void *data, size_t len, char *out,
+		      size_t out_sz) __must_check;
 /* want is "sha256:<hex>" or bare hex; hex is the computed digest. */
 bool bpm_digest_matches(const char *want, const char *hex);
 void bpm_buffer_free(struct bpm_buffer *b);

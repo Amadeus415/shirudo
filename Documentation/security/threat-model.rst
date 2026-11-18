@@ -42,7 +42,7 @@ Every entry has a stable ID that commits, issues and other pages cite:
      - Threats shirudo addresses, each with a fact box.
    * - R1 to R23
      - Residual risks: known and bounded limits of the mechanisms.
-   * - U1 to U19
+   * - U1 to U20
      - Threats to resolve: gaps in the code that are not closed yet.
    * - D1 to D9
      - Deferred mitigations that are in scope.
@@ -52,7 +52,8 @@ The fields of the box are:
 
 - Adversary: who mounts the threat
 - Enforced at: the BPF LSM programs that refuse it, by their section
-  name in :src:`bpf/`
+  name in :src:`bpf/`, and after them the programs that refuse nothing
+  and keep the state the refusals read
 - Refusal: what the caller sees
 - Counters: the tamper counters the refusal moves, described in
   :doc:`tamper-counters`
@@ -156,35 +157,42 @@ without the protection.
        task's read permission, sleepable LSM programs on
        ``inode_mkdir``, ``inode_link``, ``inode_set_acl``,
        ``inode_remove_acl``, ``inode_file_setattr`` and
-       ``inode_copy_up``, and a ``dentry->d_parent`` the verifier
-       trusts. Upstream has none of these, and shirudo carries them as
+       ``inode_copy_up``, a ``dentry->d_parent`` the verifier trusts,
+       and the ``mm_read_access`` LSM hook. Upstream has none of these,
+       and shirudo carries them as
        :src:`kernel/0001-tpm-Let-LSMs-inspect-userspace-commands.patch`,
        :src:`kernel/0002-bpf-Read-security.bpf-xattrs-for-LSM-programs-without-the-caller-s-permission.patch`,
-       :src:`kernel/0003-bpf-Let-sleepable-LSM-programs-attach-to-the-remaining-inode-hooks.patch`
-       and
-       :src:`kernel/0004-bpf-Treat-dentry-d_parent-as-a-trusted-pointer.patch`.
+       :src:`kernel/0003-bpf-Let-sleepable-LSM-programs-attach-to-the-remaining-inode-hooks.patch`,
+       :src:`kernel/0004-bpf-Treat-dentry-d_parent-as-a-trusted-pointer.patch`
+       and :src:`kernel/0005-mm-Let-LSMs-check-read-only-remote-mm-access-under-CAP_PERFMON.patch`.
      - T1 needs the ABI, T5 the hook, T3 the label read, the sleepable
-       hooks and the trusted parent.
-     - Partly. The pre-flight check ``signed_loader_kernel_abi`` tests
-       the ABI. Without the hook the ``bpf2`` object does not load, and
-       without the sleepable hooks and the trusted parent the ``seal``
-       object does not load; ``init`` fails either way. Without the
+       hooks, the trusted parent and the read-only mm access hook.
+     - Partly. The pre-flight checks ``signed_loader_kernel_abi`` and
+       ``kernel_lsm_hooks`` test the ABI and every LSM hook the
+       programs attach to, ``tpm_command`` and ``mm_read_access``
+       included, before ``init`` loads anything. Without the sleepable
+       hooks and the trusted parent the ``seal`` object does not load;
+       ``init`` fails either way. Without the
        label read, the seal falls back to its marks where a read fails
        for the caller (T3).
    * - A4
-     - The kernel refuses unsigned modules (``CONFIG_MODULE_SIG`` with
-       enforcement) and runs with lockdown in integrity mode
-       (``CONFIG_SECURITY_LOCKDOWN_LSM`` and ``lockdown=integrity``).
-     - An unsigned module is kernel code of root's choosing. Module
-       signatures alone leave root ``/dev/mem``, MSR writes, port I/O,
-       PCI BAR access, debugfs writes, ACPI table overrides and
-       hibernation, each a way to change or replace the running
-       kernel, and lockdown refuses them. Lockdown refuses an unsigned
-       module only on a kernel that checks module signatures at all.
-     - No, see U10. In confidentiality mode the kernel withholds
-       ``bpf_probe_read_kernel()`` from BPF programs, which shirudo's
-       own programs use, so that mode would stop ``init``. This is a
-       reading of the kernel source and is not tested.
+     - The kernel checks module signatures (``CONFIG_MODULE_SIG``).
+     - An unsigned module is kernel code of root's choosing. A kernel
+       that does not enforce signatures itself asks lockdown about one,
+       and ``bpf2`` refuses it from ``init`` on through
+       ``lsm/locked_down``, with the other ways root has to change or
+       replace the running kernel that lockdown in integrity mode
+       refuses, ``/dev/mem``, MSR writes, port I/O, PCI BAR access,
+       debugfs writes and ACPI table overrides, and ``/proc/kcore``,
+       which that mode leaves readable (``ModuleSignature`` and the
+       other integrity counters, ``t6154``). The
+       kernel's lockdown LSM is not needed for them, and where it runs
+       it decides first. A kernel without ``CONFIG_MODULE_SIG`` asks
+       nothing and loads any module.
+     - No, see U10. Lockdown in confidentiality mode would withhold
+       ``bpf_probe_read_kernel()`` from shirudo's own programs and stop
+       ``init``. This is a reading of the kernel source and is not
+       tested.
    * - A5
      - 32-bit compatibility is off: ``CONFIG_COMPAT=n``, and on x86-64
        also ``CONFIG_IA32_EMULATION=n`` and ``CONFIG_X86_X32_ABI=n``.
@@ -202,18 +210,14 @@ without the protection.
      - No. shirudo checks neither Secure Boot nor where the initrd came
        from. ``init`` warns when PCR 11 holds no phase measurement.
    * - A7
-     - Only keys trusted to sign shirudo configs can sign a dm-verity
-       root. The kernel tries ``.builtin_trusted_keys`` (or the
-       secondary keyring with
-       ``CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG_SECONDARY_KEYRING``), then
-       the platform keyring with
-       ``CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG_PLATFORM_KEYRING``, and
-       only then ``.dm-verity``. Both options are off and no built-in
-       certificate belongs to a holder not trusted for configs.
+     - Config signing keys are selected by the authenticated runtime
+       bootstrap's repeated ``config.verification_key`` entries.
      - A config chooses repository certificates, vouched signers,
        revocations and export endpoints.
-     - No, see U2. The test ``t5102`` shows a built-in certificate
-       signing an accepted config root.
+     - Yes. Before mapping a config, the target verifies its root
+       signature against that exact certificate set. The kernel's
+       dm-verity signature check is required as well. A built-in,
+       secondary or platform key alone cannot authorize a config.
    * - A8
      - The TPM is reachable only through the kernel driver: no
        ``i2c-dev`` or ``spidev`` driver that root could bind to the
@@ -222,10 +226,18 @@ without the protection.
        and ``/dev/tpmrm0``.
      - No.
    * - A9
-     - Hibernation is unavailable. Lockdown in integrity mode disables
-       it.
-     - A hibernation image is kernel memory on disk that root can
-       change before resume, through ``/dev/snapshot`` among others.
+     - The boot resumes from no hibernation image: the command line has
+       no ``resume=``, ``CONFIG_PM_STD_PARTITION`` is empty and the
+       initrd names no resume device, or hibernation is off from boot
+       (``CONFIG_HIBERNATION=n``, ``nohibernate`` or
+       ``lockdown=integrity``).
+     - A hibernation image is kernel memory on disk, and a resume runs
+       in the initrd before ``init``, from an image root can write to
+       swap. ``bpf2`` refuses hibernation once ``init`` runs, and the
+       write of a ``HibernateLocation`` EFI variable, through which
+       systemd's initrd resumes from a device the running system names
+       (``HibernateLocation``). What the authenticated UKI names is
+       left.
        The behavior of the register across hibernation is not analyzed
        here.
      - No.
@@ -237,9 +249,9 @@ without the protection.
      - No. See R19.
    * - A11
      - The kernel command line is authenticated as part of the UKI. It
-       carries ``lsm=`` with ``bpf``, ``lockdown=integrity``,
-       ``bpf.keyring_unsealed=1`` and ``dm_verity.keyring_unsealed=1``,
-       and nothing that masks or skips ``shirudo-initrd.service``.
+       carries ``lsm=`` with ``bpf``, ``bpf.keyring_unsealed=1`` and
+       ``dm_verity.keyring_unsealed=1``, no ``resume=`` (A9), and
+       nothing that masks or skips ``shirudo-initrd.service``.
      - The command line decides whether the LSM runs, whether the
        keyrings accept shirudo's keys and whether ``init`` runs at all.
      - Partly. ``init`` refuses a ``.bpf`` keyring the kernel sealed
@@ -311,9 +323,11 @@ Assets
      - The bpffs inode and mount guards, the descriptor checks (T2).
    * - Identity map
      - ``shirudo_bpffs_sb``, pinned as ``identity``
-     - Frozen by ``init``; opened only by tasks with runtime authority
-       (T13). It holds the keyring serials, the runtime root, the EK
-       name, the NV writer seed and public key, and the NV index.
+     - Frozen by ``init`` and created with ``BPF_F_RDONLY_PROG``, so
+       neither userspace nor a BPF program can write it; opened only by
+       tasks with runtime authority (T13). It holds the keyring
+       serials, the runtime root, the EK name, the NV writer seed and
+       public key, and the NV index.
    * - Task marks
      - ``shirudo_tasks`` task storage, pinned as ``task_authority``
      - Frozen against ``bpf()`` writes; only the seal's programs set a
@@ -333,6 +347,9 @@ Assets
    * - Tamper counters
      - ``shirudo_tamper``, pinned as ``tamper``
      - Frozen; only the hooks add to it (T10).
+   * - Integrity counters
+     - ``shirudo_integrity``, pinned as ``integrity``
+     - Frozen; only the hooks add to it (T6, T10).
    * - Payload binding of a pin
      - The ``security.bpf.shirudo.payload`` xattr on each upatch pin
        directory
@@ -376,7 +393,10 @@ Assets
      - The config signature (T11).
    * - Status, reports and telemetry
      - The target's output and the collector
-     - Nothing. They are the target's own account (R17).
+     - Nothing for reports and map snapshots. A keepalive's body is quoted
+       by the TPM's attestation key, which shows it unchanged on the way
+       but not that the key is a TPM's. All of them are the target's own
+       account (R17).
 
 .. _tm-trust-boundaries:
 
@@ -466,15 +486,17 @@ ADV-C, root with mount-namespace and device control
 ADV-D, network and registry
    Towards the target: observes, drops, delays and replays traffic, and
    serves any content a registry holds, old signed content included
-   (T7, R8). Towards the operator: a registry from which ``shirudo bpm
-   config update --base-package oci://`` takes a package runs commands
-   on the operator host (U14), and so can become ADV-F.
+   (T7, R8). Towards the operator: it serves what ``bpm tree append``
+   and ``bpm config update`` build on, which the operator pins by
+   ``--tree-id`` and ``--base-digest``.
 
 ADV-E, malicious collector
    Receives keepalives and map snapshots. It can refuse or delay them
    and put a short error message into the target's log. It cannot
-   change enforcement or state. What it receives is unauthenticated
-   (R17).
+   change enforcement or state. A map snapshot it receives is
+   unauthenticated; a keepalive it changes no longer matches its quote,
+   but it can replay an old one to a backend that does not order them
+   by the quote's clock (R17).
 
 ADV-F, holder of a compromised or revoked signing key
    Its blast radius: every target whose ``.bpf`` keyring holds the key
@@ -485,8 +507,8 @@ ADV-F, holder of a compromised or revoked signing key
    programs that write them: the maps are frozen against ``bpf()``
    writes, not against programs. An upatch does what its author wrote,
    disabling enforcement included. Keys it vouched for stay admitted
-   where a config lists them, and if it is the runtime image's primary
-   key it signs tree publications that revocation does not reach (U13).
+   where a config lists them (U13). Tree publications require a
+   non-revoked member of the active config's BPF signer set.
    A key that signs configs (A7) chooses repositories, vouched signers
    and revocations.
 
@@ -531,7 +553,8 @@ the keyring.
 
 Root cannot assemble a validly signed loader outside shirudo either. A
 loader needs its metadata map, and ``BPF_MAP_CREATE`` needs runtime
-authority (``MapCreate``), as do the routes to an existing map (T13).
+authority (``MapCreate``), as do filling and freezing the map
+(``MapWrite``) and the routes to an existing one (T13).
 The programs a verified loader loads run in kernel context, and both
 hooks admit calls whose ``kernel`` argument is set.
 
@@ -552,7 +575,7 @@ any loader the key ever signed passes (R16).
    as ``ENOKEY``, ``EKEYREJECTED``, or ``EPERM`` for a caller-supplied
    keyring
 :Counters: ``LoadNotLoader``, ``LoadUnsigned``, ``LoadUnverified``,
-   ``LoadKeyringKind``, ``MapCreate``
+   ``LoadKeyringKind``, ``LoadKeyring``, ``MapCreate``, ``MapWrite``
 :Tests: ``t6102``, ``t6103``, ``t6104``, ``t6107``, ``t6108``, ``t6138``
 :Residual: R7, R16, R18
 
@@ -587,8 +610,11 @@ refuses ``BPF_OBJ_GET``, ``BPF_MAP_GET_FD_BY_ID`` and
 ``lsm/file_open`` in the ``bpf2`` object refuses them the opening of any
 non-directory inode in the private bpffs (``ObjGet``). Directories stay
 listable. ``BPF_PROG_GET_FD_BY_ID`` and ``BPF_BTF_GET_FD_BY_ID`` stay
-open, because a descriptor of a program type shirudo ships attaches
-nowhere without the commands above or the ioctl below (R18).
+open for other program types. ``lsm/bpf_prog`` refuses an XDP descriptor
+to a task without runtime authority (``ObjGet``), including acquisition by
+ID, because netlink accepts it outside the ``bpf()`` attach guard. Other
+shipped types attach nowhere without the commands above or the ioctl
+below (R18).
 
 The one attach that does not pass through ``bpf()`` is
 ``PERF_EVENT_IOC_SET_BPF``, which binds a program reached by id to a
@@ -615,9 +641,16 @@ its mountpoint on the peers and slaves of its parent, from the bpffs
 mount ``init`` recorded, and refuses an unmount that reaches it
 (``BpffsUmountAbove``). The walk runs without the namespace lock,
 within fixed bounds of 1024 mounts, 32 levels and 4 masters, and
-refuses a tree it cannot finish. The tmpfs at ``/run/shirudo`` gets the
-same treatment without counters: no caller unmounts, moves or remounts
-it, and only authorized tasks mount onto it.
+refuses a tree it cannot finish. Removing a dentry detaches what is
+mounted on it in every namespace, and renaming it moves those mounts,
+both without ``sb_umount``: from a namespace where ``/run`` is not
+mounted, an ``rmdir`` of the directory init's ``/run`` covers would take
+the bpffs along. ``lsm/inode_rmdir``, ``lsm/inode_unlink`` and
+``lsm/inode_rename`` refuse a task without authority the removal or
+rename of the mount point of the recorded bpffs mount or of any mount
+above it (``BpffsUmountAbove``, ``t6155``). The tmpfs at
+``/run/shirudo`` gets the same treatment without counters: no caller
+unmounts, moves or remounts it, and only authorized tasks mount onto it.
 
 Root also controls part of the site a load attaches at, since root
 runs ``shirudo upatch load``. A ``cgroup_skb`` program attaches at the
@@ -626,11 +659,15 @@ caller's network namespace, and a kprobe through the PMU that sysfs
 names. The load compares the link the kernel reports with the signed
 attach metadata before it pins the link, and refuses
 ``attach_scope_mismatch``.
+XDP discovery requires the initial network namespace, classifies devices
+from kernel interfaces and expands the signed device-class mask there.
+It selects one endpoint per veth pair and checks device class, peer scope
+and the returned link's ifindex around attachment.
 
 .. rst-class:: facts
 
 :Adversary: ADV-B, root on the target without the signing key
-:Enforced at: ``lsm/bpf``, ``lsm/file_open``, ``lsm/file_ioctl``,
+:Enforced at: ``lsm/bpf``, ``lsm/bpf_prog``, ``lsm/file_open``, ``lsm/file_ioctl``,
    ``lsm/file_ioctl_compat``, ``lsm/inode_unlink``,
    ``lsm/inode_rename``, ``lsm/inode_mkdir``, ``lsm/inode_symlink``,
    ``lsm/inode_link``, ``lsm/inode_rmdir``, ``lsm/inode_setxattr``,
@@ -643,7 +680,8 @@ attach metadata before it pins the link, and refuses
    ``PerfAttach``, ``PinUnlink``, ``PinRename``, ``PinEntry``,
    ``PinXattr``, ``BpffsUmount``, ``BpffsUmountAbove``, ``BpffsMount``
 :Tests: ``t6105``, ``t6106``, ``t6107``, ``t6108``, ``t6109``,
-   ``t6116``, ``t6119``, ``t6120``, ``t6121``, ``t6138``
+   ``t6116``, ``t6119``, ``t6120``, ``t6121``, ``t6138``, ``t6155``,
+   ``t3111``
 :Residual: R1, R2, R3, U17
 
 .. _tm-t3:
@@ -671,7 +709,19 @@ with ``chattr``, an xattr change and a change of its POSIX ACL need
 runtime authority (``SealWrite``, ``SealUnlink``, ``SealRename``,
 ``SealSetattr``, ``SealXattr``); every one of those hooks reads the
 label. Only an authorized task sets or removes the exact seal label or
-changes the policy label on any inode (``SealLabel``).
+changes the policy label on any inode (``SealLabel``). XFS also changes
+attributes by file handle, ``XFS_IOC_ATTRMULTI_BY_HANDLE``, through no
+xattr hook, so ``lsm/file_ioctl`` refuses that ioctl on XFS to tasks
+without authority (``XattrHandle``, ``t6153``).
+
+A rename of a directory above the state root, ``/var/lib`` say, would
+move the sealed tree aside for the next boot's bootstrap run of
+``init`` to label whatever root then puts at the path. That run marks
+the directories above the state root on its file system with
+``security.bpf.shirudo.ancestor``, and the seal refuses a task without
+authority a rename of a marked directory or over it (``SealRename``)
+and the setting or removal of the mark (``SealLabel``) (``t6150``).
+What the next boot mounts at the path stays root's choice (R19).
 
 The label is a public constant, the same on every build. It marks a
 target and never grants authority: a file system root mounts can carry
@@ -753,8 +803,13 @@ root swapped for a link would lead it to sealed state (``t6007``).
 a private key and root cannot have shirudo write a key pair into sealed
 state (``t6114``). The
 contents of a config image are read from the descriptor of its verified
-root with ``openat2(2)`` and ``RESOLVE_BENEATH``, never through a
-``/proc/<pid>/fd`` path that root could mount over.
+root with ``openat2(2)`` and ``RESOLVE_BENEATH``, or one component at a
+time without following links, never through a ``/proc/<pid>/fd`` path
+that root could mount over. shirudo opens that descriptor once and
+checks it where it opened it, for the image's device and the root inode
+of its file system: a path checked and then opened is root's to swap in
+between, and a directory of the image bound in place of its mount has
+the image's device but leads every relative path elsewhere (``t6149``).
 
 The ``.bpf`` and ``.dm-verity`` keyrings are sealed with
 ``KEYCTL_RESTRICT_KEYRING`` and no restriction type, so the kernel
@@ -777,20 +832,47 @@ copies the mark, a failed exec keeps it, and a successful exec of
 anything else clears it. The initrd's ``init`` process receives a
 bootstrap mark through a pidfd before the gates attach.
 
+A task that dumps core loses its authority (``SealCoreDump``). The
+kernel's dump code runs as the task and unlinks and creates the file
+``kernel.core_pattern`` names, root's choice. An exec can fail after
+its mark was committed, when root gives it a stack too small for its
+arguments, and the task then dumps core before shirudo has run: a pin
+or a sealed file at that path was the dump's to remove (``t6145``).
+
+A task whose memory a uprobe reaches loses its authority as well
+(``SealUprobe``, ``t6146``). Root sets uprobes on the runtime binary
+through tracefs or perf, where no hook sees them, and a probe's
+reference counter has the kernel add to a value in the task's writable
+data at every exec: a variable shirudo reads before ``main()`` runs, a
+descriptor it takes for closed among them, changed under it. What a
+probe reads, a command's arguments and memory, is what root learns by
+running the command (R2).
+
 An authorized process is protected against being taken over:
 
 - ``lsm/ptrace_access_check`` refuses every ptrace mode against a marked
-  task: attach, ``/proc/<pid>/mem``, ``/proc/<pid>/fd``,
-  ``pidfd_getfd(2)`` and ``process_vm_readv(2)`` (``SealPtrace``).
+  task. It counts an attach-mode access, which covers attach,
+  ``/proc/<pid>/mem``, ``pidfd_getfd(2)`` and ``process_vm_readv(2)``
+  (``SealPtrace``), and refuses a read-mode one, which covers
+  ``/proc/<pid>/exe``, ``environ``, ``maps`` and the ``fd`` links,
+  without a counter. ``lsm/mm_read_access`` refuses the read-only
+  access ``mm_access()`` would otherwise grant ``CAP_PERFMON`` past that
+  refusal (carried patch 0005, A3).
 - ``lsm/perf_event_alloc`` refuses a perf event bound to a marked task
   (``SealPerf``). Events on all tasks of a CPU, and events opened on a
   task before the exec that marks it, are not checked (D9).
 - ``lsm/task_kill`` counts a signal to a marked task from a task
   without authority (``SealSignal``) and lets it through: root can stop
-  a command (R2, U17), and the count shows that it did.
+  a command (R2, U17), and the count shows that it did. A command resets
+  its file size and CPU time limits and disarms its interval timers
+  when it starts, since exec keeps them and the kernel would signal it
+  by them, and ``lsm/task_setrlimit`` refuses another task a change of
+  its limits (``SealRlimit``, ``t6156``).
 - The exec of a runtime file by a traced task is refused
-  (``ExecTraced``), and so is one under a seccomp filter, without a
-  counter.
+  (``ExecTraced``), and so is one by a task that shares its root and
+  working directory with another process (``ExecShared``), which could
+  ``chroot`` or ``chdir`` the command while it runs, and one under a
+  seccomp filter, without a counter.
 - ``lsm/bprm_check_security`` in the ``bpf2`` object runs every
   runtime executable in secure-exec mode, so the C library ignores the
   loader variables, and shirudo itself is static.
@@ -805,11 +887,23 @@ An authorized process is protected against being taken over:
   host names without NSS modules and locks its memory, and refuses to
   run when the lock fails.
 
+.. note::
+
+   Every ptrace mode against a shirudo task is refused, but only an
+   attach-mode access is counted. A read-mode probe, such as journald
+   reading ``/proc/<pid>/exe`` for a log line or ``ps`` reading
+   ``/proc/<pid>/stat``, or a read of ``environ``, ``maps`` or the
+   ``fd`` links, is refused silently: the caller gets ``EACCES`` and may
+   log it, but ``SealPtrace`` and the keepalive do not move. Honest
+   system services make read-mode checks against every process that
+   logs, so counting them would make a healthy node read as tampered.
+
 .. rst-class:: facts
 
 :Adversary: ADV-B and ADV-C
 :Enforced at: ``lsm.s/file_open``, ``lsm.s/inode_unlink``,
-   ``lsm.s/inode_rmdir``, ``lsm.s/inode_rename``,
+   ``lsm.s/inode_rmdir``, ``lsm.s/inode_rename``, ``lsm/file_ioctl``,
+   ``lsm/file_ioctl_compat``,
    ``lsm.s/inode_setattr``, ``lsm.s/inode_setxattr``,
    ``lsm.s/inode_removexattr``, ``lsm.s/inode_set_acl``,
    ``lsm.s/inode_remove_acl``, ``lsm.s/inode_file_setattr``,
@@ -819,19 +913,27 @@ An authorized process is protected against being taken over:
    ``lsm/key_permission``,
    ``lsm.s/bprm_check_security``, ``lsm.s/bprm_committed_creds``,
    ``lsm/task_alloc``, ``lsm/bprm_check_security``,
-   ``lsm/ptrace_access_check``, ``lsm/perf_event_alloc``,
-   ``lsm/task_prctl``, ``lsm/mmap_file``, ``lsm/file_mprotect``
+   ``lsm/ptrace_access_check``, ``lsm/mm_read_access``,
+   ``lsm/perf_event_alloc``, ``lsm/task_setrlimit``,
+   ``lsm/task_prctl``, ``lsm/mmap_file``, ``lsm/file_mprotect``; in
+   support, ``lsm.s/bprm_creds_for_exec`` and ``lsm/socket_post_create``
+   carry the policy bits, ``lsm.s/inode_post_setxattr`` and
+   ``lsm.s/inode_post_removexattr`` refresh an inode's mark, and
+   ``lsm/task_kill`` counts a signal it lets through
 :Refusal: ``EACCES`` from the seal and the task hooks; ``EPERM`` from a
    copy-up, a traced exec in the ``bpf2`` hook and ``PR_SET_MM``;
    ``tampered`` or a foreign-entry warning from shirudo
 :Counters: ``SealWrite``, ``SealUnlink``, ``SealRename``,
    ``SealSetattr``, ``SealXattr``, ``SealLabel``, ``SealEntry``,
    ``SealCopyUp``, ``KeyringWrite``, ``SealPtrace``, ``SealPerf``,
-   ``SealSignal``, ``ExecTraced``, ``ExeIdentity``
+   ``SealSignal``, ``SealCoreDump``, ``SealUprobe``, ``SealRlimit``,
+   ``ExecTraced``, ``ExecShared``, ``XattrHandle``,
+   ``ExeIdentity``
 :Tests: ``t6001``, ``t6006``, ``t6007``, ``t6110``, ``t6111``,
    ``t6112``, ``t6113``, ``t6114``, ``t6115``, ``t6118``, ``t6123``,
    ``t6124``, ``t6127``, ``t6129``, ``t6131``, ``t6133``, ``t6134``,
-   ``t6135``, ``t6136``, ``t6137``, ``t6144``
+   ``t6135``, ``t6136``, ``t6137``, ``t6144``, ``t6145``, ``t6146``,
+   ``t6149``, ``t6150``, ``t6152``, ``t6153``, ``t6156``
 :Residual: R2, R19, R22
 
 T4 Substituting artifacts
@@ -860,8 +962,15 @@ payload digest recorded on the upatch's pin directory, in the xattr
 ``security.bpf.shirudo.payload`` that only authorized tasks can change
 (``PinXattr``), with the directive's signed expected payload. It refuses
 ``payload_mismatch`` when they differ or when the xattr cannot be read.
-A directive therefore removes the upatch its signer made it for and no
-other.
+With no pins, it removes the name's archive only when the archive's
+bytes are the expected payload. A directive therefore removes the
+upatch its signer made it for and no other.
+
+The Lua decoders that map export runs with runtime authority ride in a
+signed section too. Export reads them from the archived artifact only
+when its bytes hash to the payload digest on the pin directory, so a
+decoder runs only beside the maps of the payload it was signed with. No
+test makes the two differ, which takes runtime authority.
 
 .. rst-class:: facts
 
@@ -927,13 +1036,20 @@ acts, and refuses when it cannot read the records or undo them. The
 same scan finds the pins an unload stopped after its extend leaves, and
 an archive without a record of its load; ``init`` restores
 only an archive whose load the eventlog records without a later unload
-(``t6144``). A measuring
+(``t6144``). The scan takes only the records the register vouches for:
+it starts at the init record that names the live index and the TPM's
+reset count, derives every record's digest from its fields and folds
+them to the value the TPM reports, and refuses ``tampered`` when they
+do not fold. A boot ID that root binds over ``/proc``, or a pending
+record in a ``/run`` of root's making, which no reader takes since it
+carries no seal label, therefore moves nothing (``t6147``). A measuring
 command holds a lock beside the eventlog from its extend to its append,
 a load or an unload from that undo to its append, so the register and
 the log advance in one order and the undo never takes a load in flight
 for a stopped one. An append that fails after a successful extend
-leaves the register ahead of the log; shirudo reports the desync and
-``shirudo status`` reports a register its replay cannot explain.
+leaves the register ahead of the log; shirudo reports the desync,
+``shirudo status`` reports a register its replay cannot explain, and
+every later load and unload refuses until the next reboot.
 
 ``init`` binds one register per TPM reset. On a re-run with this boot's
 record it reuses the register and adds no event; when the register it
@@ -955,7 +1071,7 @@ tree operations run without it.
    ``tpm_error`` and ``eventlog_full`` from shirudo
 :Counters: ``TpmExtend``
 :Tests: ``t4002``, ``t4003``, ``t4102``, ``t4103``, ``t6115``,
-   ``t6122``, ``t6128``, ``t6143``, ``t6144``
+   ``t6122``, ``t6128``, ``t6143``, ``t6144``, ``t6147``
 :Proofs: ``Shirudo.Chain``, ``Shirudo.Events``, ``Shirudo.Measured``,
    ``Shirudo.UpatchLoad``
 :Residual: R4, R12, R20, U6, U9
@@ -986,13 +1102,35 @@ runs next. ``lsm/kernel_load_data`` and ``lsm/kernel_read_file`` refuse
 every kexec image and initramfs to every task, shirudo included, by
 either system call (``Kexec``).
 
+The kernel that runs this boot has other ways in: ``/dev/mem``, MSRs,
+port I/O, PCI resources, debugfs writes and ACPI table overrides change
+it, an unsigned module joins it, and ``/proc/kcore`` reads it.
+``lsm/locked_down`` refuses what lockdown in integrity mode refuses, an
+unsigned module the kernel asks about included (A4), and
+``/proc/kcore`` with it, to every task, whatever the command line says,
+and counts each refusal on the integrity counter of its reason.
+Hibernation is refused too, but a resume runs in the initrd before
+``init``: ``lsm/file_open`` refuses the write of a ``HibernateLocation``
+EFI variable, which would have the next boot's initrd resume from a
+device root chose (``HibernateLocation``), and A9 keeps the UKI from
+naming one. :doc:`integrity-counters` lists the counters.
+
 .. rst-class:: facts
 
 :Adversary: ADV-B, root on the target without the signing key
-:Enforced at: ``lsm/kernel_load_data``, ``lsm/kernel_read_file``
-:Refusal: ``EPERM`` from ``kexec_load(2)`` and ``kexec_file_load(2)``
-:Counters: ``Kexec``
-:Tests: ``t4003``, ``t4101``, ``t6126``
+:Enforced at: ``lsm/kernel_load_data``, ``lsm/kernel_read_file``,
+   ``lsm/locked_down``, ``lsm/file_open``
+:Refusal: ``EPERM`` from ``kexec_load(2)`` and ``kexec_file_load(2)``,
+   from each lockdown check and from the open of a
+   ``HibernateLocation`` EFI variable for writing
+:Counters: ``Kexec``; the integrity counters ``ModuleSignature``,
+   ``DevMem``, ``EfiTest``, ``KexecSignature``, ``PciAccess``,
+   ``IoPort``, ``Msr``, ``AcpiTables``, ``DeviceTree``, ``PcmciaCis``,
+   ``Tiocsserial``, ``ModuleParameters``, ``Mmiotrace``, ``Debugfs``,
+   ``XmonWrite``, ``BpfWriteUser``, ``DbgWriteKernel``,
+   ``RtasErrorInjection``, ``XenUserActions``, ``Kcore``,
+   ``HibernateLocation`` and ``Other``
+:Tests: ``t4003``, ``t4101``, ``t6126``, ``t6154``
 :Residual: R6, R7, R12, U11, U16
 
 .. _tm-t7:
@@ -1008,11 +1146,30 @@ repository must match the digests in that index, and the loader in it
 is a signed upatch the kernel verifies at load (T1).
 
 ``shirudo bpm tree sync`` fetches a signed tree publication and verifies
-it against the runtime image's primary certificate. A publication
+it against the active config's non-revoked BPF signer set. Every
+member must also be present in the sealed ``.bpf`` keyring. A publication
 carries a digest for each operation, is the one the target recorded or
 has a higher generation, and names its parent, which the target
-compares when the generation is exactly one higher. A delete applies
-the signed unload directive whose name equals the operation's id.
+compares when the generation is exactly one higher. The target records
+a publication when it accepts it, before it applies the first new
+operation, so one it stopped in the middle of is not followed by an
+older one. It refuses a publication whose operations up to its last
+applied one are not the ones it processed, by the history root its
+``outcomes`` record holds, and a segment that does not start from that
+root at its base. It takes a publication only under the manifest that
+``bpm tree append`` writes for its two layers, byte for byte, so that the
+manifest digest it records and a successor names follows from the signed
+layers: a registry that serves them under a manifest of its own, which
+would leave a node with one digest refusing the other for good, is
+refused before the node records anything. A node behind the segment the tag names walks back
+through the sealed segments by digest, each signed and naming the one
+before it, up to a limit of 65,536 operations, or 1,048,576 for a node
+that has processed none, so a registry can neither splice another
+history in nor keep a node walking without end. A delete applies
+the signed unload directive whose name equals the operation's id. An
+operation's ``fixes``, which the backend reads and the operation digest
+does not cover, the target's parser skips: a malformed one cannot make
+it refuse a publication.
 
 The transport is TLS 1.3 only, with the hybrid groups
 ``X25519MLKEM768`` and ``SecP256r1MLKEM768`` and certificate
@@ -1023,8 +1180,7 @@ negotiated.
 
 A registry can still withhold or replay signed content (R8). The
 environment of the bpm units selects parts of the transport (U3), index
-and tree signatures accept algorithms other than ML-DSA (U4), and
-revocation does not reach tree publications (U13).
+and tree signatures accept algorithms other than ML-DSA (U4).
 
 .. rst-class:: facts
 
@@ -1034,10 +1190,10 @@ revocation does not reach tree publications (U13).
 :Refusal: the ``bpm`` command fails and installs nothing
 :Counters: none
 :Tests: ``t7005``, ``t7101``, ``t7102``, ``t7103``, ``t7104``,
-   ``t7105``, ``t8005``
+   ``t7105``, ``t7106``, ``t7107``, ``t7108``, ``t7111``, ``t8005``
 :Proofs: ``Shirudo.SemVer``, ``Shirudo.ArchivePath``,
    ``Shirudo.JsonString``, ``Shirudo.TreeSync``
-:Residual: R8, R9, U3, U4, U13, U15
+:Residual: R8, R9, U3, U4, U15
 
 T8 Quantum-capable adversaries against the trust anchor
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1129,8 +1285,12 @@ point counts what it lets through: a signal to an authorized task from
 a task without authority (``SealSignal``, T3). Only the
 hooks add to it, and no task resets it from userspace. ``shirudo
 status`` lists the counters that are not zero with their meaning,
-``status --json`` carries them all, and the keepalive carries the total
-as the attribute ``shirudo.tamper_attempts``.
+``status --json`` carries them all, and so does the keepalive body,
+which the TPM quotes, in its ``tamper`` list. The refusals of changes to
+the running kernel (T6) count apart from those of shirudo's own state,
+in ``shirudo_integrity``, which ``init`` creates, freezes and pins the
+same way; ``status`` reports them in their own section and key, and the
+keepalive in its ``integrity`` list.
 
 A counter is evidence of an attempt, not of a compromise. Some
 refusals move no counter: the kernel's signature errors, the guards of
@@ -1138,14 +1298,15 @@ the ``/run/shirudo`` tmpfs and the image mounts, the device-mapper and
 mapping checks, the seccomp and memory checks, and refusals by another
 LSM ordered before ``bpf``. Zero does not mean that nobody tried.
 :doc:`tamper-counters` lists every counter, its hooks and the refusals
-without one.
+without one, and :doc:`integrity-counters` the integrity counters.
 
 .. rst-class:: facts
 
 :Adversary: ADV-A and ADV-B
-:Enforced at: every hook that counts; :doc:`tamper-counters` lists them
+:Enforced at: every hook that counts; :doc:`tamper-counters` and
+   :doc:`integrity-counters` list them
 :Refusal: the refused operation fails and its counter moves
-:Counters: all, see :doc:`tamper-counters`
+:Counters: all, see :doc:`tamper-counters` and :doc:`integrity-counters`
 :Tests: ``t6003``, ``t6108``
 :Residual: R17
 
@@ -1186,7 +1347,7 @@ bootstrap key or TPM setting, and cannot enroll a key while the target
 runs: a live activation that would trust a key the ``.bpf`` keyring does
 not hold refuses before it changes anything.
 
-Which keys can sign a config is A7, and U2 is the gap there.
+The configured certificate set determines which keys can sign a config (A7).
 
 .. rst-class:: facts
 
@@ -1202,7 +1363,7 @@ Which keys can sign a config is A7, and U2 is the gap there.
    refusals move none
 :Tests: ``t5101``, ``t5102``, ``t5103``, ``t5104``, ``t6101``,
    ``t6113``, ``t6127``, ``t6130``, ``t6131``, ``t6132``
-:Residual: R5, R14, U2
+:Residual: R5, R14
 
 T12 Interrupted image activation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1247,7 +1408,9 @@ the operator relies on.
 authority: a writable one as ``MapFdWrite`` and a read-only one as
 ``ObjGet``. ``lsm/bpf`` refuses the routes to a descriptor,
 ``BPF_OBJ_GET`` and ``BPF_MAP_GET_FD_BY_ID`` (``ObjGet``), and
-``BPF_PROG_TEST_RUN`` (``ProgRun``). ``lsm/file_open`` refuses opening a
+``BPF_PROG_TEST_RUN`` (``ProgRun``), and with ``BPF_MAP_UPDATE_ELEM``
+and ``BPF_MAP_FREEZE`` the writing and freezing of a map
+(``MapWrite``). ``lsm/file_open`` refuses opening a
 pin as a file, through which bpffs would print a map's contents
 (``ObjGet``). A writable memory mapping of an arena needs a writable
 descriptor. A process whose executable is not on the runtime image
@@ -1263,7 +1426,7 @@ given (R2).
 :Adversary: ADV-B, root on the target without the signing key
 :Enforced at: ``lsm/bpf``, ``lsm/bpf_map``, ``lsm/file_open``
 :Refusal: ``EACCES`` from ``bpf()`` and from opening a pin
-:Counters: ``ObjGet``, ``MapFdWrite``, ``ProgRun``
+:Counters: ``ObjGet``, ``MapFdWrite``, ``MapWrite``, ``ProgRun``
 :Tests: ``t6107``, ``t6108``, ``t6109``, ``t6110``
 :Residual: R2, U19
 
@@ -1330,7 +1493,9 @@ R2 The command interface of the runtime binary is the boundary
    refuses signals, so root can also stop a running command, which
    ``lsm/task_kill`` counts (``SealSignal``) and which keeps open
    whatever descriptors it holds (U17); a load stopped before its
-   extend is reported and undone (T5).
+   extend is reported and undone (T5). A stop by the kernel, through
+   ``cgroup.kill``, the OOM killer, a pipe root closes or the cgroup
+   freezer, passes no hook and is not counted.
    ``CAP_SYS_RESOURCE`` can rewrite a process's executable link, which
    ``lsm/task_prctl`` refuses and the mark does not depend on. The
    initrd's bootstrap binary and the memory of authorized tasks stay
@@ -1401,12 +1566,25 @@ R8 Registry withholding and replay
    packages added since; a registry that claims to have none is refused
    unless ``--new-index`` is given. ``bpm tree append`` builds the next
    publication on the one the registry serves the same way, so an older
-   one makes the operator sign a second branch of the tree. A target
-   compares the parent of a direct successor only, and takes a
-   publication of that branch two or more generations on, applying its
-   operations after those of the first. Detection: compare the upatch payloads
-   and tree operations that ``attest verify`` certifies with what you
-   published, and the pushed index with the versions you released.
+   one makes the operator sign a second branch of the tree. It extends
+   only the tree ``--tree-id`` names, which an existing tree requires,
+   so a registry that serves another tree the key signs in its place, a
+   canary tree at ``stable``, is refused (``t7005``, ``t7008``). A target
+   that processed an operation the second branch does not have refuses
+   it, as its operations up to the target's cursor do not fold to the
+   ``history_root`` the target holds, in a segment and at a segment's
+   base alike; a target behind the point where the branches part takes
+   either. A registry can still withhold the latest publication or a
+   sealed segment, which stops a walk, and keep serving a stale tag,
+   which a target takes for current until a later one reaches it. A
+   registry that answers slowly holds each transfer of a timer's
+   command, and the config operation lock every other command waits for
+   up to 30 seconds, until that transfer's deadline: a minute plus the
+   time its largest response, 16 MiB, or its package's size, takes at
+   128 KiB a second (``t7010``).
+   Detection: compare the upatch payloads and tree operations that
+   ``attest verify`` certifies with what you published, and the pushed
+   index with the versions you released.
 
 R9 Classical pieces
    The WebPKI certificates of registries and collectors authenticate
@@ -1459,7 +1637,7 @@ R13 Revocation reaches a target only through a config
    unlinked, the revocation is unmeasured and the purge does not run.
    At boot the revoked key is not enrolled, and the init event's
    certificate list shows it. A target that has not activated the
-   config still trusts the key. Vouches and tree publications are U13.
+   config still trusts the key. Historical vouches are U13.
 
 R14 Configs roll back
    shirudo accepts any validly signed config. A live activation cannot
@@ -1483,12 +1661,20 @@ R16 Any artifact ever signed loads at any time
    way to retire one artifact is to revoke the key that signed it.
 
 R17 Telemetry has no proof of origin
-   Keepalives, map snapshots and the tamper counters they carry are
-   unsigned and not bound to the TPM. ``host.name`` is the target's
-   host name, and the credentials come from files root reads.
-   ``map_export.otel_insecure`` turns certificate verification off.
-   Root can withhold, drain or forge telemetry. Only ``attest verify``
-   is evidence.
+   Map snapshots are unsigned and not bound to the TPM. A keepalive
+   carries a quote of the SHA-256 of its body by the attestation key of
+   ``attest``, created for each keepalive, over no PCR, and
+   ``shirudo-quote-check`` verifies it without a TPM. A quote that
+   checks proves that the body is unchanged since that key signed it,
+   and its clock orders the keepalives of one key. It does not prove
+   that the key lives in a genuine TPM: only ``attest challenge`` ties
+   the key to an endorsement key, and a backend treats every node as
+   ``untrusted`` until a future workflow does that. Nor does it vouch
+   for the body: root on the target can have the TPM quote a body of
+   its own. ``host.name`` is the target's host name, and the
+   credentials come from files root reads. ``map_export.otel_insecure``
+   turns certificate verification off. Root can withhold, drain or
+   forge telemetry. Only ``attest verify`` is evidence.
 
 R18 BPF outside the gates
    ``lsm/bpf`` and ``lsm/bpf_prog_load`` admit every call whose
@@ -1496,17 +1682,23 @@ R18 BPF outside the gates
    loaded through ``kern_sys_bpf()``, such as the ``bpf_preload`` module,
    which a signed module can bring in (A4). Classic BPF, for seccomp
    filters and ``SO_ATTACH_FILTER``, does not use ``bpf()``. Program
-   descriptors stay open to root, and the attach paths outside
+   descriptors other than XDP stay open to root, and the attach paths outside
    ``bpf()`` that take one, socket options and netlink among them,
    accept only program types those paths support. The operator's build
-   refuses sections of those types; the kernel does not refuse them in
-   a signed loader.
+   refuses sections of those types except XDP, whose descriptors
+   ``lsm/bpf_prog`` guards; the kernel does not refuse these types in a
+   signed loader.
 
 R19 Raw device and offline writes bypass the seal
    The seal guards file operations. A write to the block device under
    ``/var/lib/shirudo`` while it is mounted (A10), or any change between
    boots, bypasses it. Removing the label from the state root offline
-   makes the next bootstrap run of ``init`` label everything under it.
+   makes the next bootstrap run of ``init`` label everything under it,
+   and so does another tree at ``/var/lib/shirudo`` on the next boot,
+   which root chooses on the running system too: the root file system's
+   ``fstab`` decides what the initrd mounts at ``/var`` and below
+   (``x-initrd.mount``). Only the rename of a directory above the state
+   root on its own file system is refused (T3).
    Across reboots only signatures and the register protect state:
    upatches are verified at load and measured in the init event, and
    the package, tree and config selection state is not authenticated.
@@ -1519,12 +1711,61 @@ R20 The TPM owner password is not a secret on the target
    owner hierarchy.
    An image shared across a fleet shares the password.
 
-R21 upatches can be neutralized without detaching them
+R21 upatches can be neutralized by changing their targets
    An upatch stays loaded and measured while root makes it ineffective:
    by unloading the module a kprobe targets, by replacing the binary a
-   ``uprobe.multi`` target names with a new inode, or, without lockdown
-   (A4), by disabling kprobes through debugfs. These are readings of the
-   kernel source and are not tested.
+   ``uprobe``, ``uretprobe``, ``uprobe.multi`` or ``uretprobe.multi``
+   target names with a new inode. Disabling kprobes through debugfs is
+   a debugfs write, which ``bpf2``'s lockdown refuses (A4). These
+   are readings of the kernel source and are not tested.
+
+   XDP coverage is reconciled, not continuous. A device added after load
+   runs without the upatch until ``upatch reconcile`` next runs, and is
+   unfiltered until then: normally seconds after its udev event, and up to
+   one pass plus 60 seconds when udev gives no signal, as for a veth
+   peer moving namespace. A device stays uncovered while its XDP slot is
+   occupied, it has no native XDP, its driver refuses the program, or
+   root stops the timer and the udev rule. ``status`` lists every such
+   device under ``XdpCovered`` with the reason the device reports and
+   gives the verdict ``degraded``, which the keepalive carries; root
+   can stop the keepalive as well, which its collector sees as silence.
+   At boot restore a device whose driver refuses, or that an upatch
+   restored before holds, fails ``init``: the register stays unbound, so
+   attestation fails, and that upatch and every archive after it in name
+   order stay unloaded that boot. Neither a setting that survives a
+   reboot, in the NIC's firmware or the hypervisor, nor a second upatch
+   that selects the device can therefore take it out of an upatch
+   unseen, at the price of a host that boots without those upatches. A
+   device whose driver name or devlink port cannot be read is the
+   exception: no class can be given to it, and any device's failing
+   lookup would otherwise stop ``init``, so it sits out with a warning
+   and ``status`` lists it as ``not classified`` under every XDP
+   upatch. A veth end moved to another namespace
+   keeps its link, so a pair can hold two attachments, one of them running
+   in that namespace. Reconcile adds no register event: TPM evidence covers
+   the signed class mask and loaded artifact, not the device inventory or
+   which devices are covered. ``t3111`` and ``t3112`` exercise selection,
+   reconcile and unload; driver behaviour across a namespace move is
+   tested only for veth.
+
+   Every XDP program is loaded with multi-buffer support and a selected
+   device must report it. At boot restore one that does not fails
+   ``init``. After boot it stays uncovered, with a warning, and ``status``
+   lists it. The check is made at attach only: a device that later
+   stops reporting it keeps its link, as a bond that later enslaves such a
+   device does, and what happens to a frame too large for one buffer is
+   then the driver's choice. It may drop the frame or never run the
+   program on it.
+
+   No record says which per-device XDP link pins should exist, because
+   they come and go with devices. A pin that disappears while its device
+   remains looks like a device not yet attached: ``init`` and ``status``
+   do not report it, and the next reconcile attaches again. This assumes
+   the private bpffs guards hold: removing or renaming a pin needs runtime
+   authority, and an attempt without it is refused and counted as
+   ``PinUnlink`` or ``PinRename``. A task that has that authority, or gets
+   past the guards, can detach an XDP link unreported until the next pass.
+   Every other pin an upatch must hold is checked.
 
 R22 Labeled inodes are interchangeable
    The label carries no identity. Any labeled inode passes shirudo's
@@ -1533,7 +1774,10 @@ R22 Labeled inodes are interchangeable
    its own, root can bind one labeled inode over another sealed path
    for a shirudo command it runs there. U9 is one consequence; others
    are a hidden eventlog, which makes measuring commands fail, and
-   package or tree state read from the wrong file. This is a reading of
+   package or tree state read from the wrong file. What root can bind is
+   what shirudo labeled: no target command writes a temporary file,
+   which a sealed directory bound over ``/tmp`` would have labeled with
+   content from a registry (``t7002``). This is a reading of
    the code and is not reproduced. A bind mount over the state root in
    ``init``'s namespace, an idmapped one among them, was reproduced:
    every command refuses the state as foreign from then on.
@@ -1544,12 +1788,17 @@ R23 Policy labels follow the inode
    of the executable, or the new inode a package upgrade or an editor
    leaves in its place, carries no policy until the upatch is loaded
    again, and a hard link or a rename that root makes of an inode
-   without the seal label moves the policy to another path. A task
+   without the seal label moves the policy to another path. A file
+   system that root makes and mounts, a loop image say, carries the
+   xattr on its own executables, written where no seal ran, and an
+   execution from it takes whatever bits root put there. A task
    keeps the bits it accumulated, a socket keeps the snapshot of its
    creator, and a socket passed from another task carries that task's
-   bits. An enforcement upatch therefore decides what an execution
-   without policy bits may do, and the operator reloads after a change
-   to a labeled path. Detection: none on the target.
+   bits. Root can therefore give its own processes any bits: an
+   enforcement upatch decides what an execution without policy bits
+   may do, lets a bit restrict rather than exempt, and the operator
+   reloads after a change to a labeled path. Detection: none on the
+   target.
 
 Threats to resolve
 ------------------
@@ -1573,18 +1822,6 @@ U1 Verification passes without a pinned key or an expected state
       and ``--expect-config-root`` with ``--expect-config-pcr``. See
       :doc:`/operate/run/attest`.
 
-U2 Any key the kernel trusts for dm-verity signs a config
-   :Affects: Config images (A7).
-   :Consequence: A distribution's built-in key, and with the Kconfig
-      options of A7 a MOK or UEFI db key, signs a config the target
-      accepts, with its repositories, vouched signers, revocations and
-      export endpoints. shirudo cannot tell which key verified a root.
-   :Status: Confirmed in code and in the kernel; ``t5102`` exercises a
-      built-in certificate.
-   :Meanwhile: Build both options off, build in no certificate whose
-      holder is not trusted to sign configs, and verify with
-      ``--expect-config-root``.
-
 U3 The environment reaches authorized processes
    :Affects: The bpm and export units and any runtime command root
       starts.
@@ -1596,7 +1833,10 @@ U3 The environment reaches authorized processes
       (libcurl), which open a file root names with the process's
       authority, are refused on a target like shirudo's own overrides
       (``t6136``): with the first set, ``shirudo status`` wrote the
-      library's log into a sealed file.
+      library's log into a sealed file. The personality the caller sets
+      is dropped at start (``t6151``): under ``UNAME26``, ``uname()``
+      reported a 2.6 release to the tree selector, and an operation it
+      skipped for that release stayed skipped.
    :Status: Confirmed in code for shirudo's own variables; the library
       log file was reproduced on a test VM and is refused now.
    :Meanwhile: Keep ``/etc/shirudo/bpm/environment``,
@@ -1663,15 +1903,14 @@ U9 init can rebind the register after hiding this boot's record
 
 U10 Kernel prerequisites are not checked
    :Affects: A4, A5, A7, A9 and A10.
-   :Consequence: A target without lockdown, with 32-bit compatibility,
-      with the dm-verity keyring options on, with hibernation available
-      or with writes under mounted file systems allowed initializes
-      without an error and without the protection those assumptions
-      give.
+   :Consequence: A target without module signatures, with 32-bit
+      compatibility, with the dm-verity keyring options on, with a
+      resume device in its UKI or with writes under mounted file systems
+      allowed initializes without an error and without the protection
+      those assumptions give.
    :Status: Confirmed in code: the pre-flight checks none of them.
-   :Meanwhile: Boot with ``lockdown=integrity`` on an authenticated
-      command line and build the kernel as :doc:`/operate/plan/hardening`
-      describes.
+   :Meanwhile: Build the kernel and its command line as
+      :doc:`/operate/plan/hardening` describes.
 
 U11 The boot continues when init fails
    :Affects: ``shirudo-initrd.service`` and the root file system's
@@ -1679,35 +1918,27 @@ U11 The boot continues when init fails
    :Consequence: The initrd unit is wanted by ``initrd.target`` and has
       conditions, so a failure or a skip lets the target boot
       unprotected. A first ``init`` from the root file system is not
-      refused and takes its settings from the root file system.
-   :Status: Confirmed in code.
+      refused and takes its settings from the root file system. An
+      ``init`` that crashes once it has pinned the identity map leaves
+      the guards it attached so far, and every later ``init`` of that
+      boot refuses, so enforcement stays partial until the next reboot.
+   :Status: Confirmed in code; what a crash leaves is a code-path
+      reading, not reproduced.
    :Meanwhile: Attest every target after every boot with the bind PCRs
       pinned, and treat a missing keepalive as a signal. A deployer who
       prefers a halted boot can add an ``OnFailure=`` drop-in to
       ``shirudo-initrd.service``; this is not tested.
 
-U13 Revocation does not reach everything
-   :Affects: Tree publications and vouched keys (R13).
-   :Consequence: Tree publications verify against the runtime image's
-      primary certificate without a revocation check. Vouches carry no
-      time, and a revoked key's vouch for another key still admits it
-      when a config lists that key.
-   :Status: Confirmed in code.
-   :Meanwhile: Ship a new runtime image when the primary key is
-      compromised, and drop from the config every key the revoked key
-      vouched for.
-
-U14 The operator runs commands from a registry package
-   :Affects: ``shirudo bpm config update --base-package oci://...``
-      without ``--file`` on the operator host.
-   :Consequence: The command takes the Beefile from a package checked
-      only against the registry's manifest digest and runs its updater
-      commands on the host that holds the signing key. A hostile
-      registry becomes ADV-F.
-   :Status: Confirmed in code; the usage text says the commands are
-      trusted as operator-side code.
-   :Meanwhile: Always pass ``--file`` with a local Beefile, or a local
-      ``.bee`` file as the base package.
+U13 A revoked signer's historical vouches remain valid
+   :Affects: Vouched keys (R13).
+   :Consequence: Vouches carry no time. A revoked key's vouch for another
+      key still admits it when a config lists that key. This supports
+      planned rotation but does not distinguish a legitimate earlier
+      vouch from one made with a compromised signing key.
+   :Status: Confirmed in code. Rotation preserves this existing rule.
+   :Meanwhile: When a signer is compromised, also remove or revoke every
+      dependent key whose authority should no longer be trusted. A
+      planned overlap is not sufficient compromise recovery by itself.
 
 U15 Certificates are fetched without a pin
    :Affects: ``tools/gen-initrd/install.sh --cert <url>`` and
@@ -1732,7 +1963,8 @@ U17 A stopped runtime command keeps its descriptors
    :Affects: The descriptor checks of T2.
    :Consequence: Runtime commands open link pins for short checks. No
       hook refuses signals, ``lsm/task_kill`` only counts them
-      (``SealSignal``), so root can stop such a command while it
+      (``SealSignal``), and the kernel's own signals and the cgroup
+      freezer pass uncounted, so root can stop such a command while it
       holds a link descriptor, and that link then stays attached after
       its pin is removed by an unload or a revocation.
    :Status: Code-path reading, not reproduced.
@@ -1752,6 +1984,25 @@ U19 A decoder cannot name a long upatch
       handles a longer name is a code-path reading, not reproduced.
    :Meanwhile: Keep the names of upatches that carry decoders at 63
       characters or fewer.
+
+U20 The keepalive reports only the last 512 tree operations
+   :Affects: The keepalive body (``base_seq``, ``base_root``, ``mask``)
+      and what a backend can check of a node's loaded set.
+   :Consequence: The body gives the node's outcome for each operation
+      of a window of at most 512 operations up to the head of its tree.
+      A backend that first hears from a node after the tree has grown
+      past that window never learns which earlier operations the node
+      applied. It can check that each window continues the last one
+      and compare the node with nodes of the same labels, but not which
+      upatches added before the window the node should run, so it
+      cannot check ``set_sha256`` against them. Every node that joins a
+      tree of more than 512 operations is in that case. The node keeps
+      every outcome in ``upatch-tree/outcomes``; only the body leaves
+      them out.
+   :Status: Confirmed in code.
+   :Meanwhile: Compare such a node with its peers, and attest it with
+      ``shirudo attest`` when its set matters: the register measures
+      every upatch it loaded. See :doc:`/operate/run/attest`.
 
 Deferred mitigations
 --------------------
@@ -1798,8 +2049,7 @@ D9 Perf events across exec
 Out of scope
 ------------
 
-- Compromise of the operator host or of the signing key itself. U14 is
-  in scope, because it turns a registry into that compromise.
+- Compromise of the operator host or of the signing key itself.
 - A malicious or faulty kernel, verifier, TPM or hardware, and physical
   attacks (ADV-G).
 - Denial of service: removing the binary, cutting the network, filling
@@ -1823,24 +2073,22 @@ the procedures.
 The deployer:
 
 - Builds the kernel with the signed-loader ABI and the carried kernel
-  patches (A3), ``CONFIG_MODULE_SIG`` with enforcement and
-  ``CONFIG_SECURITY_LOCKDOWN_LSM`` (A4), ``CONFIG_COMPAT=n`` (A5), both
+  patches (A3), ``CONFIG_MODULE_SIG`` (A4),
+  ``CONFIG_COMPAT=n`` (A5), both
   dm-verity keyring options off and no foreign built-in certificate
   (A7), the TPM driver without ``i2c-dev`` or ``spidev`` on its bus
   (A8), and ``CONFIG_BLK_DEV_WRITE_MOUNTED=n`` (A10)
 - Boots a signed, measured UKI under Secure Boot whose command line
-  carries ``lsm=`` with ``bpf``, ``lockdown=integrity``,
-  ``bpf.keyring_unsealed=1`` and ``dm_verity.keyring_unsealed=1`` (A6,
-  A11)
+  carries ``lsm=`` with ``bpf``, ``bpf.keyring_unsealed=1`` and
+  ``dm_verity.keyring_unsealed=1``, and whose command line, kernel and
+  initrd name no resume device (A6, A9, A11)
 - Keeps generic tools off the runtime image (A14)
 - Keeps the environment files of the units absent or empty (U3) and
   starts every shirudo unit from the runtime image (U7)
 - Uses only ML-DSA-87 certificates from ``shirudo genkey``, repository
   certificates included (U4)
 - Treats the TPM owner password as known to root (R20)
-- Never runs ``shirudo bpm config update --base-package oci://...``
-  without ``--file`` (U14), and checks the fingerprint of every
-  certificate it installs (U15)
+- Checks the fingerprint of every certificate it installs (U15)
 - Watches the size of the eventlog (U6) and the keepalives, and treats a
   ``tampered`` status as an incident to understand, not a condition to
   retry (:doc:`/operate/troubleshoot/incident-tampered`)
@@ -1855,8 +2103,7 @@ The verifier:
   ``--expect-bind-pcr=11=<value>`` (U9, R7, R12)
 - Gives an expected state: ``--cert`` with ``--upatch`` or ``--expect``
   and ``--tree-root``, or ``--expect-chain`` (U1)
-- Gives ``--expect-config-root`` with ``--expect-config-pcr`` (U2,
-  R14)
+- Gives ``--expect-config-root`` with ``--expect-config-pcr`` (R14)
 - Gives ``--strict-anchor`` where nothing else measures into PCR 9
   after ``init`` (R11), and ``--expect-pcr`` for the firmware, kernel and
   initrd values its policy accepts

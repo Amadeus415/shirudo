@@ -37,8 +37,8 @@
       <text x="472" y="88" font-size="13">OTLP JSON</text>
       <text x="472" y="106" font-size="11">log record or</text>
       <text x="472" y="119" font-size="11">metrics</text>
-      <text x="210" y="198" font-size="13">status report</text>
-      <text x="210" y="216" font-size="11">conditions, TPM, tamper counters</text>
+      <text x="210" y="198" font-size="13">keepalive body</text>
+      <text x="210" y="216" font-size="11">quoted by the TPM</text>
       <text x="472" y="198" font-size="13">OTLP JSON</text>
       <text x="472" y="216" font-size="11">keepalive log</text>
       <text x="672" y="135" font-size="13">collector</text>

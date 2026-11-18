@@ -444,6 +444,44 @@ static void name_has_suffix_wants_a_stem(void)
 	EXPECT_TRUE(name_has_suffix("a", 1, ""));
 }
 
+#define TEST_DIR "/run"
+
+static void str_has_prefix_gives_its_length(void)
+{
+	EXPECT_UEQ(str_has_prefix("oci://registry", "oci://"), 6);
+	EXPECT_UEQ(str_has_prefix("oci://", "oci://"), 6);
+	EXPECT_UEQ(str_has_prefix("oci:/", "oci://"), 0);
+	EXPECT_UEQ(str_has_prefix("OCI://registry", "oci://"), 0);
+	EXPECT_UEQ(str_has_prefix("", "oci://"), 0);
+	EXPECT_UEQ(str_has_prefix("/run/x", TEST_DIR "/"), 5);
+}
+
+static void str_skip_prefix_moves_only_on_a_match(void)
+{
+	const char *p = "realm=\"x\"";
+	char buf[] = "s3://bucket";
+	char *q = buf;
+
+	EXPECT_FALSE(str_skip_prefix(&p, "scope=\""));
+	EXPECT_STREQ(p, "realm=\"x\"");
+	EXPECT_TRUE(str_skip_prefix(&p, "realm=\""));
+	EXPECT_STREQ(p, "x\"");
+	EXPECT_TRUE(str_skip_prefix(&q, "s3://"));
+	EXPECT_TRUE(q == buf + 5);
+}
+
+static void span_equals_wants_the_whole_literal(void)
+{
+	const char *path = "a/../b";
+
+	EXPECT_TRUE(span_equals(path + 2, 2, ".."));
+	EXPECT_FALSE(span_equals(path + 2, 3, ".."));
+	EXPECT_FALSE(span_equals(path + 2, 1, ".."));
+	EXPECT_TRUE(span_equals(path + 2, 1, "."));
+	EXPECT_FALSE(span_equals(path, 1, "."));
+	EXPECT_TRUE(span_equals(path, 0, ""));
+}
+
 static const struct unit_case cases[] = {
 	UNIT_CASE(digits_counts_leading_digits),
 	UNIT_CASE(decimal_fills_its_span),
@@ -464,6 +502,9 @@ static const struct unit_case cases[] = {
 	UNIT_CASE(memzero_explicit_clears_its_span_only),
 	UNIT_CASE(memneq_explicit_tells_every_bit_apart),
 	UNIT_CASE(name_has_suffix_wants_a_stem),
+	UNIT_CASE(str_has_prefix_gives_its_length),
+	UNIT_CASE(str_skip_prefix_moves_only_on_a_match),
+	UNIT_CASE(span_equals_wants_the_whole_literal),
 	{}
 };
 

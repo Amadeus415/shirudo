@@ -38,21 +38,27 @@ def package(readme=README):
     return package_bytes(entries)
 
 
-class InfoTests(unittest.TestCase):
+class BpmTestCase(unittest.TestCase):
     def setUp(self):
         self.work = tempfile.TemporaryDirectory(prefix="shirudo-bpm-info-test-")
         self.root = Path(self.work.name)
         self.addCleanup(self.work.cleanup)
 
-    def run_bpm(self, *args):
+    def env(self):
         env = {**os.environ, "BPM_OCI_SCHEME": "http",
                "REGISTRY_AUTH_FILE": str(self.root / "absent-auth.json"),
                "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}
         env.pop("BPM_OCI_CA_FILE", None)
         env.pop("BPM_OCI_USERNAME", None)
         env.pop("BPM_OCI_PASSWORD", None)
+        return env
+
+    def run_bpm(self, *args):
         return subprocess.run([SHIRUDO, "bpm", *args], cwd=self.root,
-                              capture_output=True, env=env)
+                              capture_output=True, env=self.env())
+
+
+class InfoTests(BpmTestCase):
 
     def run_info(self, *args):
         return self.run_bpm("info", *args)
@@ -252,6 +258,109 @@ class InfoTests(unittest.TestCase):
                 self.assertEqual(result.stdout, README if success else b"")
                 self.assertEqual(len(requests), 4 if success else 2)
                 self.assertEqual(list(self.root.iterdir()), [])
+
+
+class Registry:
+    """Serves one package blob; with hold set, stops halfway until released."""
+
+    def __init__(self, blob, hold=False):
+        self.digest = "sha256:" + hashlib.sha256(blob).hexdigest()
+        self.halfway = threading.Event()
+        self.release = threading.Event()
+        manifest = json.dumps({
+            "schemaVersion": 2,
+            "layers": [{
+                "mediaType": "application/vnd.shirudo.bpm.package.v1+gzip",
+                "digest": self.digest, "size": len(blob),
+            }],
+        }).encode()
+        registry = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_GET(self):
+                if self.path == "/v2/test/example/manifests/1.0":
+                    payload = manifest
+                elif self.path == "/v2/test/example/blobs/" + registry.digest:
+                    payload = blob
+                else:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                if payload is blob and hold:
+                    self.wfile.write(payload[:len(payload) // 2])
+                    self.wfile.flush()
+                    registry.halfway.set()
+                    registry.release.wait(30)
+                    payload = payload[len(payload) // 2:]
+                self.wfile.write(payload)
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever,
+                                       daemon=True)
+        self.thread.start()
+        self.reference = f"oci://127.0.0.1:{self.server.server_port}/test/example:1.0"
+
+    def close(self):
+        self.release.set()
+        self.server.shutdown()
+        self.thread.join()
+        self.server.server_close()
+
+
+class MemoryTests(BpmTestCase):
+    """A download bpm reads is kept in memory, never in a file of /tmp."""
+
+    def test_oci_download_stays_in_memory(self):
+        blob = package(readme=README + b"x" * 300000)
+        registry = Registry(blob, hold=True)
+        self.addCleanup(registry.close)
+        proc = subprocess.Popen([SHIRUDO, "bpm", "info", registry.reference],
+                                cwd=self.root, env=self.env(),
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertTrue(registry.halfway.wait(30))
+        links = []
+        for fd in os.listdir(f"/proc/{proc.pid}/fd"):
+            try:
+                links.append(os.readlink(f"/proc/{proc.pid}/fd/{fd}"))
+            except OSError:
+                pass
+        registry.release.set()
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 0, err)
+        self.assertTrue(out.startswith(README), out[:80])
+        self.assertTrue(any(link.startswith("/memfd:shirudo-bpm-package")
+                            for link in links), links)
+        self.assertFalse([link for link in links if link.startswith("/tmp/")],
+                         links)
+
+    def test_key_fingerprint_of_file_package_and_download(self):
+        key, cert = self.root / "key.pem", self.root / "cert.der"
+        made = subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "ec",
+             "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes",
+             "-keyout", str(key), "-outform", "DER", "-out", str(cert),
+             "-days", "1", "-subj", "/CN=bpm-info"],
+            capture_output=True)
+        if made.returncode:
+            self.skipTest("openssl cannot make a certificate")
+        bee = self.root / "example.bee"
+        bee.write_bytes(package_bytes([
+            ("example-1.0/Beefile", b'[package]\nname = "example"\n'),
+            ("example-1.0/cert.der", cert.read_bytes())]))
+        registry = Registry(bee.read_bytes())
+        self.addCleanup(registry.close)
+        prints = [self.run_bpm("key", "fingerprint", source)
+                  for source in (str(cert), str(bee), registry.reference)]
+        for result in prints:
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(prints[0].stdout.strip()), 64)
+        self.assertEqual({result.stdout for result in prints},
+                         {prints[0].stdout})
 
 
 if __name__ == "__main__":

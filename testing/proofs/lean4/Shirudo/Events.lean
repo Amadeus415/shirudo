@@ -23,6 +23,9 @@ NUL and fixed fields:
 
 `chain_fold()`, and the TPM's NV extend, set the register to SHA-256 of
 the register and the event, from 32 zero bytes before the first extend.
+`chain_history_step()` hashes `"shirudo-tree-history"`, its NUL, a
+tree's history root and an operation's digest into the next history
+root (`historyBytes`), a chain beside the register.
 
 The model follows each function's buffer: `Fields.bytes` is what the
 code hands SHA-256 for an event whose set is already hashed, `listing`
@@ -31,8 +34,8 @@ digest. A byte is a `UInt8`, a digest 32 of them, a C string the bytes
 before its NUL. A CBMC harness checked that util/chain.c hashed exactly
 `Fields.bytes` for every name of up to 8 bytes and of 255 to 257, every
 payload, digest and sequence number, the init event of an empty set
-included, and `fold` for every register and event; it went with the C in
-the port to Rust.
+included, `fold` for every register and event and `historyBytes` for
+every root and digest; it went with the C in the port to Rust.
 
 On the domain the callers admit, upatch names that `upatch_name_valid()`
 accepts of at most `UPATCH_NAME_MAX` bytes and sequence numbers a
@@ -91,6 +94,7 @@ def tagUpatch : List UInt8 := ascii "shirudo-upatch"
 def tagUnload : List UInt8 := ascii "shirudo-unload"
 def tagKeyRevoke : List UInt8 := ascii "shirudo-key-revoke"
 def tagTree : List UInt8 := ascii "shirudo-tree"
+def tagHistory : List UInt8 := ascii "shirudo-tree-history"
 
 /-- `strnlen(s, max)` of the C string whose bytes, up to its NUL, start
 with `s`. -/
@@ -135,6 +139,12 @@ def be64 (s : Nat) : List UInt8 :=
 sequence number and the operation's digest. -/
 def treeBytes (seq : Int) (operation : Digest) : List UInt8 :=
   tagTree ++ [0] ++ be64 (u64OfS64 seq) ++ operation.bytes
+
+/-- `chain_history_step()`'s buffer: `"shirudo-tree-history"` with its
+NUL, the history root before the operation and the operation's digest.
+It is no register event: a tree's history root is a chain of its own. -/
+def historyBytes (prev operation : Digest) : List UInt8 :=
+  tagHistory ++ [0] ++ prev.bytes ++ operation.bytes
 
 /-- What the code hands SHA-256 for an event. -/
 def Fields.bytes : Fields → List UInt8
@@ -624,6 +634,11 @@ def Event.digest (e : Event) : Digest := sha (e.fields sha).bytes
 /-- `chain_fold()`, and the TPM's NV extend: the register and the event,
 64 bytes, hashed. -/
 def fold (r e : Digest) : Digest := sha (r.bytes ++ e.bytes)
+
+/-- `chain_history_step()`: the step `Chain.historyRoot` folds from
+`Digest.zero`. -/
+def historyStep (prev operation : Digest) : Digest :=
+  sha (historyBytes prev operation)
 
 /-- The register after `events`, oldest first, as `attest predict` and
 `attest verify` replay it and the TPM extends it. -/

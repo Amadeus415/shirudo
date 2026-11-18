@@ -42,6 +42,8 @@ Packages
      - Operator host
      - - ``/usr/bin/shirudo``, linked against the host's shared libraries
        - the helper ``/usr/libexec/shirudo/shirudo-build``
+       - ``/usr/bin/shirudo-quote-check``, a static PIE that checks
+         keepalive quotes for a telemetry backend
        - the image generators ``shirudo-gen-image``,
          ``shirudo-gen-runtime`` and ``shirudo-gen-verity`` under
          ``/usr/libexec/shirudo/gen-image/``
@@ -94,7 +96,10 @@ Build the packages
 
       $ make -C packaging bindeb-pkg PKG_ROLES=operator
 
-   ``PKG_ROLES=target`` builds only the target package.
+   ``PKG_ROLES=target`` builds only the target package. On Fedora,
+   which ships no static ``libcrypto``, the operator build also
+   downloads and builds a static OpenSSL for ``shirudo-quote-check``
+   and needs ``perl`` and ``glibc-static`` for it.
 
 Install the operator package
 ----------------------------
@@ -240,8 +245,8 @@ enforces once it boots through the shirudo initrd with everything that
   not write drop-ins for them.
 
 :doc:`/operate/deploy/boot-integration` sets these up. After the reboot,
-``shirudo status`` on the target shows ``Status: ok`` and ``Mode:
-production``, and ``shirudo status --show-full`` shows ``Bound in:
+``shirudo status`` on the target shows ``Status: ok`` with every
+condition ``OK``, and ``shirudo status --show-full`` shows ``Bound in:
 initrd``.
 
 Next steps

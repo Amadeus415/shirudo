@@ -4,13 +4,19 @@
 </picture>
 
 \
-[![CI suite](https://github.com/shirudo-dev/shirudo/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/shirudo-dev/shirudo/actions/workflows/tests.yml)
-[![Build packages](https://github.com/shirudo-dev/shirudo/actions/workflows/packages.yml/badge.svg?branch=main)](https://github.com/shirudo-dev/shirudo/actions/workflows/packages.yml)
-[![Documentation](https://github.com/shirudo-dev/shirudo/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/shirudo-dev/shirudo/actions/workflows/docs.yml)
-[![Sanitizers](https://github.com/shirudo-dev/shirudo/actions/workflows/sanitizers.yml/badge.svg?branch=main)](https://github.com/shirudo-dev/shirudo/actions/workflows/sanitizers.yml)
-[![License](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
+[![Build packages](https://github.com/shirudo-dev/shirudo/actions/workflows/packages.yml/badge.svg?branch=main)](https://github.com/shirudo-dev/shirudo/actions/workflows/packages.yml)<br/>
+[![CI suite](https://github.com/shirudo-dev/shirudo/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/shirudo-dev/shirudo/actions/workflows/tests.yml)<br/>
+[![Sanitizers](https://github.com/shirudo-dev/shirudo/actions/workflows/sanitizers.yml/badge.svg?branch=main)](https://github.com/shirudo-dev/shirudo/actions/workflows/sanitizers.yml)<br/>
+[![Proofs](https://github.com/shirudo-dev/shirudo/actions/workflows/proofs.yml/badge.svg?branch=main)](https://github.com/shirudo-dev/shirudo/actions/workflows/proofs.yml)<br/>
+[![CodeQL](https://github.com/shirudo-dev/shirudo/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/shirudo-dev/shirudo/actions/workflows/codeql.yml)<br/>
+[![Documentation](https://github.com/shirudo-dev/shirudo/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/shirudo-dev/shirudo/actions/workflows/docs.yml)<br/>
+[![Coverage Status](https://coveralls.io/repos/github/shirudo-dev/shirudo/badge.svg?branch=main)](https://coveralls.io/github/shirudo-dev/shirudo?branch=main)<br/>
+[![Coverity Scan Status](https://scan.coverity.com/projects/999999/badge.svg)](https://scan.coverity.com/projects/999999)<br/>
+[![License](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)<br/>
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/999999/badge)](https://www.bestpractices.dev/projects/999999)<br/>
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/shirudo-dev/shirudo/badge)](https://scorecard.dev/viewer/?uri=github.com/shirudo-dev/shirudo)<br/>
 
-shirudo (Japanese シールド, pronounced “shee-roo-doh”) means “shield”
+shirudo (Japanese シールド, pronounced “shee-roo-doh”) means “shield”.
 
 shirudo is an eBPF-based security platform. It ships eBPF "live patches",
 called upatches ("micropatches"), to Linux targets without a reboot, and
@@ -61,3 +67,8 @@ programs are dual-licensed BSD/GPL. Each source file holds a SPDX
 license identifier. The tree vendors a few source files from
 third-party projects under different but compatible licenses; those
 files retain their original SPDX identifier and copyright notices.
+
+## Origins
+
+shirudo was created by the [Isovalent](https://isovalent.com) team 
+at Cisco, and first [presented at LPC'26](https://lpc.events/event/20/contributions/2437/attachments/2170/4833/shirudo.pdf). 

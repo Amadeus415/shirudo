@@ -23,7 +23,7 @@ cleanup() {
 	exit "$result"
 }
 trap cleanup EXIT HUP INT TERM
-export SHIRUDO_TPM_TCTI="cmd:$SIM $WORK/tpm"
+export SHIRUDO_TPM_TCTI="cmd:exec $SIM $WORK/tpm"
 export SHIRUDO_EVENTLOG_PATH="$WORK/eventlog"
 export SHIRUDO_KEYS_DIR="$WORK/keys"
 export SHIRUDO_INITRD_RELEASE="$WORK/initrd-release"

@@ -105,7 +105,8 @@ dirs=$(cd "$stage" && find . -mindepth 1 -type d -path '*/shirudo*' | sed 's#^\.
 "the operator-side tooling: the shirudo binary plus shirudo-build, which" \
 "compiles and CMS-signs .upatch artifacts. It is for the machine that holds" \
 "the private signing key and produces artifacts for direct target loading;" \
-"it does not install the target systemd units."
+"it does not install the target systemd units. It also installs" \
+"shirudo-quote-check, which checks keepalive quotes for a telemetry backend."
 	fi
 	printf '\n%%install\n'
 	printf 'cp -a %s/. %%{buildroot}/\n' "$stage"
@@ -128,12 +129,15 @@ if [ "$1" -eq 1 ] && command -v systemctl >/dev/null 2>&1; then
 	systemctl enable shirudo.service >/dev/null 2>&1 || true
 	systemctl enable shirudo-map-export.timer >/dev/null 2>&1 || true
 	systemctl enable shirudo-keepalive.timer >/dev/null 2>&1 || true
+	systemctl enable shirudo-xdp-reconcile.timer >/dev/null 2>&1 || true
+	udevadm control --reload >/dev/null 2>&1 || true
 	systemctl enable shirudo-bpm-repo-update.timer >/dev/null 2>&1 || true
 	systemctl enable shirudo-bpm-tree-sync.timer >/dev/null 2>&1 || true
 	echo "shirudo: shirudo.service enabled; it runs 'shirudo init' early on the"
 	echo "shirudo: next boot. To enforce now: systemctl start shirudo.service"
 	echo "shirudo: shirudo-map-export.timer enabled for the next boot"
 	echo "shirudo: shirudo-keepalive.timer enabled for the next boot"
+	echo "shirudo: shirudo-xdp-reconcile.timer enabled for the next boot"
 	echo "shirudo: shirudo-bpm-repo-update.timer enabled for the next boot"
 	echo "shirudo: shirudo-bpm-tree-sync.timer enabled for the next boot"
 fi
@@ -144,6 +148,8 @@ if [ "$1" -eq 0 ] && command -v systemctl >/dev/null 2>&1; then
 	systemctl --no-reload disable --now shirudo-map-export.timer \
 		>/dev/null 2>&1 || true
 	systemctl --no-reload disable --now shirudo-keepalive.timer \
+		>/dev/null 2>&1 || true
+	systemctl --no-reload disable --now shirudo-xdp-reconcile.timer \
 		>/dev/null 2>&1 || true
 	systemctl --no-reload disable --now shirudo-bpm-repo-update.timer \
 		>/dev/null 2>&1 || true

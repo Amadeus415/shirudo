@@ -86,7 +86,8 @@ of a boot. The ``seal`` takes the maps it shares with ``bpf2`` from
 ``bpf2``, which init passes it as maps of ``bpf2``'s types:
 
 ``bpf2``
-    BPF admission (``lsm/bpf``, ``lsm/bpf_map``, ``lsm/bpf_prog_load``),
+    BPF admission (``lsm/bpf``, ``lsm/bpf_map``, ``lsm/bpf_prog``,
+    ``lsm/bpf_prog_load``),
     the guards of the private bpffs and of ``/run/shirudo``, the mount
     guards, the keyring and TPM command guards, the kexec refusal, the
     device-mapper and perf ioctl guards and the dm-verity device records.
@@ -114,7 +115,7 @@ Runtime image
     Mounted at ``/run/shirudo/runtime`` with ``ro,nodev,nosuid``. It holds
     the target binary, its bootstrap ``etc/shirudo/shirudo.conf``, the
     initial BPF certificate ``keys/cert.der`` and the config verification
-    certificate. The UKI names its exact root hash.
+    certificates. The UKI names its exact root hash.
 
 Config image
     Mounted at ``/run/shirudo/config`` with ``ro,nodev,nosuid,noexec``. It
@@ -164,7 +165,7 @@ capability or an executable path.
 
 The keyrings tie the operator to the target. ``init`` enrolls the
 initial certificate and the vouched certificates of the selected config
-in ``.bpf``, the config verification certificate in ``.dm-verity``, and
+in ``.bpf``, the config verification certificates in ``.dm-verity``, and
 seals both. The kernel verifies every upatch loader against ``.bpf`` and
 every config root against its dm-verity trust path. The operator never
 touches either keyring.

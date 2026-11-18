@@ -66,7 +66,6 @@ Check that init worked
       target# shirudo status
       Host:                  docs
       Roles:                 target
-      Mode:                  production
       Status:                ok
       Version ID:            d0d7aa800303439023907d1979d917d46a21bec21f816689c138728a28e84af9
 
@@ -78,6 +77,7 @@ Check that init worked
         UpatchesMeasured   OK      every pinned or archived upatch is in this boot's records
         TpmMeasured        OK      NV index 0x01818E00 readable
         ConfigActive       OK      config 6d5ed552f448.. is active
+        XdpCovered         OK      every device an XDP upatch selects runs it
 
       Tamper attempts (this boot):
         LoadNotLoader            15  program load that is not a signed loader
@@ -85,8 +85,10 @@ Check that init worked
         BpfCommand                8  detach, update, delete or unclassified bpf() command
         BpffsUmount               1  unmount of the private bpffs
         SealWrite                 1  write open of a sealed file
-        SealPtrace                7  ptrace of a shirudo task
         SealEntry                 2  entry into a sealed directory, or a sealed inode linked
+
+      Integrity attempts (this boot):
+        none
 
       Loaded upatches (1):
         NAME                      LOCATION                       MAPS  STATUS                        AGE
@@ -142,8 +144,6 @@ Check that init worked
         - Value after a good boot
       * - ``status``
         - ``"ok"``
-      * - ``mode``
-        - ``"production"``
       * - ``keyring_mode``
         - ``"bpf"``
       * - ``tpm.bound_in``
@@ -190,13 +190,14 @@ It changes no persistent or enforcement state:
      OK    bpf_lsm_active
      OK    bpffs_supported
      OK    signed_loader_kernel_abi
+     OK    kernel_lsm_hooks
      OK    cert_on_disk
      OK    cert_algorithm
      OK    cert_kernel_support
      OK    kernel_keyring
      OK    embedded_loader
      OK    tpm2_reachable: TCTI from the config: device:/dev/tpmrm0
-   10 of 10 passed
+   11 of 11 passed
 
 :doc:`/reference/cli/init` describes each check.
 
@@ -266,7 +267,8 @@ one that fails, with ``boot-restore: failed to apply <file>`` and
 blocked``. The upatches it loaded before that one stay loaded, and no
 register measures them. The archive is sealed, so the next boot tries
 the same upatch again. The usual cause is a kernel on which the upatch
-no longer loads. :ref:`boot-restore-lockout` describes the way out.
+no longer loads, or a device that an XDP upatch selects whose driver
+refuses it. :ref:`boot-restore-lockout` describes the way out.
 
 Register binding failures
 ~~~~~~~~~~~~~~~~~~~~~~~~~

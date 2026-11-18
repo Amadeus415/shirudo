@@ -6,8 +6,11 @@
  * build-environment.json and certificate.
  */
 
-#include <ftw.h>
+#include <dirent.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "bpm_package.h"
 #include "fuzz.h"
@@ -16,17 +19,35 @@
 static char base[64];
 static char dest[sizeof(base) + 4];
 
-static int remove_one(const char *path, const struct stat *st, int flag,
-		      struct FTW *ftw)
+/*
+ * By readdir(), not nftw(): MemorySanitizer has no interceptor for
+ * nftw() and takes the struct FTW it hands over as never written.
+ */
+static void empty_dir(const char *dir)
 {
-	if (ftw->level)
-		remove(path);
-	return 0;
+	char path[PATH_MAX];
+	struct dirent *e;
+	DIR *d;
+
+	d = opendir(dir);
+	if (!d)
+		return;
+	while ((e = readdir(d))) {
+		if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..") ||
+		    snprintf(path, sizeof(path), "%s/%s", dir,
+			     e->d_name) >= (int)sizeof(path))
+			continue;
+		if (unlink(path) && errno == EISDIR) {
+			empty_dir(path);
+			rmdir(path);
+		}
+	}
+	closedir(d);
 }
 
 static void empty_base(void)
 {
-	nftw(base, remove_one, 16, FTW_DEPTH | FTW_PHYS);
+	empty_dir(base);
 }
 
 static void remove_base(void)

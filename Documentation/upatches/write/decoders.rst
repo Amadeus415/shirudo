@@ -190,19 +190,25 @@ The decoder runs in a restricted LuaJIT state:
 - The JIT compiler is off, so that the instruction count sees every
   instruction. One snapshot may take 1,000,000 virtual machine
   instructions, loading the chunk included, and 32 MiB of memory, and the
-  result may nest 32 levels deep.
-  The memory limit also applies to finalizers during state cleanup.
+  result may nest 32 levels deep. ``pcall`` catches the error the limit
+  raises, but from then on every instruction raises it again.
 - ``io``, ``os``, ``package``, ``require``, ``debug``, ``jit``, ``ffi``,
-  ``dofile``, ``loadfile``, ``load``, ``loadstring``, ``module`` and
-  ``collectgarbage`` are removed. The rest of the base library and the
-  ``string``, ``table``, ``math`` and ``bit`` libraries remain.
+  ``dofile``, ``loadfile``, ``load``, ``loadstring``, ``module``,
+  ``collectgarbage``, ``newproxy``, ``xpcall`` and ``print`` are
+  removed, and so are the pattern functions ``string.find``,
+  ``string.match``, ``string.gmatch`` and ``string.gsub``, whose
+  backtracking on a recorded string the instruction count never sees.
+  The rest of the base library and the ``string``, ``table``, ``math``
+  and ``bit`` libraries remain.
 - shirudo reads the decoder from the archived copy of the upatch,
-  ``/var/lib/shirudo/upatches/<name>.upatch``, and opens it as sealed
-  state. A decoder that did not arrive inside the signed artifact never
-  runs.
+  ``/var/lib/shirudo/upatches/<name>.upatch``, opens it as sealed state
+  and runs it only when its bytes are the payload loaded, as the digest
+  on the pin directory records. A decoder that did not arrive inside the
+  signed artifact of the loaded upatch never runs.
 
 An error raised in the decoder drops that snapshot with a message on
-standard error. It never produces a partial record.
+standard error, its control characters replaced. It never produces a
+partial record.
 
 Build and check it
 ------------------

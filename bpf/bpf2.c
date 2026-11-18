@@ -147,6 +147,17 @@ int BPF_PROG(shirudo_lsm_bpf_map, struct bpf_map *map, fmode_t fmode,
 	return shirudo_self_or_deny(TAMPER_OBJ_GET);
 }
 
+/* XDP descriptors also authorize netlink attachment, outside lsm/bpf. */
+SEC("lsm/bpf_prog")
+int BPF_PROG(shirudo_lsm_bpf_prog, struct bpf_prog *prog, int ret)
+{
+	if (ret)
+		return ret;
+	if (BPF_CORE_READ(prog, type) == BPF_PROG_TYPE_XDP)
+		return shirudo_self_or_deny(TAMPER_OBJ_GET);
+	return 0;
+}
+
 /*
  * Admission gate. Fires from a single call site inside the verifier
  * (bpf_check), after the kernel has verified any PKCS#7 signature and
@@ -313,13 +324,18 @@ int BPF_PROG(shirudo_lsm_key_permission, key_ref_t key_ref,
 	if (id->keyring_serial == 0)
 		return 0;
 	possessed = (unsigned long)key_ref & 1;
-	if (serial != id->keyring_serial && serial != id->dm_verity_ring &&
-	    serial != id->dm_verity_key) {
+	if (serial != id->keyring_serial && serial != id->dm_verity_ring) {
 		for (i = 0; i < IDENTITY_KEYS_MAX; i++)
 			if (i < id->n_keys && id->key_serials[i] == serial)
 				break;
-		if (i == IDENTITY_KEYS_MAX)
-			return 0;	/* not the anchor -- not ours */
+		if (i == IDENTITY_KEYS_MAX) {
+			for (i = 0; i < IDENTITY_KEYS_MAX; i++)
+				if (i < id->n_dm_verity_keys &&
+				    id->dm_verity_keys[i] == serial)
+					break;
+			if (i == IDENTITY_KEYS_MAX)
+				return 0;
+		}
 	}
 	if (need == KEY_NEED_SEARCH && possessed)
 		return 0;
@@ -364,14 +380,54 @@ int BPF_PROG(shirudo_lsm_tpm_command, struct file *file,
  * `rm` -- is denied, so the LSM link cannot be detached by removing
  * its pin.
  */
+#define MOUNTPOINT_DEPTH_MAX	32
+
+/*
+ * Removing or renaming a dentry detaches or moves what is mounted on it
+ * in every namespace, without sb_umount: from a namespace where /run is
+ * not mounted, an rmdir of the directory init's /run covers takes the
+ * private bpffs with it. The mount points from that bpffs up to the
+ * root of init's namespace are shirudo's alone to remove or rename.
+ */
+static __always_inline int shirudo_mountpoint_guard(struct dentry *dentry)
+{
+	struct mount_record *rec;
+	struct mount *m, *parent;
+	struct sb_id *id;
+	__u32 zero = 0;
+	int i;
+
+	if (!dentry || !(BPF_CORE_READ(dentry, d_flags) &
+			 bpf_core_enum_value(enum dentry_flags, DCACHE_MOUNTED)))
+		return 0;
+	rec = bpf_map_lookup_elem(&shirudo_mnt_rec, &zero);
+	if (!rec || !rec->mount)
+		return 0;
+	m = (struct mount *)rec->mount;
+	bpf_for(i, 0, MOUNTPOINT_DEPTH_MAX) {
+		if (BPF_CORE_READ(m, mnt_mountpoint) == dentry)
+			goto deny;
+		parent = BPF_CORE_READ(m, mnt_parent);
+		if (!parent || parent == m)
+			return 0;
+		m = parent;
+	}
+deny:
+	id = bpf_map_lookup_elem(&shirudo_bpffs_sb, &zero);
+	if (id && shirudo_task_is_self(id))
+		return 0;
+	return shirudo_tamper_deny(TAMPER_BPFFS_UMOUNT_ABOVE, -EPERM);
+}
+
 SEC("lsm/inode_unlink")
 int BPF_PROG(shirudo_lsm_inode_unlink, struct inode *dir,
 	     struct dentry *dentry, int ret)
 {
 	if (ret)
 		return ret;
-	return shirudo_bpffs_guard(BPF_CORE_READ(dir, i_sb, s_dev),
-				   TAMPER_PIN_UNLINK);
+	ret = shirudo_bpffs_guard(BPF_CORE_READ(dir, i_sb, s_dev),
+				  TAMPER_PIN_UNLINK);
+	return ret ? ret : shirudo_mountpoint_guard(dentry);
 }
 
 SEC("lsm/inode_rmdir")
@@ -380,8 +436,9 @@ int BPF_PROG(shirudo_lsm_inode_rmdir, struct inode *dir,
 {
 	if (ret)
 		return ret;
-	return shirudo_bpffs_guard(BPF_CORE_READ(dir, i_sb, s_dev),
-				   TAMPER_MAX);
+	ret = shirudo_bpffs_guard(BPF_CORE_READ(dir, i_sb, s_dev),
+				  TAMPER_MAX);
+	return ret ? ret : shirudo_mountpoint_guard(dentry);
 }
 
 /*
@@ -452,6 +509,82 @@ int BPF_PROG(shirudo_lsm_kernel_read_file, struct file *file,
 	return shirudo_tamper_deny(TAMPER_KEXEC, -EPERM);
 }
 
+#define REASON(name)	bpf_core_enum_value(enum lockdown_reason, name)
+
+/* The kernel's numbers move between releases; the counters' do not. */
+static __always_inline enum integrity_point
+integrity_point_of(enum lockdown_reason what)
+{
+	if (what == REASON(LOCKDOWN_MODULE_SIGNATURE))
+		return INTEGRITY_MODULE_SIGNATURE;
+	if (what == REASON(LOCKDOWN_DEV_MEM))
+		return INTEGRITY_DEV_MEM;
+	if (what == REASON(LOCKDOWN_EFI_TEST))
+		return INTEGRITY_EFI_TEST;
+	if (what == REASON(LOCKDOWN_KEXEC))
+		return INTEGRITY_KEXEC;
+	if (what == REASON(LOCKDOWN_PCI_ACCESS))
+		return INTEGRITY_PCI_ACCESS;
+	if (what == REASON(LOCKDOWN_IOPORT))
+		return INTEGRITY_IOPORT;
+	if (what == REASON(LOCKDOWN_MSR))
+		return INTEGRITY_MSR;
+	if (what == REASON(LOCKDOWN_ACPI_TABLES))
+		return INTEGRITY_ACPI_TABLES;
+	if (what == REASON(LOCKDOWN_DEVICE_TREE))
+		return INTEGRITY_DEVICE_TREE;
+	if (what == REASON(LOCKDOWN_PCMCIA_CIS))
+		return INTEGRITY_PCMCIA_CIS;
+	if (what == REASON(LOCKDOWN_TIOCSSERIAL))
+		return INTEGRITY_TIOCSSERIAL;
+	if (what == REASON(LOCKDOWN_MODULE_PARAMETERS))
+		return INTEGRITY_MODULE_PARAMETERS;
+	if (what == REASON(LOCKDOWN_MMIOTRACE))
+		return INTEGRITY_MMIOTRACE;
+	if (what == REASON(LOCKDOWN_DEBUGFS))
+		return INTEGRITY_DEBUGFS;
+	if (what == REASON(LOCKDOWN_XMON_WR))
+		return INTEGRITY_XMON_WR;
+	if (what == REASON(LOCKDOWN_BPF_WRITE_USER))
+		return INTEGRITY_BPF_WRITE_USER;
+	if (what == REASON(LOCKDOWN_DBG_WRITE_KERNEL))
+		return INTEGRITY_DBG_WRITE_KERNEL;
+	if (what == REASON(LOCKDOWN_RTAS_ERROR_INJECTION))
+		return INTEGRITY_RTAS_ERROR_INJECTION;
+	if (what == REASON(LOCKDOWN_XEN_USER_ACTIONS))
+		return INTEGRITY_XEN_USER_ACTIONS;
+	if (what == REASON(LOCKDOWN_KCORE))
+		return INTEGRITY_KCORE;
+	return INTEGRITY_OTHER;
+}
+
+#undef REASON
+
+/*
+ * Lockdown in integrity mode, the ways root has to change the running
+ * kernel, from an unsigned module and /dev/mem to debugfs writes, and
+ * /proc/kcore, which that mode leaves readable, whether or not the
+ * command line asks for lockdown: the kernel's own lockdown LSM decides
+ * first where it runs. Each refusal counts on the integrity counter of
+ * its reason. The hibernation check, which every read of
+ * /sys/power/state makes, is refused without a count.
+ */
+SEC("lsm/locked_down")
+int BPF_PROG(shirudo_lsm_locked_down, enum lockdown_reason what, int ret)
+{
+	if (ret)
+		return ret;
+	if (what == bpf_core_enum_value(enum lockdown_reason,
+					LOCKDOWN_HIBERNATION))
+		return -EPERM;
+	if (what == bpf_core_enum_value(enum lockdown_reason, LOCKDOWN_KCORE) ||
+	    (what > LOCKDOWN_NONE &&
+	     what < bpf_core_enum_value(enum lockdown_reason,
+					LOCKDOWN_INTEGRITY_MAX)))
+		return shirudo_integrity_deny(integrity_point_of(what), -EPERM);
+	return 0;
+}
+
 SEC("lsm/inode_rename")
 int BPF_PROG(shirudo_lsm_inode_rename, struct inode *old_dir,
 	     struct dentry *old_dentry, struct inode *new_dir,
@@ -461,9 +594,12 @@ int BPF_PROG(shirudo_lsm_inode_rename, struct inode *old_dir,
 		return ret;
 	ret = shirudo_bpffs_guard(BPF_CORE_READ(old_dir, i_sb, s_dev),
 				  TAMPER_PIN_RENAME);
-	return ret ? ret :
-	       shirudo_bpffs_guard(BPF_CORE_READ(new_dir, i_sb, s_dev),
-				   TAMPER_PIN_RENAME);
+	if (!ret)
+		ret = shirudo_bpffs_guard(BPF_CORE_READ(new_dir, i_sb, s_dev),
+					  TAMPER_PIN_RENAME);
+	if (!ret)
+		ret = shirudo_mountpoint_guard(old_dentry);
+	return ret ? ret : shirudo_mountpoint_guard(new_dentry);
 }
 
 /*
@@ -697,6 +833,29 @@ deny:
 	return shirudo_tamper_deny(TAMPER_BPFFS_UMOUNT_ABOVE, -EPERM);
 }
 
+#define EFIVARFS_MAGIC		0xde5e81e4
+#define FMODE_WRITE		0x2
+#define HIBERNATE_LOCATION	"HibernateLocation-"
+
+/*
+ * systemd in the initrd resumes from the device the HibernateLocation
+ * EFI variable names, before init attaches a guard: a variable root
+ * writes now would have the next boot resume an image of root's making.
+ */
+static __always_inline bool hibernate_location(struct file *file)
+{
+	char name[sizeof(HIBERNATE_LOCATION)];
+	const unsigned char *s;
+
+	if (BPF_CORE_READ(file, f_inode, i_sb, s_magic) != EFIVARFS_MAGIC ||
+	    !(BPF_CORE_READ(file, f_mode) & FMODE_WRITE))
+		return false;
+	s = BPF_CORE_READ(file, f_path.dentry, d_name.name);
+	if (bpf_probe_read_kernel_str(name, sizeof(name), s) != sizeof(name))
+		return false;
+	return !bpf_strncmp(name, sizeof(name) - 1, HIBERNATE_LOCATION);
+}
+
 /*
  * A pin opened as a file reads a map's contents through bpffs, so pins
  * open for shirudo alone; directories stay listable. The bpffs mount of
@@ -712,8 +871,13 @@ int BPF_PROG(shirudo_lsm_file_open, struct file *file, int ret)
 	struct vfsmount *mnt;
 	__u32 zero = 0;
 
-	if (ret || !id)
+	if (ret)
 		return ret;
+	if (hibernate_location(file))
+		return shirudo_integrity_deny(INTEGRITY_HIBERNATE_LOCATION,
+					      -EPERM);
+	if (!id)
+		return 0;
 	mnt = BPF_CORE_READ(file, f_path.mnt);
 	if (!mnt || BPF_CORE_READ(mnt, mnt_sb, s_dev) != id->sb_dev)
 		return 0;
@@ -959,6 +1123,23 @@ static __always_inline int shirudo_dm_ioctl(struct file *file,
  * program a signed loader created would run at a probe of root's own.
  * Keep it to the caller BPF_LINK_CREATE is kept to.
  */
+#define XFS_SUPER_MAGIC		0x58465342
+#define XFS_IOC_ATTRMULTI_NR	123
+
+/*
+ * XFS_IOC_ATTRMULTI_BY_HANDLE sets and removes the attributes of the
+ * inode a handle names through xfs_attr_change(), past vfs_setxattr()
+ * and so past every xattr hook: a seal label removed that way unseals
+ * the inode. Matched by type and number, as its size differs between
+ * the native and the compat call.
+ */
+static __always_inline bool xfs_attrmulti(struct file *file, unsigned int cmd)
+{
+	return ((cmd >> 8) & 0xff) == 'X' &&
+	       (cmd & 0xff) == XFS_IOC_ATTRMULTI_NR &&
+	       BPF_CORE_READ(file, f_inode, i_sb, s_magic) == XFS_SUPER_MAGIC;
+}
+
 static __always_inline int shirudo_ioctl(struct file *file, unsigned int cmd,
 					 int ret)
 {
@@ -966,6 +1147,8 @@ static __always_inline int shirudo_ioctl(struct file *file, unsigned int cmd,
 		return ret;
 	if (cmd == PERF_EVENT_IOC_SET_BPF)
 		return shirudo_self_or_deny(TAMPER_PERF_ATTACH);
+	if (xfs_attrmulti(file, cmd))
+		return shirudo_self_or_deny(TAMPER_XATTR_HANDLE);
 	return shirudo_dm_ioctl(file, cmd, ret);
 }
 

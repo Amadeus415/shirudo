@@ -4,20 +4,38 @@
 #
 # Boot an Ubuntu guest with a selected Linux kernel and an swtpm vTPM.
 # In test mode it runs the target tests of the family TEST_VM_SUITE names,
-# or the TPM register tests for "register"; in interactive mode it prepares
-# the guest and leaves QEMU and swtpm running.
+# or the TPM register tests for "register"; in serve mode the guest only
+# prepares itself and the host runs the family's target tests in it over
+# SSH; in interactive mode it prepares the guest and leaves QEMU and swtpm
+# running. Node mode boots another node of the end2end suite, with the role
+# TEST_VM_NODE_ROLE names, core by default or edge: prepared like the
+# suite's VM, with no tests and no timers, and left running until
+# TEST_VM_TIMEOUT or a --stop.
 #
-# VM_MODE=test|interactive selects the mode. VM_NAME optionally selects a
-# stable state directory; if omitted, a unique name is allocated atomically.
-# VM_TENANT is used as the map-export tenant when OTEL export is enabled.
-# VM_VERBOSE=1 streams test-mode QEMU output to the terminal as well as the
-# console log.
+# VM_MODE=test|serve|interactive|node selects the mode. VM_NAME optionally
+# selects a stable state directory; if omitted, a unique name is allocated
+# atomically. VM_TENANT is used as the map-export tenant when OTEL export is
+# enabled. VM_VERBOSE=1 streams the QEMU output of a VM that runs tests to
+# the terminal as well as the console log.
+#
+# TEST_VM_SERVE_COMMAND names a program a serve-mode VM runs on the host,
+# with the VM's name as its argument, instead of the target tests.
+# TEST_VM_ROLE=operator boots the operator of the end-to-end test in serve
+# mode: no TPM, no initrd and no shirudo kernel arguments, the operator
+# package built in the guest, and alone the signing key in
+# TEST_VM_OPERATOR_KEYS.
+# TEST_VM_PRIVATE_DIR names a new directory outside the checkout for the
+# key the host logs in with and the VM's disk, which holds the guest's own
+# key, for a VM no other may log in to: by default both lie in the VM's
+# state directory, which every VM reads through its share of the checkout.
+# The caller removes the directory.
 
 set -euo pipefail
 
 # The guest boots with the host's own QEMU, swtpm and dracut; a library path
 # a shirudo build needed for its OpenSSL would load the wrong libraries into
-# them.
+# them. A serve command gets it back.
+HOST_LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}"
 unset LD_LIBRARY_PATH
 
 SECONDS=0
@@ -68,7 +86,12 @@ MEMORY="${TEST_VM_MEMORY:-4G}"
 DISK_SIZE="${TEST_VM_DISK_SIZE:-30G}"
 VM_TIMEOUT="${TEST_VM_TIMEOUT:-3600}"
 VM_MODE="${VM_MODE:-test}"
+VM_ROLE="${TEST_VM_ROLE:-target}"
+SERVE_COMMAND="${TEST_VM_SERVE_COMMAND:-}"
+OPERATOR_KEYS="${TEST_VM_OPERATOR_KEYS:-}"
+OPERATOR_DISK_SIZE=16G
 VM_SUITE="${TEST_VM_SUITE:-}"
+NODE_ROLE="${TEST_VM_NODE_ROLE:-core}"
 TEST_MODE="${TEST_VM_MODE:-verity}"
 SKIP_SEAL="${TEST_VM_SKIP_SEAL:-0}"
 VM_INITRD="${TEST_VM_INITRD:-1}"
@@ -79,6 +102,7 @@ VM_NAME_REQUEST="${VM_NAME:-}"
 VM_TENANT="${VM_TENANT:-}"
 VM_SSH_COMMAND="${VM_SSH_COMMAND:-}"
 SSH_PORT_REQUEST="${TEST_VM_SSH_PORT:-}"
+PRIVATE_DIR="${TEST_VM_PRIVATE_DIR:-}"
 KERNEL_URL="${TEST_VM_KERNEL_URL:-}"
 KERNEL_SHA256="${TEST_VM_KERNEL_SHA256:-}"
 KERNEL_OVERRIDE="${TEST_VM_KERNEL:-}"
@@ -106,6 +130,7 @@ MAP_EXPORT_TENANT_ID=""
 MAP_EXPORT_ENABLED=0
 RUN_DIR=""
 SSH_DIR=""
+SSH_KEY=""
 SSH_PORT=""
 SSH_PUBLIC_KEY=""
 SSH_PORT_LOCK_FD=""
@@ -116,6 +141,7 @@ QEMU_UNIT_FILE=""
 QEMU_STATUS=1
 PROGRESS_LINES=0
 GUEST_STATUS=""
+SERVE_STATUS=0
 GUEST_MEMORY_REPORT=""
 HOST_MEMORY_REPORT=""
 FAILURE_LOG_DIR=""
@@ -163,18 +189,42 @@ valid_vm_name()
 validate_mode()
 {
 	[[ "$TEST_MODE" == verity ]] || die "TEST_VM_MODE must be verity"
+	[[ -z "$SERVE_COMMAND" || ( "$VM_MODE" == serve && -x "$SERVE_COMMAND" ) ]] ||
+		die "TEST_VM_SERVE_COMMAND must name a program, in serve mode"
+	case "$VM_ROLE" in
+	target)
+		[[ -z "$OPERATOR_KEYS" ]] ||
+			die "only an operator VM gets TEST_VM_OPERATOR_KEYS"
+		;;
+	operator)
+		[[ "$VM_MODE" == serve && -n "$SERVE_COMMAND" && "$VM_INITRD" == 0 ]] ||
+			die "an operator VM runs in serve mode with TEST_VM_SERVE_COMMAND and TEST_VM_INITRD=0"
+		[[ -s "$OPERATOR_KEYS/signing_key.pem" ]] ||
+			die "TEST_VM_OPERATOR_KEYS must name the directory of the operator's signing key"
+		return 0
+		;;
+	*)
+		die "TEST_VM_ROLE must be 'target' or 'operator'"
+		;;
+	esac
 	if [[ "$VM_SUITE" != register ]]; then
 		[[ "$VM_INITRD" == 1 && "$SKIP_SEAL" == 0 ]] ||
 			die "dm-verity requires TEST_VM_INITRD=1 and TEST_VM_SKIP_SEAL=0"
 	fi
 	case "$VM_MODE" in
-	interactive|test) ;;
-	*) die "VM_MODE must be 'interactive' or 'test'" ;;
+	interactive|serve|test) ;;
+	node)
+		[[ "$VM_SUITE" == end2end ]] ||
+			die "node mode boots a node of the end2end suite only"
+		[[ "$NODE_ROLE" == core || "$NODE_ROLE" == edge ]] ||
+			die "TEST_VM_NODE_ROLE must be 'core' or 'edge'"
+		;;
+	*) die "VM_MODE must be 'interactive', 'serve', 'test' or 'node'" ;;
 	esac
 	case "$VM_SUITE" in
 	'')
 		[[ "$VM_MODE" == interactive ]] ||
-			die "test mode requires TEST_VM_SUITE: register or a test family"
+			die "$VM_MODE mode requires TEST_VM_SUITE: register or a test family"
 		;;
 	register)
 		[[ "$VM_MODE" == test && "$VM_INITRD" == 0 && "$SKIP_SEAL" == 0 ]] ||
@@ -195,6 +245,18 @@ validate_mode()
 	0|1) ;;
 	*) die "TEST_VM_INITRD must be '0' or '1'" ;;
 	esac
+}
+
+validate_private_dir()
+{
+	local dir repo
+
+	[[ -n "$PRIVATE_DIR" ]] || return 0
+	dir="$(realpath -m "$PRIVATE_DIR")"
+	repo="$(realpath -m "$REPO_ROOT")"
+	[[ "$dir" != "$repo"/* && ! -e "$dir" ]] ||
+		die "TEST_VM_PRIVATE_DIR must name a new directory outside the repository"
+	PRIVATE_DIR="$dir"
 }
 
 validate_map_export()
@@ -451,6 +513,37 @@ validate_host_bundle()
 		die "prepared runtime image is missing: $runtime_image; run 'make -C testing bundle'"
 }
 
+start_swtpm()
+{
+	local _
+
+	chmod 0700 "$RUN_DIR/tpm"
+	if user_systemd_available; then
+		SWTPM_UNIT_FILE="${RUN_DIR}/swtpm.unit"
+		SWTPM_UNIT="shirudo-vm-${VM_NAME}-swtpm.service"
+		start_user_unit "$SWTPM_UNIT" "$RUN_DIR/swtpm.log" \
+			swtpm socket --tpmstate "dir=${RUN_DIR}/tpm,mode=0700" \
+				--ctrl "type=unixio,path=tpm/swtpm-sock" \
+				--tpm2 --log "file=${RUN_DIR}/swtpm.log,level=20"
+		printf '%s\n' "$SWTPM_UNIT" >"$SWTPM_UNIT_FILE"
+		SWTPM_PID="$(user_unit_pid "$SWTPM_UNIT")" || die "could not determine swtpm systemd PID"
+		printf '%s\n' "$SWTPM_PID" >"$SWTPM_PIDFILE"
+	else
+		# Ubuntu's AppArmor profile for swtpm closes an inherited terminal, and
+		# swtpm --daemon never returns when it starts without fds 0 to 2.
+		swtpm socket --tpmstate "dir=${RUN_DIR}/tpm,mode=0700" \
+			--ctrl "type=unixio,path=tpm/swtpm-sock" \
+			--tpm2 --log "file=${RUN_DIR}/swtpm.log,level=20" \
+			--pid "file=${SWTPM_PIDFILE}" --daemon </dev/null 2>&1 |
+			sed 's/^/[test-vm] swtpm: /' >&2
+	fi
+	for _ in {1..50}; do
+		[[ -S "$SWTPM_SOCKET" ]] && return 0
+		sleep 0.1
+	done
+	die "swtpm control socket did not appear"
+}
+
 stop_swtpm()
 {
 	local pid
@@ -658,15 +751,91 @@ ssh_options()
 		-o StrictHostKeyChecking=accept-new
 		-o GlobalKnownHostsFile=/dev/null
 		-o UserKnownHostsFile="${SSH_DIR}/known_hosts"
-		-o IdentityFile="${SSH_DIR}/id_ed25519"
+		-o IdentityFile="$SSH_KEY"
+		-o ServerAliveInterval=15
+		-o ServerAliveCountMax=8
 		-p "$SSH_PORT"
 	)
 }
 
+wait_for_ssh()
+{
+	local _
+
+	for _ in {1..60}; do
+		ssh "${SSH_ARGS[@]}" -o BatchMode=yes root@127.0.0.1 true \
+			</dev/null >/dev/null 2>&1 && return 0
+		sleep 1
+	done
+	return 1
+}
+
+# The family's target tests, run in the prepared guest from an SSH session
+# with the environment the guest wrote for them. What they print goes to
+# the guest log, where test mode puts it.
+run_target_tests_over_ssh()
+{
+	local guest_log="$RUN_DIR/result/guest.log" pid status
+
+	ssh_options
+	wait_for_ssh || {
+		log "error: SSH did not become ready for VM '$VM_NAME'"
+		return 255
+	}
+	log "running target tests over SSH: $VM_SUITE"
+	: >>"$guest_log"
+	GUEST_LOG_BYTES="$(wc -c <"$guest_log")"
+	ssh "${SSH_ARGS[@]}" -o BatchMode=yes root@127.0.0.1 \
+		"cd /workspace/shirudo/testing && . /etc/shirudo-test-vm.env && exec ./run-target-tests.sh $VM_SUITE" \
+		</dev/null >>"$guest_log" 2>&1 &
+	pid=$!
+	while kill -0 "$pid" 2>/dev/null; do
+		show_progress
+		sleep 0.2
+	done
+	wait "$pid"
+	status=$?
+	show_progress
+	return "$status"
+}
+
+# The serve command runs with the caller's environment, less what made this
+# VM an operator and the file of its SSH key, since it boots other VMs.
+run_serve_command()
+{
+	log "running $(basename "$SERVE_COMMAND") for VM '$VM_NAME'"
+	env -u TEST_VM_ROLE -u TEST_VM_SERVE_COMMAND -u TEST_VM_OPERATOR_KEYS \
+		-u TEST_VM_PRIVATE_DIR \
+		${HOST_LD_LIBRARY_PATH:+LD_LIBRARY_PATH="$HOST_LD_LIBRARY_PATH"} \
+		"$SERVE_COMMAND" "$VM_NAME" </dev/null
+}
+
+# A serve-mode guest that prepared itself waits for the host-done marker in
+# its result share, then powers itself off as a test-mode guest does.
+serve_target_tests()
+{
+	local guest_status="" _
+
+	if [[ -s "$RUN_DIR/result/status" ]]; then
+		guest_status="$(<"$RUN_DIR/result/status")"
+	fi
+	[[ "$guest_status" == 0 ]] || return 0
+	if [[ -n "$SERVE_COMMAND" ]]; then
+		run_serve_command
+	else
+		run_target_tests_over_ssh
+	fi
+	SERVE_STATUS=$?
+	: >"$RUN_DIR/result/host-done"
+	for _ in {1..1200}; do
+		kill -0 "$QEMU_PID" 2>/dev/null || return 0
+		sleep 0.1
+	done
+	die "VM '$VM_NAME' did not power off after its target tests (status $SERVE_STATUS)"
+}
+
 run_ssh()
 {
-	local ready=0
-
 	if [[ -z "$VM_NAME_REQUEST" ]]; then
 		select_latest_run_dir
 		VM_NAME_REQUEST="$VM_NAME"
@@ -674,21 +843,15 @@ run_ssh()
 	require_running_vm
 	check_access_dependency ssh
 	SSH_DIR="${RUN_DIR}/ssh"
-	[[ -s "$RUN_DIR/ssh.port" && -r "$SSH_DIR/id_ed25519" ]] ||
+	SSH_KEY="$SSH_DIR/id_ed25519"
+	[[ ! -s "$RUN_DIR/ssh.key" ]] || SSH_KEY="$(<"$RUN_DIR/ssh.key")"
+	[[ -s "$RUN_DIR/ssh.port" && -r "$SSH_KEY" ]] ||
 		die "VM '$VM_NAME' has no SSH access metadata"
 	SSH_PORT="$(<"$RUN_DIR/ssh.port")"
 	[[ "$SSH_PORT" =~ ^[0-9]+$ ]] ||
 		die "VM '$VM_NAME' has an invalid SSH port"
 	ssh_options
-	for _ in {1..60}; do
-		if ssh "${SSH_ARGS[@]}" -o BatchMode=yes \
-			root@127.0.0.1 true >/dev/null 2>&1; then
-			ready=1
-			break
-		fi
-		sleep 1
-	done
-	[[ "$ready" -eq 1 ]] ||
+	wait_for_ssh ||
 		die "SSH did not become ready for VM '$VM_NAME'"
 	if [[ -n "$VM_SSH_COMMAND" ]]; then
 		exec ssh "${SSH_ARGS[@]}" root@127.0.0.1 "$VM_SSH_COMMAND"
@@ -821,7 +984,7 @@ print_test_summary()
 	local result_share_warning=0
 	declare -A recorded_suites=()
 
-	[[ "$VM_MODE" == test ]] || return 0
+	[[ "$VM_MODE" == test || "$VM_MODE" == serve ]] || return 0
 	[[ -n "$RUN_DIR" && -d "$RUN_DIR" ]] || return 0
 
 	guest_log="$RUN_DIR/result/guest.log"
@@ -913,7 +1076,8 @@ print_quiet_progress()
 	local guest_log="$RUN_DIR/result/guest.log"
 	local line_count
 
-	[[ "$VM_MODE" == test && "$VM_VERBOSE" != 1 ]] || return 0
+	[[ ( "$VM_MODE" == test || "$VM_MODE" == serve ) &&
+	   "$VM_VERBOSE" != 1 ]] || return 0
 	[[ -f "$guest_log" ]] || return 0
 	line_count="$(wc -l <"$guest_log")"
 	[[ "$line_count" =~ ^[0-9]+$ ]] || return 0
@@ -928,19 +1092,46 @@ print_quiet_progress()
 }
 
 CONSOLE_BYTES=0
+GUEST_LOG_BYTES=0
 
 stream_verbose_console()
 {
 	local console_log="$RUN_DIR/console.log"
 	local byte_count
 
-	[[ "$VM_MODE" == test && "$VM_VERBOSE" == 1 ]] || return 0
+	[[ ( "$VM_MODE" == test || "$VM_MODE" == serve ) &&
+	   "$VM_VERBOSE" == 1 ]] || return 0
 	[[ -f "$console_log" ]] || return 0
 	byte_count="$(wc -c <"$console_log")"
 	[[ "$byte_count" =~ ^[0-9]+$ ]] || return 0
 	(( byte_count > CONSOLE_BYTES )) || return 0
 	tail -c "+$((CONSOLE_BYTES + 1))" "$console_log"
 	CONSOLE_BYTES="$byte_count"
+}
+
+# A serve-mode guest's tests print over SSH, not to its console.
+stream_verbose_tests()
+{
+	local guest_log="$RUN_DIR/result/guest.log"
+	local byte_count
+
+	[[ "$VM_MODE" == serve && "$VM_VERBOSE" == 1 ]] || return 0
+	[[ -f "$guest_log" ]] || return 0
+	byte_count="$(wc -c <"$guest_log")"
+	[[ "$byte_count" =~ ^[0-9]+$ ]] || return 0
+	(( byte_count > GUEST_LOG_BYTES )) || return 0
+	tail -c "+$((GUEST_LOG_BYTES + 1))" "$guest_log"
+	GUEST_LOG_BYTES="$byte_count"
+}
+
+show_progress()
+{
+	if [[ "$VM_VERBOSE" == 1 ]]; then
+		stream_verbose_console
+		stream_verbose_tests
+	else
+		print_quiet_progress
+	fi
 }
 
 cleanup()
@@ -957,12 +1148,13 @@ cleanup()
 	if [[ "$FINAL_STATUS" -ne 0 ]]; then
 		save_failure_logs
 	fi
-	if [[ "$VM_MODE" == test && -n "$RUN_DIR" && -d "$RUN_DIR" ]]; then
+	if [[ ( "$VM_MODE" == test || "$VM_MODE" == serve ) &&
+	      -n "$RUN_DIR" && -d "$RUN_DIR" ]]; then
 		print_test_summary
 		if [[ "$FINAL_STATUS" -eq 0 ]]; then
 			# A passed run keeps its logs, not the disks it booted.
-			rm -f -- "$RUN_DIR/rootfs.qcow2" "$RUN_DIR/initrd.img" \
-				"$RUN_DIR/seed.img"
+			rm -f -- "${PRIVATE_DIR:-$RUN_DIR}/rootfs.qcow2" \
+				"$RUN_DIR/initrd.img" "$RUN_DIR/seed.img"
 			rm -rf -- "$RUN_DIR/initrd-seed"
 		else
 			log "warning: the guest overlay contains an ephemeral signing key"
@@ -1096,6 +1288,34 @@ initrd_cache_key()
 	} | sha256sum | awk '{print $1}'
 }
 
+# The operator's image: the runtime image with the toolchain that builds the
+# operator package, and clang 23 the way CI installs it. The key file beside
+# it marks it complete, as for the runtime image.
+prepare_operator_image()
+{
+	local packages="$REPO_ROOT/testing/vm/operator-packages"
+	local clang="$REPO_ROOT/.github/scripts/install-clang.sh"
+	local key
+
+	# The bundle builder chose the kernel of the libguestfs appliance, a
+	# downloaded one on a host without its own.
+	if [[ -s "$CACHE_DIR/libguestfs/supermin.env" ]]; then
+		# shellcheck source=/dev/null
+		. "$CACHE_DIR/libguestfs/supermin.env"
+	fi
+	key="operator-$({
+		printf '%s\n' "$RUNTIME_KEY" "$OPERATOR_DISK_SIZE"
+		sha256sum <"$packages"
+		sha256sum <"$clang"
+	} | sha256sum | cut -d' ' -f1)"
+	"$REPO_ROOT/testing/vm/prepare-runtime.sh" --rootfs "$ROOTFS" \
+		--cache-dir "$RUNTIME_CACHE_DIR" --package-file "$packages" \
+		--setup-script "$clang" --runtime-key "$key" \
+		--runtime-disk-size "$OPERATOR_DISK_SIZE" \
+		--key-output "$RUNTIME_CACHE_DIR/.$key.key"
+	ROOTFS="$RUNTIME_CACHE_DIR/$key.qcow2"
+}
+
 prepare_initrd()
 {
 	local key cache_dir build_dir lock_fd
@@ -1214,12 +1434,16 @@ allocate_ssh_access()
 	local port
 
 	SSH_DIR="${RUN_DIR}/ssh"
+	SSH_KEY="${PRIVATE_DIR:-$SSH_DIR}/id_ed25519"
 	mkdir -p "$SSH_DIR"
 	(
 		umask 077
-		ssh-keygen -q -t ed25519 -N '' -f "$SSH_DIR/id_ed25519"
+		mkdir -p "$(dirname "$SSH_KEY")"
+		ssh-keygen -q -t ed25519 -N '' -f "$SSH_KEY"
 	)
-	SSH_PUBLIC_KEY="$(<"$SSH_DIR/id_ed25519.pub")"
+	[[ -z "$PRIVATE_DIR" ]] ||
+		printf '%s\n' "$SSH_KEY" >"$RUN_DIR/ssh.key"
+	SSH_PUBLIC_KEY="$(<"$SSH_KEY.pub")"
 
 	exec {SSH_PORT_LOCK_FD}>"${VM_ROOT}/ssh-port.lock"
 	flock "$SSH_PORT_LOCK_FD"
@@ -1319,6 +1543,7 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 validate_mode
+validate_private_dir
 validate_kernel_selection
 validate_kernel_artifact
 validate_map_export
@@ -1333,9 +1558,10 @@ if [[ "$VM_INITRD" == 1 ]]; then
 fi
 check_host_dependencies
 validate_host_bundle
-[[ "$EUID" == 0 ]] || die "building the initrd with dracut needs root"
 [[ "$CPUS" =~ ^[1-9][0-9]*$ ]] || die "TEST_VM_CPUS must be a positive integer"
 [[ "$VM_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || die "TEST_VM_TIMEOUT must be a positive integer"
+# The operator serves through the target VM's whole run.
+[[ "$VM_ROLE" != operator ]] || VM_TIMEOUT=$((VM_TIMEOUT * 2))
 
 mkdir -p "$CACHE_DIR"
 allocate_run_dir
@@ -1349,7 +1575,10 @@ KERNEL="$(resolve_kernel)"
 
 RUNTIME_KEY="$(<"$TEST_VM_HOST_BUNDLE/runtime-image-key")"
 ROOTFS="$RUNTIME_CACHE_DIR/$RUNTIME_KEY.qcow2"
-OVERLAY="${RUN_DIR}/rootfs.qcow2"
+[[ "$VM_ROLE" != operator ]] || prepare_operator_image
+[[ "$VM_ROLE" != operator ]] ||
+	"$REPO_ROOT/testing/vm/list-source.sh" "$RUN_DIR/result/source-files"
+OVERLAY="${PRIVATE_DIR:-$RUN_DIR}/rootfs.qcow2"
 SEED="${RUN_DIR}/seed.img"
 USER_DATA="${RUN_DIR}/user-data"
 META_DATA="${RUN_DIR}/meta-data"
@@ -1469,13 +1698,16 @@ if [[ -n "$KERNEL_ARTIFACT_DIR" ]]; then
       export TEST_VM_KERNEL_MODULES=/mnt/shirudo-kernel/lib/modules
 EOF
 fi
+printf '      export TEST_VM_LOCAL_STACK=%q\n' "${TEST_VM_LOCAL_STACK:-0}" >>"$USER_DATA"
 printf '      export VM_MODE=%q\n' "$VM_MODE" >>"$USER_DATA"
 printf '      export TEST_VM_MODE=%q\n' "$TEST_MODE" >>"$USER_DATA"
 printf '      export TEST_VM_SUITE=%q\n' "$VM_SUITE" >>"$USER_DATA"
 printf '      export TEST_FILTER=%q\n' "${TEST_FILTER:-}" >>"$USER_DATA"
+printf '      export TEST_VM_NODE_ROLE=%q\n' "$NODE_ROLE" >>"$USER_DATA"
 printf '      export TEST_VM_SKIP_SEAL=%q\n' "$SKIP_SEAL" >>"$USER_DATA"
 printf '      export TEST_VM_INITRD=%q\n' "$VM_INITRD" >>"$USER_DATA"
 printf '      export TEST_VM_SSH_PUBLIC_KEY=%q\n' "$SSH_PUBLIC_KEY" >>"$USER_DATA"
+printf '      export TEST_VM_ROLE=%q\n' "$VM_ROLE" >>"$USER_DATA"
 if [[ -n "$OCI_CA_DIR" ]]; then
 	printf '      export TEST_VM_OCI_CA=/mnt/shirudo-oci/ca.crt\n' >>"$USER_DATA"
 fi
@@ -1526,14 +1758,22 @@ cat >>"$USER_DATA" <<'EOF'
       fi
 EOF
 cat >>"$USER_DATA" <<'EOF'
+      if [ "$TEST_VM_ROLE" = operator ]; then
+        mkdir -p /mnt/shirudo-operator-keys
+        mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,ro shirudo-operator-keys /mnt/shirudo-operator-keys || rc=$?
+      fi
       mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,ro shirudo-src /mnt/shirudo-src || rc=$?
       if [ "$rc" -eq 0 ]; then
         bash /mnt/shirudo-src/testing/vm/guest.sh || rc=$?
       fi
       printf '%s\n' "$rc" >/mnt/shirudo-out/status
       sync
-      if [ "${VM_MODE:-test}" = interactive ] && [ "$rc" -eq 0 ]; then
+      if { [ "${VM_MODE:-test}" = interactive ] ||
+           [ "${VM_MODE:-test}" = node ]; } && [ "$rc" -eq 0 ]; then
         while :; do sleep 3600; done
+      fi
+      if [ "${VM_MODE:-test}" = serve ] && [ "$rc" -eq 0 ]; then
+        while [ ! -e /mnt/shirudo-out/host-done ]; do sleep 1; done
       fi
       poweroff
       sleep 10
@@ -1545,35 +1785,17 @@ EOF
 make_seed
 
 cd "$RUN_DIR" || die "cannot enter $RUN_DIR"
-chmod 0700 "$RUN_DIR/tpm"
-if user_systemd_available; then
-	SWTPM_UNIT_FILE="${RUN_DIR}/swtpm.unit"
-	SWTPM_UNIT="shirudo-vm-${VM_NAME}-swtpm.service"
-	start_user_unit "$SWTPM_UNIT" "$RUN_DIR/swtpm.log" \
-		swtpm socket --tpmstate "dir=${RUN_DIR}/tpm,mode=0700" \
-			--ctrl "type=unixio,path=tpm/swtpm-sock" \
-			--tpm2 --log "file=${RUN_DIR}/swtpm.log,level=20"
-	printf '%s\n' "$SWTPM_UNIT" >"$SWTPM_UNIT_FILE"
-	SWTPM_PID="$(user_unit_pid "$SWTPM_UNIT")" || die "could not determine swtpm systemd PID"
-	printf '%s\n' "$SWTPM_PID" >"$SWTPM_PIDFILE"
-else
-	swtpm socket --tpmstate "dir=${RUN_DIR}/tpm,mode=0700" \
-		--ctrl "type=unixio,path=tpm/swtpm-sock" \
-		--tpm2 --log "file=${RUN_DIR}/swtpm.log,level=20" \
-		--pid "file=${SWTPM_PIDFILE}" --daemon
-fi
-for _ in {1..50}; do
-	[[ -S "$SWTPM_SOCKET" ]] && break
-	sleep 0.1
-done
-[[ -S "$SWTPM_SOCKET" ]] || die "swtpm control socket did not appear"
+[[ "$VM_ROLE" != target ]] || start_swtpm
 
 log "booting $(basename "$KERNEL") with ${CPUS} CPUs and ${MEMORY} memory"
 
-# The bpf keyring is left open for init to enrol the certificate and
-# seal it, as a production initrd does.
-KERNEL_LSM_ARGS="lsm=bpf bpf.keyring_unsealed=1"
-KERNEL_LSM_ARGS+=" dm_verity.keyring_unsealed=1 initcall_debug ignore_loglevel"
+KERNEL_LSM_ARGS=""
+if [[ "$VM_ROLE" == target ]]; then
+	# The bpf keyring is left open for init to enrol the certificate and
+	# seal it, as a production initrd does.
+	KERNEL_LSM_ARGS="lsm=bpf bpf.keyring_unsealed=1"
+	KERNEL_LSM_ARGS+=" dm_verity.keyring_unsealed=1 initcall_debug ignore_loglevel"
+fi
 KERNEL_NET_DEVICE="virtio-net-pci,netdev=net0"
 
 # The virt machine has no if=virtio mapping, so its disks are explicit PCI
@@ -1612,9 +1834,6 @@ QEMU_ARGS=(
 	-virtfs "local,id=shirudo-src,path=${REPO_ROOT},mount_tag=shirudo-src,security_model=none,readonly=on" \
 	-virtfs "local,id=shirudo-bundle,path=${TEST_VM_HOST_BUNDLE},mount_tag=shirudo-bundle,security_model=none,readonly=on" \
 	-virtfs "local,id=shirudo-out,path=${RUN_DIR}/result,mount_tag=shirudo-out,security_model=none" \
-	-chardev "socket,id=chrtpm,path=tpm/swtpm-sock" \
-	-tpmdev emulator,id=tpm0,chardev=chrtpm \
-	-device "$TPM_DEVICE" \
 	-chardev "socket,id=console,path=console.sock,server=on,wait=off,logfile=${RUN_DIR}/console.log,logappend=on" \
 	-serial chardev:console \
 	-display none \
@@ -1625,6 +1844,18 @@ QEMU_ARGS=(
 if [[ -n "$KERNEL_ARTIFACT_DIR" ]]; then
 	QEMU_ARGS+=(
 		-virtfs "local,id=shirudo-kernel,path=${KERNEL_ARTIFACT_DIR},mount_tag=shirudo-kernel,security_model=none,readonly=on"
+	)
+fi
+
+if [[ "$VM_ROLE" == target ]]; then
+	QEMU_ARGS+=(
+		-chardev "socket,id=chrtpm,path=tpm/swtpm-sock"
+		-tpmdev emulator,id=tpm0,chardev=chrtpm
+		-device "$TPM_DEVICE"
+	)
+else
+	QEMU_ARGS+=(
+		-virtfs "local,id=shirudo-operator-keys,path=${OPERATOR_KEYS},mount_tag=shirudo-operator-keys,security_model=none,readonly=on"
 	)
 fi
 
@@ -1736,7 +1967,21 @@ capture_host_memory_report()
 	HOST_MEMORY_REPORT="$report"
 }
 
-if [[ "$VM_MODE" == interactive ]]; then
+if [[ "$VM_MODE" == node ]]; then
+	# Bounded like a test run, so that a node its caller lost stops.
+	nohup timeout --signal=TERM --kill-after=30 "$VM_TIMEOUT" \
+		"$QEMU_BIN" "${QEMU_ARGS[@]}" \
+		>"$RUN_DIR/qemu.log" 2>&1 </dev/null &
+	QEMU_PID=$!
+	printf '%s\n' "$QEMU_PID" >"$RUN_DIR/qemu.pid"
+	wait_for_ssh_listener
+	wait_for_guest_status
+	capture_host_memory_report
+	LEAVE_RUNNING=1
+	FINAL_STATUS=0
+	log "node ready: name=$VM_NAME state=$RUN_DIR ssh_port=$SSH_PORT"
+	print_memory_summary
+elif [[ "$VM_MODE" == interactive ]]; then
 	if user_systemd_available; then
 		QEMU_UNIT_FILE="$RUN_DIR/qemu.unit"
 		QEMU_UNIT="shirudo-vm-$VM_NAME-qemu.service"
@@ -1766,26 +2011,22 @@ else
 		"$QEMU_BIN" "${QEMU_ARGS[@]}" \
 		>"$RUN_DIR/qemu.log" 2>&1 &
 	QEMU_PID=$!
+	# run.sh --ssh reaches a serve-mode VM by its PID file while it serves.
+	[[ "$VM_MODE" != serve ]] || printf '%s\n' "$QEMU_PID" >"$RUN_DIR/qemu.pid"
 	wait_for_ssh_listener
 	while :; do
-		if [[ "$VM_VERBOSE" == 1 ]]; then
-			stream_verbose_console
-		else
-			print_quiet_progress
-		fi
+		show_progress
 		[[ -s "$RUN_DIR/result/status" ]] && break
 		kill -0 "$QEMU_PID" 2>/dev/null || break
 		sleep 0.2
 	done
 	capture_host_memory_report
+	[[ "$VM_MODE" != serve ]] || serve_target_tests
 	wait "$QEMU_PID"
 	QEMU_STATUS=$?
+	rm -f -- "$RUN_DIR/qemu.pid"
 	for _ in {1..5}; do
-		if [[ "$VM_VERBOSE" == 1 ]]; then
-			stream_verbose_console
-		else
-			print_quiet_progress
-		fi
+		show_progress
 		sleep 0.1
 	done
 	set -e
@@ -1797,6 +2038,13 @@ else
 		die "QEMU exited with status $QEMU_STATUS"
 	QEMU_PID=""
 	read_guest_status
+	if [[ "$SERVE_STATUS" -ne 0 ]]; then
+		[[ -z "$SERVE_COMMAND" ]] ||
+			die "$(basename "$SERVE_COMMAND") failed with status $SERVE_STATUS"
+		[[ "$SERVE_STATUS" -ne 255 ]] ||
+			die "the SSH session that ran the target tests failed"
+		die "target tests failed over SSH with status $SERVE_STATUS"
+	fi
 
 	FINAL_STATUS=0
 fi

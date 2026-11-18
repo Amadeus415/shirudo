@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include <shirudo/misc.h>
+#include <shirudo/string.h>
 
 #include "upatch.h"
 
@@ -97,9 +98,14 @@ static int expect_serializer(const struct upatch *u)
 	return arena && error ? 0 : fail("serializer map mismatch");
 }
 
-static int expect_uprobe_multi(const struct upatch *u,
-			       const char *path, const char *pattern,
-			       __u32 expected_offsets)
+/*
+ * The one program attaches as kind to target in path at expected_offsets
+ * file offsets, the first stored in *first; entry_offset is the offset
+ * the entry records inside the function.
+ */
+static int expect_uprobe(const struct upatch *u, __u32 kind,
+			 const char *path, const char *pattern,
+			 __u64 entry_offset, __u32 expected_offsets, __u64 *first)
 {
 	struct upatch_uprobe_targets targets;
 	struct upatch_uprobe_target record;
@@ -122,8 +128,8 @@ static int expect_uprobe_multi(const struct upatch *u,
 	    le32_to_cpu(md.nr_progs) != 1)
 		return fail("unexpected metadata header");
 	if (le32_to_cpu(prog.role) != UPATCH_PROG_ROLE_ATTACH ||
-	    le32_to_cpu(prog.kind) != UPATCH_ATTACH_UPROBE_MULTI ||
-	    le64_to_cpu(prog.offset) != 0 ||
+	    le32_to_cpu(prog.kind) != kind ||
+	    le64_to_cpu(prog.offset) != entry_offset ||
 	    !memchr(prog.target, '\0', sizeof(prog.target)) ||
 	    strcmp(prog.target, pattern) != 0)
 		return fail("uprobe program entry mismatch");
@@ -155,6 +161,8 @@ static int expect_uprobe_multi(const struct upatch *u,
 		cursor += sizeof(__le64);
 		if (i && offset <= previous)
 			return fail("uprobe offsets are not sorted and unique");
+		if (!i)
+			*first = offset;
 		previous = offset;
 	}
 	return cursor == end ? 0 : fail("trailing uprobe metadata");
@@ -206,7 +214,7 @@ int main(int argc, char **argv)
 	const char *mode = "serializer";
 	int ret;
 
-	if (argc != 2 && argc != 3 && argc != 6)
+	if (argc != 2 && argc != 3 && argc != 4 && argc != 6)
 		return fail("usage: test-upatch-prog-metadata <file.upatch> [mode [path pattern count]]");
 	if (argc >= 3)
 		mode = argv[2];
@@ -235,15 +243,46 @@ int main(int argc, char **argv)
 		ret = expect_attach(&u,
 				    UPATCH_ATTACH_NETFILTER_IPV6_PRE_ROUTING,
 				    NULL, 0);
-	} else if (strcmp(mode, "uprobe-multi") == 0 && argc == 6) {
-		char *end = NULL;
-		__u64 count = strtoul(argv[5], &end, 10);
+	} else if (strcmp(mode, "xdp") == 0 && argc == 4) {
+		struct prog_spec *specs = NULL;
+		const void *attach;
+		__u32 len;
+		__u64 mask;
 
-		if (!end || *end || count > UINT32_MAX)
+		attach = upatch_signed_attach(&u, &len);
+		ret = parse_u64(argv[3], strlen(argv[3]), UPATCH_XDP_ALL, &mask);
+		if (!ret)
+			ret = prog_specs_parse(attach, len, u.hdr.nr_maps,
+					       u.hdr.nr_progs, &specs);
+		if (!ret) {
+			if (u.hdr.nr_progs != 1 || specs[0].kind != UPATCH_ATTACH_XDP ||
+			    specs[0].device_classes != mask)
+				ret = fail("XDP metadata mismatch");
+			prog_specs_free(specs, u.hdr.nr_progs);
+		}
+	} else if ((strcmp(mode, "uprobe-multi") == 0 ||
+		    strcmp(mode, "uretprobe-multi") == 0) && argc == 6) {
+		__u32 kind = strcmp(mode, "uretprobe-multi") == 0 ?
+			     UPATCH_ATTACH_URETPROBE_MULTI : UPATCH_ATTACH_UPROBE_MULTI;
+		__u64 count, first;
+
+		if (parse_u64(argv[5], strlen(argv[5]), UINT32_MAX, &count))
 			ret = fail("invalid expected uprobe offset count");
 		else
-			ret = expect_uprobe_multi(&u, argv[3], argv[4],
-						  (__u32)count);
+			ret = expect_uprobe(&u, kind, argv[3], argv[4], 0, (__u32)count, &first);
+	} else if ((strcmp(mode, "uprobe") == 0 || strcmp(mode, "uretprobe") == 0) &&
+		   argc == 6) {
+		__u32 kind = strcmp(mode, "uretprobe") == 0 ?
+			     UPATCH_ATTACH_URETPROBE : UPATCH_ATTACH_UPROBE;
+		__u64 entry_offset, first;
+
+		/* Prints the file offset, which the caller cannot know beforehand. */
+		if (parse_u64(argv[5], strlen(argv[5]), UINT64_MAX, &entry_offset))
+			ret = fail("invalid expected uprobe entry offset");
+		else
+			ret = expect_uprobe(&u, kind, argv[3], argv[4], entry_offset, 1, &first);
+		if (!ret)
+			printf("%llu\n", first);
 	} else if (strcmp(mode, "policy-labels") == 0 && argc == 3) {
 		ret = expect_policy_labels(&u);
 	} else {

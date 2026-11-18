@@ -87,8 +87,8 @@ shirudo and shirudo-build
        ``ExecStart=`` and ``EnvironmentFile=``, so the variable has no
        effect with it.
    * - ``TMPDIR``
-     - ``upatch map`` (snapshot file), ``shirudo-build bpm build``
-       (staging directory), the generator scripts (``mktemp -d``)
+     - ``shirudo-build bpm build`` (staging directory), the generator
+       scripts (``mktemp -d``)
      - Directory for temporary files, ``/tmp`` when unset or empty.
    * - ``HOME``
      - Registry credential lookup; ``shirudo-build bpm build`` expanding
@@ -99,8 +99,9 @@ shirudo and shirudo-build
 Registry access
 ---------------
 
-Read by the target's ``bpm`` commands and by ``shirudo-build bpm push``
-and ``shirudo-build bpm tree append``. Honored on a target.
+Read by the target's ``bpm`` commands and by ``shirudo-build bpm push``,
+``shirudo-build bpm tree append`` and ``shirudo-build bpm tree show``.
+Honored on a target.
 
 .. list-table::
    :header-rows: 1

@@ -100,10 +100,10 @@ Exit status
      - A check failed (``verdict: fail``), or the challenge could not be
        written.
    * - 2
-     - ``--evidence`` or ``--output`` missing, an unknown option, an
-       option given last without its value, an invalid value, an
-       unreadable evidence file, or evidence that carries no endorsement
-       key.
+     - A usage error: ``--evidence`` or ``--output`` missing, an unknown
+       option, an option given twice, a value missing, empty or invalid,
+       or an argument. An unreadable evidence file, or evidence that
+       carries no endorsement key.
 
 Examples
 --------

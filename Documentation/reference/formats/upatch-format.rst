@@ -361,15 +361,21 @@ Each program entry is 160 bytes:
        roles.
    * - +8
      - 8
-     - ``offset``
-     - Byte offset into the function for ``kprobe``. 0 for every other
-       kind and role.
+     - ``offset`` / ``xdp``
+     - Byte offset into the function for ``kprobe`` and for ``uprobe`` at a
+       function; the file offset the target uses is in the ``UPUT`` record.
+       For XDP, a
+       little-endian ``u32 device_classes`` followed by ``u32 reserved``
+       (0). The mask is nonzero and uses only bits 1, 2, 4, 8 and 16.
+       0 for every other kind and role.
    * - +16
      - 128
      - ``target``
      - NUL-terminated. The kernel symbol for ``kprobe`` and
-       ``kretprobe``, the function glob for ``uprobe.multi`` (no ``,`` or
-       ``|``). Empty for every other kind and role.
+       ``kretprobe``, the function or the ``0x`` file offset as written for
+       ``uprobe`` and ``uretprobe``, the function glob for ``uprobe.multi``
+       and ``uretprobe.multi`` (no ``,`` or ``|``). Empty for every other
+       kind and role.
    * - +144
      - 16
      - ``map``
@@ -423,14 +429,38 @@ Each program entry is 160 bytes:
      - netfilter IPv6 pre-routing
      - ``netfilter``
    * - 7
-     - uprobe.multi entry probe
-     - ``uprobe.multi/<absolute-path>:<function-glob>``
+     - uprobe.multi
+     - ``uprobe.multi/<absolute-path>:<function-glob>``,
+       ``uprobe.multi.s/<absolute-path>:<function-glob>``
+   * - 8
+     - native XDP device classes
+     - ``xdp/<decimal-mask>``
+   * - 9
+     - uretprobe.multi
+     - ``uretprobe.multi/<absolute-path>:<function-glob>``,
+       ``uretprobe.multi.s/<absolute-path>:<function-glob>``
+   * - 10
+     - uprobe
+     - ``uprobe/<absolute-path>:<function>[+<offset>]``,
+       ``uprobe/<absolute-path>:0x<file-offset>``, and their ``uprobe.s``
+       forms
+   * - 11
+     - uretprobe
+     - ``uretprobe/<absolute-path>:<function>``,
+       ``uretprobe/<absolute-path>:0x<file-offset>``, and their
+       ``uretprobe.s`` forms
 
 :doc:`/upatches/write/attach-kinds` describes how the target attaches each kind.
+XDP retains the 160-byte entry and UPGM version 1; readers that do not
+know kind 8 refuse it. Its ``target`` and ``map`` are empty. Device-class
+bits mean network-facing (1), virtual (2), VM (8) and unknown (16); 27
+selects all classes. Bit 4 is not a class, and a reader refuses a mask
+that sets it or any bit above 16, and a table whose XDP entries share a
+class.
 
-When any entry has kind 7, one ``UPUT`` block follows the program entries
-and ends the section. Without a kind 7 entry the section ends after the
-program entries.
+When any entry has kind 7, 9, 10 or 11, one ``UPUT`` block follows the
+program entries and ends the section. Without such an entry the section
+ends after the program entries.
 
 .. list-table::
    :header-rows: 1
@@ -451,7 +481,8 @@ program entries.
    * - +8
      - 4
      - ``nr_targets``
-     - Number of target records, equal to the number of kind 7 entries.
+     - Number of target records, equal to the number of kind 7, 9, 10 and
+       11 entries.
    * - +12
      - 4
      - ``reserved``
@@ -469,8 +500,8 @@ variable parts:
      - Value
    * - +0
      - ``prog_idx``
-     - Index of a kind 7 program entry. Each such entry has exactly one
-       record.
+     - Index of a kind 7, 9, 10 or 11 program entry. Each such entry has
+       exactly one record.
    * - +4
      - ``path_len``
      - Length of the path, 1 to 4095.
@@ -479,7 +510,7 @@ variable parts:
      - Length of the GNU build ID, 1 to 64.
    * - +12
      - ``nr_offsets``
-     - Number of offsets, 1 to 1048576.
+     - Number of offsets, 1 to 1048576; exactly 1 for kinds 10 and 11.
    * - +16
      - path
      - ``path_len`` bytes, an absolute path without a NUL.
@@ -727,7 +758,10 @@ CBMC proves these checks of the reader for every header, of a file of
 any size, and for the signed sections, decoders, policy labels and
 program table within the bounds
 :doc:`/contribute/testing/proof-coverage` lists: what the reader accepts
-lies inside the file, and what it refuses leaves nothing behind.
+lies inside the file, and what it refuses leaves nothing behind. Within
+the bounds listed there it also proves that the reader takes what the
+writer lays out, and reads back the header, the signed sections, the
+decoders and the program table as they were written.
 
 Target admission
 ----------------
@@ -746,8 +780,10 @@ of checks 1 to 6 is reported as ``parser_rejected``, see
 #. A ``UPGM`` section is present and parses: version 1 (any other version
    is ``EOPNOTSUPP``), ``nr_maps`` and ``nr_progs`` equal to the header's,
    every entry valid for its role and kind, and a ``UPUT`` block that is
-   present exactly when a kind 7 entry exists and ends the section.
-#. Each ``uprobe.multi`` target file is a regular file whose GNU build ID
+   present exactly when a kind 7, 9, 10 or 11 entry exists and ends the
+   section.
+#. Each ``uprobe``, ``uretprobe``, ``uprobe.multi`` and
+   ``uretprobe.multi`` target file is a regular file whose GNU build ID
    equals the recorded one.
 #. The kernel verifies the signature in ``BPF_PROG_LOAD``.
 
@@ -818,15 +854,17 @@ Limits
    * - Name of an upatch
      - 255 characters of ``[A-Za-z0-9._-]``, each ``.`` counting as two,
        not starting with ``.``
-   * - ``kprobe``, ``kretprobe`` or ``uprobe.multi`` target
+   * - ``kprobe``, ``kretprobe``, ``uprobe``, ``uretprobe``,
+       ``uprobe.multi`` or ``uretprobe.multi`` target
      - 127 bytes
    * - Serializer map name
      - 15 bytes
-   * - ``uprobe.multi`` path
+   * - ``uprobe``, ``uretprobe``, ``uprobe.multi`` or ``uretprobe.multi``
+       path
      - 4095 bytes
    * - GNU build ID
      - 1 to 64 bytes
-   * - ``uprobe.multi`` offsets per program
+   * - ``uprobe.multi`` or ``uretprobe.multi`` offsets per program
      - 1 to 1048576
    * - Decoder source
      - 16 MiB per file

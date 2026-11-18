@@ -29,7 +29,8 @@ test-vm-arch = $(shell TEST_VM_ARCH='$(TEST_VM_ARCH)'; \
 .DEFAULT_GOAL := all
 .PHONY: all help clean unit ci-checks functional end2end build-operator build-unit \
 	test-helpers \
-	fuzz bundle test-vm-bundle kernel bpf-next vm vm-console vm-ssh vm-stop vm-clean
+	fuzz afl bundle test-vm-bundle kernel bpf-next vm vm-console vm-ssh vm-stop vm-clean \
+	vm-operator-end2end
 
 KERNEL_PATCHES ?= $(if $(wildcard $(ROOT)/kernel/*.patch),$(ROOT)/kernel/,)
 override KERNEL_PATCHES := $(if $(strip $(KERNEL_PATCHES)),$(call root-path,$(KERNEL_PATCHES)),)
@@ -141,19 +142,33 @@ TEST_VM_BUNDLE_SOURCES := $(sort $(wildcard \
 	$(ROOT)/testing/fixtures/*.h \
 	$(ROOT)/testing/fixtures/policy-labels/* \
 	$(ROOT)/testing/fixtures/policy-exec-graph/* \
+	$(ROOT)/testing/fixtures/segments/*/* \
 	$(ROOT)/testing/fixtures/decoders/* \
 	$(ROOT)/upatches/kernel-obs/*.c $(ROOT)/upatches/kernel-obs/*.h $(ROOT)/upatches/kernel-obs/*.list \
 		$(ROOT)/upatches/kernel-obs/*.py $(ROOT)/upatches/kernel-obs/Beefile \
 	$(ROOT)/upatches/kernel-obs/decoders/*))
+# The host's util/version_id.c is no input: every build of the host's
+# writes it, and the bundle's build writes its own.
+TEST_VM_BUNDLE_SOURCES := $(filter-out $(ROOT)/util/version_id.c,$(TEST_VM_BUNDLE_SOURCES))
 # The kernel build replaces versioned package files; depend on its stable stamp.
 TEST_VM_BUNDLE_ARTIFACTS := $(VM_KERNEL_STAMP)
+# The bundle builds in the build container unless BUILD_CONTAINER=0, so it
+# depends on the image's inputs rather than on the host's configuration.
+BUILD_CONTAINER ?= 1
+TEST_VM_BUILD_ENV := $(if $(filter 0,$(BUILD_CONTAINER)),$(ROOT)/config.mk, \
+	$(ROOT)/testing/container/Containerfile $(ROOT)/testing/container/packages \
+	$(ROOT)/testing/container/run.sh $(ROOT)/.github/scripts/install-clang.sh \
+	$(ROOT)/.github/scripts/install-static-libcrypto-deps.sh \
+	$(ROOT)/testing/vm/list-source.sh)
 TEST_VM_BUNDLE_INPUTS := $(sort \
-	$(ROOT)/Makefile $(ROOT)/Makefile.config $(ROOT)/Makefile.shirudo $(ROOT)/Makefile.version $(ROOT)/config.mk \
+	$(ROOT)/Makefile $(ROOT)/Makefile.config $(ROOT)/Makefile.shirudo $(ROOT)/Makefile.version \
+	$(TEST_VM_BUILD_ENV) \
 	$(ROOT)/Makefile.target-deps \
 	$(ROOT)/testing/Makefile $(ROOT)/packaging/Makefile \
 	$(ROOT)/vendor/libbpf/Makefile $(ROOT)/vendor/libbpf/COMMIT \
 	$(ROOT)/Documentation/Makefile $(ROOT)/upatches/kernel-obs/Makefile \
-	$(ROOT)/testing/vm/build-bundle.sh $(ROOT)/testing/vm/guest.sh \
+	$(ROOT)/testing/vm/build-bundle.sh $(ROOT)/testing/vm/build-bundle-payload.sh \
+	$(ROOT)/testing/vm/guest.sh \
 	$(ROOT)/testing/vm/arch.sh \
 	$(ROOT)/testing/vm/prepare-runtime.sh $(ROOT)/testing/vm/runtime-packages \
 	$(TEST_VM_BUNDLE_SOURCES) $(TEST_VM_BUNDLE_ARTIFACTS) \
@@ -167,6 +182,7 @@ test-vm-bundle: $(VM_KERNEL_DEP) $(TEST_VM_BUNDLE_STAMP)
 $(TEST_VM_BUNDLE_STAMP): $(TEST_VM_BUNDLE_INPUTS)
 	$(Q)mkdir -p $(dir $(BUILD_LOCK))
 	$(Q)TEST_VM_MODE="$(TEST_VM_MODE)" TEST_VM_INITRD="$(TEST_VM_INITRD)" \
+		BUILD_CONTAINER="$(BUILD_CONTAINER)" \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		TEST_VM_WORK_DIR="$(abspath $(TEST_VM_WORK_DIR))" \
 		TEST_VM_HOST_PRIVATE_DIR="$(abspath $(TEST_VM_HOST_PRIVATE_DIR))" \
@@ -210,6 +226,8 @@ $(VM_KERNEL_STAMP):
 endif
 endif
 
+LOCAL_STACK ?= 1
+
 vm: $(VM_KERNEL_DEP) test-vm-bundle
 	$(Q)VM_MODE=interactive VM_NAME="$(VM_NAME)" VM_TENANT="$(VM_TENANT)" \
 		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
@@ -232,7 +250,7 @@ vm: $(VM_KERNEL_DEP) test-vm-bundle
 		TEST_VM_BPM_OCI_INDEX_CERT="$(TEST_VM_BPM_OCI_INDEX_CERT)" \
 		TEST_VM_MODE="$(TEST_VM_MODE)" TEST_VM_INITRD="$(TEST_VM_INITRD)" \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
-		$(ROOT)/testing/vm/run.sh
+		$(if $(filter 0,$(LOCAL_STACK)),,$(ROOT)/testing/vm/stack.sh vm) $(ROOT)/testing/vm/run.sh
 vm-console:
 	$(Q)VM_NAME="$(VM_NAME)" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" $(ROOT)/testing/vm/run.sh --console
@@ -242,7 +260,8 @@ vm-ssh:
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" $(ROOT)/testing/vm/run.sh --ssh
 
 define run-target-vm
-VM_MODE=test TEST_VM_SUITE="$(1)" VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(2)" VM_TENANT="$(VM_TENANT)" \
+VM_MODE=$(or $(4),$(if $(filter $(1),$(VM_SERVE_SUITES)),serve,test)) \
+		TEST_VM_SUITE="$(1)" VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(2)" VM_TENANT="$(VM_TENANT)" \
 		TEST_VM_INITRD="$(3)" \
 		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
 		TEST_VM_KERNEL_ARTIFACT_DIR="$(abspath $(VM_KERNEL_ARTIFACT_DIR))" \
@@ -275,9 +294,12 @@ family-list = $(shell cd $(ROOT)/testing/functional && \
 	awk -F/ '{ print substr($$2, 2, 1), $$1 }' | sort -u | cut -d' ' -f2)
 FAMILIES := $(call family-list,[0-9])
 VM_SUITES := $(call family-list,1) end2end
+# The host runs the end-to-end VM's target tests over SSH, where it can act
+# between them; the families' VMs run theirs themselves.
+VM_SERVE_SUITES := end2end
 vm-tests = $(if $(filter 0,$(VM)),:,$(MAKE) $(addprefix vm-test-,$(1)))
 .PHONY: $(addprefix unit/,$(UNIT_SUITES)) $(addprefix functional/,$(FAMILIES)) \
-	$(addprefix vm-test-,register $(VM_SUITES))
+	$(addprefix vm-test-,register $(VM_SUITES)) vm-node-end2end
 
 all:
 	+$(Q)$(MAKE) unit
@@ -303,18 +325,51 @@ $(addprefix functional/,$(FAMILIES)): functional/%: build-operator
 	$(Q)$(ROOT)/testing/run-tests.sh functional/$*
 	+$(Q)$(call vm-tests,$(filter $*,$(VM_SUITES)))
 
-# The end-to-end VM runs between the operator's publication to a registry
-# and the host's checks of what the target attests and exports.
+# The end-to-end test boots the operator VM, which builds the operator
+# package and alone gets the signing key on its own disk; while it serves,
+# host.sh has it publish kernel-obs, runs node A and has it verify what
+# node A attests. The host's own build plays the operator for the keepalive
+# backend and for the tests host.sh runs against the other nodes. The goals
+# host.sh boots the VMs with build nothing: all VMs boot this bundle, and a
+# rebuild between them, for an input changed meanwhile, would replace the
+# key the operator signs with and the targets trust.
 end2end: build-operator
 	$(Q)$(ROOT)/testing/run-tests.sh end2end
 	+$(Q)$(if $(filter 0,$(VM)),:,$(MAKE) test-vm-bundle && \
 		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
 		TEST_VM_HOST_PRIVATE_DIR="$(abspath $(TEST_VM_HOST_PRIVATE_DIR))" \
-		$(ROOT)/testing/end2end/host.sh $(MAKE) -C $(ROOT)/testing vm-test-end2end)
+		MAKE="$(MAKE)" $(ROOT)/testing/end2end/host.sh)
+
+vm-operator-end2end:
+	$(Q)VM_MODE=serve TEST_VM_ROLE=operator TEST_VM_INITRD=0 \
+		VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(VM_NAME)" \
+		TEST_VM_SERVE_COMMAND="$(TEST_VM_SERVE_COMMAND)" \
+		TEST_VM_PRIVATE_DIR="$(TEST_VM_PRIVATE_DIR)" \
+		TEST_VM_OPERATOR_KEYS="$(abspath $(TEST_VM_HOST_PRIVATE_DIR))/operator-keys/keys" \
+		TEST_VM_KERNEL="$(abspath $(VM_KERNEL_IMAGE))" \
+		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" \
+		TEST_VM_RUNTIME_CACHE_DIR="$(TEST_VM_RUNTIME_CACHE_DIR)" \
+		TEST_VM_MODE="$(TEST_VM_MODE)" \
+		TEST_VM_HOST_BUNDLE="$(abspath $(TEST_VM_BUNDLE_DIR))" \
+		$(ROOT)/testing/vm/run.sh
+
+vm-test-end2end:
+	$(Q)$(call run-target-vm,end2end,$(if $(VM_NAME),$(VM_NAME)-end2end),1)
+
+# A node of the end-to-end run that end2end/host.sh boots and stops,
+# prepared like the suite's VM, but it runs no tests and stays up until it
+# is stopped. END2END_NODE=b is node B, with the core role, beside the
+# suite's VM; edge is a fresh node with the edge role, after it.
+END2END_NODE ?= b
+vm-node-end2end:
+	$(Q)$(if $(filter-out b edge,$(END2END_NODE)),$(error END2END_NODE must be b or edge))
+	$(Q)TEST_VM_NODE_ROLE=$(if $(filter edge,$(END2END_NODE)),edge,core) \
+		$(call run-target-vm,end2end,$(if $(VM_NAME),$(VM_NAME)-end2end-$(END2END_NODE)),1,node)
 
 vm-test-tpm: vm-test-register
 
-$(addprefix vm-test-,register $(VM_SUITES)): vm-test-%: $(VM_KERNEL_DEP) test-vm-bundle
+$(addprefix vm-test-,register $(filter-out end2end,$(VM_SUITES))): \
+		vm-test-%: $(VM_KERNEL_DEP) test-vm-bundle
 	$(Q)$(call run-target-vm,$*,$(if $(VM_NAME),$(VM_NAME)-$*),$(if $(filter register,$*),0,1))
 
 vm-stop:
@@ -331,6 +386,7 @@ BUILD_LOCK := $(ROOT)/build/.testing-build.lock
 
 build-operator: build-unit
 	+$(Q)flock $(BUILD_LOCK) $(MAKE) -C $(ROOT) shirudo-build
+	+$(Q)flock $(BUILD_LOCK) $(MAKE) -C $(ROOT) quote-check
 	+$(Q)flock $(BUILD_LOCK) $(MAKE) -C $(ROOT) -f Makefile.shirudo test-helpers
 
 build-unit:
@@ -344,13 +400,31 @@ test-helpers:
 
 # The parsers of input from outside the host under libFuzzer, each target
 # for FUZZ_SECONDS on its seed corpus and, with FUZZ_CORPUS=<dir>, on what
-# earlier runs kept there; needs clang with its fuzzer runtime.
+# earlier runs kept there; FUZZERS names the targets to run, all of them
+# without it. Needs clang with its fuzzer runtime.
 FUZZ_SECONDS ?= 60
+FUZZERS ?=
 
 fuzz:
 	+$(Q)$(MAKE) -C $(ROOT) config
 	+$(Q)$(MAKE) -C $(ROOT) -f Makefile.shirudo fuzz-targets
-	$(Q)sh $(ROOT)/testing/fuzz/run.sh $(FUZZ_SECONDS)
+	$(Q)sh $(ROOT)/testing/fuzz/run.sh $(FUZZ_SECONDS) $(FUZZERS)
+
+# The same targets under AFL++, AFL_SECONDS each, FUZZERS and FUZZ_CORPUS
+# as above. Each is built twice with AFL_CC, the second time logging its
+# comparisons, which afl-fuzz -c runs beside the first to find the magic
+# values and checksums the parsers compare input with. Needs AFL++ built
+# for the clang the targets take, as .github/scripts/afl-deps.sh builds it.
+AFL_CC ?= afl-clang-fast
+AFL_SECONDS ?= 600
+
+afl:
+	+$(Q)$(MAKE) -C $(ROOT) config
+	+$(Q)$(MAKE) -C $(ROOT) -f Makefile.shirudo fuzz-targets \
+		FUZZ_CC=$(AFL_CC) FUZZ_OUT=build/fuzz-afl
+	+$(Q)AFL_LLVM_CMPLOG=1 $(MAKE) -C $(ROOT) -f Makefile.shirudo \
+		fuzz-targets FUZZ_CC=$(AFL_CC) FUZZ_OUT=build/fuzz-afl-cmplog
+	$(Q)sh $(ROOT)/testing/fuzz/afl.sh $(AFL_SECONDS) $(FUZZERS)
 
 bundle: test-vm-bundle
 
@@ -365,11 +439,13 @@ help:
 	  '  TEST_FILTER=<regex> selects test filenames (empty runs everything).' \
 	  '  VM=0 leaves out the tests that boot a VM, which need root;' \
 	  '  make -j boots several at once.' \
-	  '  make -C testing fuzz [FUZZ_SECONDS=60] [FUZZ_CORPUS=<dir>]' \
+	  '  make -C testing fuzz [FUZZ_SECONDS=60] [FUZZ_CORPUS=<dir>] [FUZZERS=<target>...]' \
+	  '  make -C testing afl [AFL_SECONDS=600] [FUZZ_CORPUS=<dir>] [FUZZERS=<target>...]' \
 	  '  make -C testing vm, vm-console, vm-ssh, vm-stop, or vm-clean' \
 	  '  make -C testing vm KERNEL=7.4' \
 	  '  make -C testing kernel KERNEL_TAG=v7.4' \
 	  '  make -C testing bpf-next, bundle or test-helpers' \
+	  '  make -C testing stack-up, oci, telemetry or stack-down' \
 	  '  make -C testing clean'
 
 clean:
@@ -381,3 +457,11 @@ clean:
 		rm -rf "$$bundle_dir" "$$bundle_dir.operator" \
 			"$(abspath $(TEST_VM_HOST_PRIVATE_DIR))/operator-keys" \
 			$(ROOT)/build/test-vm/end2end
+
+.PHONY: oci telemetry stack-up stack-down
+stack-up: oci telemetry
+
+oci telemetry:
+	$(Q)TEST_VM_HOST_PRIVATE_DIR="$(TEST_VM_HOST_PRIVATE_DIR)" $(ROOT)/testing/vm/stack.sh $@
+stack-down:
+	$(Q)TEST_VM_HOST_PRIVATE_DIR="$(TEST_VM_HOST_PRIVATE_DIR)" $(ROOT)/testing/vm/stack.sh down

@@ -53,13 +53,11 @@ Options
      - off
      - Print only the version id, on one line.
 
-Only the first argument is read. Any argument other than ``--version-id``
-and ``--help`` is ignored.
-
 Exit status
 -----------
 
-0 in every case.
+0, or 2 for a usage error: an unknown option, ``--version-id`` given
+twice, or an argument.
 
 Examples
 --------

@@ -21,6 +21,20 @@
 #define TREE_MAX_SELECTOR_VALUES 16
 #define TREE_STRING_MAX 256
 
+/*
+ * The most operations a walk back through sealed segments may cover from
+ * seq 0, as a node that joins a tree does, and from the cursor of a node
+ * that has processed one: one past it is -E2BIG. A running node walks
+ * holding the bpm lock, with its keepalive stopped, so it gets the lower
+ * one. A test build sets both low.
+ */
+#ifndef TREE_MAX_JOIN_OPS
+#define TREE_MAX_JOIN_OPS 1048576
+#endif
+#ifndef TREE_MAX_WALK_OPS
+#define TREE_MAX_WALK_OPS 65536
+#endif
+
 struct json_emit;
 
 struct tree_kv {
@@ -85,6 +99,9 @@ struct tree_publication {
 	__s64 generation;
 	char parent_manifest_digest[128];
 	__s64 base_seq;
+	/* Past the first segment: its sealed predecessor, history at base. */
+	char segment_manifest_digest[128];
+	char history_root[65];
 	struct tree_operation *operations;
 	int operations_capacity;
 	int n_operations;
@@ -100,6 +117,8 @@ struct tree_state {
 	char projection_root[65];
 	char projection_root_tpm[65];
 	char manifest_digest[128];
+	__s64 head_seq;
+	__s64 segment_base_seq;
 };
 
 int tree_parse(const char *body, size_t len,
@@ -114,10 +133,20 @@ void tree_publication_free(struct tree_publication *pub);
  * ("sha256:" + 64 hex) over an operation without its digest field, and
  * the publication document. The emitted document is xmalloc'd; release
  * it with xfree(out, out_len).
+ *
+ * extra, NULL for none, adds keys to the operation at index of
+ * pub->operations after its artifact, outside the operation digest: the
+ * publisher's fixes, which no node reads.
  */
+struct tree_emit_extra {
+	int	(*operation)(struct json_emit *e, int index, void *ctx);
+	void	*ctx;
+};
+
 int tree_operation_digest(const struct tree_operation *op,
 			  char out[72]);
 int tree_emit_publication(const struct tree_publication *pub,
+			  const struct tree_emit_extra *extra,
 			  char **out, size_t *out_len);
 
 /*
@@ -126,20 +155,55 @@ int tree_emit_publication(const struct tree_publication *pub,
  * digests and the operation digest its fields hash to: 0, -EINVAL, or
  * -EKEYREJECTED for a digest that does not match. A publication names a
  * well-formed parent digest if any, and its operations run from
- * base_seq + 1 to head_seq, or head_seq is base_seq without them: 0 or
- * -EINVAL, and -ENOTSUP for a base past 0, which snapshot compaction, a
- * later schema, would need. And it may follow the state the node
- * recorded, NULL for none, with manifest_digest its manifest's: the same
- * tree, a later generation unless it is the same manifest, the parent
- * the node recorded when it is the next generation and names one, no
- * head before the node's cursor and no base after it. 0, -EINVAL for
- * another tree, or -ERANGE.
+ * base_seq + 1 to head_seq, or head_seq is base_seq without them. A
+ * segment past the first, base_seq above 0, holds an operation or more
+ * and names a well-formed sealed predecessor digest and history root; the
+ * first names neither: 0 or -EINVAL.
+ *
+ * tree_publication_verify() makes those checks of a publication, and that
+ * its tree ID is a name the node can record: 0 or the first failure, with
+ * *bad_op, unless NULL, the index of the operation that failed or -1.
+ *
+ * And it may follow the state the node recorded, NULL for none, with
+ * manifest_digest its manifest's: the same tree, a later generation
+ * unless it is the same manifest, the parent the node recorded when it is
+ * the next generation and names one, and no head before the node's
+ * cursor. 0, -EINVAL for another tree, -ERANGE, or TREE_FOLLOWS_WALK when
+ * its base lies past the cursor, 0 without a state, and the node must
+ * walk back through the sealed segments before it.
+ *
+ * tree_segment_precedes() is the check of one step of that walk: pred,
+ * whose manifest hashed to pred_manifest_digest, is the sealed segment
+ * succ names, of the same tree, ending where succ starts and of a lower
+ * generation. 0 or -ERANGE.
  */
+#define TREE_FOLLOWS_WALK 1
+
 int tree_operation_validate(const struct tree_operation *op);
 int tree_publication_check(const struct tree_publication *pub);
+int tree_publication_verify(const struct tree_publication *pub,
+			    int *bad_op) __must_check;
 int tree_publication_follows(const struct tree_publication *pub,
 			     const struct tree_state *state,
 			     const char *manifest_digest);
+int tree_segment_precedes(const struct tree_publication *pred,
+			  const char *pred_manifest_digest,
+			  const struct tree_publication *succ) __must_check;
+
+/*
+ * tree_walk_within() is the limit of that walk: 0 when a node whose cursor
+ * is last_seq may walk back to a segment that starts at base_seq,
+ * TREE_MAX_JOIN_OPS operations at most from 0 and TREE_MAX_WALK_OPS from
+ * any other cursor, -E2BIG past it, -EINVAL for a negative number.
+ *
+ * tree_history_at() gives the history root at seq of a publication that
+ * tree_publication_check() accepts: its base's, 32 zero bytes at 0, over
+ * the digests of its operations up to seq. -EINVAL for a seq outside base
+ * to head or a malformed root or digest.
+ */
+int tree_walk_within(__s64 base_seq, __s64 last_seq) __must_check;
+int tree_history_at(const struct tree_publication *pub, __s64 seq,
+		    __u8 out[32]) __must_check;
 
 /*
  * The selector match and the state below are
@@ -174,6 +238,37 @@ int tree_state_write(const struct tree_state *state);
 int tree_event_append(__s64 seq, const char *operation_digest,
 		      const __u8 projection_root[32]);
 int tree_event_replay(__u8 out[32]);
+/*
+ * Replays the tree eventlog into replay and sets *matches when it equals
+ * the projection root of s, which tree_state_read() returned state_rc
+ * for: a state that could not be read matches no replay. 0, or
+ * tree_event_replay()'s error, leaving *matches as it was.
+ */
+int tree_eventlog_matches(const struct tree_state *s, int state_rc,
+			  __u8 replay[32], bool *matches) __must_check;
+
+enum tree_outcome {
+	TREE_OUTCOME_APPLIED = 1,
+	TREE_OUTCOME_UNMATCHED = 2,
+	TREE_OUTCOME_MODULE_ABSENT = 3,
+};
+
+/*
+ * A writer holds the bpm lock. tree_outcomes_read() gives the outcomes
+ * of seq from + 1 through seq to and the roots at from;
+ * tree_outcomes_resume() gives the history root at last_seq and drops
+ * the lines past it, which a sync that stopped left. Seq 0 has zero
+ * roots. Both are -ENOENT without a record unless they ask for no line,
+ * and -EBADMSG for one that ends early or is out of order.
+ */
+int tree_outcome_append(__s64 seq, enum tree_outcome outcome,
+			const __u8 projection_root[32],
+			const __u8 history_root[32]) __must_check;
+int tree_outcomes_read(__s64 from, __s64 to, __u8 *codes,
+		       __u8 projection_root[32],
+		       __u8 history_root[32]) __must_check;
+int tree_outcomes_resume(__s64 last_seq,
+			 __u8 history_root[32]) __must_check;
 
 void tree_emit_status(struct json_emit *e);
 

@@ -8,9 +8,12 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -20,6 +23,74 @@
 #include <shirudo/misc.h>
 
 #define SIM_CMD_MAX	(64u * 1024u)
+
+/*
+ * tss2's "cmd" TCTI reaps this process with SIGTERM before it closes
+ * stdin, so a plain blocking read() never sees the EOF that would
+ * otherwise drive save_state() below. Route the signal through a
+ * self-pipe and treat it exactly like EOF instead of dying with
+ * whatever TPM state is still unsaved. The TCTI signals and waits for
+ * the /bin/sh it starts, which is this process only when the command
+ * begins with exec.
+ */
+static int shutdown_pipe[2] = { -1, -1 };
+
+static void request_shutdown(int sig)
+{
+	char byte = 0;
+
+	if (write(shutdown_pipe[1], &byte, 1) < 0)
+		return;
+}
+
+static int install_shutdown_handler(void)
+{
+	struct sigaction sa = { .sa_handler = request_shutdown };
+
+	if (pipe(shutdown_pipe) != 0)
+		return -1;
+	if (fcntl(shutdown_pipe[1], F_SETFL, O_NONBLOCK) != 0)
+		return -1;
+	return sigaction(SIGTERM, &sa, NULL);
+}
+
+/* 1: a command is ready on stdin, 0: shutdown requested, -1: error. */
+static int wait_for_command(void)
+{
+	struct pollfd pfd[2] = {
+		{ .fd = STDIN_FILENO, .events = POLLIN },
+		{ .fd = shutdown_pipe[0], .events = POLLIN },
+	};
+	int ret;
+
+	do {
+		ret = poll(pfd, ARRAY_SIZE(pfd), -1);
+	} while (ret < 0 && errno == EINTR);
+	if (ret < 0)
+		return -1;
+	return (pfd[1].revents & POLLIN) ? 0 : 1;
+}
+
+/*
+ * A caller that exits, or whose shell stays between it and this process,
+ * goes on before the state is saved, and the next instance would load
+ * what the one before it has not written yet. Hold the state directory
+ * for as long as this instance runs: the descriptor returned owns the lock.
+ */
+static int lock_state(void)
+{
+	int fd = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+
+	if (fd < 0)
+		return -1;
+	while (flock(fd, LOCK_EX) != 0) {
+		if (errno != EINTR) {
+			close(fd);
+			return -1;
+		}
+	}
+	return fd;
+}
 
 /* TPM2_Startup(TPM_SU_CLEAR): sent when no volatile state was restored. */
 static const __u8 startup_clear[] = {
@@ -150,7 +221,7 @@ int main(int argc, char **argv)
 	__u8 *resp = NULL, *permanent = NULL, *vol = NULL;
 	__u32 resp_size = 0, resp_cap = 0, permanent_len, vol_len;
 	char path[4096];
-	int ret = 0;
+	int lock_fd, ret = 0;
 
 	if (argc != 2) {
 		fprintf(stderr, "usage: tpmsim-cmd <state-dir>\n");
@@ -159,6 +230,15 @@ int main(int argc, char **argv)
 	if ((mkdir(argv[1], 0700) != 0 && errno != EEXIST) ||
 	    chdir(argv[1]) != 0) {
 		perror("tpmsim-cmd: state directory");
+		return 1;
+	}
+	lock_fd = lock_state();
+	if (lock_fd < 0) {
+		perror("tpmsim-cmd: state lock");
+		return 1;
+	}
+	if (install_shutdown_handler() != 0) {
+		perror("tpmsim-cmd: shutdown handler");
 		return 1;
 	}
 	setenv("TPM_PATH", ".", 1);
@@ -194,7 +274,13 @@ int main(int argc, char **argv)
 	for (;;) {
 		__u8 cmd[SIM_CMD_MAX];
 		__u32 len;
+		int avail;
 
+		avail = wait_for_command();
+		if (avail <= 0) {
+			ret = avail < 0;
+			break;
+		}
 		if (read_full(STDIN_FILENO, cmd, 10) != 0)
 			break;
 		len = ((__u32)cmd[2] << 24) | ((__u32)cmd[3] << 16) |
@@ -219,5 +305,6 @@ int main(int argc, char **argv)
 	free(resp);
 	free(permanent);
 	free(vol);
+	close(lock_fd);
 	return ret;
 }

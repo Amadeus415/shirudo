@@ -165,7 +165,8 @@ For delivering and enforcing BPF on a target, shirudo takes this
 model's place. The target runs no daemon and listens on no socket.
 Enforcement stays in links pinned in a private bpffs after ``init``
 exits. Packages arrive by pull, from timers. The status keepalive is the
-target's own, unauthenticated account, and only TPM-signed evidence that
+target's own account, quoted by a key no one has tied to a TPM, and only
+TPM-signed evidence that
 the operator verifies off the target is proof
 (:doc:`/concepts/operator-and-target`). shirudo has no inventory,
 rollout orchestration or remote response; those stay with the

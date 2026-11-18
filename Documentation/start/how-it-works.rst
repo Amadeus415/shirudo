@@ -167,14 +167,16 @@ Two more timers send telemetry while upatches run.
 ``shirudo-map-export.timer`` runs ``shirudo upatch map --all``, which reads
 the maps of every loaded upatch, runs their serializers and signed Lua
 decoders, and sends the records to the destinations the config image's
-``map_export`` settings name. ``shirudo-keepalive.timer`` runs ``shirudo
-status --otel --include-system``, which sends the target's status as an
-OTLP log record when an endpoint is configured. Both run five seconds after
-the previous run ends.
+``map_export`` settings name. It runs five seconds after the previous run
+ends. ``shirudo-keepalive.timer`` runs ``shirudo status --otel`` a minute
+after the previous run ends, which sends the target's status record and
+the TPM's quote of it as an OTLP log record when an endpoint is
+configured.
 
-Telemetry carries no proof of origin. It is the target's own account, and
-the TPM-signed evidence of step 7 is the check. :doc:`/operate/run/telemetry`
-covers the export settings.
+Telemetry carries no proof of origin. The quote shows that a keepalive
+arrived as the target's attestation key signed it, but the record is
+still the target's own account, and the TPM-signed evidence of step 7
+is the check. :doc:`/operate/run/telemetry` covers the export settings.
 
 Unload
 ------

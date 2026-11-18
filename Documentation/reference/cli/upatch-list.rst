@@ -70,7 +70,8 @@ Exit status
    * - 1
      - The JSON document could not be built.
    * - 2
-     - An unknown option.
+     - A usage error: an unknown option, ``--json`` given twice, or an
+       argument.
 
 Examples
 --------

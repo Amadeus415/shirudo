@@ -50,9 +50,11 @@ Description
    it holds to the end, and undoes the pins and archives this boot's
    records do not cover: those of a load stopped before its extend, of
    an unload stopped after it, and an archive brought back after its
-   unload, which ``status`` reports under ``UpatchesMeasured``. It
-   refuses (``tpm_error``) when it cannot read this boot's records or
-   cannot undo one of them. A upatch of the same name that is loaded is
+   unload, which ``status`` reports under ``UpatchesMeasured``. It takes
+   only the records the register vouches for, which fold to the value
+   the TPM reports, and refuses (``tampered``) when they do not, and
+   (``tpm_error``) when it cannot read this boot's records or cannot
+   undo one of them. A upatch of the same name that is loaded is
    refused (``already_loaded``).
 #. It parses the artifact: a LOAD artifact, a safe and signed name, a
    payload digest that matches the payload, valid attach metadata
@@ -85,6 +87,17 @@ them before it acts.
 ``--no-precheck`` skips step 3 only. The kernel signature check and the
 LSM still apply. ``bpm`` passes it when it loads the upatches of a
 package.
+
+For XDP, the signed device-class mask selects interfaces present in the
+initial network namespace at load time, with one endpoint per veth pair.
+Each program can produce several ``link_<n>`` pins. Native XDP is
+required: a device without it is logged and skipped. A device that has
+native XDP but refuses it in its current settings is an error. An upatch with no
+attachable device yet still loads, and
+:doc:`/reference/cli/upatch-reconcile` attaches it when one appears. A
+device that is occupied or does not report multi-buffer XDP, and any other
+error, undoes all links the load
+created. :doc:`/upatches/write/attach-kinds` defines the classes and limits.
 
 Options
 -------
@@ -177,17 +190,19 @@ Exit status and failure categories
    * - 1
      - Refused or failed. The report and the message name the category.
    * - 2
-     - A usage error: an unknown option, an option given last without
-       its value, a second file, no file, or an ``--expect-chain`` that
-       is not 64 hexadecimal characters. Also the category
-       ``attach_target_missing``.
+     - A usage error: an unknown option or one given twice, a value
+       missing or empty, a second file, no file, or an
+       ``--expect-chain`` that is not 64 hexadecimal characters. Also ``attach_target_missing``
+       for missing probe targets.
 
 ``load`` reports these categories: ``version_mismatch``,
 ``kernel_abi_unsupported``, ``keyring_missing``, ``tampered``,
 ``eventlog_full``, ``already_loaded``, ``parser_rejected``,
 ``signature_rejected``, ``signature_unsupported``, ``lsm_denied``,
 ``verifier_rejected``, ``attach_target_missing``, ``binary_mismatch``,
-``attach_scope_mismatch``, ``tpm_error`` and ``unknown``.
+``attach_scope_mismatch``, ``xdp_multibuf_unsupported``,
+``xdp_driver_refused``, ``xdp_device_occupied``, ``tpm_error`` and
+``unknown``.
 :doc:`/reference/failure-categories` gives the cause and the action for
 each. Handle ``tampered`` as an incident
 (:doc:`/operate/troubleshoot/incident-tampered`).

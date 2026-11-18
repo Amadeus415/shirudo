@@ -35,25 +35,31 @@ Kernel configuration
    * - Item
      - Why
      - Checked
-   * - Lockdown in integrity mode: ``CONFIG_SECURITY_LOCKDOWN_LSM`` with
-       ``lockdown`` in the LSM list and ``lockdown=integrity``, or
-       ``CONFIG_LOCK_DOWN_KERNEL_FORCE_INTEGRITY``
-     - Without lockdown, root keeps ways to write kernel memory or
-       reconfigure hardware that shirudo has no hook for: ``/dev/mem``,
-       MSRs, I/O ports, PCI resources, debugfs, ACPI table overrides and
-       hibernation images. Module signature enforcement alone does not
-       close them. Do not use confidentiality mode: it withholds
-       ``bpf_probe_read_kernel()`` from BPF programs, which shirudo's own
-       programs need, so they would not load.
+   * - Lockdown in integrity mode: optional
+     - shirudo's ``bpf2`` object refuses, from ``init`` on, what
+       integrity mode refuses: unsigned modules, ``/dev/mem``, MSRs,
+       I/O ports, PCI resources, debugfs writes, ACPI table overrides
+       and hibernation, and ``/proc/kcore`` with them, which the mode
+       leaves readable. The kernel's lockdown LSM, where it runs, refuses
+       first and covers the boot before ``init``; module signatures and
+       the resume device need the rows below either way. Do not use
+       confidentiality mode: it withholds ``bpf_probe_read_kernel()``
+       from BPF programs, which shirudo's own programs need, so they
+       would not load.
      - no
-   * - Module signature enforcement: ``CONFIG_MODULE_SIG_FORCE`` or
-       ``module.sig_enforce=1``, or lockdown, which also refuses unsigned
-       modules
-     - An unsigned module runs in the kernel with no BPF involved.
-     - no
+   * - Module signatures: ``CONFIG_MODULE_SIG``, with every module the
+       target loads signed by a key the kernel trusts
+     - Without it the kernel loads a module without asking lockdown, and
+       the module runs in the kernel with no BPF involved. With it,
+       ``bpf2`` refuses an unsigned module from ``init`` on where the
+       kernel does not refuse it first (``CONFIG_MODULE_SIG_FORCE`` or
+       ``module.sig_enforce=1``).
+     - partly: from ``init`` on, an unsigned module is refused and
+       counted as ``ModuleSignature``
    * - ``CONFIG_STRICT_DEVMEM`` and ``CONFIG_IO_STRICT_DEVMEM``, or no
        ``/dev/mem`` at all
-     - Limits ``/dev/mem`` when lockdown is not in force.
+     - Limits ``/dev/mem`` before ``init``, after which ``bpf2`` refuses
+       it.
      - no
    * - ``CONFIG_BLK_DEV_WRITE_MOUNTED=n``
      - The seal acts on file operations. Root writing to the block
@@ -61,12 +67,17 @@ Kernel configuration
        any of them. With the option off, the kernel refuses writes to a
        mounted block device.
      - no
-   * - No hibernation: ``CONFIG_HIBERNATION=n``, ``nohibernate`` or
-       lockdown
+   * - No resume device: no ``resume=`` on the command line, an empty
+       ``CONFIG_PM_STD_PARTITION`` and none named in the initrd, or no
+       hibernation (``CONFIG_HIBERNATION=n``, ``nohibernate`` or
+       ``lockdown=integrity``)
      - Resuming from a hibernation image replaces kernel memory with
-       what the image holds. shirudo refuses kexec loads, but it does not
-       refuse hibernation.
-     - no
+       what the image holds, and the initrd resumes before ``init``,
+       from an image root can write to swap.
+     - partly: from ``init`` on, hibernating is refused, and so is a
+       write of the ``HibernateLocation`` EFI variable through which
+       systemd's initrd finds an image the UKI does not name, counted
+       as ``HibernateLocation``
    * - Kexec
      - A kexec boots a kernel and initrd of root's choosing while the
        TPM keeps this boot's register and PCRs.

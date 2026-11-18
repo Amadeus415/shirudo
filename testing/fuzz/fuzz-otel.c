@@ -3,8 +3,7 @@
  * Copyright (c) 2026 Authors of shirudo
  *
  * What an OTLP collector answers, the response header lines and the
- * partial-success body, the decoded map JSON a log record carries, and
- * the configured OTEL_EXPORTER_OTLP_HEADERS.
+ * partial-success body, and the configured OTEL_EXPORTER_OTLP_HEADERS.
  */
 
 #include "fuzz.h"
@@ -19,31 +18,6 @@
 #include "malloc.h"
 #include "upatch_maps_otel.h"
 
-static const struct json_visitor any_value = {};
-
-static size_t deepest_nesting(const char *s, size_t len)
-{
-	size_t depth = 0, deepest = 0, i;
-	bool in_string = false;
-
-	for (i = 0; i < len; i++) {
-		if (in_string) {
-			if (s[i] == '\\')
-				i++;
-			else if (s[i] == '"')
-				in_string = false;
-		} else if (s[i] == '"') {
-			in_string = true;
-		} else if (s[i] == '{' || s[i] == '[') {
-			if (++depth > deepest)
-				deepest = depth;
-		} else if ((s[i] == '}' || s[i] == ']') && depth) {
-			depth--;
-		}
-	}
-	return deepest;
-}
-
 int LLVMFuzzerTestOneInput(const __u8 *data, size_t size)
 {
 	struct json_emit e = { .max = JSON_MAX_BYTES };
@@ -51,7 +25,6 @@ int LLVMFuzzerTestOneInput(const __u8 *data, size_t size)
 	__u64 seconds;
 	size_t off, n;
 	char *body, *line;
-	int ret;
 
 	/*
 	 * curl hands the header callback one line at a time, end included

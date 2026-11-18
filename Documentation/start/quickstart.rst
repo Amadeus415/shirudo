@@ -21,9 +21,10 @@ Before you begin
 
 - A Linux host on x86-64 or arm64 with KVM. ``/dev/kvm`` must be readable
   and writable.
-- Root on that host. The test VM builds its initrd with dracut, which needs
-  root, and the signing key it generates for the VM belongs to root. Run
-  every host command on this page as root.
+- A locked-memory limit of ``unlimited`` (``ulimit -l``): the shirudo
+  binaries lock their memory and refuse to run without it. Root is not
+  needed; the test VM builds its initrd with dracut as you, without
+  changing the host's dracut.
 - Network access. The first boot clones the bpf-next kernel tree and
   downloads an Ubuntu cloud image.
 - To build shirudo: a C toolchain with ``make`` and ``pkg-config``, a
@@ -31,6 +32,8 @@ Before you begin
   ``/usr/bin/clang``, and the development files of OpenSSL 3.5 or later,
   libelf, zlib, libcurl 7.75 or later, tpm2-tss (``tss2-esys`` 4.0 or later
   and ``tss2-tctildr``) and LuaJIT.
+- OpenSSL 3.5 or newer (``openssl version``). If it reports an older
+  version, follow :ref:`the developer guide's steps <dev-openssl>` first.
 - For the test VM, with their Debian and Ubuntu names: QEMU
   (``qemu-system-x86`` or ``qemu-system-arm``), ``qemu-utils``, ``swtpm``,
   ``cloud-image-utils``, ``libguestfs-tools``, ``dracut-core``,
@@ -43,6 +46,20 @@ Before you begin
 - ``jq`` and the ``openssl`` command, for the attestation step.
 
 :doc:`/operate/plan/system-requirements` lists the requirements in full.
+
+Build a target kernel
+----------------------
+
+Before we build shirudo, we need a kernel for it to build against:
+shirudo's embedded BPF objects compile against a kernel's BTF and use
+the signed-loader ABI that only a bpf-next kernel patched under
+:src:`kernel/` has. Without one, the build falls back to the BTF of the
+kernel you are running, which lacks that ABI and fails to build. Build
+one first:
+
+.. code-block:: console
+
+   operator$ make -C testing kernel
 
 Build shirudo
 -------------
@@ -150,7 +167,6 @@ Check enforcement
       target# shirudo status
       Host:                  quickstart
       Roles:                 target
-      Mode:                  production
       Status:                ok
       Version ID:            414d0c75238fcc31b1d60ce78b4943a8b450f49556a5cb255d62392061b87ccf
 
@@ -167,8 +183,10 @@ Check enforcement
         LoadNotLoader            15  program load that is not a signed loader
         MapCreate                 1  map creation by another executable
         BpfCommand                8  detach, update, delete or unclassified bpf() command
-        SealPtrace                6  ptrace of a shirudo task
         ObjGet                    1  pin, map or link opened by another executable
+
+      Integrity attempts (this boot):
+        none
 
       Loaded upatches (0):
         none
@@ -182,7 +200,7 @@ Check enforcement
      from ``shirudo status --json``: the command exits with 0 whatever
      the verdict is, unless ``--check`` makes it exit with 1 on
      ``tampered``.
-   - ``Mode: production``: the LSM link is pinned.
+   - The ``LsmAttached`` condition is ``OK``: the LSM link is pinned.
    - The tamper attempts: calls the policy refused since boot. Other
      software on the guest has already made some.
    - The last line names the sections the report folds while their

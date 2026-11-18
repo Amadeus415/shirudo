@@ -98,6 +98,7 @@ shirudo-gen-runtime
                        --output <prefix> --keys-dir <dir>
                        [--size <mib>] [--builder <helper>]
                        [--unit-output <file>] [--extra-binary <file>]...
+                       [--config-cert <additional-certificate>]...
 
 Builds the runtime image, the image whose root hash the bootstrap
 settings pin. It holds:
@@ -106,8 +107,9 @@ settings pin. It holds:
   symbols and debug sections, as ``llvm-strip`` writes it
 - ``etc/shirudo/shirudo.conf``: ``--bootstrap-conf``
 - ``keys/cert.der``: ``--cert``, the initial BPF signing certificate
-- ``etc/shirudo/config-cert.der``: ``--config-cert``, the certificate
-  that verifies config images
+- ``etc/shirudo/config-cert.der``: the first ``--config-cert``;
+  additional certificates are ``config-cert-2.der``, ``config-cert-3.der``
+  and on. Any of them may sign a config image
 - for a dynamically linked binary, its ELF interpreter and libraries
   under their own paths, found with ``ldd``
 - each ``--extra-binary`` under ``usr/bin/`` with its libraries
@@ -140,7 +142,10 @@ trusted binaries. Requires ``readelf``, ``ldd`` and ``llvm-strip``.
      - The initial BPF signing certificate.
    * - ``--config-cert``
      - required
-     - The config image verification certificate.
+     - The config image verification certificate. Repeatable, at most 16.
+       With several certificates, the generator replaces the bootstrap's
+       ``config.verification_key`` entries with their installed paths.
+       With one certificate it preserves the bootstrap file.
    * - ``--output``
      - required
      - Output prefix.
@@ -218,15 +223,20 @@ shirudo-gen-initrd
    shirudo-gen-initrd --print-cmdline
 
 Runs ``dracut --force --add shirudo`` for a kernel release, then checks
-the result. It runs as root and requires ``dracut``. The initrd holds the
+the result. It requires ``dracut``, and root unless ``--output`` names
+where to write: without it the initrd replaces the one the host boots.
+Run as another user, dracut writes every member of the archive as owned
+by root. The initrd holds the
 binary at its root file system path, the primary certificate as
 ``/etc/shirudo/keys/cert.der``, the trusted certificates and their vouches
 under ``/etc/shirudo/keys/trusted/``, the bootstrap
 ``/etc/shirudo/shirudo.conf`` and ``shirudo-initrd.service``, enabled.
 
-When the script's own directory holds ``module-setup.sh`` that differs
-from ``/usr/lib/dracut/modules.d/90shirudo/module-setup.sh``, it installs
-its copy there. Paths given on the command line reach the module through a
+When ``--module-dir`` or the script's own directory holds
+``module-setup.sh``, dracut runs on a private copy of its base directory
+whose ``modules.d/90shirudo`` is that module, and the host's
+``/usr/lib/dracut`` is left as it is. Otherwise the module comes from
+``/usr/lib/dracut/modules.d/90shirudo``. Paths given on the command line reach the module through a
 generated ``dracut.conf`` that also leaves out the host's drop-ins.
 
 The check lists the archive with ``lsinitrd`` and fails unless it holds
@@ -285,7 +295,7 @@ kernel's command line lacks ``bpf.keyring_unsealed=1`` or
      - Embed no kernel modules.
    * - ``--module-dir``
      - the script's directory
-     - Where to install the dracut module from.
+     - The dracut module to build with.
    * - ``--``
      -
      - Pass the remaining arguments to ``dracut``.

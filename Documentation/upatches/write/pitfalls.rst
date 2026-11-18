@@ -33,10 +33,15 @@ program's ``recursion_misses``, which ``struct bpf_prog_info`` reports:
 - The return of a function a ``kretprobe`` watches, when more calls of
   it are in flight than the probe has instances for: the larger of 10
   and twice the number of CPUs.
+- The return of a function a ``uretprobe``, a ``uretprobe.multi`` or
+  their ``.s`` forms watch, when the task already waits on the returns of
+  64 calls that return probes watch, and the return of a function that
+  leaves by ``longjmp()`` or ends the thread. The kernel logs the first
+  case, rate-limited, and counts neither.
 
 A detector built on these kinds can therefore miss the event it looks
-for, and a count it keeps is a lower bound. ``lsm`` programs are never
-skipped.
+for, and a count it keeps is a lower bound. ``lsm`` and ``xdp`` programs
+are never skipped.
 
 Enforce in lsm programs
 -----------------------
@@ -77,7 +82,30 @@ was running. There ``bpf_get_current_pid_tgid()``,
 ``bpf_get_current_task_btf()``, ``bpf_get_current_comm()`` and
 ``bpf_get_current_cgroup_id()`` describe that task, not the packet.
 Attribute a packet by its socket, with ``bpf_skb_cgroup_id()`` or
-socket storage, and keep such programs off task storage.
+socket storage, and keep such programs off task storage. An ``xdp``
+program runs there too, before the packet has a socket, so nothing
+attributes it: decide on the packet alone.
+
+What an xdp program does not see
+--------------------------------
+
+``xdp`` runs in the driver on receive, before the kernel builds an
+``sk_buff``:
+
+- It sees what a device receives, not what the host sends out of it. On
+  a veth pair with one endpoint attached, it sees only what arrives at
+  that endpoint.
+- It sees only the devices it is attached to, and a device with no program
+  passes everything. :doc:`attach-kinds` says which devices are selected
+  and when.
+- It sees packets as they arrive, before GRO joins them, so a transfer
+  is many runs.
+- A VLAN tag the NIC stripped is not in the packet.
+- Direct packet access reaches only a packet's first buffer. Every
+  ``xdp/<mask>`` program is loaded with multi-buffer support, so on a large
+  MTU the rest of a frame is in fragments and ``ctx->data_end`` stops at the
+  first one. Read past it with ``bpf_xdp_load_bytes()``, and take the frame's
+  length from ``bpf_xdp_get_buff_len()``.
 
 RCU pointers in sleepable programs
 ----------------------------------

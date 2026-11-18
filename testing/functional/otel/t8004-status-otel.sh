@@ -8,139 +8,65 @@ cd "$(dirname "$0")/../.."
 S=../shirudo
 H=helper/test-otel-map
 
-test_expect_success 'status --otel sends a structured keepalive log' '
-	work=$(mktemp -d)
+# No TPM answers here: the keepalive cannot be quoted.
+export SHIRUDO_TPM_TCTI=device:/nonexistent/tpm
+
+# A sink on an ephemeral port; its pid is in $work/sink.pid.
+sink() {
+	rm -f "$work/port"
 	python3 helper/otel-mock.py success "$work/port" "$work/body" \
 		"$work/meta" &
-	server=$!
-	trap "kill $server 2>/dev/null || true; wait $server 2>/dev/null || true; rm -rf $work" EXIT
+	echo "$!" >"$work/sink.pid"
 	i=0
 	while test ! -s "$work/port" && test "$i" -lt 100; do
 		sleep .02
 		i=$((i + 1))
 	done
-	port=$(cat "$work/port") &&
-	OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="http://127.0.0.1:$port/v1/logs" \
-		"$S" status --otel >"$work/stdout" 2>"$work/stderr" &&
-	wait "$server" &&
-	test ! -s "$work/stdout" &&
-	python3 - "$work/body" "$work/meta" <<"PY"
-import json
-import sys
-
-doc = json.load(open(sys.argv[1]))
-meta = json.load(open(sys.argv[2]))
-record = doc["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0]
-values = {
-    item["key"]: item["value"]
-    for item in record["body"]["kvlistValue"]["values"]
+	test -s "$work/port"
 }
-assert meta["path"] == "/v1/logs"
-assert record["eventName"] == "shirudo.keepalive"
-assert {"schema", "status", "conditions", "tpm"} <= values.keys()
-assert values["tpm"]["kvlistValue"]
-status = values["status"]["stringValue"]
-severity = {
-    "ok": (9, "INFO"),
-    "degraded": (13, "WARN"),
-    "init-pending": (13, "WARN"),
-    "reboot-pending": (13, "WARN"),
-    "lsm-off": (17, "ERROR"),
-    "tampered": (17, "ERROR"),
-}[status]
-assert (record["severityNumber"], record["severityText"]) == severity
-attrs = {item["key"]: item["value"] for item in record["attributes"]}
-assert "shirudo.status" in attrs
-assert "shirudo.version_id" in attrs
-PY
-'
 
-test_expect_success 'keepalive status severities and structured body are deterministic' '
-	work=$(mktemp -d) || return 1
-	for status in ok degraded init-pending reboot-pending lsm-off tampered
-	do
-		python3 helper/otel-mock.py success "$work/port" "$work/body" \
-			"$work/meta" &
-		server=$!
-		trap "kill $server 2>/dev/null || true; wait $server 2>/dev/null || true; rm -rf $work" EXIT
-		i=0
-		while test ! -s "$work/port" && test "$i" -lt 100; do
-			sleep .02
-			i=$((i + 1))
-		done
-		port=$(cat "$work/port") &&
-		"$H" send-status "http://127.0.0.1:$port" "$status" &&
-		wait "$server" &&
-		python3 - "$status" "$work/body" <<'\''PY'\'' || return 1
-import json, socket, sys
-status = sys.argv[1]
-rl = json.load(open(sys.argv[2]))["resourceLogs"][0]
-resource = {item["key"]: item["value"] for item in rl["resource"]["attributes"]}
-assert resource == {"service.name": {"stringValue": "shirudo"},
-                    "service.version": {"stringValue": "test-1"},
-                    "host.name": {"stringValue": socket.gethostname()}}, resource
-assert rl["scopeLogs"][0]["scope"] == {"name": "shirudo.keepalive",
-                                       "version": "test-1"}
-record = rl["scopeLogs"][0]["logRecords"][0]
-expected = {"ok": (9, "INFO"), "degraded": (13, "WARN"),
-            "init-pending": (13, "WARN"), "reboot-pending": (13, "WARN"),
-            "lsm-off": (17, "ERROR"),
-            "tampered": (17, "ERROR")}[status]
-assert (record["severityNumber"], record["severityText"]) == expected
-assert record["eventName"] == "shirudo.keepalive"
-body = {item["key"]: item["value"] for item in record["body"]["kvlistValue"]["values"]}
-assert body["status"]["stringValue"] == status
-assert body["schema"]["intValue"] == "1"
-attrs = {item["key"]: item["value"] for item in record["attributes"]}
-assert attrs == {"shirudo.status": {"stringValue": status},
-                 "shirudo.version_id": {"stringValue": "test-version"},
-                 "shirudo.tamper_attempts": {"intValue": "2"}}, attrs
-PY
-		rm -f "$work/port" "$work/body" "$work/meta" || return 1
-	done
-'
-
-test_expect_success 'a status body many times larger as AnyValues is sent whole' '
-	work=$(mktemp -d) || return 1
-	python3 helper/otel-mock.py success "$work/port" "$work/body" \
-		"$work/meta" &
-	server=$!
-	trap "kill $server 2>/dev/null || true; wait $server 2>/dev/null || true; rm -rf $work" EXIT
-	i=0
-	while test ! -s "$work/port" && test "$i" -lt 100; do
-		sleep .02
-		i=$((i + 1))
-	done
-	port=$(cat "$work/port") &&
-	"$H" send-wide-status "http://127.0.0.1:$port" 100000 &&
-	wait "$server" &&
-	python3 - "$work/body" <<'\''PY'\'' &&
+test_expect_success 'status --keepalive prints the body with its keys in order' '
+	work=$(mktemp -d) &&
+	"$S" status --keepalive >"$work/body" 2>"$work/stderr" &&
+	python3 - "$work/body" <<"PY" &&
 import json, sys
-rl = json.load(open(sys.argv[1]))["resourceLogs"][0]
-record = rl["scopeLogs"][0]["logRecords"][0]
-body = {item["key"]: item["value"] for item in record["body"]["kvlistValue"]["values"]}
-values = body["conditions"]["arrayValue"]["values"]
-assert len(values) == 100000 and values[-1] == {"intValue": "1"}, len(values)
+
+KEYS = ["schema", "boot_id", "version_id", "config_root", "kernel_release",
+        "image_id", "image_version", "image_root", "verdict", "cond",
+        "flags", "tamper", "integrity", "tree_id", "generation",
+        "base_seq", "last_seq", "base_root", "projection_root", "mask",
+        "set_sha256", "count", "not_ok"]
+text = open(sys.argv[1]).read()
+assert text.endswith("}\n") and text.count("\n") == 1, text
+pairs = json.loads(text, object_pairs_hook=list)
+assert [k for k, _ in pairs] == KEYS, pairs
+assert dict(pairs)["schema"] == "shirudo.keepalive/1"
 PY
 	rm -rf "$work"
 '
 
-test_expect_success 'status --json --otel keeps JSON output available' '
-	work=$(mktemp -d)
-	python3 helper/otel-mock.py success "$work/port" "$work/body" \
-		"$work/meta" &
-	server=$!
-	trap "kill $server 2>/dev/null || true; wait $server 2>/dev/null || true; rm -rf $work" EXIT
-	i=0
-	while test ! -s "$work/port" && test "$i" -lt 100; do
-		sleep .02
-		i=$((i + 1))
-	done
+test_expect_success 'status --otel without a TPM sends nothing and fails' '
+	work=$(mktemp -d) &&
+	sink &&
 	port=$(cat "$work/port") &&
-	OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="http://127.0.0.1:$port/v1/logs" \
+	! OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="http://127.0.0.1:$port/v1/logs" \
+		"$S" status --otel >"$work/stdout" 2>"$work/stderr" &&
+	test ! -s "$work/stdout" &&
+	grep -q "nothing is sent" "$work/stderr" &&
+	test ! -e "$work/body" &&
+	kill "$(cat "$work/sink.pid")" &&
+	rm -rf "$work"
+'
+
+test_expect_success 'status --json --otel prints the report when the keepalive fails' '
+	work=$(mktemp -d) &&
+	sink &&
+	port=$(cat "$work/port") &&
+	! OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="http://127.0.0.1:$port/v1/logs" \
 		"$S" status --json --otel >"$work/stdout" 2>"$work/stderr" &&
-	wait "$server" &&
-	python3 - "$work/stdout" <<"PY"
+	test ! -e "$work/body" &&
+	kill "$(cat "$work/sink.pid")" &&
+	python3 - "$work/stdout" <<"PY" &&
 import json
 import sys
 
@@ -150,6 +76,7 @@ assert "status" in doc
 assert "tpm" in doc
 assert "tamper_attempts" in doc
 PY
+	rm -rf "$work"
 '
 
 test_expect_success 'status --otel without an endpoint does not send' '
@@ -212,6 +139,85 @@ test_expect_success 'status --include-system prints kernel config' '
 	grep -Eq "^  Kernel build ID: +([0-9a-f]+)?$" "$work/status" &&
 	"$S" status --json --include-system 2>/dev/null |
 		python3 -c "import json, sys; sys.exit(0 if \"kernel_config\" in json.load(sys.stdin)[\"system\"] else 1)" &&
+	rm -rf "$work"
+'
+
+test_expect_success 'a keepalive record carries its body as a string and one quote attribute' '
+	work=$(mktemp -d) || return 1
+	quote="attest=/1RDR4AY;sig=ABgACwAg;ak=ACMACwAE" &&
+	printf "%s\303\251%s" \
+		"{\"schema\":\"shirudo.keepalive/1\",\"image_id\":\"a\\\\b \\u00e9 " \
+		"\",\"tamper\":[0,1],\"mask\":null}" >"$work/input" || return 1
+	for verdict in ok degraded init-pending reboot-pending lsm-off tampered
+	do
+		python3 helper/otel-mock.py success "$work/port" "$work/body" \
+			"$work/meta" &
+		server=$!
+		trap "kill $server 2>/dev/null || true; wait $server 2>/dev/null || true; rm -rf $work" EXIT
+		i=0
+		while test ! -s "$work/port" && test "$i" -lt 100; do
+			sleep .02
+			i=$((i + 1))
+		done
+		port=$(cat "$work/port") &&
+		"$H" send-keepalive "http://127.0.0.1:$port" "$verdict" \
+			"$work/input" "$quote" &&
+		wait "$server" &&
+		python3 - "$verdict" "$work/body" "$work/meta" "$work/input" \
+			"$quote" <<'\''PY'\'' || return 1
+import json, socket, sys
+verdict, quote = sys.argv[1], sys.argv[5]
+sent = open(sys.argv[4], "rb").read()
+assert b"\\u00e9 \xc3\xa9" in sent and b"a\\\\b" in sent, sent
+assert json.load(open(sys.argv[3]))["path"] == "/v1/logs"
+rl = json.load(open(sys.argv[2]))["resourceLogs"][0]
+resource = {item["key"]: item["value"] for item in rl["resource"]["attributes"]}
+assert resource == {"service.name": {"stringValue": "shirudo"},
+                    "service.version": {"stringValue": "test-1"},
+                    "host.name": {"stringValue": socket.gethostname()}}, resource
+assert rl["scopeLogs"][0]["scope"] == {"name": "shirudo.keepalive",
+                                       "version": "test-1"}
+record = rl["scopeLogs"][0]["logRecords"][0]
+expected = {"ok": (9, "INFO"), "degraded": (13, "WARN"),
+            "init-pending": (13, "WARN"), "reboot-pending": (13, "WARN"),
+            "lsm-off": (17, "ERROR"),
+            "tampered": (17, "ERROR")}[verdict]
+assert (record["severityNumber"], record["severityText"]) == expected
+assert record["eventName"] == "shirudo.keepalive"
+assert record["timeUnixNano"].isdigit()
+assert list(record["body"]) == ["stringValue"], record["body"]
+assert record["body"]["stringValue"].encode() == sent, record["body"]
+assert record["attributes"] == [
+    {"key": "shirudo.quote", "value": {"stringValue": quote}}
+], record["attributes"]
+PY
+		rm -f "$work/port" "$work/body" "$work/meta" || return 1
+	done
+	rm -rf "$work"
+'
+
+test_expect_success 'a keepalive body JSON cannot carry unchanged is not sent' '
+	work=$(mktemp -d) || return 1
+	printf "{\"image_id\":\"\\377\"}" >"$work/latin1" &&
+	printf "{\"image_id\":\"\\000\"}" >"$work/nul" || return 1
+	for input in latin1 nul
+	do
+		python3 helper/otel-mock.py success "$work/port" "$work/body" \
+			"$work/meta" &
+		server=$!
+		trap "kill $server 2>/dev/null || true; wait $server 2>/dev/null || true; rm -rf $work" EXIT
+		i=0
+		while test ! -s "$work/port" && test "$i" -lt 100; do
+			sleep .02
+			i=$((i + 1))
+		done
+		port=$(cat "$work/port") &&
+		! "$H" send-keepalive "http://127.0.0.1:$port" ok \
+			"$work/$input" quote &&
+		test ! -e "$work/body" || return 1
+		kill "$server" && { wait "$server" || true; } &&
+		rm -f "$work/port" || return 1
+	done
 	rm -rf "$work"
 '
 

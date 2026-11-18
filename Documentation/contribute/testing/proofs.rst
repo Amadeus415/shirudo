@@ -38,7 +38,8 @@ length, and :doc:`proof-coverage` says which is which.
 Before you begin
 ----------------
 
-- CBMC 5.95 or newer, packaged as ``cbmc`` by Debian and Ubuntu.
+- CBMC 5.95 or newer, packaged as ``cbmc`` by Debian and Ubuntu. CI
+  uses 5.95.1, as `Run the proofs as CI does`_ shows.
 - For the Lean 4 proofs, elan, packaged as ``elan``, and the toolchain
   :src:`testing/proofs/lean4/lean-toolchain` names:
 
@@ -60,18 +61,28 @@ Run the proofs
 
    Each CBMC line names a proof, the number of checks CBMC made and the
    time it took, and ``proofs: <n> hold`` ends a run in which all of them
-   held. ``Build completed successfully`` ends the Lean 4 run. CI does
-   not run the proofs: all of them take about an hour, a few of them
-   minutes and gigabytes each. Run the ones that cover the code you
-   change by name, as the next step shows, and all of them after a
-   change to ``proof.h`` or ``run.sh``.
+   held. ``Build completed successfully`` ends the Lean 4 run. The
+   proofs take hours of CPU, a few of them minutes and gigabytes each,
+   and CI runs them only once a change is on main. Before you send a
+   change, run the ones that cover the code you change, as the next step
+   shows, and all of them after a change to ``proof.h`` or ``run.sh``.
 
-2. Run one kind, or some CBMC proofs by name:
+2. Run one kind, some CBMC proofs by name, or the CBMC proofs that read
+   a file you changed:
 
    .. code-block:: console
 
       $ make proofs-lean4
       $ make proofs-cbmc PROOFS="paths-bpffs-name paths-bpffs-name-model"
+      $ make proofs-cbmc CHANGED=origin/main..HEAD
+
+   ``CHANGED`` takes what ``git diff`` takes, a range of commits or one
+   commit to compare the working tree with. The compiler lists the files
+   each harness includes, and a proof runs when one of them changed; a
+   change to ``run.sh`` or ``proofs.list`` runs every proof. A run that
+   finds none prints ``proofs: none reads a file changed in <range>``.
+   No run checks a Lean 4 model against the C it follows by review: read
+   the model against the change.
 
 3. Read why a CBMC proof failed:
 
@@ -82,6 +93,48 @@ Run the proofs
    ``-v`` prints CBMC's whole output, with the trace of each failed
    check: the input that breaks it and the steps that lead there. Lean
    prints the theorem and the goal it could not close.
+
+Run the proofs as CI does
+-------------------------
+
+The ``Proofs`` workflow, :src:`.github/workflows/proofs.yml`, runs after
+every push to main, never on a pull request, so the run before you send
+a change is the only one it gets before it lands. Its ``Lean4`` job runs
+``make proofs-lean4`` with the toolchain ``lean-toolchain`` names. Its
+``CBMC`` job runs in eight shards: shard ``<k>`` takes every eighth proof
+of :src:`testing/proofs/cbmc/proofs.list` from the ``<k>``-th and runs
+each alone, under a cap of 14 GB and 60 minutes, so a proof you add has
+to fit both on a runner. CI pins CBMC 5.95.1 and elan in
+:src:`.github/scripts/proofs.sh`.
+
+1. Install the same CBMC into ``build/cbmc``, without root, and put it
+   on your ``PATH``:
+
+   .. code-block:: console
+
+      $ export PATH="$(.github/scripts/proofs.sh install-cbmc):$PATH"
+
+2. List the proofs of a shard, or run them:
+
+   .. code-block:: console
+
+      $ .github/scripts/proofs.sh list 3 8
+      $ .github/scripts/proofs.sh run 3 8
+
+   A proof that holds prints its ``ok`` line. One that fails prints
+   ``FAILED  <proof>:`` and why, then CBMC's whole output with the trace,
+   which ``run`` keeps in ``build/proofs/<proof>.log``. In CI that output
+   is in the shard's job log and in its ``cbmc-logs-<k>`` artifact.
+
+CI leaves out the proofs :src:`testing/proofs/cbmc/ci-skip.list` names,
+each with why: each needs hours, some more memory than a runner has. No
+run checks them but one you start. After a change to a file one of them
+reads, which ``CHANGED`` finds, run it by hand with its memory capped:
+
+.. code-block:: console
+
+   $ ulimit -v 24000000
+   $ make proofs-cbmc PROOFS=bpm-tree-recovery-model
 
 Write a CBMC proof
 ------------------
@@ -118,7 +171,8 @@ Write a CBMC proof
    a loop that reads one byte too many, run it and see it fail, then
    restore the code.
 
-5. Add a row to :doc:`proof-coverage`.
+5. Add a row to :doc:`proof-coverage`, and take a file the harness is
+   the first to read off that page's list of files without a proof.
 
 A function without a body in the proof, a libc one CBMC does not model or
 a system call, returns any value, and ``run.sh`` fails a proof that calls

@@ -55,7 +55,6 @@ Boot the test VM
       target# shirudo-runtime status
       Host:                  upatch-dev
       Roles:                 target
-      Mode:                  production
       Status:                ok
       ...
 
@@ -191,6 +190,16 @@ one.
    * - ``shirudo-test-uprobe-multi``
      - ``uprobe.multi`` on ``/tmp/shirudo-test-uprobe-target``. Copy
        ``shirudo-test-uprobe-target`` from the fixtures to that path first.
+   * - ``shirudo-test-uretprobe-multi``
+     - ``uretprobe.multi`` on the same binary and functions, counting in
+       the map ``hits``
+   * - ``shirudo-test-uprobe``, ``shirudo-test-uretprobe``
+     - ``uprobe`` and ``uretprobe`` on ``fooFunc`` of the same binary,
+       counting in ``hits``
+   * - ``shirudo-test-uprobe-multi-sleepable``
+     - sleepable ``uprobe.multi.s`` on the same binary and functions,
+       counting in ``hits`` each call whose ``bpf_copy_from_user()`` of the
+       task's arguments succeeds
    * - ``shirudo-test-scope-cgroup``, ``shirudo-test-scope-netfilter``,
        ``shirudo-test-scope-kprobe``
      - ``cgroup_skb``, ``netfilter`` and ``kprobe`` attachments and the

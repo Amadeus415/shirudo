@@ -104,9 +104,10 @@ Exit status
        the endorsement key is not this TPM's``), or producing
        or writing the evidence failed.
    * - 2
-     - An unknown option, an option given last without its value, an
-       invalid ``--nonce`` or ``--pcrs``, or a ``--challenge`` file that
-       is not a shirudo credential challenge.
+     - A usage error: an unknown option, an option given twice, a value
+       missing or empty, or an argument. An invalid ``--nonce`` or
+       ``--pcrs``, or a ``--challenge`` file that is not a shirudo
+       credential challenge.
 
 Files and environment
 ---------------------

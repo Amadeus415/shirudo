@@ -3,250 +3,124 @@
 #
 # bash completion for shirudo
 #
-# Command and subcommand names come from the binary through
-# `shirudo <command> --list-cmds`, so a new (sub)command in the C dispatch
-# table appears here by itself. The option lists are kept by hand: update
-# them when an option is added or removed. A valued option takes its
-# value after a space or after `=`, so the lists offer the bare name,
-# except where the parser takes `=` only.
+# The binary names what there is to complete. `--list-cmds` at each level
+# of the command line lists its subcommands, none for a command without,
+# and `--list-opts` a command's options, one a line, a value's
+# placeholder after a tab. What stays here is what the binary cannot
+# say: what a placeholder asks for, which files a command's arguments
+# are, and the options of `image build`, which shirudo-gen-verity parses.
 #
 # Install: copied to $(sharedir)/bash-completion/completions/shirudo by
 # `make install`. To try it in place: `source completion/shirudo.bash`.
 
+# Whether the word $2 is one of the lines of $1.
+_shirudo_listed()
+{
+	local line
+
+	while IFS= read -r line; do
+		[[ $line == "$2" ]] && return 0
+	done <<<"$1"
+	return 1
+}
+
+# What to offer for the value of an option whose placeholder is $1.
+_shirudo_value()
+{
+	local cur=$2
+
+	case $1 in
+	*'<'*)	;;
+	*'|'*)
+		COMPREPLY=( $(compgen -W "${1//|/ }" -- "$cur") )
+		return ;;
+	esac
+	case $1 in
+	*dir*)
+		COMPREPLY=( $(compgen -d -- "$cur") ) ;;
+	'<hex>'|'<64-hex>'|'<n>'|'<0-10>'|'<id>'|'<url>'|'<uri>'|'<version>'|\
+	'<ref>'|'<list>'|'<upatch-name>'|*'=<hex>'|*':'*|sha256:*|"'<flags>'")
+		;;
+	*)
+		COMPREPLY=( $(compgen -f -- "$cur") ) ;;
+	esac
+}
+
+# Files of the type the arguments of the command $1 are.
+_shirudo_args()
+{
+	local cur=$2 first=$3
+
+	case $1 in
+	'upatch load'|'upatch unload'|'upatch info')
+		COMPREPLY=( $(compgen -f -X '!*.upatch' -- "$cur")
+			    $(compgen -d -- "$cur") ) ;;
+	build)
+		COMPREPLY=( $(compgen -f -X '!*.bpf.[co]' -- "$cur")
+			    $(compgen -d -- "$cur") ) ;;
+	'bpm info')
+		[[ -n $first ]] || COMPREPLY=( $(compgen -W "upatches data" -- "$cur") )
+		COMPREPLY+=( $(compgen -f -X '!*.bee' -- "$cur")
+			     $(compgen -f -X '!*.upatch' -- "$cur")
+			     $(compgen -d -- "$cur") ) ;;
+	'bpm install'|'bpm push'|'bpm tree append'|'bpm config update')
+		COMPREPLY=( $(compgen -f -X '!*.bee' -- "$cur")
+			    $(compgen -d -- "$cur") ) ;;
+	'bpm build')
+		COMPREPLY=( $(compgen -d -- "$cur") ) ;;
+	'upatch get'|'upatch map'|'bpm uninstall'|'bpm pull'|'bpm repo update'|\
+	'bpm config register'*|'bpm tree show')
+		;;
+	*)
+		COMPREPLY=( $(compgen -f -- "$cur") ) ;;
+	esac
+}
+
 _shirudo()
 {
-	local cur prev cword cmd sub bin
-	cur="${COMP_WORDS[COMP_CWORD]}"
-	prev="${COMP_WORDS[COMP_CWORD-1]}"
-	cword=$COMP_CWORD
-	bin="${COMP_WORDS[0]}"
+	local cur=${COMP_WORDS[COMP_CWORD]} prev=${COMP_WORDS[COMP_CWORD-1]}
+	local bin=${COMP_WORDS[0]} cmd=() subs opts line name meta first i
 
-	if (( cword == 1 )); then
-		local cmds
-		cmds=$("$bin" --list-cmds 2>/dev/null)
-		COMPREPLY=( $(compgen -W "$cmds" -- "$cur") )
+	for (( i = 1; i < COMP_CWORD; i++ )); do
+		subs=$("$bin" "${cmd[@]}" --list-cmds 2>/dev/null)
+		_shirudo_listed "$subs" "${COMP_WORDS[i]}" || break
+		cmd+=( "${COMP_WORDS[i]}" )
+	done
+	subs=$("$bin" "${cmd[@]}" --list-cmds 2>/dev/null)
+	if (( i == COMP_CWORD )) && [[ -n $subs && $cur != -* ]]; then
+		COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
 		return
 	fi
+	(( ${#cmd[@]} )) || return
 
-	cmd="${COMP_WORDS[1]}"
-	sub="${COMP_WORDS[2]}"
-	case "$cmd" in
-	image)
-		if (( cword == 2 )); then
-			local subs
-			subs=$("$bin" image --list-cmds 2>/dev/null)
-			COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
-		elif [[ $cur == -* && $sub == build ]]; then
-			COMPREPLY=( $(compgen -W "-o --output --kind --keys-dir \
-				--key --cert --salt --builder" -- "$cur") )
-		elif [[ $cur == -* && $sub == verify ]]; then
-			COMPREPLY=( $(compgen -W "--cert" -- "$cur") )
-		elif [[ $cur == -* && $sub == status ]]; then
-			COMPREPLY=( $(compgen -W "--json" -- "$cur") )
-		else
-			COMPREPLY=( $(compgen -f -- "$cur") )
-		fi
-		;;
-	upatch)
-		if (( cword == 2 )); then
-			local subs
-			subs=$("$bin" upatch --list-cmds 2>/dev/null)
-			COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
-		elif [[ $cur == -* ]]; then
-			case "$sub" in
-			load|unload)
-				COMPREPLY=( $(compgen -W "--expect-chain \
-					--expect-version-id --no-precheck \
-					--no-version-check --report" -- "$cur") )
-				;;
-			info|list)
-				COMPREPLY=( $(compgen -W "--json" -- "$cur") )
-				;;
-			map)
-				COMPREPLY=( $(compgen -W "--json= --show-full \
-					--all --peek --otel --otel-endpoint \
-					--otel-insecure --otel-retries \
-					--tenant-id --s3-uri" -- "$cur") )
-				;;
-			get)
-				COMPREPLY=( $(compgen -W "--json --show-full" \
-					-- "$cur") )
-				;;
-			esac
-		else
-			COMPREPLY=( $(compgen -f -X '!*.upatch' -- "$cur") \
-				    $(compgen -d -- "$cur") )
-		fi
-		;;
-	bpm)
-		if (( cword == 2 )); then
-			local subs
-			subs=$("$bin" bpm --list-cmds 2>/dev/null)
-			COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
-		elif [[ $sub == config && cword -eq 3 ]]; then
-			COMPREPLY=( $(compgen -W "register update" -- "$cur") )
-		elif [[ $sub == config && ${COMP_WORDS[3]} == update &&
-			($prev == --base-package || $prev == --file) ]]; then
-			COMPREPLY=( $(compgen -f -X '!*.bee' -- "$cur") )
-		elif [[ $sub == config && ${COMP_WORDS[3]} == update &&
-			$prev == --keys-dir ]]; then
-			COMPREPLY=( $(compgen -d -- "$cur") )
-		elif [[ $sub == config && ${COMP_WORDS[3]} == update &&
-			$prev == --rodata-input ]]; then
-			COMPREPLY=( $(compgen -f -- "$cur") $(compgen -d -- "$cur") )
-		elif [[ $sub == config && ${COMP_WORDS[3]} == update &&
-			$cur == -* ]]; then
-			COMPREPLY=( $(compgen -W "--base-package --version --file \
-				--keys-dir --rodata-input" -- "$cur") )
-		elif [[ $sub == config && ${COMP_WORDS[3]} == update ]]; then
-			COMPREPLY=( $(compgen -f -X '!*.bee' -- "$cur") \
-				    $(compgen -d -- "$cur") )
-		elif [[ $sub == config && ${COMP_WORDS[3]} == register &&
-			cword -eq 4 ]]; then
-			COMPREPLY=( $(compgen -W "add list remove" -- "$cur") )
-		elif [[ $sub == config && ${COMP_WORDS[3]} == register &&
-			${COMP_WORDS[4]} == list ]]; then
-			COMPREPLY=( $(compgen -W "--json" -- "$cur") )
-		elif [[ $sub == config && ${COMP_WORDS[3]} == register &&
-			${COMP_WORDS[4]} == add && $cur == -* ]]; then
-			COMPREPLY=( $(compgen -W "--cert" -- "$cur") )
-		elif [[ ($sub == list || ($sub == key && ${COMP_WORDS[3]} == list)) &&
-			$cur == -* ]]; then
-			COMPREPLY=( $(compgen -W "--json" -- "$cur") )
-		elif [[ $sub == repo && cword -eq 3 ]]; then
-			COMPREPLY=( $(compgen -W "update" -- "$cur") )
-		elif [[ $sub == info && cword -eq 3 ]]; then
-			COMPREPLY=( $(compgen -W "upatches data" -- "$cur") \
-				    $(compgen -f -X '!*.bee' -- "$cur") \
-				    $(compgen -d -- "$cur") )
-		elif [[ $sub == info && ${COMP_WORDS[3]} == upatches &&
-			cword -eq 4 ]]; then
-			COMPREPLY=( $(compgen -f -X '!*.bee' -- "$cur") \
-				    $(compgen -d -- "$cur") )
-		elif [[ $sub == info && ${COMP_WORDS[3]} == upatches &&
-			cword -eq 5 ]]; then
-			COMPREPLY=( $(compgen -W "--all" -- "$cur") )
-		elif [[ $sub == info && ${COMP_WORDS[3]} == data && cword -eq 4 ]]; then
-			COMPREPLY=( $(compgen -f -X '!*.bee' -- "$cur") \
-				    $(compgen -d -- "$cur") )
-		elif [[ $sub == info && ${COMP_WORDS[3]} == data && cword -eq 5 ]]; then
-			COMPREPLY=( $(compgen -f -X '!*.upatch' -- "$cur") \
-				    $(compgen -d -- "$cur") )
-		elif [[ $sub == info && ${COMP_WORDS[3]} == data && cword -eq 6 ]]; then
-			COMPREPLY=( $(compgen -W "--json" -- "$cur") )
-		elif [[ $sub == info ]]; then
-			COMPREPLY=( $(compgen -f -X '!*.bee' -- "$cur") \
-				    $(compgen -d -- "$cur") )
-		elif [[ $sub == build && $prev == --file ]]; then
-			COMPREPLY=( $(compgen -f -X '!*.bee' -- "$cur") \
-				    $(compgen -d -- "$cur") )
-		elif [[ $sub == build && $prev == --keys-dir ]]; then
-			COMPREPLY=( $(compgen -d -- "$cur") )
-		elif [[ $sub == build && $prev == --vmlinux ]]; then
-			COMPREPLY=( $(compgen -f -- "$cur") )
-		elif [[ $sub == build && $prev == --rodata-input ]]; then
-			COMPREPLY=( $(compgen -f -- "$cur") $(compgen -d -- "$cur") )
-		elif [[ $sub == build && $cur == -* ]]; then
-			COMPREPLY=( $(compgen -W "--file --version --keys-dir \
-				--vmlinux --rodata-input" -- "$cur") )
-		elif [[ $sub == build ]]; then
-			COMPREPLY=( $(compgen -d -- "$cur") )
-		elif [[ $sub == tree && cword -eq 3 ]]; then
-			COMPREPLY=( $(compgen -W "sync append" -- "$cur") )
-		elif [[ $sub == tree && ${COMP_WORDS[3]} == sync && $cur == -* ]]; then
-			COMPREPLY=( $(compgen -W "--dry-run --report" -- "$cur") )
-		elif [[ $sub == tree && ${COMP_WORDS[3]} == append && $cur == -* ]]; then
-			COMPREPLY=( $(compgen -W "--keys-dir --key --cert --tree-id \
-				--reference --op" -- "$cur") )
-		elif [[ $sub == tree && ${COMP_WORDS[3]} == append ]]; then
-			COMPREPLY=( $(compgen -f -X '!*.bee' -- "$cur") \
-				    $(compgen -d -- "$cur") )
-		elif [[ $sub == push && $cur == -* ]]; then
-			COMPREPLY=( $(compgen -W "--keys-dir --index-cert \
-				--index-key --new-index" -- "$cur") )
-		elif [[ $sub == push ]]; then
-			COMPREPLY=( $(compgen -f -X '!*.bee' -- "$cur") \
-				    $(compgen -d -- "$cur") )
-		elif [[ $sub == key && cword -eq 3 ]]; then
-			local subs
-			subs=$("$bin" bpm key --list-cmds 2>/dev/null)
-			COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
-		elif [[ $sub == key && (${COMP_WORDS[3]} == add ||
-			${COMP_WORDS[3]} == fingerprint) ]]; then
-			COMPREPLY=( $(compgen -f -- "$cur") )
-		fi
-		;;
-	build)
-		if [[ $cur == -* ]]; then
-			COMPREPLY=( $(compgen -W "-o --output --name --keys-dir \
-				--key --cert --vmlinux --extra-cflags --unload \
-				--payload-sha256 --emit-artifacts" -- "$cur") )
-		else
-			COMPREPLY=( $(compgen -f -X '!*.bpf.c' -- "$cur") \
-				    $(compgen -f -X '!*.bpf.o' -- "$cur") \
-				    $(compgen -d -- "$cur") )
-		fi
-		;;
-	init)
-		COMPREPLY=( $(compgen -W "--check-only --json" -- "$cur") )
-		;;
-	status)
-		COMPREPLY=( $(compgen -W "--json --otel --check --show-full \
-			--include-system --include-eventlog" -- "$cur") )
-		;;
-	attest)
-		if [[ $cword -eq 2 && $cur != -* ]]; then
-			COMPREPLY=( $(compgen -W "verify predict challenge" -- "$cur") )
-		elif [[ $sub == verify ]]; then
-			COMPREPLY=( $(compgen -W "--evidence --nonce --ak-name \
-				--ek-name --cert --upatch --expect --tree-root \
-				--expect-chain --expect-pcr --expect-bind-pcr \
-				--expect-credential --expect-config-root \
-				--expect-config-pcr --allow-runtime-events \
-				--strict-anchor --require-initrd --json" -- "$cur") )
-		elif [[ $sub == predict ]]; then
-			COMPREPLY=( $(compgen -W "--cert --upatch --expect \
-				--tree-root --event --writer-public --bind-pcr \
-				--json" -- "$cur") )
-		elif [[ $sub == challenge ]]; then
-			COMPREPLY=( $(compgen -W "--evidence --ek-ca --ak-name \
-				--ek-name --trust-presented-ek -o --output" \
-				-- "$cur") )
-		else
-			COMPREPLY=( $(compgen -W "--nonce --pcrs --challenge \
-				-o --output" -- "$cur") )
-		fi
-		;;
-	keys)
-		if (( cword == 2 )); then
-			local subs
-			subs=$("$bin" keys --list-cmds 2>/dev/null)
-			COMPREPLY=( $(compgen -W "$subs --keys-dir --json" -- "$cur") )
-		elif [[ $cur == -* ]]; then
-			case "$sub" in
-			add)
-				COMPREPLY=( $(compgen -W "--vouch --keys-dir" \
-					-- "$cur") )
-				;;
-			vouch)
-				COMPREPLY=( $(compgen -W "-o --output --keys-dir \
-					--key --cert" -- "$cur") )
-				;;
-			esac
-		else
-			COMPREPLY=( $(compgen -f -- "$cur") )
-		fi
-		;;
-	genkey)
-		COMPREPLY=( $(compgen -W "--keys-dir --force -f" -- "$cur") )
-		;;
-	config|version|help)
-		;;
-	esac
-
-	# A completion that ends in `=` takes its value right after it.
-	if (( ${#COMPREPLY[@]} == 1 )) && [[ ${COMPREPLY[0]} == *= ]]; then
-		compopt -o nospace 2>/dev/null
+	if [[ ${cmd[*]} == 'image build' ]]; then
+		opts=$'-o\t<prefix>\n--output\t<prefix>\n--kind\tconfig|runtime\n--keys-dir\t<dir>\n--key\t<private.pem>\n--cert\t<cert.der>\n--salt\t<64-hex>'
+	else
+		opts=$("$bin" "${cmd[@]}" --list-opts 2>/dev/null)
 	fi
+	if [[ $cur == -* ]]; then
+		local names=()
+
+		while IFS=$'\t' read -r name meta; do
+			[[ -n $name ]] && names+=( "$name" )
+		done <<<"$opts"
+		COMPREPLY=( $(compgen -W "${names[*]}" -- "$cur") )
+		# An option that ends in = takes its value right after it.
+		if (( ${#COMPREPLY[@]} == 1 )) && [[ ${COMPREPLY[0]} == *= ]]; then
+			compopt -o nospace 2>/dev/null
+		fi
+		return
+	fi
+	while IFS=$'\t' read -r name meta; do
+		if [[ $name == "$prev" && -n $meta ]]; then
+			_shirudo_value "$meta" "$cur"
+			return
+		fi
+	done <<<"$opts"
+	first=
+	for (( i = ${#cmd[@]} + 1; i < COMP_CWORD; i++ )); do
+		[[ ${COMP_WORDS[i]} == -* ]] || { first=${COMP_WORDS[i]}; break; }
+	done
+	_shirudo_args "${cmd[*]}" "$cur" "$first"
 }
 complete -F _shirudo shirudo

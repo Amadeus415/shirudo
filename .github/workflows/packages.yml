@@ -7,6 +7,12 @@ on:
     tags:
       - '*'
   pull_request:
+  workflow_dispatch:
+    inputs:
+      additional_config_cert:
+        description: Base64-encoded DER X.509 config verification certificate; public data only
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -116,6 +122,8 @@ jobs:
 
             sh .github/scripts/check-operator-linkage.sh /usr/bin/shirudo \
               /usr/libexec/shirudo/shirudo-build
+            sh .github/scripts/check-static-target.sh \
+              /usr/bin/shirudo-quote-check
 
             /usr/bin/shirudo genkey
 
@@ -207,6 +215,7 @@ jobs:
           SHIRUDO_DIR: ${{ github.workspace }}
           SHIRUDO_PACKAGE_DIR: ${{ runner.temp }}/shirudo-packages
           OUTPUT_DIR: ${{ runner.temp }}/shirudo-image-assets
+          SHIRUDO_ADDITIONAL_CONFIG_CERT_B64: ${{ github.event.inputs.additional_config_cert }}
         run: .github/scripts/build-image-assets.sh
 
       - name: Upload image assets
@@ -311,22 +320,32 @@ jobs:
   rpm-operator:
     needs: rpm-target
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     container:
       image: fedora:45
       options: --ulimit memlock=-1:-1
 
     steps:
+      # Fedora ships no static libcrypto, so make builds a static OpenSSL
+      # for shirudo-quote-check, with perl, and links it with glibc-static.
       - name: Install the build dependencies
         run: |
           dnf -q install -y gcc make pkgconf-pkg-config git python3 rpm-build \
             cryptsetup openssl openssl-devel libcurl-devel tpm2-tss-devel \
-            elfutils-libelf-devel zlib-ng-compat-devel luajit-devel jq
+            elfutils-libelf-devel zlib-ng-compat-devel luajit-devel jq \
+            glibc-static perl
 
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      - name: Restore the quote checker's static OpenSSL
+        id: quote-check-openssl
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/quote-check-openssl
+          key: quote-check-openssl-fedora45-${{ runner.arch }}-${{ hashFiles('Makefile.target-deps') }}
 
       - name: Install clang 23
         run: sh .github/scripts/install-clang.sh
@@ -357,6 +376,13 @@ jobs:
           rpm -qp --requires shirudo-operator-*.rpm | grep -qx 'clang >= 23'
           .github/scripts/gen-sbom.sh shirudo-operator-*.rpm
 
+      - name: Save the quote checker's static OpenSSL
+        if: always() && steps.quote-check-openssl.outputs.cache-hit != 'true' && hashFiles('build/quote-check-openssl/lib/libcrypto.a') != ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/quote-check-openssl
+          key: ${{ steps.quote-check-openssl.outputs.cache-primary-key }}
+
       - name: Install, exercise and remove both packages
         run: |
           set -eux
@@ -377,6 +403,8 @@ jobs:
           rpm -qV shirudo-operator
           sh .github/scripts/check-operator-linkage.sh /usr/bin/shirudo \
             /usr/libexec/shirudo/shirudo-build
+          sh .github/scripts/check-static-target.sh \
+            /usr/bin/shirudo-quote-check
           shirudo genkey
           rm -rf /tmp/shirudo-smoke && mkdir -p /tmp/shirudo-smoke
           cp testing/fixtures/basic.bpf.c /tmp/shirudo-smoke/

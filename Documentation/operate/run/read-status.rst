@@ -37,7 +37,6 @@ Print the report
       target# shirudo status
       Host:                  docs
       Roles:                 target
-      Mode:                  production
       Status:                ok
       Version ID:            d0d7aa800303439023907d1979d917d46a21bec21f816689c138728a28e84af9
 
@@ -49,6 +48,7 @@ Print the report
         UpatchesMeasured   OK      every pinned or archived upatch is in this boot's records
         TpmMeasured        OK      NV index 0x01818E00 readable
         ConfigActive       OK      config 6d5ed552f448.. is active
+        XdpCovered         OK      every device an XDP upatch selects runs it
 
       Tamper attempts (this boot):
         LoadNotLoader            15  program load that is not a signed loader
@@ -56,8 +56,10 @@ Print the report
         BpfCommand                8  detach, update, delete or unclassified bpf() command
         BpffsUmount               1  unmount of the private bpffs
         SealWrite                 1  write open of a sealed file
-        SealPtrace                7  ptrace of a shirudo task
         SealEntry                 2  entry into a sealed directory, or a sealed inode linked
+
+      Integrity attempts (this boot):
+        none
 
       Loaded upatches (1):
         NAME                      LOCATION                       MAPS  STATUS                        AGE
@@ -90,7 +92,6 @@ line; a section unfolds on its own when its condition is not ``OK``.
    target# shirudo status --show-full
    Host:                  docs
    Roles:                 target
-   Mode:                  production
    Status:                ok
    Version ID:            d0d7aa800303439023907d1979d917d46a21bec21f816689c138728a28e84af9
 
@@ -102,6 +103,7 @@ line; a section unfolds on its own when its condition is not ``OK``.
      UpatchesMeasured   OK      every pinned or archived upatch is in this boot's records
      TpmMeasured        OK      NV index 0x01818E00 readable
      ConfigActive       OK      config 6d5ed552f448.. is active
+     XdpCovered         OK      every device an XDP upatch selects runs it
 
    Tamper attempts (this boot):
      LoadNotLoader            15  program load that is not a signed loader
@@ -109,8 +111,10 @@ line; a section unfolds on its own when its condition is not ``OK``.
      BpfCommand                8  detach, update, delete or unclassified bpf() command
      BpffsUmount               1  unmount of the private bpffs
      SealWrite                 1  write open of a sealed file
-     SealPtrace                7  ptrace of a shirudo task
      SealEntry                 2  entry into a sealed directory, or a sealed inode linked
+
+   Integrity attempts (this boot):
+     none
 
    Loaded upatches (1):
      NAME                      LOCATION                       MAPS  STATUS                        AGE
@@ -157,7 +161,6 @@ line; a section unfolds on its own when its condition is not ``OK``.
      keys/signing_key.pem   absent
      eventlog               present (2324 bytes)
      upatches/              1 archived
-     incoming/              empty
      bpffs/                 mounted
 
    System:
@@ -190,11 +193,6 @@ Header
     operator and target split: remove it and treat the key as exposed,
     see :doc:`/operate/maintain/keys`.
 
-``Mode``
-    ``production`` when the ``lsm/bpf`` link is pinned in the private
-    bpffs, ``inactive`` otherwise. ``Mode`` does not look at the keyring
-    or the register. Read the conditions for those.
-
 ``Status``
     The verdict, followed by the reason in parentheses when it is not
     ``ok``. :ref:`status-verdicts` explains each verdict.
@@ -206,7 +204,7 @@ Header
 Conditions
 ~~~~~~~~~~
 
-Six conditions, each ``OK``, ``WARN`` or ``ALERT`` with a detail. The
+Seven conditions, each ``OK``, ``WARN`` or ``ALERT`` with a detail. The
 verdict is derived from them.
 
 .. list-table::
@@ -240,12 +238,51 @@ verdict is derived from them.
        this boot: <names>`` is what a load stopped between its pins and
        its extend leaves, or an archive root brought back after its
        unload, which the next ``upatch load`` or ``upatch unload``
-       undoes before it acts. ``WARN`` ``no record of this boot to check
-       the pins against`` before ``init``, or ``pins not checked against
-       the records: <error>``.
+       undoes before it acts. ``ALERT`` ``<n> XDP archives differ from
+       the loaded payload: <names>``: the sealed archive of a loaded XDP
+       upatch has changed, or is gone, so ``upatch reconcile`` refuses to
+       run and new devices stay uncovered. Handle it as an incident:
+       :doc:`/operate/troubleshoot/incident-tampered`. ``ALERT`` ``<n>
+       upatches are missing a link or their archive: <names>``: a loaded
+       upatch has fewer link pins than its signed metadata implies, so part
+       of it is detached, or its sealed archive is gone or unusable. For an upatch with XDP that means an ``xdp_prog_<i>`` pin
+       or the link of another attach program; a device going away is not
+       a missing link, but a loaded upatch whose whole pin directory is
+       gone is. Handle it the same way. ``ALERT`` ``this boot's records
+       do not fold to the measurement register``: the eventlog this
+       command read, from the init record that names the live register
+       and the TPM's reset count on, does not give the value the TPM
+       reports, or a record's digest does not follow from its fields.
+       The pins are then not checked, and every ``upatch load`` and
+       ``upatch unload`` refuses; handle it as an incident. ``WARN`` ``no
+       record of this boot to check the pins against`` before ``init``, or
+       ``pins not checked against the records: <error>``. ``WARN`` ``links
+       or archives not checked: <error>`` means one of those checks could
+       not run, which says nothing either way.
    * - ``TpmMeasured``
      - The NV index is defined, written and readable. ``WARN`` ``NV
        index 0x01818E00 not bound this boot`` or ``no TPM answered``.
+   * - ``XdpCovered``
+     - Every device the signed class mask of a loaded XDP upatch selects
+       runs that upatch. ``WARN`` ``<n> selected devices run without
+       their XDP upatch: <upatch> on <device> (<why>)`` lists each
+       device that does not, whatever the reason, with what the device
+       reports: ``no native XDP``, ``no multi-buffer XDP``, ``another
+       XDP program attached`` or ``not attached``. ``not classified:
+       <error>`` is a device whose driver or devlink port could not be
+       read, so no upatch selects it; it is listed under every XDP
+       upatch it does not run, since any of them might select it. A device added in the
+       last seconds shows ``not attached`` until ``upatch reconcile``
+       attaches it, and one udev does not announce, such as a veth peer
+       moving namespace, for up to a minute. One that stays listed is unfiltered. Its driver
+       refused the program, or a setting such as LRO turned its XDP off,
+       or the reconcile units are stopped. ``WARN`` ``XDP coverage not
+       checked: <error>`` means the check could not run; a device may
+       then be unfiltered. ``another XDP program attached`` counts a
+       generic or offloaded program too, which shirudo never attaches. ``XDP
+       coverage not checked: not in the initial network namespace`` is a
+       ``status`` run in a container or another namespace, whose devices
+       are not the host's: run it in the host's namespace.
    * - ``ConfigActive``
      - The config PCR, the activation records and the mounted config
        image agree. ``WARN`` ``the activation of config <root>.. is
@@ -262,6 +299,15 @@ means every counter is zero. ``none recorded before init`` means
 ``init`` did not get as far as pinning the counters, and ``unavailable:
 <error>`` that they could not be read.
 :ref:`status-tamper-counters` explains how to read them.
+
+Integrity attempts
+~~~~~~~~~~~~~~~~~~
+
+The counters of the changes and reads of the running kernel refused this
+boot, one per way in: an unsigned module, ``/dev/mem``, a PCI
+configuration write, ``/proc/kcore`` and the others lockdown in
+integrity mode names. They are listed, and read, as the tamper attempts
+above are.
 
 Keyrings
 ~~~~~~~~
@@ -381,9 +427,8 @@ Assets
     The number of archived upatches that ``init`` restores at the next
     boot.
 
-``incoming/`` and ``bpffs/``
-    The staging directory for loads in progress and whether the private
-    bpffs is mounted.
+``bpffs/``
+    Whether the private bpffs is mounted.
 
 Eventlog
 ~~~~~~~~
@@ -431,8 +476,9 @@ precedence: ``tampered``, ``lsm-off``, ``init-pending``,
      - Nothing. Verify with the TPM regularly, see
        :doc:`/operate/run/attest`.
    * - ``degraded``
-     - Enforcement is up, but this report has no register to check.
-     - Read the ``Chain`` line. See :ref:`status-degraded`.
+     - Enforcement is up, but this report has no register to check, or
+       a device an XDP upatch selects runs without it.
+     - Read the reason. See :ref:`status-degraded`.
    * - ``reboot-pending``
      - A config activation is pending until the next reboot. Every
        command except ``status`` and ``image status`` refuses until
@@ -642,6 +688,33 @@ the index takes TPM owner authorization, which root has on a TPM whose
 owner authorization is empty. Collect the evidence as for ``tampered``,
 see :doc:`/operate/troubleshoot/incident-tampered`, then reboot.
 
+The reason ``a device an XDP upatch selects does not run it`` comes with
+an ``XdpCovered`` warning that names each device and why. A device
+listed in one report and gone from the next was new and has been
+attached since. One that stays has no filter. Restore what took its XDP
+away, such as an LRO setting, a smaller queue count or another XDP
+program, and the next ``upatch reconcile`` attaches it. Where the
+device cannot run XDP at all, sign the upatch with a class mask that
+leaves the device out.
+
+A device listed as ``another XDP program attached`` because a second
+loaded upatch holds it does not wait for a reconcile pass alone: the
+next boot restore fails on it, ``init`` stops with the register unbound
+and the host comes up ``reboot-pending``. Unload one of the two upatches
+before the next reboot.
+
+A device that stays listed also costs the target work on every
+reconcile pass. The pass takes the register lock, checks the archive
+again, retries the attach and logs a warning, every 60 seconds and on
+each udev event for the device, for as long as the device stays as it
+is. shirudo does not stop retrying on its own, because a pass has no
+memory of the last one. Treat a lasting ``XdpCovered`` warning as an
+alert. End it by undoing what makes the device refuse, or, if the device
+is meant to stay that way, by unloading the upatch (``upatch unload``
+with its unload directive, ``bpm uninstall``, or retracting it from the
+upatch tree) and loading one signed with a class mask that leaves the
+device out.
+
 The reason ``no TPM answered`` means the TPM stopped answering while
 ``status`` ran. On a production target every command first checks that
 the TPM is the one ``init`` bound, so a TPM that does not answer at all
@@ -649,15 +722,15 @@ makes ``status`` itself fail with ``shirudo: image state:``.
 
 .. _status-tamper-counters:
 
-Read the tamper counters
-------------------------
+Read the tamper and integrity counters
+--------------------------------------
 
 Each counter counts the attempts at one guard point this boot, refused
 there except ``SealSignal``. A refusal worked, so a counter alone does
 not change any condition or the verdict. It tells you that something on
 the host tried. A ``SealSignal`` tells you that a shirudo command was
 signalled from outside; a load stopped that way shows under
-``UpatchesMeasured`` until the next upatch command undoes it.
+``UpatchesMeasured`` until the next upatch load or unload undoes it.
 
 These four attempts, made as root without shirudo's runtime authority,
 were each refused:
@@ -688,7 +761,6 @@ LSM returns. The report afterwards lists one more count under
      PinUnlink                 1  unlink of a pin in the private bpffs
      BpffsUmount               1  unmount of the private bpffs
      SealWrite                 1  write open of a sealed file
-     SealPtrace               12  ptrace of a shirudo task
      ObjGet                    1  pin, map or link opened by another executable
    ...
 
@@ -696,32 +768,66 @@ Read the counters with these rules:
 
 - Learn the baseline of your hosts. Software other than shirudo that
   uses BPF or inspects processes is refused too. A freshly booted test
-  VM shows counts for ``LoadNotLoader``, ``MapCreate``, ``BpfCommand``
-  and ``SealPtrace`` before any upatch is loaded.
+  VM shows counts for ``LoadNotLoader``, ``MapCreate`` and
+  ``BpfCommand`` before any upatch is loaded.
 - Alert on a counter that moves beyond the baseline, and on any count of
   a counter that stays at zero on your hosts.
 - Find the actor in the journal and on the host. The counter does not
   record who tried.
 - A zero count does not prove that nothing tried. Some refusals have no
-  counter, among them those of the runtime and config image mounts and
-  of device-mapper control commands.
+  counter, among them those of the runtime and config image mounts, of
+  device-mapper control commands and of a read-mode ptrace check, such
+  as journald reading ``/proc/<pid>/exe`` of a shirudo command.
 
 :doc:`/security/tamper-counters` lists every counter and the guard point
 that raises it.
+
+The integrity counters count the attempts on the running kernel the
+same way. These three, made as root, were each refused: a module whose
+signature the kernel cannot verify, ``/dev/mem`` and ``/proc/kcore``:
+
+.. code-block:: console
+
+   # insmod ./unsigned.ko
+   insmod: ERROR: could not insert module ./unsigned.ko: Operation not permitted
+   # dd if=/dev/mem of=/dev/null count=1
+   dd: failed to open '/dev/mem': Operation not permitted
+   # cat /proc/kcore >/dev/null
+   cat: /proc/kcore: Operation not permitted
+
+The report afterwards lists them under their own heading, after the
+tamper attempts:
+
+.. code-block:: console
+
+   target# shirudo status
+   ...
+   Integrity attempts (this boot):
+     ModuleSignature           1  module load without a valid signature
+     DevMem                    1  /dev/mem or /dev/port
+     Kcore                     1  /proc/kcore, the kernel's memory
+   ...
+
+Read them with the same rules, with a baseline here too: a tool that
+opens a writable debugfs file only to read it moves ``Debugfs``.
+:doc:`/security/integrity-counters` lists every counter and the
+condition that raises it.
 
 Monitor with ``status --json``
 ------------------------------
 
 ``status --json`` prints the same data as one JSON document. The
-keepalive timer sends it to your collector, see
-:doc:`/operate/run/telemetry`.
+keepalive timer sends a compact record of it, the keepalive body that
+``status --keepalive`` prints, to your collector with the TPM's quote,
+see :doc:`/operate/run/telemetry`.
 
 .. warning::
 
    ``shirudo status`` exits 0 whatever the verdict, ``tampered``
    included, unless you pass ``--check``, which exits 1 on ``tampered``
    and 0 on every other verdict. It exits 1 also when it cannot load its
-   configuration, runs out of memory or fails to send a keepalive, and 2
+   configuration, runs out of memory, or cannot quote or send a
+   keepalive, and 2
    on a usage error or an invalid ``map_export`` setting. Alert on the
    ``status`` field of the JSON document, not on the exit code.
 
@@ -744,9 +850,9 @@ The fields that matter for monitoring:
      - It is not ``ok``.
    * - ``conditions[].status``
      - Any condition is ``ALERT``.
-   * - ``mode``
-     - It is not ``production``.
    * - ``tamper_attempts.total``
+     - It rises beyond your baseline. It is ``null`` before ``init``.
+   * - ``integrity_attempts.total``
      - It rises beyond your baseline. It is ``null`` before ``init``.
    * - ``config.activation_pending``
      - It is ``true``.
@@ -779,6 +885,30 @@ The fields that matter for monitoring:
 ``upatches_loaded`` lists each loaded upatch with its
 ``payload_sha256``, which you can compare with the artifacts you
 shipped. :doc:`/reference/formats/status-json` describes every field.
+
+``tamper_attempts`` and ``integrity_attempts`` name every counter, zeros
+included, so that a collector sees the same keys in every record. The
+counters that moved, after the three attempts above:
+
+.. code-block:: console
+
+   target# shirudo status --json |
+         jq '.integrity_attempts.counters | with_entries(select(.value > 0))'
+   {
+     "ModuleSignature": 1,
+     "DevMem": 1,
+     "Kcore": 1
+   }
+
+The keepalive carries the same counters as the lists ``tamper`` and
+``integrity``, in the order of :doc:`/security/tamper-counters` and
+:doc:`/security/integrity-counters`, which the TPM's quote covers with
+the rest of the body:
+
+.. code-block:: console
+
+   target# shirudo status --keepalive | jq -c .integrity
+   [1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0]
 
 Alert separately when ``status`` does not run at all. A target that
 refuses every command, ``status`` included, prints ``shirudo: image

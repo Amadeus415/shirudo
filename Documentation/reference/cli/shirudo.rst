@@ -50,7 +50,7 @@ Commands
        :doc:`upatch-info`, :doc:`upatch-get`, :doc:`upatch-map`.
    * - :doc:`bpm`
      - target, and the operator host for ``build``, ``push``,
-       ``tree append`` and ``config update``
+       ``tree append``, ``tree show`` and ``config update``
      - Install, upgrade and remove signed packages. Build and publish
        them.
    * - :doc:`image`
@@ -85,12 +85,13 @@ Every invocation goes through the same steps before the command runs:
 
 #. Standard input, output and error that are closed are reopened on
    ``/dev/null``.
-#. The process hardens itself: it is not dumpable, sets
-   ``no_new_privs``, writes no core file, loads no OpenSSL configuration
-   file, resolves host names through ``files`` and ``dns`` only and locks
-   all its memory with ``mlockall()``. When the lock fails, ``shirudo``
-   prints ``hardening: cannot lock process memory: <error>`` and exits
-   with 1. The shipped systemd units set ``LimitMEMLOCK=infinity``.
+#. The process hardens itself: it drops the personality flags of its
+   caller, lifts its file size and CPU time limits, disarms its interval
+   timers, is not dumpable, sets ``no_new_privs``, writes no core file,
+   loads no OpenSSL configuration file, resolves host names through
+   ``files`` and ``dns`` only and locks all its memory with
+   ``mlockall()``. When the lock fails, ``shirudo`` prints
+   ``hardening: cannot lock process memory: <error>`` and exits with 1. The shipped systemd units set ``LimitMEMLOCK=infinity``.
 #. ``shirudo`` resolves the command name (see below).
 #. On a target where enforcement is up, the image gate runs (see below).
 #. The command runs.
@@ -98,8 +99,7 @@ Every invocation goes through the same steps before the command runs:
 Progress, warning and error messages go to standard error and to syslog
 with the identifier ``shirudo`` and the facility ``LOG_AUTHPRIV``, where
 journald picks them up. Results go to standard output. Help text goes to
-standard error, except the help of the
-``shirudo-build`` helper and of the generator scripts, which goes to
+standard error, except the help of the generator scripts, which goes to
 standard output.
 
 Command names
@@ -118,7 +118,8 @@ An unknown name prints ``'<input>' is not a shirudo command.``, a list of
 similar names, and exits with 1. The subcommands of ``upatch``, ``keys``,
 ``attest``, ``bpm`` and ``bpm key`` resolve the same way. The subcommands
 of ``image``, the actions of ``bpm config register`` and the words
-``repo update``, ``tree sync`` and ``tree append`` must be spelled out.
+``repo update``, ``tree sync``, ``tree append`` and ``tree show`` must be
+spelled out.
 
 ``shirudo --list-cmds`` and ``shirudo help --list-cmds`` print the
 command names one per line. Bash completion reads them from there.
@@ -126,15 +127,21 @@ command names one per line. Bash completion reads them from there.
 Option forms
 ~~~~~~~~~~~~
 
-An option that takes a value takes it after an equals sign or as the
-next argument: ``--cert=cert.der`` and ``--cert cert.der`` are the
-same, and an option given last with nothing after it is a usage error.
-Two groups differ. The commands the ``shirudo-build`` helper serves
-(``build``, ``keys vouch``, ``image build``, ``image verify`` and ``bpm
-config update``) take the value as the next argument only, except
-``--keys-dir``, which takes both forms. ``upatch map --json=<path>``
-takes its path after the equals sign only. Each command page states the
-forms it accepts. The same function has the same name on every command:
+Every command parses its options by the same rules. An option that
+takes a value takes it after an equals sign or as the next argument:
+``--cert=cert.der`` and ``--cert cert.der`` are the same. An unknown
+option, an option given twice where it does not repeat, a value missing
+or empty, and an argument the command does not take are usage errors:
+the command prints one line, ``<command>: <what is wrong>``, with the
+closest option names after an unknown one, and exits with 2. ``--``
+ends the options, ``-h`` and ``--help`` print the command's help,
+``--list-opts`` prints its options one a line, a value's placeholder
+after a tab, and ``--list-cmds`` its subcommands, none where it has
+none. The bash completion reads both. ``upatch map
+--json=<path>`` takes its path after the equals sign only, as ``--json``
+alone prints the JSON. ``image build`` hands its arguments to
+``shirudo-gen-verity``, which takes each value as the next argument
+only. The same function has the same name on every command:
 a file to write is ``-o <path>`` or ``--output <path>``, a certificate
 file is ``--cert``, a signing key ``--key``, the directory that holds
 both ``--keys-dir``, a Beefile ``--file``, and ``--json`` prints the
@@ -204,7 +211,8 @@ Operator helper
 ~~~~~~~~~~~~~~~
 
 ``build``, ``keys vouch``, ``image build``, ``image verify``, ``bpm
-build``, ``bpm push``, ``bpm tree append`` and ``bpm config update`` run
+build``, ``bpm push``, ``bpm tree append``, ``bpm tree show`` and ``bpm
+config update`` run
 in the separate ``shirudo-build`` binary, which the operator package
 installs. ``shirudo`` executes the first of:
 

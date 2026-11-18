@@ -30,8 +30,16 @@ int sha256_update(struct sha256_ctx *ctx,
 int sha256_final(struct sha256_ctx *ctx,
 		 __u8 out[CRYPTO_SHA256_LEN]) __must_check;
 void sha256_free(struct sha256_ctx *ctx);
+/* Where it fails, out is all zeros. */
 int sha256_buffer(const void *data, size_t len,
 		  __u8 out[CRYPTO_SHA256_LEN]) __must_check;
+/*
+ * BASE64_LEN() is the length of the base64 of n bytes and BASE64_SIZE()
+ * the out_sz base64_encode() needs for them, its terminator included.
+ */
+#define BASE64_LEN(n)	(4 * (((n) + 2) / 3))
+#define BASE64_SIZE(n)	(BASE64_LEN(n) + 1)
+
 int base64_encode(const __u8 *data, size_t len,
 		  char *out, size_t out_sz) __must_check;
 
@@ -117,6 +125,9 @@ int base64_decode(const char *in, size_t in_len, __u8 *out,
 
 int cert_read_der(const __u8 *der, size_t len,
 		  struct cert *cert) __must_check;
+/* A DER or a PEM certificate, as cert_read_file() takes from a file. */
+int cert_read_memory(const __u8 *buf, size_t len,
+		     struct cert *cert) __must_check;
 
 struct cert_pubkey {
 	bool		rsa;

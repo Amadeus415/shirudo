@@ -1,6 +1,9 @@
 name: Build every commit
 
 on:
+  push:
+    branches:
+      - main
   pull_request:
 
 permissions:
@@ -8,7 +11,7 @@ permissions:
 
 # A new push to the pull request supersedes the run in progress.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -25,11 +28,11 @@ jobs:
 
       # Documentation/contribute/code/contributing.rst asks for every commit to
       # build on its own, so that the history bisects; the other workflows
-      # build the head of the pull request alone. The BPF objects need the BTF
+      # build the head of the pull request or of main alone. The BPF objects need the BTF
       # of a signed-BPF capable bpf-next kernel, so the builds run in the
       # same LVH VM as the package build. The guest does not inherit the
       # runner's environment; GITHUB_ACTIONS is set for the annotations.
-      - name: Build every commit the pull request adds in LVH VM
+      - name: Build every commit the pull request or push adds in LVH VM
         uses: cilium/little-vm-helper@c8b0bfbae3bdda7bc69fb9cd370e4b74ce84986d # v0.0.33
         with:
           test-name: shirudo-build-commits
@@ -44,4 +47,4 @@ jobs:
             .github/scripts/vm-toolchain.sh
             . build/vm-toolchain.env
             GITHUB_ACTIONS=true .github/scripts/build-commits.sh \
-              ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+              ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}

@@ -94,11 +94,14 @@ loader inside the kernel, which ``lsm/bpf`` sees with ``kernel`` true.
        ``--expect-chain``, the register equals the given value.
    * - userspace
      - read and parse the file
-     - The file is read once into ``/var/lib/shirudo/incoming``. The
-       signed name must equal the header name, ``payload_sha256`` must
+     - The file is read once, into memory, and every later step takes
+       its bytes from that read: the name and payload measured, the
+       loader the kernel verifies and the copy archived. The signed name
+       must equal the header name, ``payload_sha256`` must
        equal SHA-256 of ``loader_insns || data``, and the signed attach
-       metadata must parse. Each ``uprobe.multi`` target is opened and
-       its GNU build ID compared before any BPF loads.
+       metadata must parse. Each ``uprobe``, ``uretprobe``,
+       ``uprobe.multi`` and ``uretprobe.multi`` target is opened and its
+       GNU build ID compared before any BPF loads.
    * - userspace
      - ``BPF_MAP_CREATE`` of ``__loader.map``
      - ``lsm/bpf`` allows it to a task with runtime authority, else
@@ -131,6 +134,9 @@ loader inside the kernel, which ``lsm/bpf`` sees with ``kernel`` true.
      - ``lsm/bpf``, runtime authority (``ProgAttach``). shirudo then
        compares the link the kernel reports with the signed metadata and
        refuses ``attach_scope_mismatch`` when they differ.
+       XDP expands each program's signed class mask into links on matching
+       interfaces in the initial network namespace, with one endpoint per
+       veth pair, using native driver mode only.
    * - userspace
      - ``BPF_OBJ_PIN`` of each link and map
      - ``lsm/bpf``, runtime authority (``ObjPin``), and the bpffs inode
@@ -155,6 +161,10 @@ dot in the name is written as ``~d`` there. The directory carries the
 ``security.bpf.shirudo.payload`` extended attribute with the payload
 digest, which only a task with runtime authority can set.
 :doc:`kernel-interfaces` lists the attributes each call sets.
+Artifacts containing XDP always use ``link_<n>`` pins, including when only
+one link is created. Every XDP program must attach somewhere; unsupported
+native-XDP devices are skipped, and any other attachment failure removes
+all links the load created.
 
 Telling the loader apart from root
 ----------------------------------

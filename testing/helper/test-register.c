@@ -20,6 +20,7 @@
 #include "attest.h"
 #include "chain.h"
 #include "config.h"
+#include "crypto.h"
 #include "eventlog.h"
 #include "hex.h"
 #include "identity.h"
@@ -467,8 +468,8 @@ int main(int argc, char **argv)
 		if (!ret)
 			ret = chain_anchor(nv.name, anchor, sizeof(anchor));
 		if (!ret)
-			ret = sha256_calc(anchor, strlen(anchor),
-					  anchor_digest);
+			ret = sha256_buffer(anchor, strlen(anchor),
+					    anchor_digest);
 		if (!ret)
 			ret = tpm_pcr_extend(tpm, pcr, anchor_digest);
 		if (!ret)

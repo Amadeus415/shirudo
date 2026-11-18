@@ -2,6 +2,7 @@
 /* Copyright (c) 2026 Authors of shirudo */
 
 #include <errno.h>
+#include <string.h>
 
 #include <shirudo/string.h>
 
@@ -185,7 +186,45 @@ static void upatch_member_goes_by_suffix(void)
 	EXPECT_EQ(bpm_upatch_pair("x.upatch", 8, out, 16), 0);
 }
 
+#define MANIFEST \
+	"{\"schemaVersion\":2," \
+	"\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\"," \
+	"\"artifactType\":\"application/vnd.shirudo.upatch.tree.v1\"," \
+	"\"config\":{\"mediaType\":\"application/vnd.oci.empty.v1+json\"," \
+	"\"digest\":\"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\"," \
+	"\"size\":2}," \
+	"\"layers\":[{\"mediaType\":\"application/vnd.shirudo.upatch.tree.v1+json\"," \
+	"\"digest\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\"," \
+	"\"size\":123}," \
+	"{\"mediaType\":\"application/vnd.shirudo.upatch.tree.signature.v1\"," \
+	"\"digest\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\"," \
+	"\"size\":45}]}"
+
+static void tree_manifest_is_the_publisher_form(void)
+{
+	struct bpm_descriptor payload = {
+		.media = BPM_TREE_MEDIA,
+		.digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		.size = 123,
+	};
+	struct bpm_descriptor sig = {
+		.media = BPM_TREE_SIG_MEDIA,
+		.digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+		.size = 45,
+	};
+	char out[BPM_TREE_MANIFEST_CAP], small[64];
+	size_t len;
+
+	ASSERT_EQ(bpm_tree_manifest(&payload, &sig, out, sizeof(out), &len), 0);
+	EXPECT_EQ(len, strlen(out));
+	EXPECT_STREQ(out, MANIFEST);
+	EXPECT_LT(bpm_tree_manifest(&payload, &sig, small, sizeof(small), &len),
+		  0);
+	EXPECT_EQ(len, 0);
+}
+
 static const struct unit_case cases[] = {
+	UNIT_CASE(tree_manifest_is_the_publisher_form),
 	UNIT_CASE(index_entry_needs_its_package_size),
 	UNIT_CASE(semver_valid_is_semver_alone),
 	UNIT_CASE(semver_follows_its_precedence),

@@ -4,10 +4,10 @@
 #
 # t6122 -- a load whose archive copy fails is undone. The archive is
 # written after the programs are attached and pinned, and a root that
-# fills the file system between the staged copy and the archive copy,
-# or at any moment before, got a signed upatch running with no archive
-# and no register event: unmeasured, and not restored at the next boot.
-# The load must report the persist failure with its pins gone.
+# fills the file system before the archive copy got a signed upatch
+# running with no archive and no register event: unmeasured, and not
+# restored at the next boot. The load must report the persist failure
+# with its pins gone.
 
 cd "$(dirname "$0")/../.."
 . ./integration-lib.sh
@@ -35,12 +35,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Leave room for the staged copy and half of another, not for the
-# archive copy: reserve that much, fill the rest to the last block
-# fallocate takes, then give the reservation back.
+# Leave room for half of the archive copy, not for all of it: reserve
+# that much, fill the rest to the last block fallocate takes, then give
+# the reservation back.
 fill() {
 	size=$(stat -c %s "$LOAD")
-	fallocate -l $((size + size / 2)) "$FILL.keep" || return 1
+	fallocate -l $((size / 2)) "$FILL.keep" || return 1
 	n=0
 	chunk=$((64 * 1024 * 1024))
 	while [ "$chunk" -ge 4096 ]; do

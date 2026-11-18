@@ -25,11 +25,14 @@ Usage
    shirudo bpm config register list
    shirudo bpm config register (remove | rm) <source>
    shirudo bpm config update --base-package <package> --version <version>
+                             [--base-digest sha256:<manifest>]
                              [--file <beefile>]
                              [--rodata-input <name>=<path>]... [--keys-dir <dir>]
    shirudo bpm repo update [<source>]
    shirudo bpm tree sync [--dry-run] [--report <path> | --report=<path>]
    shirudo bpm tree append <package> oci://<registry>/<repository> [<append-options>]
+   shirudo bpm tree show oci://<registry>/<repository> (--cert <certificate> | --cert=<certificate>)
+                         [--reference <reference> | --reference=<reference>] [--walk]
    shirudo bpm key (add | fingerprint) <certificate | package | oci-reference>
    shirudo bpm key list [--json]
    shirudo bpm pull oci://<registry>/<repository>:<tag>
@@ -80,7 +83,7 @@ Usage
      - target
      - yes
      - yes
-   * - ``tree append``
+   * - ``tree append``, ``tree show``
      - operator host, helper
      - no
      - no
@@ -113,8 +116,8 @@ The lock is ``/var/lib/shirudo/locks/bpm.lock``. A locked subcommand waits
 for it. The helper subcommands execute ``shirudo-build`` (see
 :doc:`shirudo`). ``shirudo bpm --help`` and ``--list-cmds`` show ``build``
 and ``push`` only where the helper resolves. Elsewhere they are unknown
-subcommands. ``config update`` and ``tree append`` always execute the
-helper and fail with 127 without it.
+subcommands. ``config update``, ``tree append`` and ``tree show`` always
+execute the helper and fail with 127 without it.
 
 Subcommand names after ``bpm`` and ``bpm key`` may be abbreviated (see
 :doc:`shirudo`). The words after ``config``, ``repo`` and ``tree`` may
@@ -154,7 +157,12 @@ again and signs a new unload directive for it. The base package must be
 signed by the same key and declare ``.rodata`` inputs, and ``--version``
 must be a SemVer 2.0.0 version greater than its version. Without ``--file``, the Beefile and the
 commands it names come from the base package and run on the operator
-host: take base packages only from sources you trust. The output is
+host: take base packages only from sources you trust. An ``oci://``
+base package needs ``--base-digest``, the manifest digest ``bpm push``
+printed when you published it, and the command refuses another
+manifest: a tag is the registry's to point at any package your key
+signed, an older one included, whose loaders and Beefile the command
+would take. ``--base-digest`` with a local base package is refused. The output is
 ``<name>-<version>.bee`` in the current directory. Options take their
 value as the next argument only.
 
@@ -178,16 +186,40 @@ reading its options.
 #. It fetches the publication and checks its tree ID, generation, parent
    and sequence numbers against the state in
    ``/var/lib/shirudo/bpm/upatch-tree/state.json``.
+#. It drops from ``upatch-tree/outcomes`` what a sync that stopped left
+   past the recorded ``last_seq`` and refuses a record that does not
+   cover it.
+#. When the publication is a segment that starts past the recorded
+   ``last_seq``, it walks back through the sealed segments by their
+   digests to the one ``last_seq`` lies in, and refuses a walk of more
+   than 65,536 operations, or 1,048,576 when the node has processed
+   none. It then takes the segments oldest first, the publication
+   last.
+#. It refuses a segment that does not start from the node's
+   ``history_root`` at its base, or whose operations up to ``last_seq``
+   are not the ones the node processed. It completes an operation a
+   sync left in progress and records the segment in ``state.json``.
 #. For each new operation whose selector matches the node labels
    (``etc/shirudo/node.labels`` of the config image, or
    ``/etc/shirudo/node.labels``), it fetches and verifies the artifact,
    loads (``add``) or unloads (``delete``) it, extends the register with
-   a tree event and records the new projection root.
+   a tree event and records the new projection root. Every new
+   operation, matched or not, gets its line in ``outcomes``.
 #. It prints a JSON report to standard output, or to ``--report``.
 
-With ``--dry-run``, it reports which operations would apply and changes
-nothing. An ``add`` whose kprobe target module is not loaded is skipped
-and recorded as ``skipped: module not loaded``.
+A failure names its phase as :doc:`/reference/failure-categories`
+lists them, and the sync applies nothing past it. The walk, its limits
+and the time a joining node takes, which grows linearly with the tree,
+are in :doc:`/reference/formats/bpm-formats`; both limits are to be
+revisited on live clusters.
+
+With ``--dry-run``, it reports which operations would apply and applies
+none: it fetches and checks every segment of a walk, but neither
+records a segment nor writes a line for a new operation, and reports
+the recorded ``last_seq``. It still drops the leftovers in ``outcomes``
+and completes an operation left in progress. An ``add`` whose kprobe target
+module is not loaded is skipped and recorded as ``skipped: module not
+loaded``.
 
 tree append
 -----------
@@ -211,22 +243,173 @@ package as the next operations of the signed tree at
    * - ``--key``, ``--cert``
      - from the keys directory
      - Signing key and certificate.
+   * - ``--previous-cert``
+     - the signing certificate
+     - Certificate that verifies the existing publication. Use the old
+       certificate when the next publication will be signed by a new key.
+       It does not change the certificate used to sign the new publication.
    * - ``--tree-id``
-     - the existing tree's, else the package name
-     - Tree ID. It must match the existing tree.
+     - for a new tree, the package name at ``stable`` and
+       ``<package>-<reference>`` at another reference
+     - Tree ID. Required to extend an existing tree, and it must be that
+       tree's: the registry chooses what the reference holds, so only the
+       operator can say which tree the new generation belongs to.
    * - ``--reference``
      - ``stable``
      - Tag of the tree publication.
    * - ``--op``
      - ``add``
      - ``add`` or ``delete``.
+   * - ``--segment-ops``
+     - ``64``
+     - Operations after which a segment is sealed, 1 to 512. Any other
+       value is refused with ``bpm tree append: --segment-ops must be 1
+       to 512``. It may differ from one append to the next.
+
+The existing publication must pass the checks ``tree sync`` makes before
+it applies anything: the sequence numbers, the ``base`` keys and every
+operation's digest. Otherwise the append is refused with ``bpm tree
+append: the publication at <repository>:<reference> does not verify``
+and nothing is published.
+
+A tree is a chain of segments, each one publication document of at most
+512 operations; :doc:`/reference/formats/bpm-formats` has the ``base``
+keys that link them. An append never splits its operations
+across segments. Before it adds its ``n`` operations to the current
+segment, which holds ``c``, it seals that segment when ``c`` is at least
+``--segment-ops`` or ``c + n`` exceeds 512, so a segment can hold up to
+``n - 1`` operations more than ``--segment-ops``. A package holds at most
+128 tree entries, so one append always fits in a segment. Sealing:
+
+#. The current publication becomes the sealed segment, its manifest and
+   document unchanged.
+#. Its manifest is tagged ``segment-<k>``, where ``k`` counts the sealed
+   segments from 1. The tag only keeps registry garbage collection from
+   deleting the segment: a target follows ``<reference>`` and reaches the
+   sealed segments by digest. The append looks up the last tag by
+   doubling ``k`` and then halving the gap, about 2 log\ :sub:`2` ``k``
+   manifest requests, and never moves an existing tag. When the last tag
+   already names the sealed manifest, left by an append that failed after
+   tagging, it adds none.
+#. The new publication holds only the appended operations. Its
+   ``base.seq`` is the sealed ``head.seq``, ``base.segment_manifest_digest``
+   and ``parent_manifest_digest`` both name the sealed manifest, its
+   ``generation`` is one higher, and ``base.history_root`` is the sealed
+   segment's ``base.history_root``, 64 zeros for the first segment,
+   folded over the sealed operations.
+
+The tag is written after every check has passed and just before
+``<reference>`` moves, so a refused append leaves no tag.
+
+``tree append`` works out every operation of the package, checks each
+as a target will and signs the publication before it uploads anything:
+when it refuses, the registry is as it was. An entry no target could
+take, one with a control character in its id or in a selector value,
+fails with ``bpm tree append: the tree entry of <id> makes an operation
+no target takes``.
+
+An ``add`` is refused when an XDP program of the upatch selects a device
+class that an XDP program of another upatch in the tree selects, and the
+selectors of the two operations do not exclude each other. A device runs
+one native XDP program, so the second upatch would fail its load on every
+node with such a device and ``tree sync`` would stop there. The message
+names both upatches, the sequence number of the earlier operation and the
+shared classes, and nothing is published.
+
+- Only an ``add`` that no later ``delete`` withdrew counts. A ``delete``
+  withdraws it when its selector reaches every node the ``add`` reaches:
+  it is empty, or it constrains nothing the ``add`` leaves open and
+  allows every value the ``add`` allows.
+- Two selectors exclude each other when both name architectures, kernel
+  build IDs or kernel release prefixes and have none in common, or when
+  both name the same label or kernel option and share no value for it.
+  Selectors that name different labels do not: one node can carry both.
+- The classes of the earlier upatches are read from their artifacts in
+  the registry, so the append fails when one of them cannot be fetched.
+  Two upatches of the package being appended are compared as well.
+- The earlier upatches are those of every segment back to ``seq`` 1. For
+  an ``add`` whose XDP programs select a class, the append fetches each
+  sealed segment by its digest, as a target that joins the tree does, and
+  checks that it verifies against ``--previous-cert``, that it is the
+  segment its successor names, ends where the successor starts and has a
+  lower generation, and it passes the checks of the current publication
+  above. A segment that fails is refused with ``bpm tree append: the
+  sealed segment <digest>, which ends at seq <n>, does not verify``.
+  A ``delete`` in any later segment withdraws an ``add`` as one in its
+  own segment does. The walk covers at most 1,048,576 operations, the
+  limit of a joining target; past it the append is refused with ``bpm
+  tree append: a joining node walks back <n> operations, past the limit
+  of 1048576, so the XDP device classes of the sealed segments cannot be
+  checked``. An ``add`` without XDP classes and a ``delete`` fetch no
+  sealed segment.
+
+An ``add`` carries the entry's ``fixes``, a ``delete`` none, and every
+earlier operation keeps its own. The append is refused, and nothing is
+published, when the existing publication holds a ``fixes`` list
+``bpm tree append`` would not write; the message is ``bpm tree append:
+the publication at <repository>:<reference> has a fixes list bpm tree
+append would not write, so it cannot carry it into the next
+generation``.
+
+tree show
+---------
+
+``tree show`` fetches the tree publication at ``<repository>:<reference>``
+(``reference`` defaults to ``stable``) and verifies it as ``tree sync``
+does, against the certificate ``--cert`` names instead of a config
+image: each layer against its descriptor, the signature, then the tree
+ID, the sequence numbers and each operation's digest. It reads no node
+state and writes nothing. It prints one JSON object and a newline:
+
+.. code-block:: none
+
+   {"manifest_digest":"sha256:<hex>","document":<document>}
+
+``manifest_digest`` is the digest of the publication's manifest, and
+``document`` the signed document's bytes as published, not emitted
+again, so keys a node ignores, such as ``fixes``, appear as signed. The
+document may hold newlines; read the output as a JSON value, not as a
+line.
+
+With ``--walk``, it prints every segment of the tree that way, one
+object and a newline per segment, oldest first: the segment at
+``base.seq`` 0 first and the publication ``<reference>`` names last. It
+walks back from that publication through the sealed segments by the
+``base.segment_manifest_digest`` each names, and checks each one as a
+target walking back does: fetched by its digest, verified, of the same
+tree, ending at its successor's ``base.seq`` and of a lower generation.
+It keeps only their digests and fetches each again, by digest, to print
+it, so it fetches every sealed segment twice. A tree never sealed prints
+the one object ``tree show`` prints without it. Like a joining target,
+it refuses a tree whose current segment starts more than 1,048,576
+operations in before it fetches a sealed segment, with ``bpm tree show:
+the current segment starts after seq <n>, more than the 1048576
+operations a joining node walks`` and ``Argument list too long``. A sealed segment it cannot fetch or that does not check is
+refused with ``bpm tree show: the sealed segment <digest>, which ends at
+seq <n>, cannot be fetched or does not verify``, then the errno: ``No
+such file or directory`` for one the registry no longer holds, and
+``Numerical result out of range`` for one that is not the segment before
+its successor. Nothing is printed before the whole walk back checks; a
+segment that the registry no longer serves, or serves with other bytes,
+when it is fetched again stops the output after the segments before it,
+with ``bpm tree show: the sealed segment <digest> cannot be fetched
+again or changed`` and the errno.
+
+A refusal prints ``bpm tree show: <error>`` with the errno ``tree sync``
+reports for the same publication: ``Key was rejected by service`` for a
+signature that does not verify under the certificate, a layer that does
+not match its digest or an operation digest that does not match its
+operation, ``No such file or directory`` for a reference that does not
+exist, and ``Invalid argument`` for a document that is not a tree
+publication.
 
 key
 ---
 
 - ``key fingerprint`` prints the SHA-256 fingerprint of a certificate's
   public key (SPKI). The argument is a DER certificate, a ``.bee`` package
-  (its ``cert.der``) or an ``oci://`` package reference.
+  (its ``cert.der``) or an ``oci://`` package reference. The certificate
+  is read once, so ``key add`` installs the bytes it fingerprints.
 - ``key add`` prints the same fingerprint and installs the certificate in
   ``/var/lib/shirudo/keys/<fingerprint>.der``. When
   ``/var/lib/shirudo/keys/cert.der`` does not exist, it links ``cert.der``
@@ -275,7 +458,8 @@ push
 ----
 
 ``push`` publishes a ``.bee`` file to ``oci://<registry>/<repository>``
-(no tag) and prints ``oci://<registry>/<repository>:<version>``. With
+(no tag) and prints ``oci://<registry>/<repository>:<version>
+sha256:<digest>``, the digest of the manifest it pushed. With
 ``--keys-dir``, or ``--index-cert`` and ``--index-key`` together, it also
 adds the package to the registry's signed index
 ``<namespace>/bpm-index:stable``, signed with that key. The namespace is
@@ -368,16 +552,14 @@ Exit status
    * - 0
      - Success, or ``tree sync`` without a configured tree.
    * - 1
-     - Failure, printed as ``bpm <action>: <error>``. Also the usage
-       errors of ``build``, ``config update``, ``tree append`` and
-       ``tree sync``, and ``config register add`` or ``remove`` and
-       ``key add`` on a target with a config image.
+     - Failure, printed as ``bpm <action>: <error>``. Also ``config
+       register add`` or ``remove`` and ``key add`` on a target with a
+       config image.
    * - 2
-     - A usage error of the other subcommands, an unknown subcommand, and
-       without a message: ``repo`` without ``update``, ``repo update``
-       with more than one source, ``tree sync`` with more than three
-       arguments, ``upgrade`` with an argument, ``install`` without
-       exactly one reference, and an unknown ``config`` action.
+     - A usage error, printed as ``bpm <subcommand>: <what is wrong>``:
+       an unknown subcommand, action or option, an option given twice, a
+       value missing, empty or out of range, or an argument missing or
+       one too many.
    * - 127
      - A helper subcommand cannot execute ``shirudo-build``.
 
@@ -427,6 +609,19 @@ Preview a tree sync:
 .. code-block:: console
 
    target# shirudo bpm tree sync --dry-run --report=/tmp/tree.json
+
+Print the tree publication a target would sync, verified with the
+operator certificate:
+
+.. code-block:: console
+
+   operator$ shirudo bpm tree show oci://quay.io/example/tree --cert ~/shirudo-keys/cert.der
+
+Print every segment of that tree, oldest first:
+
+.. code-block:: console
+
+   operator$ shirudo bpm tree show oci://quay.io/example/tree --cert ~/shirudo-keys/cert.der --walk
 
 Print the fingerprint of the certificate a package carries:
 

@@ -151,9 +151,11 @@ Exit status
      - The register's write policy could not be computed, or memory ran
        out.
    * - 2
-     - No ``--cert``, an unknown option, an option given last without
-       its value, an unreadable file, an invalid value or event, or
+     - A usage error: no ``--cert``, an unknown option, an option given
+       twice, the same PCR twice to ``--bind-pcr``, a value missing,
+       empty or invalid, an argument, more than 256 ``--event``, or
        ``--bind-pcr`` without both PCRs or without ``--writer-public``.
+       An unreadable file or an invalid event.
 
 Examples
 --------

@@ -34,9 +34,10 @@ whatever changed it. Do not reboot the target before the evidence is
 safe: a reboot starts a new register, and the TPM can no longer certify
 the state of this boot.
 
-A tamper counter that moved is a different signal: something tried an
-operation and the LSM refused it. :doc:`/security/tamper-counters`
-explains the counters.
+A tamper or integrity counter that moved is a different signal:
+something tried an operation and the LSM refused it.
+:doc:`/security/tamper-counters` and :doc:`/security/integrity-counters`
+explain the counters.
 
 Before you begin
 ----------------

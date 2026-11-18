@@ -3,9 +3,7 @@
 # Copyright (c) 2026 Authors of shirudo
 #
 # .github/scripts/build-debian.sh -- build on a Debian testing container of
-# any architecture, with the distribution's compiler and libraries, which
-# are new enough to need no toolchain of their own, and clang 23 from
-# unstable through install-clang.sh: the binary and the
+# any architecture, with what debian-deps.sh installs: the binary and the
 # shirudo-build helper, then the unit tests and the linkage check. The BPF
 # objects are bytecode whatever the host, so the BTF can come from a
 # kernel of another architecture.
@@ -28,30 +26,16 @@ grep -aq 'signature_size' "$btf" || {
 	exit 1
 }
 
-export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y --no-install-recommends \
-	build-essential \
-	ca-certificates \
-	git \
-	openssl \
-	pkgconf \
-	python3 \
-	libcurl4-openssl-dev \
-	libelf-dev \
-	libluajit-5.1-dev \
-	libssl-dev \
-	libtss2-dev \
-	zlib1g-dev
-sh .github/scripts/install-clang.sh
-
-git config --global --add safe.directory "$PWD"
+sh .github/scripts/debian-deps.sh
 uname -m
 cc --version | head -n 1
 
 export BPF_VMLINUX_BTF="$btf"
 make -j"$(nproc)"
 make shirudo-build
+make quote-check
 make -C testing unit
 sh .github/scripts/check-operator-linkage.sh shirudo \
 	tools/shirudo-build/shirudo-build
+sh .github/scripts/check-static-target.sh \
+	tools/quote-check/shirudo-quote-check

@@ -1,6 +1,6 @@
 ---
 name: upatch
-description: Write, build, sign, inspect and package a shirudo upatch. Covers the BPF C program written for the target kernels' preemption model and at a low cost on machines large and small, `shirudo build` for a .upatch and its unload directive, the Beefile and `shirudo bpm build` for a .bee package, `bpm info` to inspect one, `bpm push` and `bpm tree append` to publish, and loading it on a test target. Use when asked to create, change or ship an upatch or a bpm package, or to reproduce a failed upatch build or load.
+description: Write, build, sign, inspect and package a shirudo upatch. Covers the BPF C program written for the target kernels' preemption model and at a low cost on machines large and small, `shirudo build` for a .upatch and its unload directive, the Beefile and `shirudo bpm build` for a .bee package, `bpm info` to inspect one, `bpm push` and `bpm tree append` to publish, `bpm tree show` to read a publication back, and loading it on a test target. Use when asked to create, change or ship an upatch or a bpm package, or to reproduce a failed upatch build or load.
 ---
 
 # Upatch
@@ -133,6 +133,7 @@ the `.rodata` a rodata entry wrote, the quickest check of a generator.
 ```sh
 shirudo bpm push <name>-<version>.bee oci://<registry>/<namespace>/<repo> --keys-dir <keys>
 shirudo bpm tree append <name>-<version>.bee oci://<registry>/<repository> [<append-options>]
+shirudo bpm tree show oci://<registry>/<repository> --cert <keys>/cert.der [--reference <ref>] [--walk]
 ```
 
 `push` signs the namespace's index along with the package. Pass
@@ -140,6 +141,24 @@ shirudo bpm tree append <name>-<version>.bee oci://<registry>/<repository> [<app
 `BPM_OCI_SCHEME=http` is for a registry on the loopback only. `tree
 append` adds a load or delete operation to a signed upatch tree that
 targets sync; `Documentation/reference/cli/bpm.rst` lists its options.
+It refuses an `add` whose XDP programs select a device class another
+upatch of the tree selects on the same nodes, in any segment: give each
+class to one upatch, or the two entries selectors that exclude each
+other. A segment that holds `--segment-ops` operations (64 by default,
+1 to 512) is sealed and tagged `segment-<k>`, and the append starts the
+next one; keep the `segment-*` tags in the registry, since targets walk
+back through the sealed segments by digest: up to 65,536 operations from
+where they are, or 1,048,576 for one that has applied none, past which
+`bpm tree sync` refuses with the `segment_walk` phase. A target refuses
+a segment that does not start from its own `history_root`, or whose
+operations up to its cursor differ from the ones it processed
+(`history_base`, `history_prefix`), so never republish a sealed segment
+or rewrite an operation a target may have taken. `tree
+show` prints the publication verified as a target verifies it, as
+`{"manifest_digest":...,"document":...}` with the signed document
+verbatim, `fixes` included: the check that an append published what
+was meant. `--walk` prints one such object per segment, oldest first,
+after checking the chain back to `base.seq` 0 as a joining target does.
 
 ## Load it on a target
 

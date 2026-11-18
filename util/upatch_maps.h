@@ -64,6 +64,8 @@ struct map_view {
 	__u32		n_entries;	/* live entries iterated */
 	__u32		n_cpus;		/* 1 for non-percpu types */
 	__u64		lifetime_start_ns; /* pin-dir ctime; metric reset boundary */
+	bool		has_payload;	/* the pin directory's payload digest */
+	__u8		payload[UPATCH_PAYLOAD_HASH_LEN];
 	bool		truncated;
 	__u32		n_truncated_at;
 	bool		serialized;

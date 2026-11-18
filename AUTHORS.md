@@ -7,6 +7,7 @@ signed off on commits in the shirudo project:
  * Bill Mulligan             \<billmulligan516@gmail.com\>
  * Daniel Borkmann           \<daniel@iogearbox.net\>
  * Jeremy Colvin             \<jeremy.colvin@isovalent.com\>
+ * Jiri Olsa                 \<jolsa@kernel.org\>
  * John Fastabend            \<john.fastabend@gmail.com\>
  * KP Singh                  \<kpsingh@kernel.org\>
  * Leonard Cohnen            \<leonard.cohnen@gmail.com\>

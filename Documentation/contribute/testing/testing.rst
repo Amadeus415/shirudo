@@ -27,24 +27,38 @@ Before you begin
 - For the ``ci-checks`` tests: ``git``, ``jq``, ``pkg-config``,
   ``readelf`` and ``spatch`` from Coccinelle. A test whose tool is
   missing skips. The runner of the ``CI suite`` workflow has them all.
-- For the tests that boot a VM: root, a readable and writable
-  ``/dev/kvm``, an x86-64 or arm64 host and what ``make target`` needs,
-  since the bundle a VM boots holds the static target binary. On Ubuntu,
+- For the tests that boot a VM: a readable and writable ``/dev/kvm``,
+  a locked-memory limit (``ulimit -l``) of ``unlimited``, which the
+  shirudo binaries the runner calls require, an x86-64 or arm64 host,
+  and podman or Docker, in which the bundle a VM boots builds; with
+  ``BUILD_CONTAINER=0`` it builds on the host instead, which then needs
+  what ``make target`` needs. On Ubuntu,
   ``.github/scripts/tests.sh setup`` installs ``cloud-image-utils``,
   ``dracut-core``, ``file``, ``isc-dhcp-client``, ``libguestfs-tools``,
   ``qemu-system-x86``, ``qemu-utils``, ``swtpm``, ``swtpm-tools`` and
   ``tpm2-tools`` among others. :src:`testing/vm/run.sh` names the packages
-  it misses with an install command for ``apt-get`` or ``dnf``.
-- For the end-to-end tests: Docker on the host.
+  it misses with an install command for ``apt-get`` or ``dnf``. The
+  bundle carries the TPM simulator helper, so
+  :src:`testing/vm/build-bundle.sh` builds no bundle without
+  ``libtpms-dev``.
+- For the end-to-end tests: Docker on the host, and network access the
+  first time, when the runner adds clang 23 from apt.llvm.org and the
+  operator's build dependencies to the image of the operator VM.
 
 The ``CI suite`` workflow uses the x86-64 CI kernel package from
-``shirudo-dev/kernel`` for every trigger. By default, it selects the
-latest available ``kernel-packages-x86-64-ci`` artifact from ``main``.
-For a manual run, set ``kernel_run_id`` to select a specific run instead.
-The run must contain that artifact. The
-``KERNEL_REPO_READ_TOKEN`` secret needs Actions read access to the kernel
-repository. Setup extracts the image and headers packages, checks the
-kernel config and BTF, and stages the result for the test VM.
+``shirudo-dev/kernel`` for every trigger: the
+``kernel-packages-x86-64-ci`` artifact of the run that
+:src:`.github/workflows/tests.yml` pins, so that a new build of the
+kernel does not change what a series is tested on. For a manual run,
+set ``kernel_run_id`` to select another run. The run must contain that
+artifact. The ``KERNEL_REPO_READ_TOKEN`` secret needs Actions read
+access to the kernel repository. Setup extracts the image and headers
+packages, checks the kernel config and BTF, and stages the result for
+the test VM. It refuses a kernel whose BTF lacks an LSM hook a program
+of ``bpf/`` attaches to, or whose config does not sign every module.
+A change to ``kernel/`` or to :src:`testing/vm/build-kernel.sh`
+therefore needs a new run of the kernel repository and the pin moved to
+it before CI can boot the series.
 
 Test tiers
 ----------
@@ -72,22 +86,24 @@ Test tiers
      - ``make -C testing functional``
    * - End-to-end
      - :src:`testing/end2end/`
-     - Around one VM, with a registry and a collector in containers on
-       the host
+     - In an operator VM and a target VM, with a registry and a
+       collector in containers on the host
      - ``make -C testing end2end``
    * - Fuzz
      - :src:`testing/fuzz/`
-     - On the build host, under libFuzzer, ASan and UBSan
-     - ``make -C testing fuzz``
+     - On the build host, under libFuzzer with ASan and UBSan, or with
+       MSan, and under AFL++
+     - ``make -C testing fuzz``, ``make -C testing afl``
    * - Proofs
      - :src:`testing/proofs/`
-     - On the build host, with CBMC and Lean 4, about an hour for all
+     - On the build host, with CBMC and Lean 4, hours of CPU for all
      - ``make proofs``
 
 ``make tests`` in the checkout root, or ``make -C testing``, runs the
 unit, CI check, functional and end-to-end tiers in that order. The fuzz
-targets and the proofs run on their own, and CI does not run the
-proofs: :doc:`proofs` says which to run for a change.
+targets and the proofs run on their own. CI runs the proofs only after
+a push to main, in the ``Proofs`` workflow, never on a pull request:
+:doc:`proofs` says which to run for a change.
 
 Each functional family with target tests gets a fresh VM. The VM runner
 caches the generated dracut initrd in ``build/test-vm/cache/initrd/``
@@ -145,9 +161,11 @@ A shell test is named ``t<F><K><NN>-<what>.sh``:
        seal, task authority, task and socket policy inheritance, the
        keyrings and the TPM path
    * - 7
-     - ``functional/bpm/``
+     - ``functional/bpm/``, ``functional/bpm-segments/``
      - Package commands, Beefile policy labels, publishing and the
-       upatch tree
+       upatch tree; ``bpm-segments`` boots a VM of its own, whose node
+       starts without a tree, for the walk through a tree's segments
+       and the keepalive window over them
    * - 8
      - ``functional/otel/``
      - Map export, the status keepalive, OTLP transport and TLS policy
@@ -166,6 +184,11 @@ a Python companion with the same stem, such as
 before ``init``. They skip on the build host and run in a separate VM
 that the ``tpm`` family boots without the production initrd.
 
+``t9109``, ``t9110`` and ``t9111`` carry target numbers but run on the
+host: :src:`testing/end2end/host.sh` runs them after node A's suite, in
+that order, against other nodes (see :ref:`testing-two-nodes`), and node
+A's runner leaves them out.
+
 Run the tests
 -------------
 
@@ -173,7 +196,7 @@ Run everything, as CI does:
 
 .. code-block:: console
 
-   # make tests
+   $ make tests
 
 ``make -C testing help`` lists the unit suites and the families. Run
 one tier, one unit suite or one family:
@@ -182,7 +205,7 @@ one tier, one unit suite or one family:
 
    $ make -C testing unit
    $ make -C testing unit/<suite>
-   # make -C testing functional/<family>
+   $ make -C testing functional/<family>
 
 ``<suite>`` is a file name under :src:`testing/unit/` without ``.c``, such
 as ``json``. ``<family>`` is a directory under :src:`testing/functional/`,
@@ -190,7 +213,7 @@ such as ``upatch``. A family runs its operator tests in number order,
 then boots its VM and runs its target tests there. ``make -j`` boots the
 VMs of several families side by side.
 
-Leave out every test that boots a VM, for a host without KVM or root:
+Leave out every test that boots a VM, for a host without KVM:
 
 .. code-block:: console
 
@@ -257,6 +280,52 @@ Run under the sanitizers
 objects are unaffected. Recovery is off, so every report fails the run.
 CI runs the same with gcc and with clang.
 
+``SANITIZE=thread`` runs the same tests under ThreadSanitizer, which
+reports data races and, in a signal handler, a call that is not
+async-signal-safe or a changed ``errno``. shirudo starts no thread and
+installs no signal handler, so it reports nothing today; the ``TSan``
+leg of the ``Sanitizers`` workflow runs it with clang so that the first
+one added is checked.
+
+Run under MemorySanitizer
+-------------------------
+
+MemorySanitizer reports a read of memory that nothing wrote, which ASan
+and UBSan do not. It takes what code it did not instrument writes as
+never written, so every library the code reads from must be built with
+it too.
+
+1. Build the instrumented zlib, OpenSSL, libelf, libcurl and tpm2-tss
+   into ``/tmp/shirudo-msan``. The script keeps a copy in
+   ``build/msan-deps`` and copies it back on a later run instead of
+   building again:
+
+   .. code-block:: console
+
+      $ sh .github/scripts/msan-deps.sh
+
+2. Remove the objects of an earlier build:
+
+   .. code-block:: console
+
+      $ make clean
+
+3. Build with ``SANITIZE=memory`` and run the unit tests and every fuzz
+   target, here for 60 seconds each:
+
+   .. code-block:: console
+
+      $ sh .github/scripts/msan-tests.sh 60
+
+Both need clang 23 with its MemorySanitizer and libFuzzer runtimes.
+``SANITIZE=memory`` instruments the vendored libbpf as well. The suite
+leaves out the decoder's unit tests and fuzz target: LuaJIT's
+interpreter is assembly, which no sanitizer instruments, so the values
+it hands back would read as uninitialized. ASan and UBSan cover those.
+The ``MSan`` job of the ``Sanitizers`` workflow runs the same, the fuzz
+targets for 60 seconds on each push and pull request and for ten
+minutes in a run started by hand.
+
 Run the fuzz targets
 --------------------
 
@@ -279,8 +348,10 @@ runner.
    ``<target>`` is the name of ``testing/fuzz/fuzz-<target>.c``, such as
    ``json``.
 
-``FUZZ_JOBS`` sets how many targets run at a time, one per CPU by
-default. A crash fails the run and leaves its input in
+``FUZZERS`` names the targets ``make -C testing fuzz`` runs, all of them
+by default, and ``FUZZ_JOBS`` how many run at a time, one per CPU by
+default. The targets are built under the sanitizers ``SANITIZE`` names,
+ASan and UBSan without it. A crash fails the run and leaves its input in
 ``testing/fuzz/crash-<target>-*``.
 
 What a target finds is discarded after the run unless
@@ -299,16 +370,45 @@ An input in the kept corpus that crashes a later build fails that run
 like any new crash.
 
 The ``libFuzzer`` job of the ``Sanitizers`` workflow runs every target
-for 60 seconds on each push and pull request, and for ten minutes in a
-nightly run, which also starts by hand from the Actions page. Every run
-starts from the corpus the last nightly or manual run kept in the
-Actions cache, and only those runs save it. When a run fails, the
-inputs that crashed are in its ``fuzz-crashes`` artifact; copy one into
-``testing/fuzz/`` and run its target on it to reproduce the crash:
+for 60 seconds on each push to ``main`` and each pull request, and for
+ten minutes in a run started by hand from the Actions page. Every run
+starts from the corpus the last push to ``main`` or run by hand kept in
+the Actions cache, and only those runs save it: a pull request keeps
+what it finds to itself. When a run fails, the inputs that crashed are
+in its ``fuzz-crashes`` artifact; copy one into ``testing/fuzz/`` and
+run its target on it to reproduce the crash:
 
 .. code-block:: console
 
    $ testing/fuzz/fuzz-<target> testing/fuzz/crash-<target>-<hash>
+
+The same targets run under AFL++, whose mutations and comparison
+logging find inputs libFuzzer does not, such as a magic value or a
+checksum the parser compares the input with. AFL++ builds each target
+twice, with ``afl-clang-fast`` and again logging its comparisons, into
+``build/fuzz-afl`` and ``build/fuzz-afl-cmplog``, apart from the
+libFuzzer builds. Its compiler passes must be built for clang 23:
+:src:`.github/scripts/afl-deps.sh` builds a pinned AFL++ into
+``build/afl``, and needs ``llvm-23-dev``.
+
+.. code-block:: console
+
+   $ .github/scripts/afl-deps.sh
+   $ PATH=$PWD/build/afl/bin:$PATH make -C testing afl AFL_SECONDS=600 \
+         FUZZ_CORPUS=$PWD/build/fuzz-corpus
+
+``AFL_SECONDS`` is the time per target, ten minutes by default, and
+``FUZZERS``, ``FUZZ_JOBS`` and ``FUZZ_CORPUS`` work as for
+``make -C testing fuzz``. What AFL++ queued goes into the same kept
+corpus, which the next libFuzzer run merges down. A crash fails the run
+and leaves its input in ``testing/fuzz/crash-afl-<target>-<n>``; the
+libFuzzer build of the target reproduces it like any other input.
+
+The ``afl-fuzz`` job of the ``Sanitizers`` workflow runs every target
+under AFL++ when the ``libFuzzer`` job does, for as long, and saves its
+corpus when that job does. Each starts from the newest corpus either
+kept, so that what one finds the other starts from. What crashed is in
+the job's ``afl-fuzz-crashes`` artifact.
 
 Use the test VM
 ---------------
@@ -317,6 +417,13 @@ The test VM plays a production target. It boots a test kernel, an
 Ubuntu cloud image and a software TPM, and runs ``init`` from a dracut
 initrd with the dm-verity runtime image and a signed config image. The
 family runs, the end-to-end run and the interactive VM all boot it.
+
+A family's VM runs its target tests itself and powers off. The
+end-to-end VM prepares itself the same way and waits while the host runs
+its target tests over SSH, then powers off. The operator VM of the
+end-to-end test has no TPM and no shirudo kernel arguments; it builds
+and installs the operator package and serves the end-to-end run. The
+interactive VM stays up until you stop it.
 
 Build the test kernel
 ~~~~~~~~~~~~~~~~~~~~~
@@ -389,19 +496,43 @@ the signing key outside the checkout, which every guest can read, in
 ``TEST_VM_HOST_PRIVATE_DIR`` names another directory, which must lie
 outside the repository. Every target that boots a VM rebuilds the bundle
 when one of its inputs changed, or when that directory does not hold the
-key the bundle's fixtures are signed with. Build it alone with:
+key the bundle's fixtures are signed with. The end-to-end test builds it
+once, before its two VMs: the target must trust the key the operator
+signs with. Build it alone with:
 
 .. code-block:: console
 
    $ make -C testing bundle
 
+The host prepares the VM images and keeps the stamp. The rest, the build
+and everything it signs, :src:`testing/vm/build-bundle-payload.sh` does
+in the build container: Ubuntu 26.04, the release the VMs run, with its
+OpenSSL 3.5, the static archives its ``libcrypto.a`` names, which
+:src:`.github/scripts/install-static-libcrypto-deps.sh` installs as it
+does in CI, and clang 23, so that it needs nothing of the host's
+toolchain and what it puts into a guest links against the guest's
+libraries. The image builds from :src:`testing/container/Containerfile` on
+first use, with network access, and is tagged ``shirudo-build:<hash>``
+by its inputs; :src:`testing/container/run.sh` builds it and runs a
+command in it. The container builds from a copy of the files git sees in
+the checkout, tracked and untracked but not ignored, so uncommitted
+changes are in the bundle and the host's own build is left alone. It
+keeps the static target dependencies it builds under
+``build/test-vm/cache/target-deps/``, one directory per image and
+:src:`Makefile.target-deps`.
+
+``BUILD_CONTAINER=0`` builds the bundle in the checkout with the host's
+toolchain, the way the host tier always builds: OpenSSL 3.5 and clang 23,
+found through ``PATH`` and ``LD_LIBRARY_PATH`` as
+:doc:`/contribute/code/developer-guide` shows. ``CONTAINER`` names another
+engine than the first of ``podman`` and ``docker`` on ``PATH``.
 The bundle script runs Make builds with one job per available CPU reported
 by ``nproc``. The eighty status-many fixture pairs build in parallel batches, with one
 worker per available CPU reported by ``nproc``. Each worker builds a load
 artifact and its matching unload artifact. The ordinary fixture builders, including
 the policy and observability fixtures, and the independent unload artifacts
 also build in CPU-sized batches. Payload hashes are read after their builders
-finish, and the tree test registry is generated after its unload artifact.
+finish, and the tree test registry is generated after its unload artifacts.
 
 Boot an interactive VM
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -466,9 +597,11 @@ Boot an interactive VM
    * - ``TEST_VM_QEMU=<path>``
      - Another emulator, such as RHEL's ``/usr/libexec/qemu-kvm``.
    * - ``TEST_VM_TIMEOUT=<seconds>``
-     - How long a test-mode VM may run, 3600 by default. CI sets 900.
+     - How long a VM that runs tests may run, 3600 by default. CI sets
+       900.
    * - ``TEST_VM_VERBOSE=1``
-     - Streams the console of a test-mode VM to the terminal.
+     - Streams the console of a VM that runs tests to the terminal, and
+       what the end-to-end tests print over SSH.
 
 Inside the guest:
 
@@ -491,6 +624,8 @@ Inside the guest:
    * - ``/mnt/shirudo-out``
      - The result share, ``build/test-vm/vms/<name>/result/`` on the
        host.
+   * - ``/etc/shirudo-test-vm.env``
+     - The environment the target tests run with.
 
 .. _testing-by-hand:
 
@@ -507,9 +642,7 @@ Run a target test by hand
 
    .. code-block:: console
 
-      target# export SHIRUDO_BIN=/usr/local/bin/shirudo-runtime
-      target# export SHIRUDO_TEST_FIXTURES_DIR=/mnt/shirudo-bundle/fixtures
-      target# export SHIRUDO_TEST_KEY_FIXTURES=/mnt/shirudo-bundle/verity
+      target# . /etc/shirudo-test-vm.env
 
 3. Run one test, or all target tests of a family. The ``image`` tests
    need the result directories that ``run-target-tests.sh`` sets, so
@@ -554,20 +687,91 @@ failed keeps its disks too, copies its logs to
 overlay holds an ephemeral signing key, so do not share the state
 directory.
 
+Run a local development stack
+-----------------------------
+
+From the checkout root, run the following commands in any order:
+
+.. code-block:: console
+
+   $ make oci
+   $ make telemetry
+   $ make vm
+
+``make oci`` starts a persistent TLS OCI registry on
+``127.0.0.1:15444``. ``make telemetry`` starts the OTLP collector on
+``https://127.0.0.1:14319`` and ClickHouse on
+``http://127.0.0.1:18124``. Both targets are idempotent. They use the same
+container helpers as the end-to-end tests, which use separate ports and
+storage.
+
+``make stack-up`` is shorthand for ``make oci telemetry``. Start the VM
+with ``make vm``.
+
+``make vm`` prepares a stable CA even when neither service is running.
+After initialization, it activates the signed ``config-local-stack``
+image. That image points telemetry at ``https://10.0.2.2:14319`` and the
+BPM tree at ``oci://10.0.2.2:15444/shirudo/local-tree``, reference
+``stable``. The existing timers retry exports and tree sync when services
+are unavailable; starting the containers later needs no VM reboot.
+The registry starts empty. Publish a signed tree at that reference using
+the VM bundle's operator key under ``TEST_VM_HOST_PRIVATE_DIR`` to load
+upatches. Keepalives can reach the collector before any upatch is loaded.
+The VM's node labels include ``role=local``.
+
+The public CA and service data live under ``build/test-vm/stack/``;
+collector JSON is ``out/otlp.json`` there. Server private keys live outside
+the checkout in a directory under ``/tmp`` named for the checkout's hash.
+Normal and sudo invocations use the same trust material. The guest
+receives only the public CA. ``make stack-down`` removes the service
+containers and network while retaining the data and CA for the next start.
+It does not stop the VM; use ``make vm-stop`` for that.
+
+``make -C testing vm`` uses the same defaults. Set ``LOCAL_STACK=0`` to
+boot a VM without the local-stack configuration and use the explicit
+endpoint settings described above instead.
+
 Run the end-to-end tests
 ------------------------
 
 ``make -C testing end2end`` runs ``t9001`` on the host, then
-:src:`testing/end2end/host.sh` plays the operator around one VM. It starts
-an OCI registry, an OpenTelemetry Collector and ClickHouse in Docker
-containers pinned by digest. The registry and collector use a throwaway
-CA. It builds ``kernel-obs`` into a package with ``bpm build``, pushes
-it with ``bpm push`` and appends it to a signed upatch tree with
-``bpm tree append``. The target
-activates a signed config that points at the tree and the collector,
-and its units pull, verify, load and export. The host then verifies the
-target's TPM evidence with ``attest verify`` and checks that the
-collector holds the package's records. The earlier ``kernel-obs`` tests
+:src:`testing/end2end/host.sh` runs the test with an operator VM and the
+target nodes: node A, which runs the target tests, node B beside it, and
+with a keepalive backend a fresh edge node after node A (see
+:ref:`testing-two-nodes`). It starts an OCI registry, an OpenTelemetry
+Collector and ClickHouse in Docker containers pinned by digest. The
+registry and collector use a throwaway CA.
+
+The operator VM boots from the runtime image with clang 23 and the build
+dependencies of the operator package added, which the runner prepares
+once and caches beside it. The VM has no TPM, boots without the shirudo
+kernel arguments, and is the only VM that sees the signing key. The host
+keeps the key it logs in to it with and the VM's disk, which holds the
+guest's own key, outside the checkout, in
+``/tmp/shirudo-test-vm-private-<uid>/end2end-operator/``: a VM's keys
+and disk lie in its state directory, which the target VMs read through
+their share of the checkout. The operator VM builds the operator package
+from the files git sees in the checkout and installs it. Once it is
+ready, the host has it run :src:`testing/end2end/operator.sh` over SSH:
+the operator builds ``kernel-obs`` into a package with ``bpm build``,
+against the headers and ``vmlinux.h`` of the package, pushes it with
+``bpm push``, appends it to a signed upatch tree with
+``bpm tree append`` and picks the nonce the targets attest with. The
+operator VM and node A name the registry ``registry.test``, at QEMU's
+address for the host, so the tree names it as node A reaches it. The
+host's own build and the operator key it keeps still play the operator
+for the keepalive backend's example tree and for ``t9109`` to ``t9111``,
+which run on the host.
+
+Node A and node B boot next. Node A activates a signed config that
+points at the tree and the collector, and its units pull, verify, load
+and export. Its tests, ``t91??``, run over SSH from the host, which
+writes what they print to ``result/guest.log`` as a family's VM does.
+The host hands node A's TPM evidence to the operator, which verifies it
+with ``attest verify`` and checks that its records name the package and
+the tree operation it published. Once the operator VM has stopped, the
+host checks that the collector holds the package's records. The earlier
+``kernel-obs`` tests
 export each map snapshot as local JSON and OTLP from one read; the host
 compares the snapshots with the collector's JSON output and queries the
 ClickHouse log and sum metric tables to check that both collector exports
@@ -575,13 +779,309 @@ hold the same data. The comparison uses event times relative to each
 map's interval start and ignores the metric export time, which the two
 decoder calls sample independently.
 
+The kernel observability scenarios share fixture setup, load reports and
+unload operations through ``testing/end2end/kernel-obs-lib.sh``. Their
+Python assertions use ``snapshots.py`` to read and validate map snapshots;
+``kernel_obs_checks.py`` holds the scenario checks called by the shell
+tests.
+
 .. code-block:: console
 
-   # make -C testing end2end
+   $ make -C testing end2end
 
-The host side writes to ``build/test-vm/end2end/``. The guest reaches
-the registry and collector through QEMU's address for the host. ClickHouse
-is available to the collector on the test's Docker network.
+The host side writes to ``build/test-vm/end2end/``. The VMs are named
+``end2end-<pid>-operator`` and ``end2end-<pid>-end2end``, or
+``<name>-operator`` and ``<name>-end2end`` with ``VM_NAME=<name>``; the
+operator's package build log is in its ``result/operator-build.log`` and
+what it published and verified in its ``result/end2end/``. While the run lasts,
+``make -C testing vm-ssh VM_NAME=<name>`` opens a shell on either VM.
+The guests reach the registry and collector through QEMU's address for
+the host. ClickHouse is available to the collector on the test's Docker
+network.
+
+``t9107`` runs the reference keepalive backend, which lives in a
+repository of its own, ``shirudo-dev/backend``. ``host.sh`` finds it
+through ``BACKEND_DIR``: a directory, relative to the checkout when the
+path is relative, ``../backend`` by default, or a git URL, which it
+clones into ``build/test-vm/end2end/backend``. It starts a ClickHouse of
+the backend's own on ``http://127.0.0.1:18125``, with the backend's schema
+and ``shirudo-quote-check`` as ``tpm_quote_check``, and a collector with
+the backend's configuration on ``https://127.0.0.1:14320``. It publishes
+the example tree of :src:`testing/fixtures/keepalive/` signed with the
+operator key and loads it with the backend's tree ingest job, which runs
+``bpm tree show``. In the guest, ``t9107`` sends the example keepalives
+with their recorded quotes through that collector and queries
+ClickHouse, both through QEMU's address for the host. After node A,
+``host.sh`` runs ``t9109``, ``t9110`` and ``t9111`` against the same
+backend, see :ref:`testing-pipeline`, :ref:`testing-history` and
+:ref:`testing-walk`. Without ``BACKEND_DIR`` and without ``../backend``,
+none of ``t9107`` and ``t9109`` to ``t9111`` runs: ``host.sh`` writes the
+example tree's digest to ``build/test-vm/end2end/backend-tree.digest``
+only when it started the backend, and without it
+:src:`testing/run-target-tests.sh` leaves ``t9107`` out with
+``not run without a keepalive backend`` rather than failing the family
+on its skip:
+
+.. code-block:: console
+
+   # make -C testing end2end BACKEND_DIR=/path/to/backend
+
+.. _testing-two-nodes:
+
+The nodes
+~~~~~~~~~
+
+The tier boots up to five targets, at most two at once, each with its
+own software TPM and so its own attestation key. The operator VM runs
+beside the first two, node A and node B, and stops before the others
+boot. Node A is the family's
+VM, named ``<name>-end2end``, and runs the target tests in number order.
+Node B, ``<name>-end2end-b``, boots beside it. With a keepalive backend,
+the fresh edge node, ``<name>-end2end-edge``, boots once node A has
+stopped, and ``t9109`` and then ``t9110`` run against it and node B.
+Once both have stopped, a second fresh edge node and node B,
+``<name>-2-end2end-edge`` and ``<name>-2-end2end-b``, boot for
+``t9111``. All of them boot with ``make -C testing vm-node-end2end``, ``END2END_NODE=b`` or
+``edge``: the runner's
+node mode prepares a node as it prepares node A, activates the config
+image of its role, runs no tests, starts no timers and leaves it running
+until ``host.sh`` stops it at the end. Each takes its role from a signed
+config image, as ``t9105`` configures node A:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 26 52
+
+   * - Image
+     - Labels
+     - Points at
+   * - ``config-end2end``
+     - ``role=edge``
+     - The tree ``shirudo/end2end-tree`` and the test's collector. Node
+       A activates it in ``t9105``, and the ``kernel-obs`` operation
+       selects ``role=edge``.
+   * - ``config-edge``
+     - ``role=edge``
+     - The tree ``shirudo/pipeline-tree`` on the test's registry and the
+       keepalive backend's collector. The fresh edge node activates it
+       while it is prepared.
+   * - ``config-core``
+     - ``role=core``
+     - The same as ``config-edge``. Node B activates it while it is
+       prepared.
+
+``t9109`` needs a node that has run nothing else. By the time it runs,
+node A has loaded ``kernel-obs`` and ``policy-exec-graph``, counted
+denied execs, and followed ``shirudo/end2end-tree``, none of which a fleet
+node has, and its register and eventlog keep all of it. So the fresh edge
+node takes node A's place rather than node A moving to the pipeline
+tree. Booting it after node A keeps two guests at most.
+
+``t9111`` needs nodes that have followed no tree, and both nodes of
+``t9109`` and ``t9110`` hold the eleven operations of
+``shirudo/pipeline-tree`` and their upatches by then. So ``host.sh``
+stops them and boots a second pair with the same config images, and it
+starts the registry again without a volume, so that it holds no tree
+and ``shirudo/pipeline-tree`` begins anew. The registry keeps nothing
+else that a later step needs, and the second pair needs no config image
+of its own. The pair boots once the first has stopped, so two guests
+still run at most; their boot costs the tier two more boots.
+
+All nodes declare an image: :src:`testing/vm/files/end2end.os-release`,
+``IMAGE_ID=fleet-os`` and ``IMAGE_VERSION=end2end-1``, is added to their
+``/etc/os-release``. None binds the image as ``verified``. Their root is
+the stock cloud image in a writable overlay, not a dm-verity image, and
+their kernel command line names no ``roothash=`` or ``usrhash=``, so
+``image_root`` is ``null`` and the keepalive backend binds every node as
+``declared``. Giving a node a root hash would mean building its root as a
+verity image; the backend's own tests cover ``verified`` and
+``root_mismatch`` with rows they insert.
+
+After node A, ``host.sh`` checks node B: its evidence verifies, its
+attestation key differs from node A's and its labels are ``role=core``.
+It checks that the fresh edge node is labelled ``role=edge``, and that
+the keepalive body each node printed while it was prepared, in
+``result/keepalive.json`` of its state directory, names the image above
+and no root. It checks the labels of the second pair the same way.
+
+A test reaches node B and the fresh edge node as root over SSH through
+:src:`testing/end2end/node-lib.sh`, by the names ``b`` and ``edge``,
+which name the second pair once it has booted.
+``node_wait`` waits for a node to be prepared and fails when it did not
+boot; ``node_sh`` runs a command line in its shell, with the test's
+standard input and output:
+
+.. code-block:: sh
+
+   . ./end2end/node-lib.sh
+   node_wait b || test_skip_all "node B did not boot"
+   node_sh b /usr/local/bin/shirudo-runtime status --keepalive >"$W/node-b.json"
+   node_sh b cat /var/lib/shirudo/bpm/upatch-tree/state.json
+   node_sh b "cat >/etc/shirudo/end2end-ca.pem" <"$E2E/ca.pem"
+
+``host.sh`` records each node's SSH port and key in
+``build/test-vm/end2end/node-b/`` and ``node-edge/``, which node A reads
+through the read-only checkout; on the host, ``NODES_DIR`` names that
+directory and ``NODES_HOST`` is ``127.0.0.1``. The nodes reach the
+registry and the collectors through QEMU's address for the host, as node
+A does, and have the checkout at ``/workspace/shirudo`` too. A tree at
+``127.0.0.1:15443`` names its packages there, so a test that syncs a node
+starts ``end2end/tcp_forward.py`` in it, detached from the SSH
+session:
+
+.. code-block:: sh
+
+   node_sh b "cd /workspace/shirudo/testing &&
+              setsid -f python3 end2end/tcp_forward.py 127.0.0.1:15443 \
+                     10.0.2.2:15443 /tmp/forward-ready </dev/null >/dev/null 2>&1"
+
+The other nodes have 2 CPUs and ``TEST_VM_NODE_MEMORY``, ``2G`` by
+default; node A and the operator VM keep ``TEST_VM_CPUS`` and
+``TEST_VM_MEMORY``. With the defaults the guests take 10 GiB of host
+memory at most, while the operator VM, node A and node B run, and the
+registry, the two collectors and the two ClickHouse servers come on top. ``host.sh`` prints each node's memory use, and their
+boot logs are ``build/test-vm/end2end/node-b.log`` and
+``node-edge.log``, and ``node-b-2.log`` and ``node-edge-2.log`` for the
+second pair.
+
+.. _testing-pipeline:
+
+The full chain
+~~~~~~~~~~~~~~
+
+``t9109`` runs the whole keepalive pipeline on real data, with no
+fixture at a seam between two stages. ``host.sh`` runs it on the host as
+root, after node A, with ``E2E``, the backend directory, the operator key
+and the nodes' directory in its environment; its output is
+``build/test-vm/end2end/t9109.log``. It:
+
+#. empties the keepalive backend that ``t9107`` used and loads its
+   schema again;
+#. builds ``xfs-fix`` 1.0.0 and 1.1.0 from
+   :src:`testing/fixtures/pipeline/xfs-fix/`, whose Beefile names
+   ``fixes = ["EXAMPLE-0101"]`` and selects ``role=edge``, and appends
+   add 1.0.0, delete 1.0.0 and add 1.1.0 to ``shirudo/pipeline-tree``;
+#. loads the publication with the backend's tree ingest job;
+#. syncs the fresh edge node, which applies all three operations, and
+   node B, which passes over all three, with ``shirudo-bpm-tree-sync``,
+   and sends two keepalives from each a few seconds apart with
+   ``shirudo-keepalive``;
+#. writes the SBOM store of the nodes' image, and one image for each
+   other state of an SBOM, and runs the backend's sbom-scan job with the
+   stub ``trivy`` of the fixtures, which prints one ``openssl`` finding;
+#. seeds the kernel advisory of the fixtures, whose range holds every test
+   kernel, and the nodes' build, and refreshes ``node_status`` and
+   ``node_vulns``.
+
+It then checks the tree, the stored records and their quotes,
+``node_status`` with the masks ``VA==`` and ``qA==``, each node's
+``state.json``, ``outcomes``, ``tree-eventlog`` and loaded set against
+the backend's rows, the state of every SBOM, and the exposure of each
+node: the kernel advisory ``shielded`` by ``xfs-fix`` on the edge node and
+``shield_excludes_node`` on node B, and the ``openssl`` finding
+``exposed_no_shield`` on both. A record replayed through the collector
+with one byte of its body changed lands in ``rejected`` as
+``body_mismatch`` and changes no row of ``node_status``.
+
+``t9109`` takes nothing from :src:`testing/fixtures/keepalive/`.
+:src:`testing/end2end/pipeline_checks.py` recomputes the roots, the mask,
+the loaded set and each quote's qualifying data from the formats' own
+definitions.
+
+.. _testing-history:
+
+The history over segments
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``t9110`` checks the backend's history of each node, ``node_ops`` and
+``node_sets``, on a tree longer than the keepalive window. The bundle
+builds every guest target with a window of 7 operations, a walk of 4 and
+a join of 6 (``TREE_LIMIT_CFLAGS``), so a tree of 11 operations is enough.
+``host.sh`` runs it after ``t9109``, against the same nodes and backend,
+and its output is ``build/test-vm/end2end/t9110.log``. It continues
+``t9109``'s tree, whose first segment holds operations 1 to 3, the add of
+``xfs-fix`` 1.1.0 at seq 3 with ``fixes`` included, and needs both nodes
+at seq 3 of it. It:
+
+#. empties the keepalive backend, loads its schema again and sets
+   ``window`` in ``shirudo.settings`` to 7;
+#. builds ``hist-pad``, a copy of ``xfs-fix`` that selects every node,
+   and appends add and delete of it in turn with ``--segment-ops 2``, as
+   operations 4 and 5, 6 and 7, then 8 to 11, which seal four segments;
+#. after each step loads the tree with the ingest job and syncs the
+   nodes. The edge node sends a keepalive each time, so the backend sees
+   it from seq 1. Node B syncs to seq 7, walking back one segment, and
+   sends nothing until seq 11, so the backend first sees it with a
+   window that starts at seq 4.
+
+It then checks that ``bpm tree show --walk`` and ``tree_pubs`` hold the
+five segments with their bases, ``segment-<k>`` tags and
+``history_root``, and ``tree_ops`` all 11 operations; that each node's
+newest record, its ``status --keepalive`` body and its ``outcomes`` agree
+on ``base_seq`` 4, ``base_root`` and the mask; that ``node_ops`` holds
+the edge node from seq 1 and node B from a gap row at seq 4, with the
+roots of their ``outcomes``; that both nodes are ``healthy``, the edge
+node's ``base_root`` verified and node B's log reading ``base unverified
+(gap)`` and ``set unverified (gap)``; and that ``node_vulns`` still reads
+the kernel advisory ``shielded`` by ``xfs-fix`` at seq 3, below the
+window, on the edge node and ``unknown`` on node B, as threat U20 of
+:doc:`/security/threat-model` says.
+
+.. _testing-walk:
+
+The backward walk
+~~~~~~~~~~~~~~~~~
+
+``t9111`` shows a node's walk back over a sealed segment on real data:
+the publisher seals it, a node behind it follows its signed digest back
+and applies forwards, and the backend sees one tree. ``host.sh`` runs it
+after ``t9110``, against the second fresh edge node and node B and the
+same backend, and its output is ``build/test-vm/end2end/t9111.log``. The
+tree's five operations fit in the walk, join and keepalive window of the
+bundle's targets. It:
+
+#. checks that neither node has tree state and that the registry holds
+   no tree, empties the keepalive backend, loads its schema again and
+   sets ``window`` to 7;
+#. builds ``xfs-fix`` 1.0.0 and 1.1.0 and ``net-guard`` from
+   :src:`testing/fixtures/pipeline/net-guard/`, which selects no label,
+   so that node B applies something;
+#. appends, with ``--segment-ops 2`` and the tree id ``segments``, add
+   ``xfs-fix`` 1.0.0 for ``role=edge``, which node B alone syncs, then add
+   ``net-guard``, delete ``xfs-fix`` 1.0.0 and add ``xfs-fix`` 1.1.0,
+   which seal segment 1 at generation 2 as ``segment-1``;
+#. syncs the edge node, which has ``last_seq`` 0, and node B, at seq 1,
+   one after the other. Each fetches ``stable``, segment 2, then segment
+   1 by its digest, and applies forwards to seq 4;
+#. loads the tree with the ingest job and sends a keepalive from each
+   node;
+#. appends delete ``net-guard``, which seals segment 2 as ``segment-2``,
+   syncs both nodes, which fetch ``stable`` and the manifest of the
+   ``net-guard`` package the delete names, which ``bpm tree append``
+   keeps in the tree's repository, but no sealed segment, and sends
+   keepalives again.
+
+The registry's access log (``stack_oci_log`` of
+:src:`testing/vm/stack-lib.sh`) is how it sees each fetch: the test
+writes a mark there before and after each sync, a request for a manifest
+that does not exist, and reads the requests for the tree's repository
+between them. It checks that each walk fetches segment 1 by its digest
+after ``stable`` and never by its ``segment-1`` tag, and that no sync
+after seq 5 fetches a sealed segment. It checks that each segment's
+``base`` names the manifest its tag names and the ``history_root`` the
+test folds from the published digests; that each node's ``outcomes``,
+``tree-eventlog`` and ``projection_root`` follow from the published
+operations and its role, with the masks ``VQ==`` and ``mg==`` at seq 4
+and ``VUA=`` and ``mkA=`` at seq 5, the same ``history_root`` on every
+line of both, ``segment_base_seq`` 2 and then 4, the ``tree_op`` events
+of its attested eventlog and its loaded upatches; that each keepalive
+covers all five operations from ``base_seq`` 0; and that ``tree_pubs``
+holds the three segments, ``tree_ops`` the five operations and
+``node_ops`` each node from seq 1, with no contradiction marked, and
+both nodes are ``healthy`` with ``4 chain: pass``, ``5 head: pass, seq 5
+of 5`` and ``6 set: pass``. :src:`testing/end2end/pipeline-lib.sh` holds
+what ``t9109`` to ``t9111`` do to the nodes, the registry and
+ClickHouse.
 
 Select test scripts
 ~~~~~~~~~~~~~~~~~~~
@@ -657,7 +1157,10 @@ A case left out of the table is an unused static function, which fails
 the build. Each case runs in a child process with a 60-second limit, so
 a crash, a sanitizer report or a hang fails that case alone.
 ``unit_skip()`` skips a case with a reason. The suite links the util
-objects from an archive and needs no build rule of its own.
+objects from an archive and needs no build rule of its own. A suite for
+code outside :src:`util/`, as ``quote_check`` is for
+:src:`tools/quote-check/row.c`, names the object it links in
+``UNIT_OBJS`` in :src:`Makefile.shirudo`.
 
 Write a shell test
 ~~~~~~~~~~~~~~~~~~
@@ -708,7 +1211,7 @@ Write a shell test
 
    .. code-block:: console
 
-      # make -C testing functional/<family>
+      $ make -C testing functional/<family>
 
 A target test finds loaded only what its family loaded, because each
 family boots a VM of its own. ``require_loaded <fixture>`` loads a
@@ -726,14 +1229,27 @@ Add a fixture or a helper
 - A target test loads BPF only from signed fixtures. Put the source in
   ``testing/fixtures/<name>.bpf.c`` and add a line
   ``build_fixture <name>.bpf.c <fixture> "$FIXTURE_WORK/trusted"`` to
-  :src:`testing/vm/build-bundle.sh`. The bundle signs it on the build host
-  and the guest finds it as
+  :src:`testing/vm/build-bundle-payload.sh`. The bundle build signs it
+  outside the guest, which finds it as
   ``$SHIRUDO_TEST_FIXTURES_DIR/<fixture>.upatch``.
 - A compiled helper goes in ``testing/helper/<name>.c`` with a build
   rule in :src:`Makefile.shirudo` and an entry in ``TEST_HELPERS``. A
   helper that a target test runs also goes in the list of helpers that
-  :src:`testing/vm/build-bundle.sh` copies into the bundle. A Python
+  :src:`testing/vm/build-bundle-payload.sh` copies into the bundle. A Python
   helper needs none of this.
+- The keepalive bodies in :src:`testing/fixtures/keepalive/` carry real
+  quotes in ``quotes.tsv``: per row the body's file name, then the
+  ``attest``, ``sig``, ``ak`` and ``body_sha256`` columns of
+  ``shirudo-quote-check``, so ``cut -f2-`` feeds the checker. A change
+  to a node body fails ``t4006`` until
+  :src:`testing/helper/capture-keepalive-quotes.sh` rebuilds the file.
+  It quotes each body with ``test-keepalive-quote`` under the libtpms
+  simulator, as ``status --otel`` quotes its own, with one TPM state
+  for node A and another for node B; it needs no root and no VM, only
+  ``make -C testing test-helpers`` with libtpms installed. Each run
+  starts from fresh TPM states, so both the quotes and the two
+  attestation keys change; a state directory named as its second
+  argument keeps the keys.
 - A fuzz target goes in ``testing/fuzz/fuzz-<name>.c`` with a seed
   corpus in ``testing/fuzz/corpus/<name>/`` and a rule in
   :src:`Makefile.shirudo` that names the sources it links.

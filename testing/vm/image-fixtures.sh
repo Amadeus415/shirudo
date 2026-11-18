@@ -10,6 +10,7 @@ templates="$source_dir/testing/vm/files"
 keys_dir=
 boot_keys_dir=
 output=
+segments_port=
 builtin_key=${TEST_VM_BUILTIN_SIGNING_KEY:-}
 builtin_cert=${TEST_VM_BUILTIN_SIGNING_CERT:-}
 while [ $# -gt 0 ]; do
@@ -17,8 +18,9 @@ while [ $# -gt 0 ]; do
 	--boot-keys-dir) boot_keys_dir=${2:?}; shift 2 ;;
 	--keys-dir) keys_dir=${2:?}; shift 2 ;;
 	--output) output=${2:?}; shift 2 ;;
+	--segments-port) segments_port=${2:?}; shift 2 ;;
 	*)
-		printf 'usage: %s --keys-dir <operator-keys> [--boot-keys-dir <operator-keys>] --output <new-directory>\n' \
+		printf 'usage: %s --keys-dir <operator-keys> [--boot-keys-dir <operator-keys>] [--segments-port <port>] --output <new-directory>\n' \
 			"$0" >&2
 		exit 2
 		;;
@@ -63,13 +65,22 @@ live_fp=$(cat "$output/public/live.fingerprint")
 [[ "$boot_fp" =~ ^[a-f0-9]{64}$ ]] && [[ "$live_fp" =~ ^[a-f0-9]{64}$ ]]
 [ "$boot_fp" != "$live_fp" ]
 cp "$keys_dir/cert.der" "$output/public/primary.der"
+primary_fp=$("$operator" bpm key fingerprint "$keys_dir/cert.der")
+for name in config-c config-d config-untrusted; do
+	"$operator" genkey --keys-dir "$output/private/$name" \
+		>"$output/$name-genkey.log" 2>&1
+	cp "$output/private/$name/cert.der" "$output/public/$name.der"
+done
 
-for name in config-boot-keys config-live-new-key config-a config-b config-bad config-revoke \
+for name in config-boot-keys config-live-new-key config-live-revoke-a config-a config-b config-bad config-revoke \
 	config-tree-stable config-tree-updated config-tree-deleted config-tree-restored \
-	config-tree-kconfig config-tree-reloaded \
+	config-tree-kconfig config-tree-reloaded config-tree-outcomes \
+	config-tree-stopped config-tree-fetched config-tree-fixes \
+	config-tree-keepalive config-tree-unmatched config-tree-segments \
 	config-otel config-jsonl config-jsonl-bad config-interrupted config-end2end \
-	config-builtin; do
+	config-edge config-core config-local-stack config-builtin config-untrusted; do
 	[ "$name" != config-builtin ] || [ -n "$builtin_key" ] || continue
+	[ "$name" != config-tree-segments ] || [ -n "$segments_port" ] || continue
 	root="$output/source/$name"
 	mkdir -p "$root/etc/shirudo" "$root/keys/trusted" "$root/keys/revoked"
 	sed "s/@tenant@/$name/g" "$templates/config.conf.in" \
@@ -81,6 +92,10 @@ for name in config-boot-keys config-live-new-key config-a config-b config-bad co
 		sed "s/@reference@/${name#config-tree-}/g" \
 			"$templates/upatch-tree.conf.in" \
 			>"$root/etc/shirudo/bpm/upatch-tree.conf"
+		# The segment tree's artifacts name the port it was published on.
+		[ "$name" != config-tree-segments ] ||
+			sed -i "s|127.0.0.1:5443/shirudo/upatch-tree|127.0.0.1:$segments_port/shirudo/segments|" \
+				"$root/etc/shirudo/bpm/upatch-tree.conf"
 		;;
 	config-otel)
 		cp "$templates/otel.conf" "$root/etc/shirudo/shirudo.conf"
@@ -88,26 +103,41 @@ for name in config-boot-keys config-live-new-key config-a config-b config-bad co
 	config-jsonl|config-jsonl-bad)
 		cp "$templates/${name#config-}.conf" "$root/etc/shirudo/shirudo.conf"
 		;;
+	config-local-stack)
+		mkdir -p "$root/etc/shirudo/bpm"
+		cp "$templates/local-stack.conf" "$root/etc/shirudo/shirudo.conf"
+		cp "$templates/local-stack-tree.conf" "$root/etc/shirudo/bpm/upatch-tree.conf"
+		printf 'role=local\n' >"$root/etc/shirudo/node.labels"
+		;;
 	config-end2end)
 		mkdir -p "$root/etc/shirudo/bpm"
-		printf 'role=end2end\n' >"$root/etc/shirudo/node.labels"
+		printf 'role=edge\n' >"$root/etc/shirudo/node.labels"
 		cp "$templates/end2end-tree.conf" \
 			"$root/etc/shirudo/bpm/upatch-tree.conf"
 		cp "$templates/end2end.conf" "$root/etc/shirudo/shirudo.conf"
+		;;
+	config-edge|config-core)
+		mkdir -p "$root/etc/shirudo/bpm"
+		printf 'role=%s\n' "${name#config-}" >"$root/etc/shirudo/node.labels"
+		cp "$templates/pipeline-tree.conf" \
+			"$root/etc/shirudo/bpm/upatch-tree.conf"
+		cp "$templates/pipeline.conf" "$root/etc/shirudo/shirudo.conf"
 		;;
 	esac
 	cp "$output/public/boot.der" "$root/keys/trusted/$boot_fp.der"
 	"$builder" keys vouch "$output/public/boot.der" \
 		-o "$root/keys/trusted/$boot_fp.vouch" --keys-dir "$keys_dir" \
 		>"$output/$name-boot-vouch.log" 2>&1
-	if [ "$name" = config-live-new-key ]; then
+	if [[ "$name" == config-live-new-key || "$name" == config-live-revoke-a ]]; then
 		cp "$output/public/live.der" "$root/keys/trusted/$live_fp.der"
 		"$builder" keys vouch "$output/public/live.der" \
 			-o "$root/keys/trusted/$live_fp.vouch" \
 			--keys-dir "$output/private/boot" \
 			>"$output/$name-live-vouch.log" 2>&1
 	fi
-	if [[ "$name" == config-revoke || "$name" == config-interrupted ]]; then
+	if [ "$name" = config-live-revoke-a ]; then
+		cp "$output/public/primary.der" "$root/keys/revoked/$primary_fp.der"
+	elif [[ "$name" == config-revoke || "$name" == config-interrupted ]]; then
 		cp "$output/public/boot.der" "$root/keys/revoked/$boot_fp.der"
 	elif [ "$name" = config-bad ]; then
 		printf 'invalid certificate\n' >"$root/keys/revoked/$boot_fp.der"
@@ -117,9 +147,15 @@ for name in config-boot-keys config-live-new-key config-a config-b config-bad co
 		expected=2
 		[[ "$name" != config-revoke && "$name" != config-interrupted ]] || expected=1
 		[ "$name" != config-live-new-key ] || expected=3
+		[ "$name" != config-live-revoke-a ] || expected=2
 		grep -q "signers=$expected" "$output/$name-validation.log"
 	fi
-	verify_cert="$keys_dir/cert.der"
+	signing_keys="$output/private/config-c"
+	case "$name" in
+	config-b|config-live-revoke-a) signing_keys="$output/private/config-d" ;;
+	config-untrusted) signing_keys="$output/private/config-untrusted" ;;
+	esac
+	verify_cert="$signing_keys/cert.der"
 	if [ "$name" = config-builtin ]; then
 		truncate -s 8M "$output/private/builtin.img"
 		mkfs.ext4 -q -F -b 4096 -O '^has_journal' -E root_owner=0:0 \
@@ -131,7 +167,7 @@ for name in config-boot-keys config-live-new-key config-a config-b config-bad co
 		cp "$builtin_cert" "$output/public/builtin.der"
 	else
 		"$source_dir/tools/gen-image/shirudo-gen-image" --source "$root" \
-			--output "$output/public/$name" --keys-dir "$keys_dir" \
+			--output "$output/public/$name" --keys-dir "$signing_keys" \
 			--builder "$builder" >"$output/$name-build.log" 2>&1
 	fi
 	SHIRUDO_BUILD="$builder" "$operator" image verify "$output/public/$name" \
@@ -142,6 +178,22 @@ done
 "$builder" "$source_dir/testing/fixtures/basic.bpf.c" \
 	-o "$output/public/shirudo-test-revoked-key.upatch" \
 	--name shirudo-test-revoked-key \
+	--vmlinux "$source_dir/vendor/linux/vmlinux.h" \
+	--extra-cflags "-I$source_dir/vendor/libbpf" \
+	--key "$output/private/boot/signing_key.pem" \
+	--cert "$output/public/boot.der"
+
+"$builder" "$source_dir/testing/fixtures/basic.bpf.c" \
+	-o "$output/public/shirudo-test-live-key.upatch" \
+	--name shirudo-test-live-key \
+	--vmlinux "$source_dir/vendor/linux/vmlinux.h" \
+	--extra-cflags "-I$source_dir/vendor/libbpf" \
+	--key "$output/private/live/signing_key.pem" \
+	--cert "$output/public/live.der"
+
+"$builder" "$source_dir/testing/fixtures/xdp-virtual.bpf.c" \
+	-o "$output/public/shirudo-test-revoked-xdp.upatch" \
+	--name shirudo-test-revoked-xdp \
 	--vmlinux "$source_dir/vendor/linux/vmlinux.h" \
 	--extra-cflags "-I$source_dir/vendor/libbpf" \
 	--key "$output/private/boot/signing_key.pem" \

@@ -50,8 +50,10 @@ both in signed sections (see :doc:`build`). ``unload``:
    directory and compares it with the signed one. A difference, or a
    digest that cannot be read, is refused with ``payload_mismatch``. A
    directive signed with an all-zero digest never matches.
-#. When the upatch has no pin, it removes any archive copy, reports
-   ``already_unloaded`` and exits with 0 without measuring.
+#. When the upatch has no pin, it removes the archive copy if it holds
+   the directive's payload, reports ``already_unloaded`` and exits with
+   0 without measuring. An archive of another payload stays, and the
+   unload is refused with ``payload_mismatch``.
 #. It extends the register with the ``upatch_unload`` event and appends
    it to the eventlog. The event comes first: a failed extend leaves the
    upatch attached.
@@ -112,9 +114,9 @@ Exit status and failure categories
    * - 1
      - Refused or failed.
    * - 2
-     - A usage error: an unknown option, an option given last without
-       its value, a second file, no file, or an ``--expect-chain`` that
-       is not 64 hexadecimal characters.
+     - A usage error: an unknown option or one given twice, a value
+       missing or empty, a second file, no file, or an
+       ``--expect-chain`` that is not 64 hexadecimal characters.
 
 ``unload`` reports these categories: ``version_mismatch``,
 ``kernel_abi_unsupported``, ``keyring_missing``, ``tampered``,

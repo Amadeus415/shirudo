@@ -35,9 +35,6 @@
 					 (1u << CHAIN_PHASE_PCR))
 #define CHAIN_ANCHOR_MAX	128
 
-int sha256_calc(const void *data, size_t len,
-		__u8 out[CHAIN_DIGEST_LEN]) __must_check;
-
 int sha256_2(const void *a, size_t a_len,
 	     const void *b, size_t b_len,
 	     __u8 out[CHAIN_DIGEST_LEN]) __must_check;
@@ -63,6 +60,9 @@ int chain_upatch_event(const char *tag, const char *name,
 int chain_tree_event(__s64 seq, const __u8 operation_digest[32],
 		     __u8 event[32]) __must_check;
 int chain_fold(__u8 chain[32], const __u8 event[32]) __must_check;
+/* A step for every operation, whatever its outcome here; out may be prev. */
+int chain_history_step(const __u8 prev[32], const __u8 operation_digest[32],
+		       __u8 out[32]) __must_check;
 
 /* The PCR record anchoring a register name: nvpcr-init:shirudo:0x..:<name>. */
 int chain_anchor(const __u8 name[TPM_NAME_LEN],
@@ -104,6 +104,20 @@ int chain_extend(const __u8 event[CHAIN_DIGEST_LEN],
 
 /* The live value; -ENODEV when no register is written this boot. */
 int chain_read(__u8 out[CHAIN_DIGEST_LEN]);
+
+/* The register as the TPM reports it, over the session init pinned. */
+struct chain_live {
+	__u8		name[TPM_NAME_LEN];
+	__u32		reset_count;
+	__u8		value[CHAIN_DIGEST_LEN];
+};
+
+/*
+ * The live register's name, value and TPM reset count. -ENODEV when no
+ * TPM answers or the index is not written this reset, -EIO when a read
+ * fails.
+ */
+int chain_live(struct chain_live *out);
 
 /* For a probe: a TPM that does not answer is not logged. */
 bool chain_bound(void);

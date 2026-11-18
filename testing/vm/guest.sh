@@ -19,6 +19,7 @@ UPPER=/var/tmp/shirudo-upper
 OVERLAY_WORK=/var/tmp/shirudo-overlay-work
 WORKSPACE=/workspace/shirudo
 VM_MODE="${VM_MODE:-test}"
+VM_ROLE="${TEST_VM_ROLE:-target}"
 SHIRUDO_BIN=/usr/local/bin/shirudo
 VM_INITRD="${TEST_VM_INITRD:-1}"
 
@@ -247,9 +248,85 @@ configure_map_export()
 		>/etc/shirudo/shirudo.conf
 }
 
+# The end-to-end nodes run an image that the keepalive backend knows by
+# its os-release id and version. Their root is the stock cloud image, not a
+# dm-verity image, so the command line names no roothash= and the backend
+# binds them as declared.
+configure_image_identity()
+{
+	[[ "${TEST_VM_SUITE:-}" == end2end ]] || return 0
+	cat /usr/lib/os-release "$LOWER/testing/vm/files/end2end.os-release" \
+		>/etc/os-release.tmp
+	mv -f /etc/os-release.tmp /etc/os-release
+}
+
+# Target tests run from this script in test mode and from an SSH session
+# otherwise, which inherits nothing from it.
+write_target_test_env()
+{
+	{
+		printf 'export SHIRUDO_BIN=%q\n' "$SHIRUDO_BIN"
+		printf 'export SHIRUDO_TEST_KEY_FIXTURES=%q\n' "$BUNDLE/verity"
+		printf 'export SHIRUDO_TEST_RESULTS=%q\n' /mnt/shirudo-out/verity
+		printf 'export SHIRUDO_TEST_FIXTURES_DIR=%q\n' "$BUNDLE/fixtures"
+		printf 'export SHIRUDO_TEST_FAILURES_FILE=%q\n' \
+			/mnt/shirudo-out/failed-tests
+		printf 'export SHIRUDO_TEST_SUITE_FAILURES_FILE=%q\n' \
+			/mnt/shirudo-out/failed-suites
+		printf 'export TEST_FILTER=%q\n' "${TEST_FILTER:-}"
+	} >/etc/shirudo-test-vm.env
+}
+
+# The operator holds the signing key and is no target: it has no TPM, and its
+# shirudo is the operator package, built here for the distribution it runs
+# on, as that package must be, from the files git sees in the checkout,
+# which the host lists.
+prepare_operator()
+{
+	local src=/var/tmp/shirudo-operator-src
+	local build_log=/mnt/shirudo-out/operator-build.log
+	local files=/mnt/shirudo-out/source-files
+	local debs
+
+	if [[ -e /dev/tpm0 || -e /dev/tpmrm0 ]]; then
+		log "the operator VM has a TPM"
+		return 1
+	fi
+	[[ -s /mnt/shirudo-operator-keys/signing_key.pem ]] || {
+		log "the operator VM has no signing key"
+		return 1
+	}
+	[[ -s "$files" ]] || {
+		log "the host listed no files of the checkout"
+		return 1
+	}
+	sed -E -i '/^[^#]*[[:space:]]registry\.test([[:space:]]|$)/d' /etc/hosts
+	printf '%s\n' '10.0.2.2 registry.test' >>/etc/hosts
+
+	log "building the operator package"
+	rm -rf -- "$src"
+	mkdir -p "$src"
+	rsync -a --from0 --files-from="$files" --ignore-missing-args \
+		"$LOWER"/ "$src"/
+	if ! make -C "$src/packaging" -j"$(nproc)" bindeb-pkg PKG_ROLES=operator \
+		>"$build_log" 2>&1; then
+		tail -40 "$build_log"
+		log "the operator package did not build; see operator-build.log"
+		return 1
+	fi
+	debs=("$src"/shirudo-operator_*.deb)
+	[[ ${#debs[@]} -eq 1 && -s "${debs[0]}" ]] || {
+		log "expected one operator package in $src"
+		return 1
+	}
+	dpkg -i "${debs[0]}"
+	shirudo version
+}
+
 configure_oci_ca
 configure_bpm_oci_repository
 configure_map_export
+configure_image_identity
 
 [[ -s /etc/shirudo-test-vm-runtime ]] || {
 	log "prepared runtime image is missing; run make -C testing bundle"
@@ -289,6 +366,12 @@ fi
 
 cd "$WORKSPACE"
 
+if [[ "$VM_ROLE" == operator ]]; then
+	prepare_operator
+	log "operator prepared; the host runs its steps over SSH"
+	exit 0
+fi
+
 log "installing networking modules from the booted kernel artifact"
 install_kernel_modules
 install_kernel_config
@@ -307,6 +390,8 @@ TARGET_UNITS=(
 	shirudo-map-export.timer
 	shirudo-keepalive.service
 	shirudo-keepalive.timer
+	shirudo-xdp-reconcile.service
+	shirudo-xdp-reconcile.timer
 	shirudo-bpm-repo-update.service
 	shirudo-bpm-repo-update.timer
 	shirudo-bpm-tree-sync.service
@@ -364,8 +449,11 @@ if [[ "${TEST_VM_SUITE:-}" == register ]]; then
 fi
 
 (cd "$BUNDLE/verity" && sha256sum -c manifest)
-mountpoint -q /run/shirudo/runtime
-mountpoint -q /run/shirudo/config
+if ! mountpoint -q /run/shirudo/runtime ||
+   ! mountpoint -q /run/shirudo/config; then
+	log "the initrd did not mount the runtime and config images; its shirudo journal is above"
+	exit 1
+fi
 install -m 0755 "$BUNDLE/verity/shirudo-runtime" /usr/local/bin/shirudo-runtime
 SHIRUDO_BIN=/usr/local/bin/shirudo-runtime
 for unit in "${TARGET_UNITS[@]}"; do
@@ -395,7 +483,7 @@ if [[ "$VM_INITRD" == 1 ]]; then
 	"$SHIRUDO_BIN" status --json | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-assert d["mode"] == "production", d["mode"]
+assert d["lsm_attached"] is True, d["lsm_attached"]
 assert d["tpm"]["bound_in"] == "initrd", d["tpm"]
 '
 	test ! -e /run/shirudo/eventlog.pending
@@ -413,6 +501,21 @@ if not tpm.get("chain"):
 if tpm.get("chain_matches_eventlog") is not True:
     raise SystemExit("register does not match the shirudo eventlog")
 PY
+
+if [[ "$VM_MODE" == node ]]; then
+	log "this node of the end2end suite takes the ${TEST_VM_NODE_ROLE} role"
+	"$SHIRUDO_BIN" image update "/var/lib/shirudo/images/config-${TEST_VM_NODE_ROLE}"
+fi
+if [[ "${TEST_VM_SUITE:-}" == end2end ]]; then
+	"$SHIRUDO_BIN" status --keepalive >/mnt/shirudo-out/keepalive.json
+fi
+
+if [[ "${TEST_VM_LOCAL_STACK:-0}" == 1 ]]; then
+	"$SHIRUDO_BIN" image update /var/lib/shirudo/images/config-local-stack
+	install -d /etc/shirudo/bpm
+	printf '%s\n' 'BPM_OCI_CA_FILE=/usr/local/share/ca-certificates/shirudo-oci-ca.crt' \
+		>/etc/shirudo/bpm/environment
+fi
 
 if [[ -n "${TEST_VM_BPM_TREE_INPUT:-}" ]]; then
 	log "performing initial BPM tree sync"
@@ -434,6 +537,12 @@ if [[ -n "${TEST_VM_BPM_TREE_INPUT:-}" ]]; then
 fi
 
 report_boot_memory
+write_target_test_env
+
+if [[ "$VM_MODE" == node ]]; then
+	log "node prepared; node mode runs no tests and starts no timers"
+	exit 0
+fi
 
 if [[ "$VM_MODE" == interactive ]]; then
 	# init above was deliberately run directly so the current boot gets one
@@ -442,6 +551,10 @@ if [[ "$VM_MODE" == interactive ]]; then
 	systemctl enable shirudo.service
 	systemctl enable --now shirudo-map-export.timer
 	systemctl enable --now shirudo-keepalive.timer
+	install -D -m 0644 "$BUNDLE/root/usr/lib/udev/rules.d/90-shirudo-xdp-reconcile.rules" \
+		/usr/lib/udev/rules.d/90-shirudo-xdp-reconcile.rules
+	udevadm control --reload
+	systemctl enable --now shirudo-xdp-reconcile.timer
 	systemctl enable --now shirudo-bpm-repo-update.timer
 	systemctl enable --now shirudo-bpm-tree-sync.timer
 
@@ -449,17 +562,17 @@ if [[ "$VM_MODE" == interactive ]]; then
 	exit 0
 fi
 
-log "running target tests: $TEST_VM_SUITE"
 : >/mnt/shirudo-out/failed-tests
 : >/mnt/shirudo-out/failed-suites
+if [[ "$VM_MODE" == serve ]]; then
+	log "guest prepared; the host runs the target tests over SSH"
+	exit 0
+fi
+
+log "running target tests: $TEST_VM_SUITE"
 (
 	cd testing
-	SHIRUDO_BIN="$SHIRUDO_BIN" \
-		SHIRUDO_TEST_KEY_FIXTURES="$BUNDLE/verity" \
-		SHIRUDO_TEST_RESULTS=/mnt/shirudo-out/verity \
-		SHIRUDO_TEST_FIXTURES_DIR="$BUNDLE/fixtures" \
-		SHIRUDO_TEST_FAILURES_FILE=/mnt/shirudo-out/failed-tests \
-		SHIRUDO_TEST_SUITE_FAILURES_FILE=/mnt/shirudo-out/failed-suites \
-		./run-target-tests.sh "$TEST_VM_SUITE"
+	. /etc/shirudo-test-vm.env
+	./run-target-tests.sh "$TEST_VM_SUITE"
 )
 log "integration suite passed"

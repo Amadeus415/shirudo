@@ -146,7 +146,8 @@ bintar-pkg: config $(ROOT)/packaging/tar/install.sh
 #       shirudo + the systemd reboot, map-export, and keepalive units
 #       (target node)
 #   shirudo-operator_<version>_<arch>.deb
-#       shirudo + shirudo-build + BPF headers, no unit
+#       shirudo + shirudo-build + shirudo-quote-check + BPF headers,
+#       no unit
 # Rebuilds from clean with prefix=$(PKG_PREFIX) because the libexec path is
 # compiled into the binary and make cannot see the changed -D otherwise.
 bindeb-pkg:

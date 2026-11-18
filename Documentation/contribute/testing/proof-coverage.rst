@@ -10,8 +10,11 @@ Proof coverage
 
 This page lists the CBMC proofs under :src:`testing/proofs/cbmc/` and the
 Lean 4 proofs under :src:`testing/proofs/lean4/`, what each one proves and
-for which inputs, and the parsers no proof covers yet. :doc:`proofs`
-explains how to run and write them.
+for which inputs, the source files no proof reads and the parsers no
+proof covers yet. :doc:`proofs` explains how to run and write them. CI
+runs every proof after a push to main but the CBMC proofs
+:src:`testing/proofs/cbmc/ci-skip.list` names, which take hours each:
+only a run a developer starts checks those.
 
 CBMC proofs
 -----------
@@ -67,7 +70,11 @@ the model follows the C.
        registers come from the same events, tagged the same, in the same
        order; ``register_injective_on``: the same with the hash injective
        only on the pairs the two sequences fold; ``register_eq_foldl``: the
-       register folds the events in the order they came
+       register folds the events in the order they came;
+       ``history_ignores_outcomes``: a upatch tree's history root is the
+       same on two nodes that processed operations of the same digests,
+       whatever outcome each had; ``processAll_history``,
+       ``historyRoot_append_one``: it takes one step per operation
      - The hash is injective on the (register, event) pairs (for
        ``register_injective_on`` only those folded) and never yields the
        initial value; ``register_tagged_injective`` also takes the tagged
@@ -236,8 +243,23 @@ the model follows the C.
        between an append and its commit; ``applied_signed``,
        ``applied_consistent``: an applied operation is one of a signed
        publication of the tree, and that of every one when the signer never
-       gives a number two operations
-     - A manifest digest names one publication; the hash is injective on
+       gives a number two operations; ``outcomes_cover``,
+       ``outcomes_fixed``, ``lastSeq_le_head``: the outcomes record has a
+       line for every operation from 1 to the cursor, in order, no line
+       at or below the cursor ever changes, and the cursor never passes
+       the head of the recorded publication. All of these hold across
+       segment boundaries, as a publication of any base is a sync;
+       ``walk_same_ops``: the segments of a walk, each recorded before
+       its operations, apply the operations of the tree taken as one
+       publication, in its order, with the same ``pending.json``,
+       register, tree eventlog and outcomes writes, and end at the same
+       cursor and projection root
+     - A sync that walks is one sync per segment: it leaves out only the
+       state each segment but the last writes at its end, which the next
+       segment's record overwrites with the same cursor and root, and
+       its cut keeps every line; the base and prefix checks are left out
+       of the model, as they only refuse more. A manifest digest names
+       one publication; the hash is injective on
        (root, digest) and never 64 zeros; only sync writes the tree files,
        each write whole, one sync at a time; the unlink of ``pending.json``
        succeeds; an extend and its eventlog record are one write

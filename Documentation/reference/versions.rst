@@ -204,7 +204,8 @@ State the target keeps for itself:
      - Refused as malformed (``EBADMSG``). The active config can then
        not be verified, and commands stop with ``shirudo: image state:``
        and the error.
-   * - ``state.json`` and ``pending.json`` of the upatch tree
+   * - ``state.json`` and ``pending.json`` of the upatch tree and the
+       lines of its ``outcomes``
      - 1
      - Refused by ``bpm tree sync``.
 
@@ -220,10 +221,11 @@ Kernel ABI
 ----------
 
 shirudo needs the signed-loader ABI of the bpf-next tree it targets and
-the ``tpm_command`` LSM hook that it carries as a kernel patch. A
-release number does not identify such a kernel. The pre-flight check
-``signed_loader_kernel_abi`` reads the running kernel's BTF, and a load
-on a kernel without the ABI fails with ``kernel_abi_unsupported``.
+the kernel patches it carries, among them the ``tpm_command`` and
+``mm_read_access`` LSM hooks. A release number does not identify such a
+kernel. The pre-flight checks ``signed_loader_kernel_abi`` and
+``kernel_lsm_hooks`` read the running kernel's BTF, and a load on a
+kernel without the ABI fails with ``kernel_abi_unsupported``.
 :doc:`/operate/plan/system-requirements` lists the kernel requirements and how
 to identify a kernel, :doc:`/internals/kernel-interfaces` every interface
 shirudo uses, and :doc:`/internals/kernel-patches` the carried patches.
@@ -244,10 +246,10 @@ target on builds of the same commit.
    * - Initrd binary and runtime image binary
      - Must be the same build (:doc:`/operate/deploy/boot-integration`).
        Nothing compares their IDs. The runtime binary reads the identity
-       map and the tamper counters that the initrd's ``init`` pinned and
-       refuses maps whose layout differs from its own: a different
-       identity layout stops every command with ``shirudo: image state:
-       Protocol error``.
+       map and the tamper and integrity counters that the initrd's
+       ``init`` pinned and refuses maps whose layout differs from its
+       own: a different identity layout stops every command with
+       ``shirudo: image state: Protocol error``.
    * - Operator artifacts on a target of another build
      - Load when a key the target trusts signed them, the container and
        section versions match, and the target kernel accepts the signed

@@ -32,7 +32,6 @@ Before you begin
      target# shirudo status
      Host:                  docs
      Roles:                 target
-     Mode:                  production
      Status:                ok
      Version ID:            d0d7aa800303439023907d1979d917d46a21bec21f816689c138728a28e84af9
 
@@ -44,6 +43,7 @@ Before you begin
        UpatchesMeasured   OK      every pinned or archived upatch is in this boot's records
        TpmMeasured        OK      NV index 0x01818E00 readable
        ConfigActive       OK      config 6d5ed552f448.. is active
+       XdpCovered         OK      every device an XDP upatch selects runs it
      ...
 
   A verdict other than ``ok`` is followed by its reason in parentheses,
@@ -484,19 +484,20 @@ Meaning
         OK    bpf_lsm_active
         OK    bpffs_supported
         OK    signed_loader_kernel_abi
+        OK    kernel_lsm_hooks
         OK    cert_on_disk
         OK    cert_algorithm
         OK    cert_kernel_support
         OK    kernel_keyring
         OK    embedded_loader
         OK    tpm2_reachable: TCTI from the config: device:/dev/tpmrm0
-      10 of 10 passed
+      11 of 11 passed
 
 Causes
    The check names the requirement that is missing: root, the BPF LSM
-   in the kernel's active LSM list, bpffs, the signed-loader ABI, the
-   certificate and its algorithm, the kernel keyring, the embedded
-   loader or the TPM.
+   in the kernel's active LSM list, bpffs, the signed-loader ABI, an
+   LSM hook only the carried kernel patches add, the certificate and
+   its algorithm, the kernel keyring, the embedded loader or the TPM.
 
 Action
    Fix the requirement, see :doc:`/operate/plan/system-requirements`, and
@@ -516,10 +517,17 @@ Meaning
 Causes
    The archived upatch does not load on this kernel, typically after a
    kernel upgrade. The load failure before this message carries its
-   category.
+   category. For an XDP upatch, a line ``XDP: attach <device>`` before
+   it names a device whose driver refused the program: a NIC added since
+   the load, or a setting that survived the reboot, in the NIC's firmware
+   or the hypervisor, such as LRO, header-data split or a device without
+   multi-buffer XDP.
 
 Action
-   A reboot restores the same archive and fails the same way.
+   A reboot restores the same archive and fails the same way. For an XDP
+   device, undo the setting, or remove the device, and reboot. A device
+   that cannot take XDP needs an upatch signed with a class mask that
+   leaves it out.
    :doc:`/operate/maintain/backup-recovery` describes what works and what does
    not.
 

@@ -26,8 +26,8 @@ property of the parser breaks:
 
 - what it accepts and emits again reads back the same, as `fuzz-tree.c`
   holds a tree publication and its operation digests;
-- what it writes reads back as its format, as `fuzz-otel.c` holds the
-  OTLP AnyValues to JSON;
+- what it writes reads back as its format, as `fuzz-quote-check.c`
+  holds the line of a verdict to JSON;
 - offsets and sizes it returns lie within the input, as `fuzz-rodata.c`
   holds the `.rodata` range;
 - two ways to the same value agree.
@@ -53,10 +53,13 @@ state that exception exactly, or the target reports its own error.
 make -C testing fuzz FUZZ_SECONDS=60           # every target, as CI
 sh testing/fuzz/run.sh 300 <name>              # one target for longer
 testing/fuzz/fuzz-<name> testing/fuzz/crash-<name>-<hash>
+PATH=$PWD/build/afl/bin:$PATH make -C testing afl FUZZERS=<name>  # AFL++
 ```
 
-A failure leaves its input in `testing/fuzz/crash-<name>-*`, which git
-ignores. Fix the parser, or the harness when the property was wrong,
+A new target needs nothing more for AFL++: `make -C testing afl` builds
+every `fuzz-*.c` with `afl-clang-fast` as it is. A failure leaves its
+input in `testing/fuzz/crash-<name>-*`, or `crash-afl-<name>-<n>` from
+AFL++, which git ignores. Fix the parser, or the harness when the property was wrong,
 add the input to the corpus when it shows a case the seeds do not, and
 delete the crash file. libFuzzer's own `-jobs` writes `fuzz-<n>.log`
 into the current directory: run that from a scratch directory, not the

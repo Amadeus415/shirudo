@@ -40,6 +40,17 @@ jobs:
       - name: Check the SPDX tag of every tracked source
         run: .github/scripts/check-spdx.sh
 
+  unused:
+    name: Unused functions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check that every extern function has a caller
+        run: .github/scripts/check-unused.sh
+
   sparse:
     name: Sparse
     runs-on: ubuntu-latest

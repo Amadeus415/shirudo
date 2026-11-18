@@ -52,10 +52,13 @@ jobs:
             . build/vm-toolchain.env
             make -j4 CC=${{ matrix.cc }}
             make CC=${{ matrix.cc }} shirudo-build
+            make CC=${{ matrix.cc }} quote-check
             make -C testing CC=${{ matrix.cc }} test-helpers
             make -C testing CC=${{ matrix.cc }} unit
             sh .github/scripts/check-operator-linkage.sh shirudo \
               tools/shirudo-build/shirudo-build
+            sh .github/scripts/check-static-target.sh \
+              tools/quote-check/shirudo-quote-check
 
   btf:
     name: bpf-next BTF
@@ -92,6 +95,42 @@ jobs:
           path: build/vmlinux.btf
           if-no-files-found: error
           retention-days: 1
+
+  # clang's static analyzer follows the paths through each function and
+  # reports what a compiler warning does not: a NULL or uninitialized
+  # value used, memory leaked or used after its free, a store never read.
+  scan-build:
+    name: scan-build
+    needs: btf
+    runs-on: ubuntu-latest
+    container: debian:testing
+    timeout-minutes: 60
+
+    steps:
+      # Without git the checkout is no repository, and the build takes its
+      # version from one.
+      - name: Install git
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates git
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download the kernel BTF
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bpf-next-btf
+          path: build
+
+      - name: Build under clang's static analyzer
+        run: sh .github/scripts/scan-build.sh build/vmlinux.btf
+
+      - name: Upload the analyzer's report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scan-build-report
+          path: build/scan-build
+          if-no-files-found: ignore
 
   arch:
     name: ${{ matrix.arch }}

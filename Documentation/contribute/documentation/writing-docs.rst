@@ -87,17 +87,21 @@ the ``facts`` class:
    .. rst-class:: facts
 
    :Adversary: ADV-B, root on the target without the signing key
-   :Enforced at: ``lsm/bpf``, ``inode_unlink``, ``sb_umount``
+   :Enforced at: ``lsm/bpf``, ``lsm/inode_unlink``, ``lsm/sb_umount``
    :Refusal: ``EACCES`` from the denied system call
    :Counters: ``BpfCommand``, ``PinUnlink``, ``BpffsUmount``
    :Tests: ``t6106``, ``t6107``, ``t6120``
    :Proofs: ``Shirudo.Chain``, ``Shirudo.Events``
    :Residual: R3
 
-Name only hooks, counters, tests and proofs that exist, a proof by its
-name in :src:`testing/proofs/cbmc/proofs.list` or its Lean 4 module, and
-add ``:Proofs:`` only where a proof covers the check the threat rests
-on. ``make -C Documentation check`` verifies them against the tree.
+Name only hooks, counters, tests and proofs that exist, a hook by the
+section of its program, ``lsm/`` or ``lsm.s/``, a proof by its name in
+:src:`testing/proofs/cbmc/proofs.list` or its Lean 4 module, and add
+``:Proofs:`` only where a proof covers the check the threat rests on.
+Every LSM program of :src:`bpf/` stands in the ``:Enforced at:`` field
+of some threat, one that refuses nothing after the others with what it
+does, and every tamper counter in a ``:Counters:`` field. ``make -C
+Documentation check`` verifies all of this against the tree.
 
 Page metadata
 -------------

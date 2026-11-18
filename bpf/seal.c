@@ -130,6 +130,17 @@ static __always_inline bool seal_is_policy(const char *name)
 	return !bpf_strncmp(buf, sizeof(XATTR_POLICY), XATTR_POLICY);
 }
 
+static __always_inline bool seal_is_ancestor(const char *name)
+{
+	char buf[sizeof(XATTR_ANCESTOR) + 1];
+	long n;
+
+	n = bpf_probe_read_kernel_str(buf, sizeof(buf), name);
+	if (n != sizeof(XATTR_ANCESTOR))
+		return false;
+	return !bpf_strncmp(buf, sizeof(XATTR_ANCESTOR), XATTR_ANCESTOR);
+}
+
 static __always_inline struct seal_scratch *
 seal_scratch_get(struct task_struct *task)
 {
@@ -183,6 +194,7 @@ void BPF_PROG(shirudo_seal_bprm_committed_creds,
 		return;
 	authority->trusted = authority->candidate_valid &&
 			     authority->candidate_trusted;
+	authority->revoked = 0;
 	authority->candidate_valid = 0;
 	authority->candidate_trusted = 0;
 }
@@ -217,6 +229,7 @@ int BPF_PROG(shirudo_seal_task_alloc, struct task_struct *child,
 	if (!authority)
 		return -ENOMEM;
 	authority->trusted = parent_authority->trusted;
+	authority->revoked = parent_authority->revoked;
 	return 0;
 }
 
@@ -240,18 +253,38 @@ int BPF_PROG(shirudo_seal_perf_event_alloc,
 	return 0;
 }
 
-/* Keep ptrace away from processes with committed exec marks. */
+/*
+ * Keep every ptrace mode away from processes with committed exec marks,
+ * but count only attach mode: journald reads /proc/<pid>/exe of every
+ * client it logs for, and ps reads /proc/<pid>/stat, so a counted read
+ * mode would make an honest node look tampered.
+ */
 SEC("lsm/ptrace_access_check")
 int BPF_PROG(shirudo_seal_ptrace_access_check,
 	     struct task_struct *child, unsigned int mode, int ret)
 {
 	if (ret)
 		return ret;
-
-	if (shirudo_marked(child))
+	if (!shirudo_marked(child))
+		return 0;
+	if (mode & PTRACE_MODE_ATTACH)
 		return shirudo_tamper_deny(TAMPER_SEAL_PTRACE, -EACCES);
+	return -EACCES;
+}
 
-	return 0;
+/*
+ * mm_access() grants a read-mode access to CAP_PERFMON after the check
+ * above refused it, and asks here first (carried patch 0005): the
+ * environment, memory map and page map of a marked task stay its own,
+ * refused as uncounted as any read mode.
+ */
+SEC("lsm/mm_read_access")
+int BPF_PROG(shirudo_seal_mm_read_access, struct task_struct *task,
+	     unsigned int mode, int ret)
+{
+	if (ret)
+		return ret;
+	return shirudo_marked(task) ? -EACCES : 0;
 }
 
 /*
@@ -271,6 +304,23 @@ int BPF_PROG(shirudo_seal_task_kill, struct task_struct *p,
 	if (sig && shirudo_marked(p) && !seal_task_authorized())
 		shirudo_tamper_count(TAMPER_SEAL_SIGNAL);
 	return 0;
+}
+
+/*
+ * A file size or CPU time limit has the kernel itself signal a command,
+ * which task_kill never sees. A command resets its own limits when it
+ * starts, and no one else changes them while it runs.
+ */
+SEC("lsm/task_setrlimit")
+int BPF_PROG(shirudo_seal_task_setrlimit, struct task_struct *p,
+	     unsigned int resource, struct rlimit *new_rlim, int ret)
+{
+	if (ret)
+		return ret;
+	if (p == bpf_get_current_task_btf() || !shirudo_marked(p) ||
+	    seal_task_authorized())
+		return 0;
+	return shirudo_tamper_deny(TAMPER_SEAL_RLIMIT, -EPERM);
 }
 
 SEC("lsm.s/file_open")
@@ -508,6 +558,32 @@ int BPF_PROG(shirudo_seal_inode_link, const struct mnt_idmap *idmap,
 	return seal_parent(new_dentry, TAMPER_SEAL_ENTRY);
 }
 
+/*
+ * A rename of a directory above the state root, /var/lib say, moves the
+ * sealed tree aside, and the next boot's bootstrap init labels whatever
+ * root then puts at the path as shirudo's. init marks those directories
+ * with an xattr of their own, which only this check reads: the seal
+ * label would refuse root every new entry there.
+ */
+static __always_inline int seal_ancestor(struct dentry *dentry)
+{
+	struct inode *inode = BPF_CORE_READ(dentry, d_inode);
+	struct seal_scratch *s;
+	struct bpf_dynptr tdp;
+	int len;
+
+	if (!inode || !seal_is_dir(inode))
+		return 0;
+	s = seal_scratch_get(bpf_get_current_task_btf());
+	if (!s)
+		return seal_caller(TAMPER_SEAL_RENAME);
+	bpf_dynptr_from_mem(s->target, LABEL_LEN, 0, &tdp);
+	len = bpf_get_dentry_xattr(dentry, XATTR_ANCESTOR, &tdp);
+	if (len == -ENODATA || len == -EOPNOTSUPP)
+		return 0;
+	return seal_caller(TAMPER_SEAL_RENAME);
+}
+
 /* Protect the source, the destination directory and an existing target. */
 SEC("lsm.s/inode_rename")
 int BPF_PROG(shirudo_seal_inode_rename, struct inode *old_dir,
@@ -522,12 +598,16 @@ int BPF_PROG(shirudo_seal_inode_rename, struct inode *old_dir,
 	err = seal_dentry(old_dir, old_dentry, TAMPER_SEAL_RENAME);
 	if (err)
 		return err;
+	err = seal_ancestor(old_dentry);
+	if (err)
+		return err;
 	err = seal_parent(new_dentry, TAMPER_SEAL_ENTRY);
 	if (err)
 		return err;
 	if (!target)
 		return 0;
-	return seal_dentry(new_dir, new_dentry, TAMPER_SEAL_RENAME);
+	err = seal_dentry(new_dir, new_dentry, TAMPER_SEAL_RENAME);
+	return err ? err : seal_ancestor(new_dentry);
 }
 
 /* Truncate, chmod, chown and utimes all come through here. */
@@ -545,7 +625,8 @@ int BPF_PROG(shirudo_seal_inode_setxattr, struct mnt_idmap *idmap,
 {
 	if (ret)
 		return ret;
-	if (seal_is_label(name) || seal_is_policy(name))
+	if (seal_is_label(name) || seal_is_policy(name) ||
+	    seal_is_ancestor(name))
 		return seal_caller(TAMPER_SEAL_LABEL);
 	return seal_dentry(NULL, dentry, TAMPER_SEAL_XATTR);
 }
@@ -561,7 +642,8 @@ int BPF_PROG(shirudo_seal_inode_removexattr, struct mnt_idmap *idmap,
 {
 	if (ret)
 		return ret;
-	if (seal_is_label(name) || seal_is_policy(name))
+	if (seal_is_label(name) || seal_is_policy(name) ||
+	    seal_is_ancestor(name))
 		return seal_caller(TAMPER_SEAL_LABEL);
 	return seal_dentry(NULL, dentry, TAMPER_SEAL_XATTR);
 }
@@ -658,10 +740,14 @@ int BPF_PROG(shirudo_seal_bprm_creds_for_exec, struct linux_binprm *bprm,
 	return 0;
 }
 
+#define LSM_UNSAFE_SHARE	1
+
 /*
  * shirudo grants authority only to a direct file on the verified runtime.
  * Overlay copies cannot qualify. Ptrace or seccomp supplied before exec must
- * not control the new trusted process. A failed exec retains the old mark.
+ * not control the new trusted process, nor a process that shares its root
+ * and working directory, which exec does not unshare. A failed exec retains
+ * the old mark.
  */
 SEC("lsm.s/bprm_check_security")
 int BPF_PROG(shirudo_seal_bprm_check_security,
@@ -701,6 +787,8 @@ int BPF_PROG(shirudo_seal_bprm_check_security,
 		  shirudo_file_runtime(bprm->file);
 	if (trusted && BPF_CORE_READ(task, ptrace))
 		return shirudo_tamper_deny(TAMPER_EXEC_TRACED, -EACCES);
+	if (trusted && (BPF_CORE_READ(bprm, unsafe) & LSM_UNSAFE_SHARE))
+		return shirudo_tamper_deny(TAMPER_EXEC_SHARED, -EACCES);
 	if (trusted && shirudo_task_has_seccomp(task))
 		return -EACCES;
 	authority = bpf_task_storage_get(&shirudo_tasks, task, NULL,

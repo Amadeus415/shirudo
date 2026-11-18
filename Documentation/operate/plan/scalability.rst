@@ -100,10 +100,11 @@ Staged rollouts
 Collectors
 ~~~~~~~~~~
 
-With an endpoint configured, every target sends one keepalive and one
-request per map of every loaded upatch every 5 seconds after the previous
-run ends, about 12 a minute each. A collector serves N targets with M
-exported maps each about 12 × N × (M + 1) requests a minute. A request
+With an endpoint configured, every target sends one keepalive a minute
+after the previous one ends, and one request per map of every loaded
+upatch 5 seconds after the previous export ends, about 12 a minute. A
+collector serves N targets with M exported maps each about
+N × (12 × M + 1) requests a minute. A request
 waits 10 seconds by default and is retried 3 times. See
 :doc:`/operate/run/telemetry`.
 
@@ -183,10 +184,10 @@ without ``CAP_BPF``. What bounds a target is the attach point.
    * - ``tp_btf``
      - No limit per tracepoint
      -
-   * - ``kprobe``, ``kretprobe``
-     - No limit per symbol; every attachment is a perf event of its own
+   * - ``kprobe``, ``kretprobe``, ``uprobe``, ``uretprobe``
+     - No limit per site; every attachment is a perf event of its own
      -
-   * - ``uprobe.multi``
+   * - ``uprobe.multi``, ``uretprobe.multi``
      - 1,048,576 offsets per link, which shirudo also enforces
      - ``MAX_UPROBE_MULTI_CNT`` in ``kernel/trace/bpf_trace.c``
    * - ``cgroup_skb``

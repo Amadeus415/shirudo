@@ -125,6 +125,38 @@ for target in ./Beefile a/./data.txt dir/; do
 	n=$((n + 1))
 done
 
+# A name that would be a file and a directory at once, in either order,
+# below a member bpm build writes itself, and above the load artifact.
+n=1
+for pair in "a a/b" "a/b a" "data.txt README.md/data.txt" "data.txt upatches"; do
+	mkdir -p "$WORK/nested/$n" &&
+	cp "$WORK/pkg/t7005.bpf.c" "$WORK/nested/$n/" &&
+	echo data >"$WORK/nested/$n/data.txt" &&
+	printf '[package]\nname = "t7005"\n' >"$WORK/nested/$n/Beefile" &&
+	for target in $pair; do
+		printf '\n[[files]]\nsource = "data.txt"\ntarget = "%s"\n' \
+			"$target" >>"$WORK/nested/$n/Beefile"
+	done &&
+	printf '\n[[upatches]]\nsource = "t7005.bpf.c"\n' >>"$WORK/nested/$n/Beefile"
+	n=$((n + 1))
+done
+
+# Two members that each fit and together pass what a target unpacks, and
+# one that passes it alone.
+mkdir -p "$WORK/large" "$WORK/larger" &&
+	ln -s "$REPO/vendor" "$WORK/large/vendor" &&
+	ln -s "$REPO/bpf" "$WORK/large/bpf" &&
+	ln -s "$REPO/vendor" "$WORK/larger/vendor" &&
+	ln -s "$REPO/bpf" "$WORK/larger/bpf" &&
+	cp "$WORK/pkg/t7005.bpf.c" "$WORK/large/" &&
+	cp "$WORK/pkg/t7005.bpf.c" "$WORK/larger/" &&
+	truncate -s 134217729 "$WORK/large/one" "$WORK/large/two" &&
+	truncate -s 268435457 "$WORK/larger/one" &&
+	printf '[package]\nname = "t7005"\n\n[[files]]\nsource = "one"\n\n[[files]]\nsource = "two"\n\n[[upatches]]\nsource = "t7005.bpf.c"\n' \
+		>"$WORK/large/Beefile" &&
+	printf '[package]\nname = "t7005"\n\n[[files]]\nsource = "one"\n\n[[upatches]]\nsource = "t7005.bpf.c"\n' \
+		>"$WORK/larger/Beefile"
+
 test_expect_success 'bpm build takes a SemVer version alone' '
 	for v in 1.0 01.0.0 1.0.0.1 1.0.0_rc; do
 		( cd "$WORK" && ! "$S" bpm build pkg --version $v \
@@ -143,6 +175,82 @@ test_expect_success 'bpm build refuses a tree selector or a target spelled anoth
 	done
 '
 
+test_expect_success 'bpm build refuses a target below another member' '
+	for n in 1 2 3 4; do
+		( cd "$WORK" && ! "$S" bpm build nested/$n --version 9.1.$n \
+			--keys-dir "$WORK/keys" ) 2>"$WORK/nested/$n.err" &&
+		grep -q "is not a valid Beefile" "$WORK/nested/$n.err" &&
+		! test -e "$WORK/t7005-9.1.$n.bee" || return 1
+	done
+'
+
+test_expect_success 'bpm build refuses members a target could not unpack together' '
+	for n in large larger; do
+		( cd "$WORK" && ! "$S" bpm build $n --version 9.2.0 \
+			--keys-dir "$WORK/keys" ) 2>"$WORK/$n.err" &&
+		grep -q "more than 256 MiB together, the most a target installs" \
+			"$WORK/$n.err" &&
+		! test -e "$WORK/t7005-9.2.0.bee" || return 1
+	done
+'
+
+# $1 is the package directory under $WORK, $2 the value of the key.
+fixes_package() {
+	mkdir -p "$WORK/$1" &&
+	cp "$WORK/pkg/t7005.bpf.c" "$WORK/$1/" &&
+	ln -s "$REPO/vendor" "$WORK/$1/vendor" &&
+	ln -s "$REPO/bpf" "$WORK/$1/bpf" &&
+	printf '[package]\nname = "t7005"\n\n[[upatches]]\nsource = "t7005.bpf.c"\n\n[upatches.tree]\nid = "t7005"\nfixes = %s\n' \
+		"$2" >"$WORK/$1/Beefile"
+}
+# $1 is the case, $2 the value, $3 what the refusal says.
+fixes_refused() {
+	fixes_package "fixes/$1" "$2" &&
+	( cd "$WORK" && ! "$S" bpm build "fixes/$1" --version 8.0.0 \
+		--keys-dir "$WORK/keys" ) 2>"$WORK/fixes/$1.err" &&
+	grep -q "Beefile: $3" "$WORK/fixes/$1.err" &&
+	grep -q "is not a valid Beefile" "$WORK/fixes/$1.err" &&
+	! test -e "$WORK/t7005-8.0.0.bee"
+}
+# An array of $1 IDs, and one ID of $1 bytes.
+fixes_ids() {
+	python3 -c 'import sys; print("[" + ", ".join("\"ID-%d\"" % i for i in range(int(sys.argv[1]))) + "]")' "$1"
+}
+fixes_long() {
+	python3 -c 'import sys; print("[\"" + "A" * int(sys.argv[1]) + "\"]")' "$1"
+}
+
+test_expect_success 'bpm build takes fixes of 1 to 16 IDs of 1 to 255 bytes' '
+	fixes_package fixes/ok "[\"EXAMPLE-0101\", \"a.B_c:9-\"]" &&
+	( cd "$WORK" && "$S" bpm build fixes/ok --version 8.1.0 \
+		--keys-dir "$WORK/keys" ) >&2 &&
+	tar -xzOf "$WORK/t7005-8.1.0.bee" t7005-8.1.0/Beefile |
+		cmp - "$WORK/fixes/ok/Beefile" &&
+	fixes_package fixes/max "$(fixes_ids 16)" &&
+	( cd "$WORK" && "$S" bpm build fixes/max --version 8.2.0 \
+		--keys-dir "$WORK/keys" ) >&2 &&
+	fixes_package fixes/long "$(fixes_long 255)" &&
+	( cd "$WORK" && "$S" bpm build fixes/long --version 8.3.0 \
+		--keys-dir "$WORK/keys" ) >&2 &&
+	test -s "$WORK/t7005-8.2.0.bee" && test -s "$WORK/t7005-8.3.0.bee"
+'
+
+test_expect_success 'bpm build refuses a malformed fixes' '
+	fixes_refused many "$(fixes_ids 17)" "fixes holds more than 16 IDs" &&
+	fixes_refused dup "[\"B\", \"A\", \"B\"]" "fixes holds B twice" &&
+	fixes_refused empty-id "[\"A\", \"\"]" "fixes holds an empty ID" &&
+	fixes_refused char "[\"A\", \"CVE 1\"]" "ID 2 of fixes has a character outside" &&
+	fixes_refused slash "[\"a/b\"]" "ID 1 of fixes has a character outside" &&
+	fixes_refused escape "[\"A\\n\"]" "ID 1 of fixes has a character outside" &&
+	fixes_refused empty "[]" "fixes is not an array of 1 to 16 strings" &&
+	fixes_refused string "\"EXAMPLE-0101\"" "fixes is not an array of 1 to 16 strings" &&
+	fixes_refused number "[1]" "fixes is not an array of 1 to 16 strings" &&
+	fixes_refused bare "7" "fixes is not an array of 1 to 16 strings" &&
+	fixes_refused toolong "$(fixes_long 256)" "fixes is not an array of 1 to 16 strings" &&
+	fixes_refused twice "[\"A\"]
+fixes = [\"B\"]" "fixes is given twice"
+'
+
 PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 REG="$WORK/registry"
 python3 ./helper/test-oci-registry.py --root "$REG" --port "$PORT" --writable \
@@ -159,7 +267,7 @@ REGISTRY="127.0.0.1:$PORT"
 # Verify a detached CMS blob against the operator certificate.
 cms_verify() {
 	openssl cms -verify -binary -inform DER -in "$1" -content "$2" \
-		-certfile "$WORK/cert.pem" -CAfile "$WORK/cert.pem" -purpose any \
+		-certfile "${3:-$WORK/cert.pem}" -CAfile "${3:-$WORK/cert.pem}" -purpose any \
 		-out /dev/null 2>/dev/null
 }
 
@@ -197,7 +305,8 @@ test_expect_success 'bpm push refuses a namespace without an index unless told t
 test_expect_success 'bpm push publishes the package and a signed repository index' '
 	"$S" bpm push "$WORK/t7005-1.0.0.bee" "oci://$REGISTRY/ns/t7005" \
 		--keys-dir "$WORK/keys" --new-index >"$WORK/push.out" 2>"$WORK/push.err" &&
-	grep -qx "oci://$REGISTRY/ns/t7005:1.0.0" "$WORK/push.out" &&
+	grep -qx "oci://$REGISTRY/ns/t7005:1.0.0 sha256:$(sha256sum \
+		<"$REG/ns/t7005/manifests/1.0.0" | cut -d" " -f1)" "$WORK/push.out" &&
 	test -s "$REG/ns/t7005/manifests/1.0.0" &&
 	test -s "$REG/ns/bpm-index/manifests/stable" &&
 	split_layers "$REG/ns/bpm-index/manifests/stable" "$REG/ns/bpm-index" "$WORK/index1" &&
@@ -328,7 +437,7 @@ PY
 
 test_expect_success 'a delete append chains on the previous publication' '
 	"$S" bpm tree append "$WORK/t7005-1.0.0.bee" "oci://$REGISTRY/ns/tree" \
-		--keys-dir "$WORK/keys" --op delete >/dev/null 2>&1 &&
+		--tree-id t7005 --keys-dir "$WORK/keys" --op delete >/dev/null 2>&1 &&
 	split_layers "$REG/ns/tree/manifests/stable" "$REG/ns/tree" "$WORK/tree2" &&
 	cms_verify "$WORK/tree2.sig" "$WORK/tree2.payload" &&
 	python3 - "$WORK/tree2.payload" "$WORK/tree1.manifest" "$WORK/tree1.payload" "$WORK/unload.json" <<'"'"'PY'"'"'
@@ -347,9 +456,15 @@ assert op["artifact"]["payload_sha256"] == "sha256:" + unload["payload_sha256"],
 PY
 '
 
-test_expect_success 'tree append refuses a different tree id and a package without tree entries' '
+test_expect_success 'tree append refuses another tree id, none, and a package without tree entries' '
 	! "$S" bpm tree append "$WORK/t7005-1.0.0.bee" "oci://$REGISTRY/ns/tree" \
-		--keys-dir "$WORK/keys" --tree-id other >/dev/null 2>&1 &&
+		--keys-dir "$WORK/keys" --tree-id other >/dev/null 2>"$WORK/other.err" &&
+	grep -q "holds tree t7005, not other; refusing to extend another tree" \
+		"$WORK/other.err" &&
+	! "$S" bpm tree append "$WORK/t7005-1.0.0.bee" "oci://$REGISTRY/ns/tree" \
+		--keys-dir "$WORK/keys" >/dev/null 2>"$WORK/noid.err" &&
+	grep -q "holds tree t7005; name the tree to extend with --tree-id" \
+		"$WORK/noid.err" &&
 	python3 - "$WORK" <<'"'"'PY'"'"'
 import io, pathlib, sys, tarfile
 work = pathlib.Path(sys.argv[1])
@@ -365,12 +480,94 @@ with tarfile.open(fileobj=body, mode="w:gz", format=tarfile.USTAR_FORMAT) as tar
 (work / "plain.bee").write_bytes(body.getvalue())
 PY
 	! "$S" bpm tree append "$WORK/plain.bee" "oci://$REGISTRY/ns/tree" \
-		--keys-dir "$WORK/keys" >/dev/null 2>"$WORK/plain.err" &&
+		--tree-id t7005 --keys-dir "$WORK/keys" >/dev/null 2>"$WORK/plain.err" &&
 	grep -q "no \[upatches.tree\] entries" "$WORK/plain.err"
 '
 
+# A package of one XDP upatch named $1 for the device classes $2, with $3
+# as the rest of its tree entry. A second name $4 adds an upatch for the
+# same classes.
+xdp_package() {
+	mkdir -p "$WORK/$1" &&
+	ln -s "$REPO/vendor" "$WORK/$1/vendor" &&
+	ln -s "$REPO/bpf" "$WORK/$1/bpf" &&
+	printf '[package]\nname = "%s"\n' "$1" >"$WORK/$1/Beefile" &&
+	for name in $1 ${4:-}; do
+		printf '// SPDX-License-Identifier: GPL-2.0 OR BSD-2-Clause\n#include "vmlinux.h"\n#include <bpf/bpf_helpers.h>\n\nchar _license[] SEC("license") = "Dual BSD/GPL";\n\nSEC("xdp/%s")\nint xdp_pass(struct xdp_md *ctx)\n{\n\treturn XDP_PASS;\n}\n' \
+			"$2" >"$WORK/$1/$name.bpf.c" &&
+		printf '\n[[upatches]]\nsource = "%s.bpf.c"\n\n[upatches.tree]\nid = "%s"\n%b' \
+			"$name" "$name" "$3" >>"$WORK/$1/Beefile" || return 1
+	done &&
+	( cd "$WORK" && "$S" bpm build "$1" --version 1.0.0 \
+		--keys-dir "$WORK/keys" ) >&2
+}
+site() {
+	printf '\\n[upatches.tree.selector.labels]\\nsite = [%s]\\n' "$1"
+}
+xdp_append() {
+	"$S" bpm tree append "$WORK/$1-1.0.0.bee" "oci://$REGISTRY/ns/xdp" \
+		--keys-dir "$WORK/keys" --tree-id xdp "${2:---op=add}" \
+		>/dev/null 2>"$WORK/$1.err"
+}
+xdp_refused() {
+	if xdp_append "$1"; then
+		return 1
+	fi
+	grep -q "$1 and $2 both select XDP device classes $3 " "$WORK/$1.err"
+}
+
+# A device runs one native XDP program, so the second of two upatches that
+# select a class fails its load wherever such a device is, and tree sync
+# stops there on every node the two reach.
+test_expect_success 'tree append refuses an XDP device class another upatch of the tree selects' '
+	xdp_package t7005xa 3 "$(site \"a\")" &&
+	xdp_package t7005xb 2 "$(site "\"a\", \"b\"")" &&
+	xdp_append t7005xa &&
+	cp "$REG/ns/xdp/manifests/stable" "$WORK/xdp1.manifest" &&
+	xdp_refused t7005xb "t7005xa (seq 1)" 2 &&
+	cmp -s "$WORK/xdp1.manifest" "$REG/ns/xdp/manifests/stable" &&
+	! ls "$REG/ns/xdp/manifests" | grep -q "upatch-t7005xb"
+'
+
+test_expect_success 'tree append takes the class once the upatch that held it is deleted' '
+	xdp_append t7005xa --op=delete &&
+	xdp_append t7005xb &&
+	xdp_package t7005xc 1 "$(site \"a\")" &&
+	xdp_append t7005xc
+'
+
+test_expect_success 'tree append takes a shared class on selectors that exclude each other, and another class' '
+	xdp_package t7005xd 2 "$(site \"c\")" &&
+	xdp_append t7005xd &&
+	xdp_package t7005xe 8 "" &&
+	xdp_append t7005xe &&
+	xdp_package t7005xf 2 "" &&
+	xdp_refused t7005xf "t7005xb (seq 3)" 2
+'
+
+test_expect_success 'tree append refuses two upatches of one package that select a class' '
+	xdp_package t7005xg 16 "" t7005xh &&
+	! "$S" bpm tree append "$WORK/t7005xg-1.0.0.bee" "oci://$REGISTRY/ns/xdp2" \
+		--keys-dir "$WORK/keys" >/dev/null 2>"$WORK/t7005xg.err" &&
+	grep -q "t7005xh and t7005xg (seq 1) both select XDP device classes 16 " \
+		"$WORK/t7005xg.err" &&
+	! test -e "$REG/ns/xdp2"
+'
+
+# No node can digest an operation with a control character in it, so the
+# entry is refused, and before its artifact reaches the registry.
+test_expect_success 'tree append uploads nothing for an entry no target would take' '
+	xdp_package t7005ct 16 "$(site "\"a\\\\tb\"")" &&
+	grep -q "^site = \[\"a.tb\"\]\$" "$WORK/t7005ct/Beefile" &&
+	! "$S" bpm tree append "$WORK/t7005ct-1.0.0.bee" "oci://$REGISTRY/ns/ctl" \
+		--keys-dir "$WORK/keys" >/dev/null 2>"$WORK/t7005ct.err" &&
+	grep -q "the tree entry of t7005ct makes an operation no target takes" \
+		"$WORK/t7005ct.err" &&
+	! test -e "$REG/ns/ctl"
+'
+
 test_expect_success 'the operator commands are reachable directly in shirudo-build' '
-	"$B" bpm --help | grep -q "tree append <package-file> <repository>" &&
+	"$B" bpm --help 2>&1 | grep -q "tree append <package-file> <repository>" &&
 	"$B" bpm tree append --help 2>&1 | grep -q "\-\-op add|delete" &&
 	"$B" bpm push --help 2>&1 | grep -q "<namespace>/bpm-index:stable" &&
 	! "$B" bpm not-a-command >/dev/null 2>&1
@@ -378,7 +575,48 @@ test_expect_success 'the operator commands are reachable directly in shirudo-bui
 
 test_expect_success 'tree append needs readable signing material' '
 	! "$S" bpm tree append "$WORK/t7005-1.0.0.bee" "oci://$REGISTRY/ns/tree" \
-		--key "$WORK/missing.pem" --cert "$WORK/keys/cert.der" >/dev/null 2>&1
+		--tree-id t7005 --key "$WORK/missing.pem" \
+		--cert "$WORK/keys/cert.der" >/dev/null 2>&1
+'
+
+test_expect_success 'a new signing key does not silently replace the previous tree signer' '
+	"$S" genkey --keys-dir "$WORK/next-key" >/dev/null &&
+	openssl x509 -inform DER -in "$WORK/next-key/cert.der" -out "$WORK/next-key.pem" &&
+	cp "$REG/ns/tree/manifests/stable" "$WORK/before-rotation.manifest" &&
+	! "$S" bpm tree append "$WORK/t7005-1.0.0.bee" "oci://$REGISTRY/ns/tree" \
+		--tree-id t7005 --keys-dir "$WORK/next-key" >/dev/null 2>&1 &&
+	cmp "$REG/ns/tree/manifests/stable" "$WORK/before-rotation.manifest"
+'
+
+test_expect_success 'previous-cert verifies A while B signs the next publication' '
+	"$S" bpm tree append "$WORK/t7005-1.0.0.bee" "oci://$REGISTRY/ns/tree" \
+		--tree-id t7005 --keys-dir "$WORK/next-key" --previous-cert "$WORK/keys/cert.der" >/dev/null &&
+	split_layers "$REG/ns/tree/manifests/stable" "$REG/ns/tree" "$WORK/rotated" &&
+	cms_verify "$WORK/rotated.sig" "$WORK/rotated.payload" "$WORK/next-key.pem" &&
+	! cms_verify "$WORK/rotated.sig" "$WORK/rotated.payload" &&
+	python3 - "$WORK/rotated.payload" "$WORK/before-rotation.manifest" <<"PYTEST"
+import hashlib, json, pathlib, sys
+publication = json.loads(pathlib.Path(sys.argv[1]).read_bytes())
+parent = pathlib.Path(sys.argv[2]).read_bytes()
+assert publication["parent_manifest_digest"] == "sha256:" + hashlib.sha256(parent).hexdigest()
+assert publication["generation"] == 3 and publication["head"] == {"seq": 3}
+PYTEST
+'
+
+test_expect_success 'later B publications use B to verify the predecessor by default' '
+	"$S" bpm tree append "$WORK/t7005-1.0.0.bee" "oci://$REGISTRY/ns/tree" \
+		--tree-id t7005 --keys-dir "$WORK/next-key" >/dev/null &&
+	split_layers "$REG/ns/tree/manifests/stable" "$REG/ns/tree" "$WORK/after-rotation" &&
+	cms_verify "$WORK/after-rotation.sig" "$WORK/after-rotation.payload" "$WORK/next-key.pem" &&
+	python3 -c "import json, sys; p=json.load(open(sys.argv[1])); assert p[\"generation\"] == 4" \
+		"$WORK/after-rotation.payload"
+'
+
+test_expect_success 'a wrong explicit predecessor certificate leaves the tree unchanged' '
+	cp "$REG/ns/tree/manifests/stable" "$WORK/rotated.manifest" &&
+	! "$S" bpm tree append "$WORK/t7005-1.0.0.bee" "oci://$REGISTRY/ns/tree" \
+		--tree-id t7005 --keys-dir "$WORK/next-key" --previous-cert="$WORK/keys/cert.der" >/dev/null 2>&1 &&
+	cmp "$REG/ns/tree/manifests/stable" "$WORK/rotated.manifest"
 '
 
 test_done

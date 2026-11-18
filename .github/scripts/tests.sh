@@ -61,6 +61,24 @@ require_kernel_config() {
 	fi
 }
 
+# The programs of bpf/ attach to LSM hooks that carried patches of kernel/
+# add. A kernel built without one passes every other check here and then
+# fails init in the initrd of every VM.
+require_lsm_hooks() {
+	btf="$1"
+	names=$(mktemp) || return 1
+	tr '\0' '\n' <"$btf" >"$names"
+	missing=$(sed -nE 's/^SEC\("lsm(\.s)?\/([a-z0-9_]+)"\).*/\2/p' bpf/*.c |
+		sort -u | while read -r hook; do
+			grep -qx "bpf_lsm_$hook" "$names" || printf ' %s' "$hook"
+		done)
+	rm -f "$names"
+	[ -z "$missing" ] && return 0
+	printf 'kernel BTF lacks the LSM hooks%s: build it with kernel/*.patch\n' \
+		"$missing" >&2
+	return 1
+}
+
 validate_lvh_kernel() {
 	source_dir="$1"
 	[ -d "$source_dir/boot" ] || {
@@ -95,6 +113,7 @@ validate_lvh_kernel() {
 		echo "LVH kernel BTF lacks bpf_attr.signature_size" >&2
 		return 1
 	}
+	require_lsm_hooks "$btf" || return 1
 
 	for setting in \
 		CONFIG_BPF_EVENTS=y \
@@ -120,6 +139,7 @@ validate_lvh_kernel() {
 		CONFIG_CRYPTO_SHA512=y \
 		CONFIG_CRYPTO_SHA256=y \
 		CONFIG_MODULE_SIG=y \
+		CONFIG_MODULE_SIG_ALL=y \
 		CONFIG_UPROBES=y \
 		CONFIG_SECURITY=y \
 		CONFIG_SECURITY_NETWORK=y \

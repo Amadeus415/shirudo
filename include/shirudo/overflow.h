@@ -2,7 +2,8 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Integer arithmetic that reports or saturates instead of wrapping.
+ * Integer arithmetic that reports, saturates or rounds instead of
+ * wrapping.
  */
 
 #ifndef SHIRUDO_OVERFLOW_H
@@ -64,6 +65,17 @@ static inline size_t __must_check size_sub(size_t a, size_t b)
 		return SIZE_MAX;
 	return bytes;
 }
+
+/*
+ * n / d rounded up, for n of 0 and up and d of 1 and up, without the
+ * n + d - 1 that wraps when n is near the top of its type.
+ */
+#define DIV_ROUND_UP(n, d) ({						\
+	__auto_type __n = (n);						\
+	__auto_type __d = (d);						\
+									\
+	__n / __d + (__n % __d != 0);					\
+})
 
 /*
  * The size of *p with count elements in its flexible array member, which

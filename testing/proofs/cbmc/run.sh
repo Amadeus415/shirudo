@@ -8,18 +8,27 @@
 # harness defines harness() and includes the source it proves; proofs.list
 # gives its CBMC options, and LEN=<a>-<b>,<c> there runs it once for each
 # length the list of lengths and ranges names, as CBMC handles a fixed
-# length far faster than one it has to keep symbolic. -v prints the whole CBMC output and the trace of a
-# failed check.
+# length far faster than one it has to keep symbolic. -v prints the whole
+# CBMC output and the trace of a failed check. -c takes what git diff
+# takes, a range of commits or one to compare the working tree with, and
+# runs only the proofs whose harness reads a file changed there, as the
+# compiler lists what each harness includes; a change to this script or
+# to proofs.list runs them all.
 #
-#   testing/proofs/cbmc/run.sh [-v] [<proof>...]
+#   testing/proofs/cbmc/run.sh [-v] [-c <rev-range>] [<proof>...]
 
 set -eu
 
 verbose=
-if [ "${1:-}" = -v ]; then
-	verbose=--trace
-	shift
-fi
+range=
+while getopts vc: opt; do
+	case $opt in
+	v) verbose=--trace ;;
+	c) range=$OPTARG ;;
+	*) exit 2 ;;
+	esac
+done
+shift $((OPTIND - 1))
 
 cd "$(dirname "$0")"
 root=$(cd ../../.. && pwd)
@@ -36,6 +45,44 @@ checks='--unsigned-char --bounds-check --pointer-check
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+
+if [ -n "$range" ]; then
+	git diff --name-only "$range" >"$work/changed"
+	if grep -qxE 'testing/proofs/cbmc/(run\.sh|proofs\.list)' "$work/changed"; then
+		range=
+	fi
+fi
+
+# Whether a harness, built with the -I and -D options and the first
+# length of its line, reads a changed file. One the compiler cannot list
+# counts as changed.
+touched() {
+	name=$1
+	shift
+	flags=
+	dir=
+	for o in "$@"; do
+		if [ -n "$dir" ]; then
+			flags="$flags -I $o"
+			dir=
+			continue
+		fi
+		case $o in
+		-I) dir=1 ;;
+		-D*) flags="$flags $o" ;;
+		LEN=*)
+			o=${o#LEN=}
+			flags="$flags -DLEN=${o%%[-,]*}"
+			;;
+		esac
+	done
+	# shellcheck disable=SC2086
+	"${CC:-cc}" -MM -I "$root/include" -I "$root/util" -D_GNU_SOURCE \
+		$flags "$name.c" >"$work/deps" 2>/dev/null || return 0
+	sed 's/\\$//' "$work/deps" | tr -s ' ' '\n' | grep -v ':$' | grep . |
+		xargs realpath --relative-to="$root" |
+		grep -qxF -f "$work/changed"
+}
 
 wanted() {
 	name=$1
@@ -63,6 +110,8 @@ ran=0
 grep -v '^[[:space:]]*\(#\|$\)' proofs.list >"$work/list"
 while read -r name opts; do
 	wanted "$name" -- "$@" || continue
+	# shellcheck disable=SC2086
+	[ -z "$range" ] || touched "$name" $opts || continue
 	ran=$((ran + 1))
 	lens=-
 	rest=
@@ -109,6 +158,10 @@ while read -r name opts; do
 done <"$work/list"
 
 [ "$ran" -gt 0 ] || {
+	[ -z "$range" ] || {
+		printf 'proofs: none reads a file changed in %s\n' "$range"
+		exit 0
+	}
 	printf 'proofs: no proof named %s\n' "$*" >&2
 	exit 2
 }

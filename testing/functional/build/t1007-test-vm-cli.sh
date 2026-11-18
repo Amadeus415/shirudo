@@ -32,6 +32,30 @@ test_expect_success 'register protocols run only in an isolated pre-init test VM
 	grep -q "register suite requires test mode" "$WORK/register-initrd.out"
 '
 
+test_expect_success 'node mode boots only a core or edge node of the end2end suite' '
+	! VM_MODE=node TEST_VM_WORK_DIR="$WORK/node" \
+		"$RUNNER" >"$WORK/node-upatch.out" 2>&1 &&
+	grep -q "node mode boots a node of the end2end suite only" \
+		"$WORK/node-upatch.out" &&
+	! TEST_VM_SUITE=end2end VM_MODE=node TEST_VM_NODE_ROLE=gateway \
+		TEST_VM_WORK_DIR="$WORK/node" "$RUNNER" \
+		>"$WORK/node-role.out" 2>&1 &&
+	grep -q "TEST_VM_NODE_ROLE must be .core. or .edge." "$WORK/node-role.out" &&
+	! TEST_VM_SUITE=end2end VM_MODE=node TEST_VM_NODE_ROLE=edge \
+		TEST_VM_WORK_DIR="$WORK/node" \
+		TEST_VM_KERNEL="$WORK/no-bzImage" "$RUNNER" \
+		>"$WORK/node-end2end.out" 2>&1 &&
+	grep -q "kernel image not found" "$WORK/node-end2end.out" &&
+	grep -Fq "\$(call run-target-vm,end2end,\$(if \$(VM_NAME),\$(VM_NAME)-end2end-\$(END2END_NODE)),1,node)" \
+		../testing/Makefile &&
+	grep -Fq "TEST_VM_NODE_ROLE=\$(if \$(filter edge,\$(END2END_NODE)),edge,core)" \
+		../testing/Makefile &&
+	grep -Fq "export TEST_VM_NODE_ROLE=" vm/run.sh &&
+	grep -Fq "if [[ \"\$VM_MODE\" == node ]]" vm/guest.sh &&
+	grep -Fq "image update \"/var/lib/shirudo/images/config-\${TEST_VM_NODE_ROLE}\"" \
+		vm/guest.sh
+'
+
 test_expect_success 'test-vm requires a SHA-256 for a remote kernel' '
 	! TEST_VM_WORK_DIR="$WORK/no-sha" \
 		TEST_VM_KERNEL_URL=https://example.invalid/bzImage "$RUNNER" \
@@ -451,10 +475,46 @@ test_expect_success 'test-vm imports the host-built payload' '
 	grep -q "TEST_VM_BUNDLE_STAMP" ../testing/Makefile &&
 	grep -q "TEST_VM_BUNDLE_INPUTS" ../testing/Makefile &&
 	grep -q "bundle_is_current" vm/build-bundle.sh &&
+	grep -Fq "touch -d \"@\$STAMP_TIME\" \"\$STAMP_FILE\"" vm/build-bundle.sh &&
+	make -s -C .. -f testing/Makefile \
+		--eval "bundle-inputs: ; @echo \$(TEST_VM_BUNDLE_INPUTS)" \
+		bundle-inputs >"$WORK/bundle-inputs.out" &&
+	grep -q "/util/upatch\.c" "$WORK/bundle-inputs.out" &&
+	! grep -q "/util/version_id\.c" "$WORK/bundle-inputs.out" &&
 	grep -q "flock 9" ../testing/Makefile &&
 	grep -q "bundle_dir.lock" ../testing/Makefile &&
 	! grep -Fq "rm -rf \"\$\$bundle_dir.lock\"" ../testing/Makefile &&
 	grep -Fq "\$\$bundle_dir" ../testing/Makefile
+'
+
+test_expect_success 'the bundle builds in the build container unless BUILD_CONTAINER=0' '
+	image=$(../testing/container/run.sh --image) &&
+	expr "$image" : "shirudo-build:[0-9a-f]\{16\}$" >/dev/null &&
+	! CONTAINER=/bin/false ../testing/container/run.sh -v relative -- true \
+		>"$WORK/container-v.out" 2>&1 &&
+	grep -q -- "-v takes an absolute directory" "$WORK/container-v.out" &&
+	! CONTAINER=/bin/false ../testing/container/run.sh \
+		>"$WORK/container-none.out" 2>&1 &&
+	grep -q "no command to run" "$WORK/container-none.out" &&
+	make -n -C .. -f testing/Makefile test-vm-bundle \
+		TEST_VM_WORK_DIR="$WORK/container-bundle" \
+		>"$WORK/container-make.out" 2>&1 &&
+	grep -q "BUILD_CONTAINER=\"1\"" "$WORK/container-make.out" &&
+	grep -q "testing/container/Containerfile" "$WORK/container-make.out" &&
+	! grep -q "/config\.mk" "$WORK/container-make.out" &&
+	make -n -C .. -f testing/Makefile test-vm-bundle BUILD_CONTAINER=0 \
+		TEST_VM_WORK_DIR="$WORK/host-bundle" >"$WORK/host-make.out" 2>&1 &&
+	grep -q "BUILD_CONTAINER=\"0\"" "$WORK/host-make.out" &&
+	grep -q "/config\.mk" "$WORK/host-make.out" &&
+	grep -q "build-bundle-payload.sh\" --from-copy" vm/build-bundle.sh &&
+	grep -q "list-source.sh" vm/build-bundle.sh vm/run.sh &&
+	! grep -q "ls-files" vm/build-bundle-payload.sh vm/guest.sh &&
+	if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+		vm/list-source.sh "$WORK/source-files" &&
+		tr "\\0" "\\n" <"$WORK/source-files" >"$WORK/source-list" &&
+		grep -qx "testing/vm/list-source.sh" "$WORK/source-list" &&
+		! grep -q "^build/" "$WORK/source-list"
+	fi
 '
 
 	test_expect_success 'test-vm summary records failed test names' '
@@ -487,12 +547,83 @@ test_expect_success 'test harness records a failed test title' '
 test_expect_success 'make -C testing vm and test-vm share named mode support' '
 	grep -q "^[[:space:]]*vm:" ../testing/Makefile &&
 	grep -q "VM_MODE=interactive" ../testing/Makefile &&
-	grep -q "VM_MODE=test" ../testing/Makefile &&
+	grep -Fq "VM_MODE=\$(or \$(4),\$(if \$(filter \$(1),\$(VM_SERVE_SUITES)),serve,test))" \
+		../testing/Makefile &&
 	grep -Fq "VMS_DIR=\"\${VM_ROOT}/vms\"" vm/run.sh &&
 	grep -Fq "mktemp -d \"\${VMS_DIR}/\${VM_MODE}\${VM_SUITE:+-\$VM_SUITE}-XXXXXX\"" \
 		vm/run.sh &&
 	grep -q "VM_TENANT" vm/run.sh &&
 	grep -q "while :; do sleep 3600; done" vm/run.sh
+'
+
+test_expect_success 'serve mode runs the end-to-end target tests over SSH' '
+	grep -q "^VM_SERVE_SUITES := end2end\$" ../testing/Makefile &&
+	! VM_MODE=other "$RUNNER" >"$WORK/mode.out" 2>&1 &&
+	grep -q "VM_MODE must be .interactive., .serve., .test. or .node." \
+		"$WORK/mode.out" &&
+	! VM_MODE=serve TEST_VM_SUITE= "$RUNNER" >"$WORK/serve-suite.out" 2>&1 &&
+	grep -q "serve mode requires TEST_VM_SUITE" "$WORK/serve-suite.out" &&
+	! TEST_VM_SUITE=register VM_MODE=serve TEST_VM_INITRD=0 \
+		"$RUNNER" >"$WORK/serve-register.out" 2>&1 &&
+	grep -q "register suite requires test mode" "$WORK/serve-register.out" &&
+	grep -q "} >/etc/shirudo-test-vm.env" vm/guest.sh &&
+	grep -Fq ". /etc/shirudo-test-vm.env && exec ./run-target-tests.sh \$VM_SUITE" \
+		vm/run.sh &&
+	grep -Fq "while [ ! -e /mnt/shirudo-out/host-done ]" vm/run.sh &&
+	grep -Fq ": >\"\$RUN_DIR/result/host-done\"" vm/run.sh
+'
+
+test_expect_success 'an operator VM serves without a TPM and alone gets the key' '
+	mkdir -p "$WORK/operator-keys" &&
+	! TEST_VM_ROLE=other "$RUNNER" >"$WORK/role.out" 2>&1 &&
+	grep -q "TEST_VM_ROLE must be .target. or .operator." "$WORK/role.out" &&
+	! TEST_VM_ROLE=operator VM_MODE=test TEST_VM_INITRD=0 \
+		"$RUNNER" >"$WORK/operator-mode.out" 2>&1 &&
+	grep -q "an operator VM runs in serve mode" "$WORK/operator-mode.out" &&
+	! TEST_VM_ROLE=operator VM_MODE=serve TEST_VM_INITRD=0 \
+		TEST_VM_SERVE_COMMAND=/bin/true \
+		TEST_VM_OPERATOR_KEYS="$WORK/operator-keys" \
+		"$RUNNER" >"$WORK/operator-keys.out" 2>&1 &&
+	grep -q "TEST_VM_OPERATOR_KEYS must name" "$WORK/operator-keys.out" &&
+	! VM_MODE=serve TEST_VM_OPERATOR_KEYS="$WORK/operator-keys" \
+		"$RUNNER" >"$WORK/target-keys.out" 2>&1 &&
+	grep -q "only an operator VM gets TEST_VM_OPERATOR_KEYS" \
+		"$WORK/target-keys.out" &&
+	! VM_MODE=test TEST_VM_SERVE_COMMAND=/bin/true \
+		"$RUNNER" >"$WORK/serve-command.out" 2>&1 &&
+	grep -q "TEST_VM_SERVE_COMMAND must name a program, in serve mode" \
+		"$WORK/serve-command.out" &&
+	! VM_MODE=serve TEST_VM_PRIVATE_DIR="$PWD/private" \
+		"$RUNNER" >"$WORK/private-repo.out" 2>&1 &&
+	grep -q "TEST_VM_PRIVATE_DIR must name a new directory outside" \
+		"$WORK/private-repo.out" &&
+	mkdir "$WORK/private" &&
+	! VM_MODE=serve TEST_VM_PRIVATE_DIR="$WORK/private" \
+		"$RUNNER" >"$WORK/private-exists.out" 2>&1 &&
+	grep -q "TEST_VM_PRIVATE_DIR must name a new directory outside" \
+		"$WORK/private-exists.out" &&
+	grep -q -- "-u TEST_VM_PRIVATE_DIR" vm/run.sh &&
+	grep -Fq "SSH_KEY=\"\${PRIVATE_DIR:-\$SSH_DIR}/id_ed25519\"" vm/run.sh &&
+	grep -Fq "OVERLAY=\"\${PRIVATE_DIR:-\$RUN_DIR}/rootfs.qcow2\"" vm/run.sh &&
+	grep -Fq "OPERATOR_PRIVATE_DIR=\$HOST_PRIVATE_DIR/" end2end/host.sh &&
+	grep -Fq "TEST_VM_PRIVATE_DIR=\"\$OPERATOR_PRIVATE_DIR\"" end2end/host.sh &&
+	make -n -C .. -f testing/Makefile vm-operator-end2end VM_NAME=e2e-operator \
+		TEST_VM_SERVE_COMMAND=/bin/true TEST_VM_WORK_DIR="$WORK/operator-vm" \
+		TEST_VM_PRIVATE_DIR="$WORK/operator-private" \
+		>"$WORK/operator-make.out" 2>&1 &&
+	grep -q "TEST_VM_ROLE=operator" "$WORK/operator-make.out" &&
+	grep -q "TEST_VM_OPERATOR_KEYS=.*/operator-keys/keys" "$WORK/operator-make.out" &&
+	grep -Fq "TEST_VM_PRIVATE_DIR=\"$WORK/operator-private\"" \
+		"$WORK/operator-make.out" &&
+	make -n -C .. -f testing/Makefile vm-test-end2end VM_NAME=e2e \
+		TEST_VM_WORK_DIR="$WORK/target-vm" >"$WORK/target-make.out" 2>&1 &&
+	grep -q "VM_MODE=serve" "$WORK/target-make.out" &&
+	! grep -q "TEST_VM_OPERATOR_KEYS\|TEST_VM_ROLE\|TEST_VM_PRIVATE_DIR" \
+		"$WORK/target-make.out" &&
+	grep -Fq "[[ \"\$VM_ROLE\" != target ]] || start_swtpm" vm/run.sh &&
+	grep -q "mount_tag=shirudo-operator-keys" vm/run.sh &&
+	grep -q "the operator VM has a TPM" vm/guest.sh &&
+	grep -q "bindeb-pkg PKG_ROLES=operator" vm/guest.sh
 '
 test_expect_success 'make -C testing vm boots a release kernel at or above the floor' '
 	grep -q "VM_KERNEL_MIN := 7.4" ../testing/Makefile &&
@@ -675,7 +806,7 @@ test_expect_success 'explicit VM_NAME overrides unnamed vm-ssh selection' '
 
 test_expect_success 'VM bundle installs target units and interactive mode activates timers' '
 	grep -q "DESTDIR=\"\$TMP_DIR/root\" install-target" \
-		vm/build-bundle.sh &&
+		vm/build-bundle-payload.sh &&
 	grep -q "systemd/\\*.timer" ../testing/Makefile &&
 	grep -q "shirudo-map-export.timer" vm/guest.sh &&
 	grep -q "shirudo-keepalive.timer" vm/guest.sh &&
@@ -933,13 +1064,23 @@ test_expect_success 'the runners split the tests by number' '
 	! grep -q "/t[0-9]1[0-9][0-9]-" "$WORK/operator-tests" &&
 	families=$(make -s -C .. -f testing/Makefile help |
 		sed -n "s/.*families: //p") &&
-	[ "$families" = "build signing upatch tpm image labels tamperproof bpm otel" ] &&
+	[ "$families" = "build signing upatch tpm image labels tamperproof bpm bpm-segments otel" ] &&
 	for d in functional/*/; do
 		f=${d#functional/}
 		case " $families " in *" ${f%/} "*) ;; *) return 1 ;; esac
 	done &&
 	! sh run-tests.sh nosuch >"$WORK/nosuch.out" 2>&1 &&
-	grep -q "no tests nosuch" "$WORK/nosuch.out"
+	grep -q "no tests nosuch" "$WORK/nosuch.out" &&
+	test -e end2end/t9109-pipeline.sh &&
+	test -e end2end/t9110-keepalive-history.sh &&
+	test -e end2end/t9111-pipeline-segments.sh &&
+	grep -Fqx "	end2end/t9109-pipeline.sh | end2end/t9110-keepalive-history.sh) continue ;;" \
+		run-target-tests.sh &&
+	grep -Fqx "	end2end/t9111-pipeline-segments.sh) continue ;;" \
+		run-target-tests.sh &&
+	grep -Fqx "	host_test t9109-pipeline" end2end/host.sh &&
+	grep -Fqx "	host_test t9110-keepalive-history" end2end/host.sh &&
+	grep -Fqx "	host_test t9111-pipeline-segments" end2end/host.sh
 '
 
 test_expect_success 'test-vm rejects unknown policy modes before boot' '

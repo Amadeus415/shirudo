@@ -4,9 +4,11 @@
 #
 # t6134 -- the seal's task hooks (bpf/seal.c ptrace_access_check and
 # perf_event_alloc): a task that runs the runtime shirudo binary can
-# neither be ptrace-attached nor have a perf event bound to it, even by
-# root. The task is a shirudo blocked on opening a fifo, released at
-# the end. Non-destructive.
+# neither be ptrace-attached, read through /proc nor have a perf event
+# bound to it, even by root. Only an attach-mode access counts as
+# SealPtrace; a read-mode one is refused uncounted. The task is a
+# shirudo blocked on opening a fifo, released at the end.
+# Non-destructive.
 
 cd "$(dirname "$0")/../.."
 . ./integration-lib.sh
@@ -29,19 +31,44 @@ cleanup() {
 }
 trap cleanup EXIT
 
+counter() {
+	"$SHIRUDO_BIN" status --json | python3 -c '
+import json, sys
+print(json.load(sys.stdin)["tamper_attempts"]["counters"][sys.argv[1]])
+' "$1"
+}
+
+# Counters are read while no command holds the config lock.
+before=$(counter SealPtrace) || test_skip_all "no tamper counters"
 mkfifo "$W/fifo" || test_skip_all "cannot make a fifo"
 "$SHIRUDO_BIN" bpm info "$W/fifo" >/dev/null 2>&1 &
 PID=$!
-# A sleeping task may still be completing TPM startup.
+# A sleeping task may still be the shell that forks it, or completing
+# TPM startup.
 i=0
 while [ "$i" -lt 50 ]; do
 	[ -d "/proc/$PID" ] || break
-	[ "$(awk '{print $3}' "/proc/$PID/stat" 2>/dev/null)" = S ] && break
+	[ "$(awk '{print $2 $3}' "/proc/$PID/stat" 2>/dev/null)" = "(shirudo)S" ] &&
+		break
 	sleep 0.1
 	i=$((i + 1))
 done
 [ -d "/proc/$PID" ] || test_skip_all "shirudo did not stay around"
 
+# A /proc access by kind, against pid $2: 0 granted, 1 refused with
+# EACCES, 3 refused otherwise. exe and environ are read-mode checks,
+# mem an attach-mode one.
+PROC='
+import errno, os, sys
+kind, pid = sys.argv[1], sys.argv[2]
+try:
+    if kind == "exe":
+        os.readlink("/proc/%s/exe" % pid)
+    else:
+        os.close(os.open("/proc/%s/%s" % (pid, kind), os.O_RDONLY))
+except OSError as e:
+    sys.exit(1 if e.errno == errno.EACCES else 3)
+'
 # ptrace(PTRACE_ATTACH): 0 attached (and detached again), 1 refused by
 # the seal, 3 refused otherwise.
 ATTACH='
@@ -71,9 +98,23 @@ if fd >= 0:
 sys.exit(1 if ctypes.get_errno() == 13 else 3)
 '
 
+# mm_access() grants CAP_PERFMON a read of environ and maps past the
+# ptrace check unless mm_read_access refuses it (carried patch 0005).
+test_expect_success 'root cannot read the exe link, environ or maps of a running shirudo' '
+	for kind in exe environ maps; do
+		python3 -c "$PROC" "$kind" "$PID"; rc=$?
+		[ "$rc" = 1 ] || { echo "$kind: $rc" >&2; return 1; }
+	done
+'
+
 test_expect_success 'root cannot ptrace-attach to a running shirudo' '
 	python3 -c "$ATTACH" "$PID"; [ "$?" = 1 ]
 '
+
+test_expect_success 'nor open its /proc mem' '
+	python3 -c "$PROC" mem "$PID"; [ "$?" = 1 ]
+'
+
 
 if python3 -c "$PERF" self 2>/dev/null; then
 	test_expect_success 'root cannot bind a perf event to a running shirudo' '
@@ -95,6 +136,10 @@ test_expect_success 'the task is unharmed and finishes once released' '
 		[ "$i" -lt 100 ] || return 1
 		sleep 0.1
 	done
+'
+
+test_expect_success 'the two attach-mode refusals alone count as SealPtrace' '
+	[ "$(counter SealPtrace)" = "$((before + 2))" ]
 '
 
 test_done

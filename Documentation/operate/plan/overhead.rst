@@ -152,6 +152,7 @@ until it exits. The units set ``LimitMEMLOCK=infinity`` for this, see
      - 20.5 MiB
      - 72 ms
    * - ``shirudo status --otel --include-system``, the keepalive timer
+       before it quoted its body
      - 20.5 MiB
      - 72 ms
    * - ``shirudo upatch map --all``, the map export timer, no upatch
@@ -184,7 +185,8 @@ Larger inputs raise the peak. These limits bound it:
      - 16 MiB. ``upatch load`` holds the file twice and allocates a
        16 MiB verifier log.
    * - Registry responses read into memory
-     - 256 MiB: manifests, the repository index and its signature.
+     - 16 MiB: manifests, the repository index and its signature, tree
+       publications and the upatch artifacts they name.
    * - Package archive
      - 256 MiB, written to disk, and 256 MiB unpacked.
    * - JSON documents, the repository index and the eventlog among them
@@ -292,9 +294,9 @@ TPM attestation key, see `TPM commands`_.
      - CPU per run
      - Runs per minute
    * - ``shirudo-keepalive.service``
-     - 5 s after the previous run ends
-     - 17.9 ms
-     - 11.8
+     - 60 s after the previous run ends
+     - 17.9 ms before it quoted its body
+     - 1
    * - ``shirudo-map-export.service``
      - 5 s after the previous run ends
      - 14.5 ms with no upatch loaded
@@ -309,8 +311,11 @@ TPM attestation key, see `TPM commands`_.
      - 1
 
 Together they used 0.43 s of CPU time per minute in the test VM, 0.71 %
-of one vCPU, in about 27 process starts. Figure 3 shows the keepalive
-and map export timers taking most of it.
+of one vCPU, in about 27 process starts, when the keepalive ran every
+5 seconds and sent no quote. Figure 3 shows that measurement, with the
+keepalive and map export timers taking most of it. The keepalive now
+runs once a minute, which leaves it one run of the 11.8 the figure
+counts, plus the quote below, which the measurement does not include.
 
 .. figure:: /images/operate-timer-cpu.svg
    :alt: Per minute, keepalive uses 212 ms of CPU time, map export 172 ms,
@@ -340,6 +345,10 @@ TPM commands
        config PCR.
    * - ``status``
      - Adds reads of the measurement register's NV index.
+   * - ``status --otel``
+     - Adds a second attestation key, created with
+       ``TPM2_CreatePrimary`` for the quote and flushed after it, and
+       ``TPM2_Quote`` of the keepalive body.
    * - ``upatch load``, ``upatch unload``
      - One register extension: about 20 commands, among them a new
        RSA-3072 primary key (the NV writer key), a new attestation key, a
@@ -356,12 +365,19 @@ TPM commands
        register and the endorsement key.
 
 With the default timers an idle target creates its attestation key about
-27 times per minute. The register is an orderly NV index, so an
+17 times per minute, twice in each keepalive. The register is an orderly NV index, so an
 extension updates it in TPM RAM rather than writing NV memory each time.
 ``init`` defines the index again at every boot. In the test VM, with
 swtpm, the extension took 0.44 s of a 0.50 s load, binding the register
 at boot 0.56 s and ``attest`` 0.46 s.
 :doc:`/concepts/background/tpm` explains the objects involved.
+
+The keepalive's ``TPM2_CreatePrimary`` derives the P-256 key from the
+endorsement seed at every run. A firmware or discrete TPM can take
+hundreds of milliseconds for it, which the keepalive spends once a
+minute. Keeping the key under a persistent handle would avoid it, at the
+price of TPM state shirudo does not keep today;
+:doc:`/internals/design-decisions` records the choice.
 
 Network
 ~~~~~~~
@@ -405,6 +421,11 @@ Disk writes
 - ``bpm upgrade`` rewrites ``bpm/state.json`` with ``fsync()`` every
   minute, also when nothing changed. ``bpm repo update`` rewrites the
   cached index of every repository.
+- ``bpm tree sync`` rewrites ``bpm/upatch-tree/state.json`` with
+  ``fsync()`` twice every minute with a tree configured, also when
+  nothing changed, and appends a line of about 220 bytes to
+  ``bpm/upatch-tree/outcomes`` with ``fsync()`` for every new tree
+  operation. It reads that file once at the start of a sync.
 - shirudo appends every eventlog record with ``fsync()``.
 - Map export creates an empty lock file for every map it exports in
   ``/var/lib/shirudo/locks``, named by the kernel's map ID. Map IDs change

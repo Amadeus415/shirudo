@@ -25,6 +25,13 @@
 #include <shirudo/types.h>
 
 /*
+ * glibc 2.43 makes these const-preserving _Generic macros under C23,
+ * which a definition of the function cannot be spelled through.
+ */
+#undef memchr
+#undef strstr
+
+/*
  * CBMC models neither strnlen(), memchr(), strcspn(), strstr() nor
  * vsnprintf(), and a function without a body returns anything.
  */
@@ -121,6 +128,53 @@ static size_t format_number(char *buf, size_t size, size_t n, __u64 v,
 }
 
 /*
+ * A character at n, which is lo or more, lo known before the solver runs:
+ * where lo leaves one place for it or none, the write is to that place,
+ * and the other bytes of the buffer keep the values they had.
+ */
+static size_t format_char_from(char *buf, size_t size, size_t n, size_t lo,
+			       char c)
+{
+	__CPROVER_assert(n >= lo, "the vsnprintf() model's lower bound");
+	if (lo + 1 >= size)
+		return n + 1;
+	if (lo + 2 < size)
+		return format_char(buf, size, n, c);
+	if (n == lo)
+		buf[lo] = c;
+	return n + 1;
+}
+
+/*
+ * %o apart from format_number(): a digit is three bits of the value, so a
+ * value within its width has every digit at a place known beforehand.
+ */
+static size_t format_octal(char *buf, size_t size, size_t n, __u64 v,
+			   size_t width, bool zero)
+{
+	size_t k = 1, j;
+
+	while (k < 22 && v >> (3 * k))
+		k++;
+	if (k > width) {
+		for (j = 0; j < 22; j++)
+			if (j < k)
+				format_char(buf, size, n + j, (char)('0' +
+					    ((v >> (3 * (k - 1 - j))) & 7)));
+		return n + k;
+	}
+	for (j = 0; j < width; j++) {
+		size_t place = width - 1 - j;
+		char c = zero ? '0' : ' ';
+
+		if (place < 22 && (zero || place < k))
+			c = (char)('0' + ((v >> (3 * place)) & 7));
+		format_char(buf, size, n + j, c);
+	}
+	return n + width;
+}
+
+/*
  * CBMC passes each variadic argument as an object of its own type, a
  * char not promoted to int, so an integer is read by its size, a char or
  * short as unsigned.
@@ -135,7 +189,10 @@ static __u64 integer_arg(va_list *ap, bool is_signed, bool *neg)
 	case 2:
 		return va_arg(*ap, __u16);
 	case 4:
-		v = is_signed ? va_arg(*ap, __s32) : va_arg(*ap, __u32);
+		if (is_signed)
+			v = va_arg(*ap, __s32);
+		else
+			v = va_arg(*ap, __u32);
 		break;
 	default:
 		if (!is_signed)
@@ -148,12 +205,13 @@ static __u64 integer_arg(va_list *ap, bool is_signed, bool *neg)
 
 /*
  * CBMC has no vsnprintf() either. This one formats what shirudo's proofs
- * reach, %s and the d, u and x conversions with a zero flag, a width and
- * ll, and fails the proof on any other.
+ * reach, %s and the d, u, x and o conversions with a zero flag, a width,
+ * written out or as *, and ll, and fails the proof on any other. lo counts
+ * the characters whose number does not depend on a value.
  */
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
 {
-	size_t n = 0;
+	size_t n = 0, lo = 0;
 
 	for (; *fmt; fmt++) {
 		bool zero = false, neg = false;
@@ -162,7 +220,7 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
 		__u64 v;
 
 		if (*fmt != '%' || fmt[1] == '%') {
-			n = format_char(buf, size, n, *fmt);
+			n = format_char_from(buf, size, n, lo++, *fmt);
 			fmt += *fmt == '%';
 			continue;
 		}
@@ -172,6 +230,14 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
 		}
 		while (*fmt >= '1' && *fmt <= '9' && width < 10)
 			width = width * 10 + (size_t)(*fmt++ - '0');
+		if (*fmt == '*') {
+			int star = va_arg(ap, int);
+
+			__CPROVER_assert(star >= 0,
+					 "a width the vsnprintf() model has");
+			width = (size_t)star;
+			fmt++;
+		}
 		if (fmt[0] == 'l' && fmt[1] == 'l')
 			fmt += 2;
 		if (*fmt == 's') {
@@ -181,14 +247,20 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
 				n = format_char(buf, size, n, *s);
 			continue;
 		}
-		__CPROVER_assert(*fmt == 'd' || *fmt == 'u' || *fmt == 'x',
+		__CPROVER_assert(*fmt == 'd' || *fmt == 'u' || *fmt == 'x' ||
+				 *fmt == 'o',
 				 "a conversion the vsnprintf() model has");
 		v = integer_arg(&ap, *fmt == 'd', &neg);
+		if (*fmt == 'o') {
+			n = format_octal(buf, size, n, v, width, zero);
+			lo += width ? width : 1;
+			continue;
+		}
 		n = format_number(buf, size, n, v, neg, *fmt == 'x' ? 16 : 10,
 				  width, zero);
 	}
 	if (size)
-		buf[n < size ? n : size - 1] = '\0';
+		buf[n < size && lo + 1 < size ? n : size - 1] = '\0';
 	return (int)n;
 }
 

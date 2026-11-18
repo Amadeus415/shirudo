@@ -38,6 +38,10 @@ Summary
      - Daniel Borkmann
      - No
      - All
+   * - ``0005-mm-Let-LSMs-check-read-only-remote-mm-access-under-CAP_PERFMON.patch``
+     - Daniel Borkmann
+     - No
+     - All
 
 "In bpf-next" was checked against the bpf-next tree at commit
 ``57fae4059380``: ``include/linux/lsm_hook_defs.h`` there has no
@@ -45,8 +49,9 @@ Summary
 read permission before it returns a ``security.bpf.`` xattr to an LSM
 program, the sleepable hook set of ``kernel/bpf/bpf_lsm.c`` lacks
 ``inode_mkdir``, ``inode_link``, ``inode_set_acl``, ``inode_remove_acl``,
-``inode_file_setattr`` and ``inode_copy_up``, and the verifier trusts
-``d_inode`` of a dentry but not ``d_parent``.
+``inode_file_setattr`` and ``inode_copy_up``, the verifier trusts
+``d_inode`` of a dentry but not ``d_parent``, and ``may_access_mm()``
+grants a read-mode access to ``CAP_PERFMON`` without asking an LSM.
 
 The x86 ftrace fix the tree used to carry is upstream as
 ``31ac959c915c`` ("x86/ftrace: Mark jmp mode by clearing bit 63 of
@@ -201,6 +206,40 @@ Without it
     The verifier refuses ``d_parent`` as the kfunc's argument, so the
     ``seal`` object fails to load and ``init`` fails at "loading
     enforcement", with the result the TPM command hook describes.
+
+Read-only mm access hook
+------------------------
+
+Subject
+    mm: Let LSMs check read-only remote mm access under CAP_PERFMON
+
+Files
+    ``kernel/fork.c``, ``include/linux/lsm_hook_defs.h``,
+    ``include/linux/security.h``, ``security/security.c``.
+
+What it changes
+    ``may_access_mm()``, which ``mm_access()`` asks before it hands out
+    another task's memory, grants a read-mode access to a caller with
+    ``CAP_PERFMON`` or ``CAP_SYS_ADMIN`` after ``ptrace_may_access()``
+    refused it, since commit ``0c555a3c1bc9`` ("mm,procfs: allow
+    read-only remote mm access under CAP_PERFMON"). The patch has it
+    call a new hook, ``security_mm_read_access(task, mode)``, before
+    it grants the access that way, and refuse it when the hook does.
+    An access ``ptrace_may_access()`` allows is not checked again.
+
+Why shirudo needs it
+    The seal refuses every ptrace mode against a task with runtime
+    authority, and ``ptrace_may_access()`` asks it, but the perfmon path
+    comes after that refusal: root opened ``/proc/<pid>/environ``,
+    ``maps``, ``smaps``, ``numa_maps``, ``pagemap`` and ``auxv`` of a
+    running command, its environment and the layout of its memory. The
+    seal attaches ``lsm/mm_read_access`` and refuses a marked task there
+    too.
+
+Without it
+    The ``seal`` object fails to attach the hook, and ``init`` fails at
+    "loading enforcement", with the result the TPM command hook
+    describes.
 
 Related
 -------

@@ -29,6 +29,8 @@
 
 const char shirudo_version[] = "test-1";
 
+#define KEEPALIVE_BODY_FILE_MAX	(64u * 1024u)
+
 struct fixture {
 	struct map_view view;
 	struct map_entry entry;
@@ -411,61 +413,26 @@ static int send_metric(const char *url)
 	return ret ? 1 : 0;
 }
 
-static int send_status(const char *url, const char *status)
+static int send_keepalive(const char *url, const char *verdict,
+			  const char *body_path, const char *quote)
 {
 	struct otel_opts opts = {
 		.endpoint = url,
 		.retries = 0,
 	};
 	const char *severity_text;
-	char body[256];
-	int severity, n;
+	char *body = NULL;
+	int severity, ret;
+	size_t len = 0;
 
-	severity = status_otel_severity(status, &severity_text);
-	n = snprintf(body, sizeof(body),
-		     "{\"schema\":1,\"status\":\"%s\",\"conditions\":[],\"tpm\":{}}",
-		     status);
-	if (n < 0 || (size_t)n >= sizeof(body))
+	if (read_file(body_path, KEEPALIVE_BODY_FILE_MAX, &body, &len))
 		return 1;
-	return otel_send_log_json(&opts, "shirudo.keepalive",
-					 "shirudo.keepalive", severity,
-					 severity_text, status, "test-version", 2,
-					 body, (size_t)n) != 0;
-}
-
-/*
- * A status body of a list of count ones, which the AnyValue form spells
- * in some eight times the bytes.
- */
-static int send_wide_status(const char *url, const char *count)
-{
-	static const char head[] =
-		"{\"schema\":1,\"status\":\"ok\",\"conditions\":[";
-	struct otel_opts opts = {
-		.endpoint = url,
-		.retries = 0,
-	};
-	size_t n = strtoul(count, NULL, 10), cap, len, i;
-	char *body;
-	int ret;
-
-	cap = sizeof(head) + 2 * n + 2;
-	body = xmalloc(cap);
-	if (!body)
-		return 1;
-	memcpy(body, head, sizeof(head) - 1);
-	len = sizeof(head) - 1;
-	for (i = 0; i < n; i++) {
-		if (i)
-			body[len++] = ',';
-		body[len++] = '1';
-	}
-	body[len++] = ']';
-	body[len++] = '}';
-	ret = otel_send_log_json(&opts, "shirudo.keepalive",
-				 "shirudo.keepalive", 9, "INFO", "ok",
-				 "test-version", 0, body, len);
-	xfree(body, cap);
+	severity = status_otel_severity(verdict, &severity_text);
+	ret = otel_send_log_string(&opts, "shirudo.keepalive",
+				   "shirudo.keepalive", severity,
+				   severity_text, body, len,
+				   "shirudo.quote", quote);
+	xfree(body, len + 1);
 	return ret != 0;
 }
 
@@ -709,10 +676,8 @@ int main(int argc, char **argv)
 					0, 0, true);
 	if (argc == 2 && strcmp(argv[1], "send-metric-env") == 0)
 		return send_metric_env();
-	if (argc == 4 && strcmp(argv[1], "send-status") == 0)
-		return send_status(argv[2], argv[3]);
-	if (argc == 4 && strcmp(argv[1], "send-wide-status") == 0)
-		return send_wide_status(argv[2], argv[3]);
+	if (argc == 6 && strcmp(argv[1], "send-keepalive") == 0)
+		return send_keepalive(argv[2], argv[3], argv[4], argv[5]);
 	if (argc == 4 && strcmp(argv[1], "retry-after") == 0) {
 		__u64 seconds;
 		time_t now = (time_t)strtoll(argv[3], NULL, 10);

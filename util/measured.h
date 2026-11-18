@@ -15,11 +15,13 @@
  * The set of upatches the eventlog records as loaded, each with the
  * payload of its load: an init record's set, with every later load
  * added and every unload removed, in order. measured_set_boot() folds
- * this boot's records and is -ENOENT when there are none;
- * measured_set_log() folds every boot's, an empty set when there is no
- * log yet.
+ * this boot's records as eventlog_verified_upatches() checks them
+ * against the register, and fails as it does; measured_set_log() folds
+ * every boot's, an empty set when there is no log yet.
  */
 struct measured_set;
+
+#define MEASURED_MAX	4096
 
 int measured_set_boot(struct measured_set **out);
 int measured_set_log(struct measured_set **out);
@@ -59,5 +61,14 @@ int measured_unmeasured_archives(const struct measured_set *s,
 				 int (*cb)(const char *name,
 					   const char *path, void *ctx),
 				 void *ctx);
+
+/*
+ * The upatches the set holds without a pin directory: detached with no
+ * unload of record, which only a task with runtime authority does. cb
+ * runs for each; the number found, or -errno when a pin cannot be
+ * looked up.
+ */
+int measured_unpinned(const struct measured_set *s,
+		      int (*cb)(const char *name, void *ctx), void *ctx);
 
 #endif /* SHIRUDO_MEASURED_H */

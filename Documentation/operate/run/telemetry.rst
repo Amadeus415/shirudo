@@ -15,9 +15,12 @@ systemd timers start. Nothing connects to the target. This page shows
 how to choose the destination, set up the collector, check the pipeline
 and decide what to alert on.
 
-Telemetry is the target's own account of itself. It carries no proof of
-origin, so it tells you where to look, not what is true. Evidence that a
-target cannot forge comes from the TPM, through :doc:`/operate/run/attest`.
+Telemetry is the target's own account of itself, so it tells you where
+to look, not what is true. The keepalive carries a quote by the target's
+TPM attestation key, which shows that its body is unchanged since that
+key signed it, but not that the key lives in a genuine TPM. Map
+snapshots carry no proof of origin at all. Evidence that a target cannot
+forge comes from the TPM, through :doc:`/operate/run/attest`.
 
 What a target sends
 -------------------
@@ -30,26 +33,40 @@ What a target sends
      - Runs
      - Sends
    * - ``shirudo-keepalive.timer``
-     - ``shirudo status --otel --include-system``
-     - One log record, ``shirudo.keepalive``, when an OTLP endpoint is
-       configured. Nothing otherwise.
+     - ``shirudo status --otel``
+     - One log record, ``shirudo.keepalive``: the keepalive body and its
+       TPM quote, when an OTLP endpoint is configured. Nothing otherwise.
    * - ``shirudo-map-export.timer``
      - ``shirudo upatch map --all``
      - One record per pinned map to every destination the config names:
        JSON lines, OTLP, or both. With no destination, the dump goes to
        the journal.
 
-Both timers start their service 5 seconds after boot and again 5 seconds
-after each run ends. ``shirudo-map-export.service`` runs only while
+Both timers start their service 5 seconds after boot. The keepalive
+timer starts it again 60 seconds after each run ends, the map-export
+timer 5 seconds after. ``shirudo-map-export.service`` runs only while
 ``/run/shirudo/bpffs/lsm_link`` exists.
 
+A keepalive and a ``bpm tree sync`` stall each other rather than run at
+once. Every target command holds the config operation lock for its whole
+run, and a sync holds it until its last operation is applied. A
+keepalive that starts during a sync waits up to 30 seconds for the lock;
+when the sync is still running then, that run fails and sends nothing,
+and the next run of the timer tries again. A sync that fetches and
+applies for minutes therefore leaves a gap of about that length in the
+node's keepalives, which a backend's threshold for a stale node must
+allow for. See :doc:`/reference/systemd-units`.
+
 The keepalive record has the event name ``shirudo.keepalive``. Its body
-is the ``shirudo status --json`` document with the system section, and
-its attributes are ``shirudo.status`` (the verdict),
-``shirudo.version_id`` and ``shirudo.tamper_attempts`` (the refusals the
-guards counted this boot). The system section includes the kernel
-configuration, so a keepalive from a distribution kernel is a few hundred
-kilobytes. Its severity follows the verdict:
+is a string, the keepalive body that ``shirudo status --keepalive``
+prints: one compact JSON object of about a kilobyte with the verdict,
+the conditions, the tamper and integrity counters, the build, the
+config and image,
+the tree the target follows and the upatches it has loaded
+(:doc:`/reference/cli/status`). Its one attribute, ``shirudo.quote``, is
+the TPM quote of the SHA-256 of the body by the attestation key of
+``shirudo attest``. A target whose TPM does not answer sends no
+keepalive. Its severity follows the verdict:
 
 .. list-table::
    :header-rows: 1
@@ -272,33 +289,9 @@ reboot.
    Grafana and Splunk. A collector built with Go 1.24 or later offers
    ``X25519MLKEM768`` by default.
 
-#. Optionally, drop the kernel configuration from the keepalives before
-   the collector exports them. It makes up most of a keepalive, and
-   every keepalive repeats it:
-
-   .. code-block:: yaml
-
-      processors:
-        transform/drop-kernel-config:
-          log_statements:
-            - context: log
-              conditions:
-                - log.event_name == "shirudo.keepalive"
-              statements:
-                - delete_key(log.body["system"], "kernel_config")
-
-      service:
-        pipelines:
-          logs:
-            receivers: [otlp]
-            processors: [transform/drop-kernel-config]
-            exporters: [debug]
-
-   The ``transform`` processor is part of the contrib distribution,
-   ``otelcol-contrib``. ``kernel_release`` and ``kernel_build_id`` stay
-   in the system section and still name the kernel.
-
-#. Restart the collector.
+#. Restart the collector. Keep the keepalive body a string on its way
+   to storage: a processor that parses it into a structure or rewrites
+   it breaks the quote.
 
 Any HTTPS server that accepts those two requests works as a destination.
 It answers ``200`` to accept. A ``200`` whose ``partialSuccess`` reports
@@ -309,19 +302,28 @@ connection errors and the statuses ``429``, ``502``, ``503`` and
 Check the pipeline
 ------------------
 
-#. Send one keepalive by hand and print it:
+#. Print the keepalive body the target reports, without quoting or
+   sending it:
 
    .. code-block:: console
 
-      target# shirudo status --otel --include-system --json
+      target# shirudo status --keepalive
 
-   The command prints the status document and sends it. ``--otel``
-   without ``--json`` prints nothing. When the send fails, the command
-   prints ``status: OTEL export failed: <reason>`` and exits 1. When no
-   endpoint is configured, it sends nothing and exits 0.
+#. Send one keepalive by hand:
+
+   .. code-block:: console
+
+      target# shirudo status --otel
+
+   The command prints nothing. When no TPM answers or the quote fails,
+   it prints ``status: quote the keepalive: <reason>; nothing is sent``
+   and exits 1. When the send fails, it prints ``status: send the
+   keepalive: <reason>`` and exits 1. When no endpoint is configured, it
+   sends nothing and exits 0.
 
 #. Check that the collector printed a record with the event name
-   ``shirudo.keepalive`` and the attribute ``shirudo.status``.
+   ``shirudo.keepalive``, a ``stringValue`` body and the one attribute
+   ``shirudo.quote``.
 
 #. List the maps the loaded upatches pin:
 
@@ -382,9 +384,11 @@ decoder to build the metric and prints ``upatch map: OTLP export
 What to alert on
 ----------------
 
-The keepalive body is the ``shirudo status --json`` document.
-:doc:`/operate/run/read-status` explains each field and
-:doc:`/reference/formats/status-json` lists them.
+The keys below are those of the keepalive body,
+:doc:`/reference/cli/status` lists them and
+:doc:`/operate/run/read-status` explains what each condition and verdict
+means. What only the full report carries, such as the size of the
+eventlog, is read with ``shirudo status --json`` on the target.
 
 .. list-table::
    :header-rows: 1
@@ -398,48 +402,62 @@ The keepalive body is the ``shirudo status --json`` document.
        another ``shirudo`` command holds the config operation lock for
        more than 30 seconds, during a long package download for
        example.
-   * - ``shirudo.status`` other than ``ok``
+   * - ``verdict`` other than ``ok``
      - Read :doc:`/operate/run/read-status` for each verdict.
-   * - A condition with ``status`` ``ALERT``
+       ``reboot-pending`` is a config activation that waits for a
+       reboot; every command except ``status`` and ``image status`` is
+       refused until then.
+   * - A pair of ``cond`` at ``11``, ``ALERT``
      - ``LsmAttached``, ``KeyringSealed``, ``ChainIntact``,
        ``UpatchesMeasured`` or ``ConfigActive`` found tampering or lost
-       enforcement.
-   * - ``shirudo.tamper_attempts`` rises
+       enforcement. ``ChainIntact`` at ``ALERT`` is a register the
+       eventlog does not explain; handle it as in
+       :doc:`/operate/troubleshoot/incident-tampered`.
+   * - ``XdpCovered``, the seventh pair of ``cond``, at ``10``, ``WARN``,
+       in several keepalives
+     - A device an XDP upatch selects runs without it: its driver
+       refuses the program or its XDP was turned off. Each reconcile
+       pass retries it at a cost to the target until the device changes
+       or the upatch is unloaded. Alert on it, and end it as
+       :doc:`/operate/run/read-status` describes.
+   * - A counter of ``tamper`` rises
      - Something on the target tried an operation the guards refused.
        The counters start at zero each boot. See
        :doc:`/security/tamper-counters`.
-   * - ``config.activation_pending`` is ``true``
-     - A config activation waits for a reboot. Every command except
-       ``status`` and ``image status`` is refused until then.
-   * - ``tpm.chain_matches_eventlog`` is ``false``
-     - The register holds a value the eventlog does not explain. Handle
-       it as in :doc:`/operate/troubleshoot/incident-tampered`.
-   * - ``tpm.register_rebound`` is ``true``
+   * - A counter of ``integrity`` rises
+     - Something on the target tried to change or read the running
+       kernel, and ``bpf2`` refused it. The counters start at zero each
+       boot. See :doc:`/security/integrity-counters`.
+   * - Bit 0 of ``flags``, ``register_rebound``
      - The register was bound twice in one TPM reset.
-   * - ``tpm.bound_in`` is not ``initrd``
+   * - Bit 1 of ``flags``, ``bound_late``
      - ``init`` bound the register from the root file system, not from
        the initrd.
-   * - ``assets.eventlog_bytes`` nears 8388608
-     - The eventlog approaches the size that readers refuse. See
-       :doc:`/operate/maintain/backup-recovery`.
+   * - Bit 2 of ``flags``, ``tree_log_mismatch``
+     - The tree eventlog or the outcomes record does not agree with the
+       tree state.
    * - ``version_id`` is not the build you deployed
      - The target runs another shirudo build.
 
 Limits
 ------
 
-- Telemetry has no proof of origin. Root on a target, or anyone who can
-  reach the collector with valid credentials, can send records in a
-  target's name. Use :doc:`/operate/run/attest` for evidence.
+- A map snapshot has no proof of origin. Root on a target, or anyone who
+  can reach the collector with valid credentials, can send records in a
+  target's name. A keepalive's quote ties its body to an attestation
+  key, but a key in software can sign a quote too, so a backend that
+  has not tied the key to the target's TPM treats the target as
+  untrusted. Use :doc:`/operate/run/attest` for evidence.
 - While the config cannot be verified, ``status`` uses only the runtime
   image's settings and the environment. While an activation is pending,
   it uses the pending config's settings only when that config is the one
   mounted. To keep keepalives arriving in those states, also set
   ``OTEL_EXPORTER_OTLP_ENDPOINT`` in ``/etc/shirudo/map-export.env``.
   The map export is refused in those states.
-- The keepalive interval is 5 seconds after the previous run ends, not a
-  fixed schedule. Size the alert for a missing keepalive to several
-  intervals plus the 30-second lock wait.
+- The keepalive interval is 60 seconds after the previous run ends, not
+  a fixed schedule. Size the alert for a missing keepalive to several
+  intervals plus the 30-second lock wait, and to the longest tree sync
+  your targets run.
 
 Next steps
 ----------

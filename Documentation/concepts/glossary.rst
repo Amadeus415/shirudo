@@ -182,11 +182,12 @@ it.
 
    keepalive
       An OTLP log record named ``shirudo.keepalive`` that carries a
-      target's status. ``shirudo-keepalive.timer`` runs ``shirudo status
-      --otel --include-system`` about every five seconds, which sends one
-      when an OTLP endpoint is configured. A missing keepalive tells a
-      collector that a target stopped reporting; a present one is still
-      the target's own account. See :doc:`/operate/run/telemetry`.
+      target's status record and the TPM quote of it.
+      ``shirudo-keepalive.timer`` runs ``shirudo status --otel`` about
+      every minute, which sends one when an OTLP endpoint is configured
+      and the TPM quotes. A missing keepalive tells a collector that a
+      target stopped reporting; a present one is still the target's own
+      account. See :doc:`/operate/run/telemetry`.
 
    load artifact
       A ``.upatch`` file that installs an upatch: a header with the name
@@ -278,8 +279,8 @@ it.
    private bpffs
       The BPF file system instance that ``init`` mounts at
       ``/run/shirudo/bpffs`` with mode ``0700``. It holds the pins of the
-      enforcement links, the identity map, the tamper counters and every
-      upatch's links and maps. BPF LSM hooks refuse unlink, rename and
+      enforcement links, the identity map, the tamper and integrity
+      counters and every upatch's links and maps. BPF LSM hooks refuse unlink, rename and
       opening a pin there to tasks without runtime authority, and refuse
       every caller the unmount, move or remount of the mount ``init``
       made. See :doc:`/internals/enforcement`.
@@ -318,7 +319,7 @@ it.
    runtime image
       The dm-verity image, mounted read-only at ``/run/shirudo/runtime``,
       that carries the ``shirudo`` executable, the initial BPF certificate
-      ``keys/cert.der``, the config verification certificate and the
+      ``keys/cert.der``, the config verification certificates and the
       bootstrap settings. The UKI's initrd names its root hash, so the
       measured boot covers it. Every executable on it gains runtime
       authority when it runs. See :doc:`/internals/config-images`.
@@ -360,7 +361,7 @@ it.
    ``shirudo-build``
       The operator-only helper that the core ``shirudo`` binary executes
       for ``build``, ``bpm build``, ``bpm push``, ``bpm tree append``,
-      ``bpm config update``, ``image build``, ``image verify`` and ``keys
+      ``bpm tree show``, ``bpm config update``, ``image build``, ``image verify`` and ``keys
       vouch``. It links the signer, runs clang and runs ``veritysetup``.
       The operator package installs it and the target package does not.
       See :doc:`/concepts/operator-and-target`.
@@ -389,6 +390,14 @@ it.
       ``BPF_PROG_LOAD`` against the ``.bpf`` keyring. After ``init``, it
       is the only way BPF from userspace enters the kernel. See
       :doc:`/internals/signed-loader`.
+
+   integrity counter
+      A counter for one way to change or read the running kernel that
+      the enforcement programs refuse, such as ``ModuleSignature``,
+      ``DevMem`` or ``Kcore``. The counters live in a map pinned at
+      ``/run/shirudo/bpffs/integrity``, apart from the tamper counters,
+      and ``shirudo status`` reports them. See
+      :doc:`/security/integrity-counters`.
 
    tamper counter
       A counter for one point at which the enforcement programs refuse a

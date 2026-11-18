@@ -11,6 +11,12 @@
 
 SHELL := /bin/sh
 
+# The packaging build passes shirudo's install paths (prefix, libdir,
+# DESTDIR) on the command line, and make hands those to every sub-make,
+# where they override what each dependency's own configure chose: OpenSSL
+# would install into the system libdir. The dependencies' makes get none.
+MAKEOVERRIDES :=
+
 TARGET_DEPS_DIR ?= build/target-deps
 TARGET_STATIC_LIBDIR ?= $(TARGET_DEPS_DIR)/lib
 TARGET_OPENSSL_PREFIX ?= $(TARGET_DEPS_DIR)/openssl
@@ -87,11 +93,15 @@ TSS_ARCHIVES := \
 	libtss2-sys.a \
 	libtss2-mu.a
 
-.PHONY: all clean check-system-archives
+.PHONY: all openssl clean check-system-archives
 
 all: $(OPENSSL_STAMP) $(CURL_STAMP) $(TSS_STAMP) $(STATIC_ARCHIVES_STAMP) $(ENV_FILE)
 	@printf 'shirudo: target dependencies ready\n'
 	@printf 'shirudo: run make target (or source %s)\n' '$(ENV_FILE)'
+
+# The static OpenSSL alone, for shirudo-quote-check where the
+# distribution ships no libcrypto.a.
+openssl: $(OPENSSL_STAMP)
 
 # Static-only, no shared objects or loadable modules: the target binary
 # must not pick up a provider or engine from the host filesystem. The

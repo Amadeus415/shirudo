@@ -7,7 +7,6 @@
  * decoders and the fixture that reads fixed records.
  */
 
-#include <libgen.h>
 #include <limits.h>
 #include <stdlib.h>
 
@@ -24,33 +23,34 @@
 #include "bpf/lib/serializer.h"
 
 static const char * const sources[] = {
-	"../../upatches/kernel-obs/decoders/dns.lua",
-	"../../upatches/kernel-obs/decoders/exec.lua",
-	"../../upatches/kernel-obs/decoders/file.lua",
-	"../../upatches/kernel-obs/decoders/listen.lua",
-	"../../upatches/kernel-obs/decoders/net.lua",
-	"../../upatches/kernel-obs/decoders/priv.lua",
-	"../../upatches/kernel-obs/decoders/watch.lua",
-	"../../upatches/kernel-obs/decoders/watch_stat.lua",
-	"../fixtures/decoders/counters.lua",
+	"upatches/kernel-obs/decoders/dns.lua",
+	"upatches/kernel-obs/decoders/exec.lua",
+	"upatches/kernel-obs/decoders/file.lua",
+	"upatches/kernel-obs/decoders/listen.lua",
+	"upatches/kernel-obs/decoders/net.lua",
+	"upatches/kernel-obs/decoders/priv.lua",
+	"upatches/kernel-obs/decoders/watch.lua",
+	"upatches/kernel-obs/decoders/watch_stat.lua",
+	"testing/fixtures/decoders/counters.lua",
 };
 
 static struct upatch_decoder_view views[ARRAY_SIZE(sources)];
 
-/* The decoders sit beside the target in the tree, wherever it runs from. */
+/*
+ * The decoders are read from the tree the target was built from, which
+ * the build names: the target itself may be built anywhere, AFL++'s in
+ * build/fuzz-afl.
+ */
 int LLVMFuzzerInitialize(int *argc, char ***argv)
 {
-	char self[PATH_MAX], path[PATH_MAX];
+	char path[PATH_MAX];
 	size_t len;
 	char *src;
 
-	if (strscpy(self, (*argv)[0], sizeof(self)) < 0)
-		abort();
 	for (size_t i = 0; i < ARRAY_SIZE(sources); i++) {
-		if (snprintf(path, sizeof(path), "%s/%s", dirname(self),
+		if (snprintf(path, sizeof(path), "%s/%s", FUZZ_SOURCE_TREE,
 			     sources[i]) < 0)
 			abort();
-		strscpy(self, (*argv)[0], sizeof(self));
 		if (read_file(path, 1 << 20, &src, &len))
 			abort();
 		views[i].source = src;

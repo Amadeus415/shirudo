@@ -48,20 +48,12 @@ Set up Loki and Prometheus
                   - host.name
 
    Loki 3 enables structured metadata by default; an older configuration
-   may turn it off. A keepalive carries the target's kernel
-   configuration, a few hundred kilobytes for a distribution kernel,
-   which can exceed Loki's default limit of 256 KB; Loki then refuses it
-   and the collector drops it. 4 MB is the largest request a target sends,
+   may turn it off. A keepalive is about a kilobyte, but a map snapshot
+   can exceed Loki's default limit of 256 KB; Loki then refuses it and
+   the collector drops it. 4 MB is the largest request a target sends,
    ``map_export.otlp_max_bytes`` by default, so every record fits.
    Without the label, every target writes to the one stream
    ``{service_name="shirudo"}`` and shares its rate limit.
-
-   With a distribution kernel, every target sends about 60 KB a second
-   in keepalives, and Loki accepts 4 MB a second per tenant by default.
-   For a fleet of more than a few dozen targets, raise
-   ``ingestion_rate_mb`` and ``ingestion_burst_size_mb``, or drop the
-   kernel configuration at the collector as
-   :doc:`/operate/run/telemetry` shows.
 
 #. Start Prometheus with ``--web.enable-otlp-receiver``, and in
    ``prometheus.yml`` promote the target's host name to a label and accept
@@ -112,19 +104,21 @@ Check the data
 
    .. code-block:: text
 
-      {service_name="shirudo"} | shirudo_status != "" | shirudo_status != "ok"
+      {service_name="shirudo"} |= `"schema":"shirudo.keepalive/1"` | json verdict="verdict" | verdict != "ok"
 
    Loki turns ``service.name`` and ``host.name`` into the labels
    ``service_name`` and ``host_name`` and stores the other attributes as
-   structured metadata, with dots turned into underscores:
-   ``shirudo.status`` becomes ``shirudo_status``. Only keepalives carry
-   ``shirudo.status``.
+   structured metadata, with dots turned into underscores. A
+   keepalive's body is a string, the JSON object the target's TPM
+   quoted, and becomes the log line: the line filter keeps the
+   keepalives and ``json`` takes keys out of them.
+   :doc:`/reference/cli/status` lists the keys.
 
 #. List the keepalives of one target:
 
    .. code-block:: text
 
-      {service_name="shirudo", host_name="<target>"} | shirudo_status != ""
+      {service_name="shirudo", host_name="<target>"} |= `"schema":"shirudo.keepalive/1"`
 
 #. Read the map snapshots of one upatch:
 
@@ -158,28 +152,33 @@ on.
           rules:
             - alert: ShirudoTargetSilent
               expr: |
-                sum by (host_name) (count_over_time({service_name="shirudo"} | shirudo_status != "" [1d]))
+                sum by (host_name) (count_over_time({service_name="shirudo"} |= `"schema":"shirudo.keepalive/1"` [1d]))
                 unless
-                sum by (host_name) (count_over_time({service_name="shirudo"} | shirudo_status != "" [2m]))
+                sum by (host_name) (count_over_time({service_name="shirudo"} |= `"schema":"shirudo.keepalive/1"` [10m]))
             - alert: ShirudoTargetNotOk
               expr: |
-                sum by (host_name) (count_over_time({service_name="shirudo"} | shirudo_status != "" | shirudo_status != "ok" [5m])) > 0
+                sum by (host_name) (count_over_time({service_name="shirudo"} |= `"schema":"shirudo.keepalive/1"` | json verdict="verdict" | verdict != "ok" [5m])) > 0
             - alert: ShirudoTamperAttempts
               expr: |
-                last_over_time({service_name="shirudo"} | shirudo_tamper_attempts != "" | unwrap shirudo_tamper_attempts [10m]) by (host_name)
-                -
-                first_over_time({service_name="shirudo"} | shirudo_tamper_attempts != "" | unwrap shirudo_tamper_attempts [10m]) by (host_name)
-                > 0
+                count by (host_name, boot_id) (
+                  sum by (host_name, boot_id, tamper) (
+                    count_over_time({service_name="shirudo"} |= `"schema":"shirudo.keepalive/1"` | json boot_id="boot_id" | regexp `"tamper":(?P<tamper>\[[^\]]*\]|null)` [10m])
+                  )
+                ) > 1
 
    ``ShirudoTargetSilent`` fires for a target that sent keepalives in
-   the last day but none in the last two minutes, which covers several
-   keepalive intervals and the 30 seconds a keepalive may wait for the
-   config operation lock. A target silent for longer than a day drops
-   out of the rule. ``ShirudoTargetNotOk`` fires for a verdict other
-   than ``ok`` in the last five minutes. ``ShirudoTamperAttempts``
-   subtracts the earliest refusal count in ten minutes from the latest.
-   The counters start at zero each boot, so a reboot in the window gives
-   a negative difference and no alert.
+   the last day but none in the last ten minutes, which covers several
+   keepalive intervals and a tree sync of a few minutes, which holds the
+   config operation lock that a keepalive waits for; a target whose tree
+   syncs run for longer needs a longer window. A target silent for longer than a day drops out of
+   the rule. ``ShirudoTargetNotOk`` fires for a verdict other than
+   ``ok`` in the last five minutes. ``ShirudoTamperAttempts`` counts the
+   different lists of counters, ``tamper``, in the keepalives of one
+   boot in ten minutes. The counters only grow within a boot and start
+   at zero at the next, so more than one list means a counter rose, and
+   a reboot in the window gives no alert. ``integrity`` lists the
+   integrity counters the same way; the rule with ``integrity`` in place
+   of ``tamper`` alerts on a refused change to the running kernel.
 
 #. Point the ruler at the directory and at your Alertmanager in Loki's
    configuration:

@@ -96,6 +96,11 @@ Kernel source
        The seal reads the label of the directory a new entry goes into
        from it; without the patch the verifier refuses the seal's entry
        hooks.
+   * - :src:`kernel/0005-mm-Let-LSMs-check-read-only-remote-mm-access-under-CAP_PERFMON.patch`
+     - Adds the ``mm_read_access`` LSM hook, which ``mm_access()`` asks
+       before it grants a read-only access to another task's memory to
+       ``CAP_PERFMON``. The seal refuses a task with runtime authority
+       there, and ``init`` fails without the hook.
 
 :doc:`/internals/kernel-patches` gives the upstream status of the
 carried patches.
@@ -110,7 +115,10 @@ Identify the kernel
   ``bpf-next-kernel-build``.
 - ``shirudo init --check-only`` checks the ABI of the running kernel
   from its BTF (``signed_loader_kernel_abi``). A load on a kernel
-  without it fails with ``kernel_abi_unsupported``.
+  without it fails with ``kernel_abi_unsupported``. It also checks that
+  the kernel has every LSM hook the embedded programs attach to
+  (``kernel_lsm_hooks``), and names the hooks a kernel built without
+  the carried patches lacks.
 - The test harness builds bpf-next by default. It also builds release
   tags and refuses any tag older than v7.4. It applies the patches in
   :src:`kernel/` to either. A release kernel still needs ``kernel/0001``.
@@ -202,7 +210,7 @@ keyring when ``CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG_SECONDARY_KEYRING`` or
 ``CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG_PLATFORM_KEYRING`` is set.
 :doc:`/operate/plan/hardening` lists what that means for who can sign a
 config, and the options the trust model assumes beyond this table:
-lockdown, module signature enforcement, ``CONFIG_COMPAT`` and others.
+lockdown, module signatures, ``CONFIG_COMPAT`` and others.
 
 Kernel command line
 ~~~~~~~~~~~~~~~~~~~
@@ -253,7 +261,8 @@ point is missing fails to load.
    * - ``CONFIG_BPF_KPROBE_OVERRIDE``
      - ``bpf_override_return()`` from a ``kprobe`` upatch.
    * - ``CONFIG_UPROBE_EVENTS``
-     - ``uprobe.multi`` upatches.
+     - ``uprobe``, ``uretprobe``, ``uprobe.multi`` and
+       ``uretprobe.multi`` upatches.
    * - ``CONFIG_CGROUP_BPF``
      - ``cgroup_skb`` upatches.
    * - ``CONFIG_NETFILTER``, ``CONFIG_NETFILTER_BPF_LINK``
@@ -363,6 +372,10 @@ Pre-flight checks
    * - ``signed_loader_kernel_abi``
      - The kernel BTF has the fields of the signed-loader ABI with the
        expected types.
+   * - ``kernel_lsm_hooks``
+     - The kernel BTF has a ``bpf_lsm_<hook>`` function for every LSM
+       hook the embedded ``bpf2`` and ``seal`` programs attach to, the
+       carried ``tpm_command`` and ``mm_read_access`` among them.
    * - ``cert_on_disk``
      - The primary certificate exists, is a regular file and is not
        empty.
@@ -389,13 +402,14 @@ Run the checks as root on a target:
      OK    bpf_lsm_active
      OK    bpffs_supported
      OK    signed_loader_kernel_abi
+     OK    kernel_lsm_hooks
      OK    cert_on_disk
      OK    cert_algorithm
      OK    cert_kernel_support
      OK    kernel_keyring
      OK    embedded_loader
      OK    tpm2_reachable: TCTI from the config: device:/dev/tpmrm0
-   10 of 10 passed
+   11 of 11 passed
 
 A failed check prints ``FAIL`` and its reason, and the command exits 1
 after ``init: pre-flight failed, <failed> of <total> checks``.

@@ -53,7 +53,8 @@ shirudo-build helper
 The code that signs artifacts is not in the core ``shirudo`` binary.
 Every operator command except ``genkey`` and the offline ``attest``
 commands executes a separate helper, ``shirudo-build``: ``build``, ``bpm
-build``, ``bpm push``, ``bpm tree append``, ``bpm config update``, ``image
+build``, ``bpm push``, ``bpm tree append``, ``bpm tree show``, ``bpm
+config update``, ``image
 build``, ``image verify`` and ``keys vouch``. The helper links the
 signer, runs clang to compile BPF and runs ``veritysetup`` to build and
 check images. The core binary finds it through ``SHIRUDO_BUILD``, then
@@ -105,8 +106,8 @@ Table 1 lists what it does hold.
    * - The trusted certificates
      - The kernel's ``.bpf`` keyring
      - Sealed by ``init``, and ``lsm/key_permission``
-   * - Enforcement links, the identity map, the tamper counters, upatch
-       links and maps
+   * - Enforcement links, the identity map, the tamper and integrity
+       counters, upatch links and maps
      - The private bpffs at ``/run/shirudo/bpffs``
      - BPF LSM hooks on unlink, rename, mount and descriptor access
    * - Archived upatches, the eventlog, package and tree state, cached
@@ -186,15 +187,16 @@ Agentless target
 A target runs no daemon and listens on no socket. Every operation is a
 one-shot command, started by root or by a systemd unit, that does its work
 and exits: ``init`` at boot from the initrd and again from the root file
-system, package and tree updates every minute, and map export and status
-keepalives every five seconds.
+system, package and tree updates and status keepalives every minute,
+and map export every five seconds.
 :doc:`/reference/systemd-units` lists the units and timers.
 
 What must outlive a command is pinned in the private bpffs, and what must
 outlive the boot is archived under ``/var/lib/shirudo`` and restored by
 ``init``. We accept the cost of this design, which is latency: a target
-learns of a new package at its next timer run, and nothing on it reacts
-between runs. In return there is no long-running process for root to
+learns of a new package at its next timer run, and besides a new network
+device starting ``upatch reconcile``, nothing on it reacts between runs.
+In return there is no long-running process for root to
 attack, no socket for the network to reach, and less code in the target's
 trusted computing base.
 

@@ -234,6 +234,9 @@ Before sending
 - Run ``make -C Documentation html`` when the change touches
   ``Documentation/``. The build turns every Sphinx warning into an
   error. See :doc:`/contribute/documentation/writing-docs`.
+- Run :src:`.github/scripts/check-unused.sh` when the change removes or
+  renames a call: a function whose last caller went fails it. CI runs it
+  as the ``Unused functions`` job of the ``Lint`` workflow.
 - Run :src:`.github/scripts/check-spdx.sh` when the change adds a file.
   Every source carries an SPDX tag in the kernel's form for its type,
   ``BSD-2-Clause`` for userspace and ``GPL-2.0 OR BSD-2-Clause`` for
@@ -266,8 +269,9 @@ Before sending
   opened without close-on-exec or a pointer tested for NULL after its
   use. CI runs it as the ``Coccinelle`` job of the ``Lint`` workflow.
 - Keep each commit to one logical change that builds and passes on its
-  own, so the history bisects. CI builds every commit of a pull request
-  on its own in the ``Build every commit`` workflow.
+  own, so the history bisects. CI builds every commit of a pull request,
+  and every commit a push adds to ``main``, on its own in the
+  ``Build every commit`` workflow.
   ``.github/scripts/build-commits.sh origin/main..HEAD`` does the same
   locally.
 - Read :doc:`/security/threat-model` before changing anything on a

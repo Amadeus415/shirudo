@@ -221,14 +221,14 @@ append <cli/bpm>`. ``<package>`` is a built package whose Beefile has
 
 .. code-block:: console
 
-   operator$ shirudo bpm tree append <package> oci://quay.io/example/tree --keys-dir ~/shirudo-keys
+   operator$ shirudo bpm tree append <package> oci://quay.io/example/tree --tree-id <tree-id> --keys-dir ~/shirudo-keys
 
 Retract them on another tree reference with :doc:`bpm tree append
 <cli/bpm>`:
 
 .. code-block:: console
 
-   operator$ shirudo bpm tree append <package> oci://quay.io/example/tree --keys-dir ~/shirudo-keys --reference canary --op delete
+   operator$ shirudo bpm tree append <package> oci://quay.io/example/tree --tree-id <canary-tree-id> --keys-dir ~/shirudo-keys --reference canary --op delete
 
 Refresh the indexes and upgrade, as ``shirudo-bpm-repo-update.timer``
 does, with :doc:`cli/bpm`:
@@ -348,6 +348,20 @@ Activate a new config image on a target with :doc:`image update
 
    target# shirudo image update https://config.example/shirudo/config
 
+Select a config containing new vouched BPF signers for the next planned
+reboot with :doc:`image stage <cli/image>`. It leaves the active config,
+keyrings and measurements unchanged:
+
+.. code-block:: console
+
+   target# shirudo image stage https://config.example/shirudo/with-new-signer
+
+Cancel that selection before reboot:
+
+.. code-block:: console
+
+   target# shirudo image stage --cancel
+
 Show the config activation with :doc:`image status <cli/image>`. It exits
 with 1 while the activation is pending:
 
@@ -392,12 +406,14 @@ Export every map to the configured destinations, as
 
    target# shirudo upatch map --all
 
-Send a keepalive and print it with :doc:`cli/status`. Nothing is sent
-without a configured endpoint:
+Print the keepalive body, then quote it and send it, with
+:doc:`cli/status`. Nothing is sent without a configured endpoint or a
+TPM that quotes:
 
 .. code-block:: console
 
-   target# shirudo status --otel --include-system --json
+   target# shirudo status --keepalive
+   target# shirudo status --otel
 
 Developing shirudo
 ------------------
@@ -442,19 +458,22 @@ List the suites and families:
 
    $ make -C testing help
 
-Boot the interactive test VM, log in and stop it. Booting needs root:
+Boot the interactive test VM, log in and stop it:
 
 .. code-block:: console
 
-   # make -C testing vm
-   # make -C testing vm-ssh
-   # make -C testing vm-stop
+   $ make -C testing vm
+   $ make -C testing vm-ssh
+   $ make -C testing vm-stop
 
-Run the fuzz targets for a minute each:
+Run the fuzz targets for a minute each, or under AFL++ for ten minutes
+each:
 
 .. code-block:: console
 
    $ make -C testing fuzz FUZZ_SECONDS=60
+   $ .github/scripts/afl-deps.sh
+   $ PATH=$PWD/build/afl/bin:$PATH make -C testing afl
 
 Render and serve the documentation, and check it against the code
 (:doc:`/contribute/documentation/writing-docs`):
@@ -471,4 +490,5 @@ Check the commits of a branch as CI does (:doc:`/contribute/code/contributing`):
    $ .github/scripts/check-dco.sh origin/main..HEAD
    $ .github/scripts/check-style.sh origin/main..HEAD
    $ .github/scripts/check-spdx.sh
+   $ .github/scripts/check-unused.sh
    $ .github/scripts/build-commits.sh origin/main..HEAD

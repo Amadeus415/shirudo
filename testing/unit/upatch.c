@@ -125,6 +125,99 @@ static void name_fits_its_pin_directory(void)
 	EXPECT_FALSE(upatch_name_valid(name));
 }
 
+static void xdp_classes_come_from_xdp_programs_alone(void)
+{
+	struct prog_spec specs[] = {
+		{ .kind = UPATCH_ATTACH_XDP, .device_classes = 1 },
+		{ .kind = UPATCH_ATTACH_RAW_TRACEPOINT, .device_classes = 16 },
+		{ .kind = UPATCH_ATTACH_XDP, .device_classes = 8 },
+	};
+
+	EXPECT_UEQ(prog_specs_xdp_classes(specs, 3), 9);
+	EXPECT_UEQ(prog_specs_xdp_classes(specs + 1, 1), 0);
+	EXPECT_UEQ(prog_specs_xdp_classes(specs, 0), 0);
+}
+
+static void xdp_masks_are_signed_and_bounded(void)
+{
+	struct upatch_prog_entry prog = {};
+	struct prog_spec *specs = NULL;
+	__u8 buf[ONE_PROG_LEN];
+	__u32 mask;
+
+	EXPECT_UEQ(sizeof(prog), 160);
+	for (mask = 1; mask <= 31; mask++) {
+		one_raw_tracepoint(buf, 0);
+		prog.kind = cpu_to_le32(UPATCH_ATTACH_XDP);
+		prog.xdp.device_classes = cpu_to_le32(mask);
+		memcpy(buf + sizeof(struct upatch_prog_metadata), &prog, sizeof(prog));
+		if (mask & ~(__u32)UPATCH_XDP_ALL) {
+			EXPECT_TRUE(prog_specs_parse(buf, sizeof(buf), 0, 1, &specs) < 0);
+			continue;
+		}
+		ASSERT_EQ(prog_specs_parse(buf, sizeof(buf), 0, 1, &specs), 0);
+		EXPECT_UEQ(specs[0].kind, UPATCH_ATTACH_XDP);
+		EXPECT_UEQ(specs[0].device_classes, mask);
+		EXPECT_UEQ(specs[0].offset, 0);
+		prog_specs_free(specs, 1);
+	}
+	for (mask = 0; mask < 7; mask++) {
+		memset(&prog, 0, sizeof(prog));
+		prog.kind = cpu_to_le32(UPATCH_ATTACH_XDP);
+		prog.xdp.device_classes = cpu_to_le32(UPATCH_XDP_ALL);
+		if (mask == 0)
+			prog.xdp.device_classes = 0;
+		else if (mask == 1)
+			prog.xdp.device_classes = cpu_to_le32(32);
+		else if (mask == 2)
+			prog.xdp.reserved = cpu_to_le32(1);
+		else if (mask == 3)
+			prog.target[0] = 'x';
+		else if (mask == 4)
+			prog.map[0] = 'x';
+		else if (mask == 5)
+			prog.target[sizeof(prog.target) - 1] = 'x';
+		else
+			prog.map[sizeof(prog.map) - 1] = 'x';
+		memcpy(buf + sizeof(struct upatch_prog_metadata), &prog, sizeof(prog));
+		EXPECT_EQ(prog_specs_parse(buf, sizeof(buf), 0, 1, &specs), -EINVAL);
+		EXPECT_FALSE(specs);
+	}
+}
+
+static int parse_two_xdp(__u32 first, __u32 second, struct prog_spec **specs)
+{
+	__u8 buf[sizeof(struct upatch_prog_metadata) +
+		 2 * sizeof(struct upatch_prog_entry)];
+	struct upatch_prog_metadata md = {};
+	struct upatch_prog_entry prog = {};
+
+	md.magic = cpu_to_le32(UPATCH_PROG_MAGIC);
+	md.version = cpu_to_le32(UPATCH_PROG_VERSION);
+	md.nr_progs = cpu_to_le32(2);
+	memcpy(buf, &md, sizeof(md));
+	prog.role = cpu_to_le32(UPATCH_PROG_ROLE_ATTACH);
+	prog.kind = cpu_to_le32(UPATCH_ATTACH_XDP);
+	prog.xdp.device_classes = cpu_to_le32(first);
+	memcpy(buf + sizeof(md), &prog, sizeof(prog));
+	prog.xdp.device_classes = cpu_to_le32(second);
+	memcpy(buf + sizeof(md) + sizeof(prog), &prog, sizeof(prog));
+	return prog_specs_parse(buf, sizeof(buf), 0, 2, specs);
+}
+
+static void xdp_programs_select_disjoint_classes(void)
+{
+	struct prog_spec *specs = NULL;
+
+	ASSERT_EQ(parse_two_xdp(UPATCH_XDP_NETWORK, UPATCH_XDP_VIRTUAL, &specs),
+		  0);
+	prog_specs_free(specs, 2);
+	specs = NULL;
+	EXPECT_EQ(parse_two_xdp(UPATCH_XDP_NETWORK | UPATCH_XDP_VIRTUAL,
+				UPATCH_XDP_VIRTUAL, &specs), -EINVAL);
+	EXPECT_FALSE(specs);
+}
+
 static const struct unit_case cases[] = {
 	UNIT_CASE(prog_specs_take_the_signed_counts),
 	UNIT_CASE(prog_specs_refuse_another_header_count),
@@ -133,6 +226,9 @@ static const struct unit_case cases[] = {
 	UNIT_CASE(name_signed_is_the_header_name),
 	UNIT_CASE(member_is_a_name_and_a_payload),
 	UNIT_CASE(name_fits_its_pin_directory),
+	UNIT_CASE(xdp_classes_come_from_xdp_programs_alone),
+	UNIT_CASE(xdp_masks_are_signed_and_bounded),
+	UNIT_CASE(xdp_programs_select_disjoint_classes),
 	{}
 };
 

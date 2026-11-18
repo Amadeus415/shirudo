@@ -10,7 +10,9 @@ systemd units and timers
 
 The units the target package installs, from ``systemd/*.in`` and
 ``systemd/*.timer``. Every service is ``Type=oneshot``: shirudo runs no
-daemon.
+daemon. Every service sets ``SyslogIdentifier=shirudo``, so what it writes
+to standard error reaches the journal under the same identifier as what
+it sends to syslog, whatever the name of the process that runs the binary.
 
 Units
 -----
@@ -30,8 +32,11 @@ Units
        runtime drop-in
      - ``sysinit.target``, once per boot
    * - ``shirudo-keepalive.service``
-     - ``@bindir@/shirudo status --otel --include-system``
+     - ``@bindir@/shirudo status --otel``
      - ``shirudo-keepalive.timer``
+   * - ``shirudo-xdp-reconcile.service``
+     - ``@bindir@/shirudo upatch reconcile``
+     - ``shirudo-xdp-reconcile.timer`` and the udev rule below
    * - ``shirudo-map-export.service``
      - ``@bindir@/shirudo upatch map --all``
      - ``shirudo-map-export.timer``
@@ -158,7 +163,7 @@ installed, ``/etc/shirudo/init.env`` and ``SHIRUDO_INIT_ARGS`` have no
 effect.
 
 The generator writes this drop-in for ``shirudo.service`` only. The
-keepalive, map-export, repository-update and tree-sync services run
+keepalive, reconcile, map-export, repository-update and tree-sync services run
 ``@bindir@/shirudo``. On a target that enforces, a shirudo binary outside
 the runtime image is refused with ``shirudo: image state: Permission
 denied`` and exit status 1, so each of these services needs its own
@@ -175,7 +180,7 @@ shirudo-keepalive.service
    * - Setting
      - Value
    * - ``ExecStart``
-     - ``@bindir@/shirudo status --otel --include-system``
+     - ``@bindir@/shirudo status --otel``
    * - ``EnvironmentFile``
      - ``-/etc/shirudo/map-export.env`` (optional)
    * - ``After``
@@ -187,7 +192,51 @@ shirudo-keepalive.service
 
 The keepalive is sent only when ``map_export.otel_endpoint``,
 ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`` or ``OTEL_EXPORTER_OTLP_ENDPOINT``
-names an endpoint. See :doc:`/reference/formats/otlp`.
+names an endpoint, and only with its TPM quote: a run whose TPM does not
+answer or does not quote fails and sends nothing. See
+:doc:`/reference/formats/otlp`.
+
+A keepalive and a ``bpm tree sync`` do not run at once. Every target
+command holds the config operation lock for its whole run, and a sync
+holds it until its last operation is applied. A keepalive that starts
+during a sync waits up to 30 seconds for the lock; when the sync is
+still running then, that run fails and sends nothing, and the next
+run of the timer tries again. A sync that fetches and applies for
+minutes therefore leaves a gap of about that length in the node's
+keepalives, which a backend's threshold for a stale node must allow
+for.
+
+shirudo-xdp-reconcile.service
+-----------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Setting
+     - Value
+   * - ``ExecStart``
+     - ``@bindir@/shirudo upatch reconcile``
+   * - ``After``
+     - ``shirudo.service``
+   * - ``ConditionPathExists``
+     - ``/run/shirudo/bpffs/lsm_link``
+   * - ``StartLimitIntervalSec``
+     - ``0``, as a burst of new veths would otherwise disable it
+   * - ``TimeoutStartSec``
+     - ``2min``
+   * - ``LimitMEMLOCK``
+     - ``infinity``
+
+The rule ``90-shirudo-xdp-reconcile.rules`` in
+``/usr/lib/udev/rules.d`` starts it through ``SYSTEMD_WANTS`` when a
+network device other than ``lo`` appears. It is not ``RUN+=``, because a
+child of ``systemd-udevd`` inherits its seccomp filter and would get no
+task mark. A veth peer moving namespace gives the initial namespace no
+such event, so the timer is what catches it, within a minute. The timer
+runs a pass 60 seconds after the previous one ends rather than more
+often because a device that keeps refusing costs a full retry on every
+pass. The unit and the rule are not in the initrd. See :doc:`/reference/cli/upatch-reconcile`.
 
 shirudo-map-export.service
 --------------------------
@@ -283,7 +332,9 @@ Timers
    * - Timer
      - Schedule
    * - ``shirudo-keepalive.timer``
-     - ``OnBootSec=5s``, ``OnUnitInactiveSec=5s``, ``AccuracySec=1s``
+     - ``OnBootSec=5s``, ``OnUnitInactiveSec=60s``, ``AccuracySec=1s``
+   * - ``shirudo-xdp-reconcile.timer``
+     - ``OnBootSec=5s``, ``OnUnitInactiveSec=60s``, ``AccuracySec=1s``
    * - ``shirudo-map-export.timer``
      - ``OnBootSec=5s``, ``OnUnitInactiveSec=5s``, ``AccuracySec=1s``
    * - ``shirudo-bpm-repo-update.timer``
@@ -315,8 +366,9 @@ Enablement
      - What it enables
    * - Target ``.deb`` and ``.rpm``
      - On install: ``systemctl enable`` of ``shirudo.service`` and the
-       four timers, for the next boot. Nothing is started. On removal:
-       ``disable --now`` of the four timers and ``disable`` of
+       five timers, for the next boot, and ``udevadm control --reload``.
+       Nothing is started. On removal: ``disable --now`` of the five
+       timers and ``disable`` of
        ``shirudo.service``.
    * - Target tarball (``install.sh``)
      - ``systemctl daemon-reload`` only.

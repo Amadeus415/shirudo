@@ -149,6 +149,7 @@ int upatch_select(const struct dirent *e);
 struct prog_spec {
 	__u32 role;
 	__u32 kind;
+	__u32 device_classes;
 	__u64 offset;
 	char target[UPATCH_ATTACH_TARGET_MAX];
 	char map[UPATCH_PROG_MAP_MAX];
@@ -162,6 +163,22 @@ struct prog_spec {
 	struct stat target_stat;
 };
 
+static inline bool kind_is_uprobe_multi(__u32 kind)
+{
+	return kind == UPATCH_ATTACH_UPROBE_MULTI || kind == UPATCH_ATTACH_URETPROBE_MULTI;
+}
+
+static inline bool kind_is_uprobe_single(__u32 kind)
+{
+	return kind == UPATCH_ATTACH_UPROBE || kind == UPATCH_ATTACH_URETPROBE;
+}
+
+/* The kinds that attach to a userspace binary named in the UPUT block. */
+static inline bool kind_has_uprobe_target(__u32 kind)
+{
+	return kind_is_uprobe_multi(kind) || kind_is_uprobe_single(kind);
+}
+
 /*
  * The attach metadata of a load upatch, parsed strictly into one spec
  * per program, target_fd -1. 0 or -errno; free with prog_specs_free().
@@ -169,5 +186,7 @@ struct prog_spec {
 int prog_specs_parse(const void *metadata, __u32 metadata_len,
 		     __u32 nr_maps, __u32 nr_progs, struct prog_spec **out);
 void prog_specs_free(struct prog_spec *specs, __u32 nr_progs);
+/* Every device class an XDP program among the specs selects. */
+__u32 prog_specs_xdp_classes(const struct prog_spec *specs, __u32 nr_progs);
 
 #endif /* SHIRUDO_UTIL_UPATCH_H */

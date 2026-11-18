@@ -8,7 +8,7 @@
 Failure categories and exit status
 ==================================
 
-``shirudo upatch load`` and ``shirudo upatch unload`` classify every
+``shirudo upatch load``, ``unload`` and ``reconcile`` classify every
 refusal by a phase and a category. Both appear in the operation report
 (``--report``) and in the ``upatch unload failed:`` journal line. Other
 commands report failures as messages and exit status only.
@@ -40,8 +40,9 @@ measures in ``tpm_extend`` and removes the pins in ``pin``.
        name, the signed name, ``payload_sha256`` against the loader and
        data, and the signed attach metadata.
    * - ``target_verify``
-     - Opening each ``uprobe.multi`` target binary and comparing its GNU
-       build ID with the one the artifact records.
+     - Opening each ``uprobe``, ``uretprobe``, ``uprobe.multi`` and
+       ``uretprobe.multi`` target binary and comparing its GNU build ID
+       with the one the artifact records.
    * - ``signed_loader_load``
      - Creating, filling and freezing ``__loader.map`` and the
        ``BPF_PROG_LOAD`` of the signed loader, where the kernel verifies
@@ -102,13 +103,24 @@ Categories
        config, see :doc:`/operate/maintain/keys`.
    * - ``tampered``
      - ``pre_flight``, ``tpm_extend``
-     - none, ``EPERM``, ``EACCES``
+     - none, ``EPERM``, ``EACCES``, ``ENOENT``, ``ESTALE``, ``EBADMSG``
      - The ``.bpf`` keyring is not the frozen anchor (no errno), the
-       ``lsm_link`` pin cannot be opened, the register differs from
-       ``--expect-chain`` or cannot be read (``EPERM``), or the register
-       is not the one ``init`` bound (``EACCES``, the load is undone).
+       ``lsm_link`` pin is missing (``ENOENT``), the register differs from
+       ``--expect-chain`` or cannot be read (``EPERM``), the register
+       is not the one ``init`` bound (``EACCES``, the load is undone), or
+       this boot's eventlog records do not fold to the register
+       (``EBADMSG``, nothing changed). From
+       ``upatch reconcile``: the archive of a loaded XDP upatch differs
+       from what the records say was loaded, or its program pin is missing
+       (``ENOENT``) or holds no XDP program (``ESTALE``).
      - Do not retry. Keep the eventlog and the journal and handle the
        target as an incident: :doc:`/operate/troubleshoot/incident-tampered`.
+   * - ``not_initialized``
+     - ``pre_flight``
+     - none
+     - ``upatch reconcile`` ran outside the initial network namespace, or
+       before ``init`` finished on the root file system.
+     - Wait for ``shirudo.service``; the timer runs the pass again.
    * - ``eventlog_full``
      - ``pre_flight``
      - ``ENOSPC``
@@ -134,6 +146,38 @@ Categories
        ``upatch load`` exits 2. ``bpm tree sync`` records the operation as
        ``skipped: module not loaded`` and continues.
      - Load the module or install the binary, then load again.
+   * - ``xdp_multibuf_unsupported``
+     - ``link_create``
+     - ``EMEDIUMTYPE``
+     - A selected device has native XDP but does not report multi-buffer
+       support (``NETDEV_XDP_ACT_RX_SG``). The load was undone.
+     - Narrow the signed device-class mask, or configure or change the
+       device so that it reports multi-buffer XDP. See
+       :doc:`/upatches/write/attach-kinds`.
+   * - ``xdp_driver_refused``
+     - ``link_create``
+     - ``ENOPROTOOPT``
+     - The driver of a selected device refused the program in its
+       current settings: ``EOPNOTSUPP`` while it reports native XDP, from
+       ``virtio_net`` while the host does GRO_HW or checksum offload or
+       from ``bnxt`` with header-data split or with rx and tx channels not
+       combined; ``EINVAL`` from ``mlx5`` with LRO or hardware GRO on;
+       ``ENOSPC`` from a veth with fewer rx queues than its peer has tx
+       queues; ``ERANGE`` for an MTU the driver cannot take. The journal
+       names the driver's errno. The load was undone.
+     - Change the setting that rules XDP out, which ``bnxt`` names in the
+       kernel log, or narrow the signed device-class mask. See
+       :doc:`/upatches/write/attach-kinds`.
+   * - ``xdp_device_occupied``
+     - ``link_create``
+     - ``EBUSY``
+     - A selected device already runs another XDP program, in any mode:
+       another upatch's, or one shirudo did not attach, generic and
+       offloaded programs included. The kernel holds one XDP program per
+       device. The load was undone.
+     - Unload the upatch that holds the device, detach the other
+       program, or narrow the signed device-class mask. See
+       :doc:`/upatches/write/attach-kinds`.
    * - ``binary_mismatch``
      - ``target_verify``, ``link_create``
      - ``ESTALE``
@@ -153,10 +197,13 @@ Categories
      - Build the kernel with ``CONFIG_CRYPTO_MLDSA``, see
        :doc:`/operate/plan/system-requirements`.
    * - ``lsm_denied``
-     - ``target_verify``, ``signed_loader_load``, ``link_create``
+     - ``pre_flight``, ``target_verify``, ``signed_loader_load``,
+       ``link_create``
      - ``EACCES``, ``EPERM``
      - The kernel refused an operation with ``EACCES`` or ``EPERM``,
-       normally an LSM, shirudo's own or another one.
+       normally an LSM, shirudo's own or another one. In ``pre_flight``
+       it refused to open the ``lsm_link`` pin or, from ``upatch
+       reconcile``, an XDP program pin.
      - Check the tamper counters in ``shirudo status`` and the other
        LSMs' audit records.
    * - ``verifier_rejected``
@@ -170,11 +217,14 @@ Categories
        :doc:`/upatches/test/debugging`.
    * - ``attach_scope_mismatch``
      - ``link_create``
-     - ``EXDEV``
+     - ``EXDEV``, ``EREMOTE`` for XDP
      - The link the kernel reports is not at the site the attach
        metadata names: a cgroup link not at the root cgroup, a netfilter
        link outside the initial network namespace or at another hook or
        priority, a kprobe at another function or offset.
+       For XDP, a load outside the initial network namespace, or a link
+       the kernel made for another device; that also fails boot restore,
+       and stops an ``upatch reconcile`` pass.
      - Run the load in the host's initial cgroup and network namespaces
        and with the host's sysfs.
    * - ``already_loaded``
@@ -188,8 +238,9 @@ Categories
      - ``pin``
      - ``EPERM``, errno of the read
      - The upatch loaded under the name carries another payload than the
-       directive expects, or the recorded payload cannot be read.
-       Nothing was detached.
+       directive expects, or the recorded payload cannot be read. With
+       no pins, the archive of the name holds another payload or cannot
+       be read. Nothing was detached or removed.
      - Compare the ``Payload`` of ``shirudo upatch get <name>`` with the
        directive and build a directive for the loaded payload.
    * - ``detach_failed``
@@ -198,7 +249,7 @@ Categories
      - The unload was measured, then removing the pins failed.
      - Repeat the unload. Each attempt records another unload event.
    * - ``tpm_error``
-     - ``tpm_extend``
+     - ``tpm_extend``; ``pre_flight`` from ``upatch reconcile``
      - errno of the call
      - The register lock could not be taken, or this boot's records could
        not be read or what they do not cover could not be undone, in which
@@ -212,19 +263,22 @@ Categories
      - Check ``shirudo status``. A register ahead of the eventlog shows as
        ``tampered``; handle that as an incident.
    * - ``unknown``
-     - ``parse``, ``target_verify``, ``signed_loader_load``,
-       ``payload_load``, ``link_create``, ``persist``
+     - ``pre_flight``, ``parse``, ``target_verify``,
+       ``signed_loader_load``, ``payload_load``, ``link_create``,
+       ``persist``
      - errno of the call
      - Any other failure: out of memory, a failed hash of the loader, an
        unclassified attach error, a payload that cannot be recorded on the
        pin directory or a failed archive copy (the load is undone for
-       both).
+       both). In ``pre_flight``, the ``lsm_link`` pin or, from ``upatch
+       reconcile``, an XDP program pin that cannot be opened for a reason
+       that says nothing about the pin, such as ``EMFILE`` or ``ENOMEM``.
      - Read ``message`` and the journal. For ``persist``, check the space
        on the file system that holds ``/var/lib/shirudo``.
 
 A successful operation reports the category ``ok``. An unload of a
 upatch that has no pins reports ``already_unloaded``, exits 0 and
-records no event.
+records no event, after removing an archive of the directive's payload.
 
 Refusals before a command runs
 ------------------------------
@@ -277,8 +331,10 @@ every verdict, ``tampered`` included. Parse ``.status`` of
    * - Unknown or ambiguous command
      - 1.
    * - Any command
-     - 1 when ``mlockall()`` fails (``hardening: cannot lock process
-       memory``) or the gate refuses.
+     - 1 when the hardening fails (``hardening: cannot reset the
+       personality``, ``cannot reset the resource limits``, ``cannot
+       disarm the interval timers``, ``cannot lock process memory``) or
+       when the gate refuses.
    * - ``genkey``
      - 0; 1 on failure or when keys exist without ``--force``; 2 for an
        unknown option.
@@ -303,6 +359,9 @@ every verdict, ``tampered`` included. Parse ``.status`` of
    * - ``upatch unload``
      - 0, ``already_unloaded`` included; 1 on refusal or failure; 2 for a
        usage error.
+   * - ``upatch reconcile``
+     - 0 when the pass finishes, whatever each device's outcome; 1 when it
+       stops; 2 for a usage error.
    * - ``upatch list``, ``upatch info``
      - 0; 1 on failure; 2 for a usage error.
    * - ``upatch get``
@@ -321,7 +380,8 @@ every verdict, ``tampered`` included. Parse ``.status`` of
      - 0, also when no tree is configured; 1 on failure and for an
        unknown option; 2 for too many arguments or a ``--report`` path
        that is too long.
-   * - ``bpm build``, ``bpm config update``, ``bpm tree append``
+   * - ``bpm build``, ``bpm config update``, ``bpm tree append``,
+       ``bpm tree show``
      - 0; 1 on failure and for a usage error; 127 when the helper is
        missing.
    * - ``bpm push``
@@ -557,9 +617,38 @@ rc=<rc> (<strerror>)`` and exits 1:
    * - ``operation_validate``
      - An operation of the publication is malformed or its digest does
        not match.
+   * - ``outcomes_check``
+     - The ``outcomes`` record does not cover the recorded ``last_seq``:
+       it is missing (``ENOENT``), has a gap or a malformed line, or ends
+       early (``EBADMSG``), or it cannot be read or cut. Nothing is
+       applied.
+   * - ``segment_walk``
+     - The segment the tag names starts further past the node's last
+       applied ``seq`` than the walk limit allows (``E2BIG``): 65,536
+       operations, or 1,048,576 for a node that has processed none. A
+       line before it names the segment's base, the limit and the node's
+       ``seq``. Nothing is fetched further and nothing is applied.
+   * - ``segment_fetch``
+     - A sealed segment of the walk cannot be fetched, ``ENOENT`` when
+       the registry does not serve its digest, or does not verify, or
+       has changed when it is fetched again. A line before it names its
+       digest. Nothing past it is applied.
+   * - ``segment_chain``
+     - A sealed segment is not the one its successor names: another
+       digest, tree, head or a generation that is not lower, or it does
+       not follow the node's state (``ERANGE``).
+   * - ``history_base``
+     - The segment's ``base.history_root`` is not the ``history_root``
+       the node's ``outcomes`` holds at ``base.seq`` (``EKEYREJECTED``),
+       or that line cannot be read. Nothing of the segment is applied.
+   * - ``history_prefix``
+     - The publication's operations up to the node's last applied
+       ``seq`` are not the ones the node processed: their
+       ``history_root`` differs from the node's (``EKEYREJECTED``).
+       Nothing of the publication is applied.
    * - ``pending_recovery``
      - An interrupted operation cannot be reconciled with the tree
-       eventlog.
+       eventlog, or its ``outcomes`` lines or state cannot be written.
    * - ``selector_evaluate``
      - The selector cannot be evaluated: the node labels or the kernel
        config cannot be read. The cursor stays on the operation.
@@ -581,8 +670,13 @@ rc=<rc> (<strerror>)`` and exits 1:
      - The register extend failed.
    * - ``tree_event_append``
      - The tree eventlog record cannot be appended.
-   * - ``tree_state_commit``, ``tree_state_commit_final``
-     - ``state.json`` cannot be written.
+   * - ``tree_outcome_append``
+     - The operation's ``outcomes`` line cannot be appended. The cursor
+       stays before the operation.
+   * - ``tree_state_commit_accept``, ``tree_state_commit``,
+       ``tree_state_commit_final``
+     - ``state.json`` cannot be written: when the publication is
+       recorded, after an operation, or at the end of the sync.
    * - ``tree_status_write``
      - The per-operation status file cannot be written.
 

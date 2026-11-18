@@ -59,16 +59,48 @@ when all of these hold:
 - the inode is on a read-only superblock whose block device is recorded
   as the runtime device, with the same device number and disk sequence;
 - the task is not traced;
+- no other process shares the task's root and working directory;
 - the task has no seccomp filter.
 
-A traced exec of a runtime file is refused (``ExecTraced``), and so is
-one with a seccomp filter, because a tracer or a filter installed before
-the exec would control the trusted process. ``lsm.s/bprm_committed_creds``
+A traced exec of a runtime file is refused (``ExecTraced``), and so are
+one by a task that shares its ``fs_struct`` with another process
+(``ExecShared``), which exec does not unshare, and one with a seccomp
+filter, because a tracer, the other process or a filter installed
+before the exec would control the trusted process. ``lsm.s/bprm_committed_creds``
 commits the candidate when the exec succeeds. A failed exec never reaches
 that hook and leaves the existing mark alone. A successful exec of a file
 that is not on the runtime image commits an untrusted candidate and so
 clears the mark. ``lsm/task_alloc`` copies a parent's mark to every
 child.
+
+A task that dumps core keeps its mark but loses its authority. An exec
+can still fail after ``bprm_committed_creds`` has committed the mark,
+when the new stack cannot take the argument pointers, and the task then
+dies by ``SIGSEGV`` and dumps core before the new program has run a
+single instruction. The kernel's dump code runs as the task: it unlinks
+the file ``kernel.core_pattern`` names, root's choice, and creates it
+anew. The first check of authority that finds ``PF_DUMPCORE`` on the
+task revokes the authority for good and counts ``SealCoreDump``, and the
+operation is refused as it is for any task without authority. The mark
+stays, so the protections below still keep other tasks off the dumping
+task, and a fork copies the revocation along with the mark. The next
+successful exec commits a fresh mark without it.
+
+A task whose memory a uprobe reaches loses its authority the same way,
+counted as ``SealUprobe``. Root sets a uprobe on any file it can name,
+the runtime binary included, through ``uprobe_events`` in tracefs or a
+perf event on the ``uprobe`` PMU, and no LSM hook sees either. A probe
+can carry a reference counter, a 16-bit value at a file offset of the
+probed binary, and the kernel adds one to it in every process that maps
+the binary writable at that offset, at every exec and every
+registration: a probe placed on the binary's data changes the variables
+shirudo reads before ``main()`` runs. The kernel sets
+``MMF_HAS_UPROBES`` in the memory of a process before it installs a
+probe there, and the check of authority reads that flag. The kernel
+installs probes in every mapping of a probed file that could be
+executable, so shirudo reads the binaries uprobe upatches target with
+``pread()`` rather than mapping them: the static runtime binary maps no
+file but itself, and the flag in its memory means a probe on it.
 
 Policy bits
 -----------
@@ -121,13 +153,25 @@ Protecting marked tasks
 
 A mark is only worth as much as the integrity of the process that holds
 it. ``lsm/ptrace_access_check`` refuses every ptrace access to a marked
-task (``SealPtrace``), which also covers ``/proc/<pid>/mem``,
-``pidfd_getfd()`` and ``process_vm_readv()``. ``lsm/perf_event_alloc``
+task. It counts one whose mode includes ``PTRACE_MODE_ATTACH``
+(``SealPtrace``), which covers attach, ``/proc/<pid>/mem``,
+``pidfd_getfd()`` and ``process_vm_readv()``, and refuses a read-mode
+one uncounted, because journald reads ``/proc/<pid>/exe`` of every
+process it logs for and a counted read would rise on an honest node.
+``lsm/mm_read_access``, a hook of carried patch 0005, refuses the
+read-only access ``mm_access()`` grants ``CAP_PERFMON`` after that
+refusal, to ``environ``, ``maps`` and the other memory files. ``lsm/perf_event_alloc``
 refuses a perf event bound to a marked task (``SealPerf``).
 ``lsm/task_kill`` lets a signal to a marked task through, since root
 may end a command that hangs and systemd stops the runs its timers
 start, and counts one from a task without authority (``SealSignal``),
-so that a command stopped on purpose shows in the counters.
+so that a command stopped on purpose shows in the counters. The
+kernel's own signals pass no hook: those a file size or CPU time limit
+or an interval timer raise, the command forestalls by resetting its
+limits and disarming the timers it inherited when it starts, and
+``lsm/task_setrlimit`` refuses another task a change of its limits
+(``SealRlimit``). ``SIGKILL`` from ``cgroup.kill`` or the OOM killer,
+``SIGPIPE`` and the cgroup freezer stay uncounted.
 ``lsm/mmap_file`` and ``lsm/file_mprotect`` refuse a marked task
 executable memory that is writable or that does not come from the
 runtime image. ``bpf2`` makes every exec of a runtime file a secure-exec,
@@ -175,6 +219,14 @@ Setting or removing the attribute ``security.bpf.shirudo`` itself, or
 ``security.bpf.shirudo.policy``, needs runtime authority on every inode,
 labeled or not (``SealLabel``), so root cannot label an inode of its own
 as shirudo's.
+
+The directories above the state root are not labeled, since root makes
+entries in ``/var/lib`` freely, but renaming one would move the sealed
+tree aside, and the next boot's bootstrap run would label whatever root
+put at ``/var/lib/shirudo``. That run marks each of them, up to the root
+of the state's file system, with ``security.bpf.shirudo.ancestor``, and
+a rename of a marked directory, or over one, needs runtime authority
+(``SealRename``), as does setting or removing the mark (``SealLabel``).
 
 A labeled directory takes new entries only from a task with runtime
 authority: ``inode_create``, ``inode_mkdir``, ``inode_symlink``,

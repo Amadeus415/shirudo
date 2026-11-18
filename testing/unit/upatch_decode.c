@@ -116,30 +116,51 @@ static void decoder_memory_limit_is_enforced(void)
 	       -EINVAL, NULL);
 }
 
-static void decoder_memory_limit_applies_to_finalizers(void)
+static void decoder_protected_loops_hit_the_limit(void)
 {
-	char output[128] = {};
+	decode("function decode(input) while true do "
+	       "pcall(function() while true do end end) end end",
+	       -EINVAL, NULL);
+	decode("function decode(input) local co = coroutine.wrap(function() "
+	       "while true do pcall(function() while true do end end) "
+	       "coroutine.yield() end end) "
+	       "while true do pcall(co) end end",
+	       -EINVAL, NULL);
+}
+
+static void decoder_cannot_reach_unbudgeted_code(void)
+{
+	decode("function decode(input) return {reach = tostring(newproxy) .. "
+	       "tostring(xpcall) .. tostring(print) .. tostring(string.find) .. "
+	       "tostring(string.match) .. tostring(string.gmatch) .. "
+	       "tostring(string.gsub)} end",
+	       0, "{\"reach\":\"nilnilnilnilnilnilnil\"}");
+	decode("function decode(input) local s = shirudo.page_slots("
+	       "{chunks = '1', data_hex = string.rep('00', 64)}, 8) "
+	       "return {mt = getmetatable(s[1])} end",
+	       0, "{\"mt\":\"shirudo.slot\"}");
+}
+
+static void decoder_error_is_sanitized(void)
+{
+	char output[256] = {};
 	int capture, saved;
 	ssize_t len;
 
-	capture = memfd_create("decoder-finalizer", MFD_CLOEXEC);
+	capture = memfd_create("decoder-error", MFD_CLOEXEC);
 	ASSERT_TRUE(capture >= 0);
-	saved = dup(STDOUT_FILENO);
+	saved = dup(STDERR_FILENO);
 	ASSERT_TRUE(saved >= 0);
-	ASSERT_EQ(fflush(stdout), 0);
-	ASSERT_EQ(dup2(capture, STDOUT_FILENO), STDOUT_FILENO);
-	decode("proxy = newproxy(true) "
-	       "getmetatable(proxy).__gc = function() "
-	       "local ok, s = pcall(string.rep, 'x', 64 * 1024 * 1024) "
-	       "print(ok, ok and #s or s) end "
-	       "function decode(input) return {value = 42} end", 0, "{\"value\":42}");
-	ASSERT_EQ(fflush(stdout), 0);
-	ASSERT_EQ(dup2(saved, STDOUT_FILENO), STDOUT_FILENO);
+	ASSERT_EQ(dup2(capture, STDERR_FILENO), STDERR_FILENO);
+	decode("function decode(input) error('\\27]0;title\\7', 0) end",
+	       -EINVAL, NULL);
+	ASSERT_EQ(dup2(saved, STDERR_FILENO), STDERR_FILENO);
 	EXPECT_EQ(close(saved), 0);
 	ASSERT_EQ(lseek(capture, 0, SEEK_SET), 0);
 	len = read(capture, output, sizeof(output) - 1);
-	ASSERT_TRUE(len >= 0);
-	EXPECT_STREQ(output, "false\tnot enough memory\n");
+	ASSERT_TRUE(len > 0);
+	EXPECT_TRUE(strstr(output, "decoder failed: ?]0;title?\n"));
+	EXPECT_FALSE(memchr(output, '\033', len));
 	EXPECT_EQ(close(capture), 0);
 }
 
@@ -147,7 +168,9 @@ static const struct unit_case cases[] = {
 	UNIT_CASE(decoder_initializes_and_returns_json),
 	UNIT_CASE(decoder_instruction_limit_is_enforced),
 	UNIT_CASE(decoder_memory_limit_is_enforced),
-	UNIT_CASE(decoder_memory_limit_applies_to_finalizers),
+	UNIT_CASE(decoder_protected_loops_hit_the_limit),
+	UNIT_CASE(decoder_cannot_reach_unbudgeted_code),
+	UNIT_CASE(decoder_error_is_sanitized),
 	{}
 };
 

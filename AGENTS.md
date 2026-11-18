@@ -5,6 +5,18 @@ this repository. The code and `Documentation/` are authoritative for
 what shirudo does; this file holds the rules and the reasoning that are
 not visible from the code.
 
+## Before you write code
+
+Read `.agents/skills/coding/SKILL.md` and follow it before you write,
+change or review any C in this tree, userspace, BPF, tests and tools
+alike, and before you write the commit message of such a change. It is
+how code here is written, with
+`Documentation/contribute/code/coding-style.rst` that it builds on.
+Claude Code loads it as the `coding` skill, Codex from `.agents/skills/`,
+and an agent that does not load skills reads the file. Work another
+skill covers, tests, documentation, proofs or an upatch, loads that skill
+as well.
+
 ## What shirudo is
 
 A BPF security platform that locks down the `bpf()` syscall so only signed in-kernel
@@ -21,7 +33,8 @@ with a Rust library under `rust/` taking over its modules one at a time:
   initrd under PCRs 9 and 11 and anchored in PCR 9, verifies every
   load, emits TPM-signed evidence on request
   (`shirudo attest`) and is agentless: no daemon, no listening socket,
-  every operation is a one-shot CLI invocation run locally or by the
+  every operation is a one-shot CLI invocation run locally, by systemd
+  when udev reports a new network device (`upatch reconcile`), or by the
   systemd timers that pull packages (`bpm repo update`, `bpm upgrade`,
   `bpm tree sync`) and export status (OTLP). The operator verifies that
   evidence offline (`shirudo attest verify`, `shirudo attest predict`).
@@ -47,7 +60,7 @@ Before changing security-relevant code, read
 | `Documentation/upatches/` | Authoring and shipping upatches: attach kinds, maps and serializers, decoders, the Beefile, publishing, debugging a failed load. |
 | `Documentation/reference/` | Every command (`reference/cli/`), the formats and settings (`reference/formats/`, including the `.upatch` container), failure categories and exit status, files, units, environment variables, the cheat sheet. |
 | `Documentation/contribute/` | Developer guide, test tiers and the test VM (read `testing.rst` before adding or moving a test), test coverage, the kernel coding style, commits and sign-off (read `contributing.rst` before crafting a commit), and the documentation style guide `writing-docs.rst`. |
-| `.agents/skills/` | Skills for coding agents in the `SKILL.md` format of agentskills.io, which Codex reads there and Claude Code through the `.claude/skills` link: `coding` writes C in the tree's style and grows `util/`, `testing` runs the test tiers and the test VM, `pre-submit` the checks CI runs on a series, `upatch` writes for the target's preemption model and a low cost, builds, packages and publishes an upatch, `bpf-concurrency` checks upatch code whose runs share state, `bpf-coccinelle` runs and extends the Coccinelle rules for it, `docs` finds and checks the pages a change touches, `fuzz-target` adds a libFuzzer target for a parser, `proofs` runs and writes the CBMC and Lean 4 proofs. |
+| `.agents/skills/` | Skills for coding agents in the `SKILL.md` format of agentskills.io, which Codex reads there and Claude Code through the `.claude/skills` link: `coding` writes C in the tree's style, grows `util/` and writes its commit messages, `testing` runs the test tiers and the test VM, `pre-submit` the checks CI runs on a series, `upatch` writes for the target's preemption model and a low cost, builds, packages and publishes an upatch, `bpf-concurrency` checks upatch code whose runs share state, `bpf-coccinelle` runs and extends the Coccinelle rules for it, `docs` finds and checks the pages a change touches, `fuzz-target` adds a libFuzzer target for a parser, `proofs` runs and writes the CBMC and Lean 4 proofs, `security-audit` audits the tree against the threat model, and the threat model and the proofs against the tree. |
 
 The kernel side of the signing design is the kernel's own
 `Documentation/bpf/signing.rst`; `bpf_prog_verify_signature()` runs
@@ -75,8 +88,11 @@ grep -n '<file>.c\|<function>' testing/proofs/cbmc`), or to an algorithm
 a Lean 4 model of `testing/proofs/lean4/` follows, adapts the harness or
 the model in the same commit, with its line in `proofs.list` and its row
 in `Documentation/contribute/testing/proof-coverage.rst`, and runs the
-proofs it touches. A proof that no longer matches the code, or no
-longer holds, is a bug like a page.
+proofs it touches (`make proofs-cbmc CHANGED=<range>` picks them), as
+CI runs them only once the change is on main. A proof that no longer
+matches the code, or no longer holds, is a security bug: a threat's
+fact box or a coverage row then claims an assurance the tree does not
+have.
 
 New documentation extends an existing page or adds one to its section's
 toctree, and follows `Documentation/contribute/documentation/writing-docs.rst`. Only
@@ -92,8 +108,9 @@ package for `bpm info`.
 C follows the kernel coding style,
 `Documentation/contribute/code/coding-style.rst`, in userspace and BPF
 alike, and Rust the style `rustfmt` gives it, as the kernel's Rust does;
-the `coding` skill gives these conventions with their reasons and the
-helpers to use.
+the `coding` skill, which the section above has you load first, gives
+these conventions with their reasons, the helpers to use and the commit
+message that carries a change.
 
 - Rust under `rust/` replaces a C module whole: the module that ports
   `util/<m>.c` is `rust/src/util/<m>.rs` or `rust/src/util/<m>/`, and
@@ -203,7 +220,7 @@ one usually still compiles and passes tests.
   on drift (`tampered`) rather than retrying. Boot restore is exactly one
   register event and a re-run of `init` adds none. A load stopped
   between its pins and its extend leaves pins without a record: `status`
-  reports them (`UpatchesMeasured`) and the next upatch command undoes
+  reports them (`UpatchesMeasured`) and the next upatch load or unload undoes
   them, or refuses when it cannot, under the register lock, which a
   load or an unload holds from before it touches the pins to its
   append, and a purge from its archive read until its pins and archive
@@ -235,6 +252,17 @@ one usually still compiles and passes tests.
   value the target wrote about itself is not a check.
 - **Pin the bpf_link before anything else fallible** in `shirudo init`,
   or a crash leaves an attached, unowned link that the kernel detaches.
+- **A map no BPF program writes is created with `BPF_F_RDONLY_PROG`.**
+  `BPF_MAP_FREEZE` only blocks the syscall side; without the flag a BPF
+  program could still write the map's value through a lookup's return
+  pointer, and the verifier would allow it. `shirudo_bpffs_sb` carries
+  the flag for that reason. A map a BPF program writes, even once
+  (`shirudo_mnt_rec`, the task, socket and inode storage maps,
+  `shirudo_tamper`, `shirudo_integrity`, `shirudo_devices`, upatch
+  state), does not take it.
+  A map added later that fits the no-BPF-write criterion takes the flag
+  from the commit that adds it; a map that stops fitting it drops the
+  flag in the same commit that adds the write.
 - **init runs twice in production.** The authenticated systemd initrd binds
   persistent state writable, verifies runtime and config, enrolls and seals the
   `.bpf` and `.dm-verity` keyrings, labels state, attaches all guards, restores
@@ -333,8 +361,10 @@ one usually still compiles and passes tests.
 
 ## Building, testing, packaging
 
-- `make` builds the operator binary, `make shirudo-build` the helper and
-  `make target` the fully static PIE target profile (`make target-deps`
+- `make` builds the operator binary, `make shirudo-build` the helper,
+  `make quote-check` the backend's quote checker `shirudo-quote-check`,
+  a static PIE in either profile,
+  and `make target` the fully static PIE target profile (`make target-deps`
   builds OpenSSL, libcurl and tpm2-tss from source first). Each builds
   the Rust library with cargo first, offline, into `build/rust/`; it
   takes Rust 1.85 or newer. A checkout used in place of an installed
@@ -350,14 +380,17 @@ one usually still compiles and passes tests.
 - `make proofs` runs the CBMC proofs of `testing/proofs/cbmc/`, which
   check parsers and emitters for every input within a bound, and the Lean
   4 proofs of `testing/proofs/lean4/`, which prove models of algorithms
-  for every input. CI does not run them: a full run takes about an hour.
-  A change to code a proof covers, or to an algorithm a model follows,
-  runs those proofs by name, all of them after a change to `proof.h` or
-  `run.sh`, and a new parser gets a proof where CBMC can carry one; the
-  `proofs` skill says how.
+  for every input. They take hours of CPU, so CI runs them after a push
+  to main, in the `Proofs` workflow, never on a pull request, and leaves
+  out the CBMC proofs `testing/proofs/cbmc/ci-skip.list` names, which
+  take hours each. A change to code a proof covers, or to an algorithm
+  a model follows, runs those proofs by name before it is sent, all of
+  them after a change to `proof.h` or `run.sh`, and a new parser gets a
+  proof where CBMC can carry one; the `proofs` skill says how.
 - CI runs `.github/scripts/build-commits.sh`, `check-style.sh`,
   `check-dco.sh`, `check-coccinelle.sh`, `check-sparse.sh`,
-  `check-spdx.sh` and the documentation check on every pull request;
+  `check-spdx.sh`, `check-unused.sh`, `scan-build.sh` and the
+  documentation check on every pull request;
   run them before handing work over, as the `pre-submit` skill says.
   Shell that a workflow runs lives in `.github/scripts/`, not inline in
   the workflow file.

@@ -17,6 +17,8 @@
 #include "bpm_oci.h"
 #include "bpm_tree.h"
 
+struct trusted_set;
+
 struct bpm_index_entry {
 	char name[BPM_MAX_NAME];
 	char version[BPM_MAX_NAME];
@@ -71,9 +73,12 @@ int bpm_upatch_pair(const char *name, size_t len, char *out, size_t cap);
 
 typedef int (*bpm_pkg_member_fn)(void *ctx, const char *member, char type);
 
-/* Visit validated package-relative ustar members without extracting them. */
-int bpm_pkg_visit_members(const char *archive, const char *package_dir,
-			  bpm_pkg_member_fn visit, void *ctx);
+/*
+ * Visit validated package-relative ustar members without extracting them,
+ * reading the archive from the start of fd, which it leaves open.
+ */
+int bpm_pkg_visit_members_fd(int fd, const char *package_dir,
+			     bpm_pkg_member_fn visit, void *ctx);
 
 /*
  * Read one member of a gzip'd ustar .bee into an xmalloc'd buffer of
@@ -82,6 +87,10 @@ int bpm_pkg_visit_members(const char *archive, const char *package_dir,
  * reports it otherwise.
  */
 int bpm_pkg_read_member_in(const char *archive, const char *member,
+			   const char *package_dir, char *found_dir,
+			   size_t found_dir_sz, __u8 **out,
+			   size_t *out_len, size_t max);
+int bpm_pkg_read_member_fd(int fd, const char *member,
 			   const char *package_dir, char *found_dir,
 			   size_t found_dir_sz, __u8 **out,
 			   size_t *out_len, size_t max);
@@ -94,14 +103,39 @@ int bpm_pkg_read_member(const char *archive, const char *member,
 int bpm_pkg_extract(const char *archive, const char *dest);
 int bpm_pkg_load_info(const char *archive, struct bpm_package_info *info);
 
+/* Room for the manifest of a tree publication, in bytes. */
+#define BPM_TREE_MANIFEST_CAP	8192u
+
+/*
+ * The manifest of a tree publication whose payload and signature are the
+ * layers payload and sig, as bpm tree append writes it, into out of cap
+ * bytes with its length in *len. 0 or -errno.
+ */
+int bpm_tree_manifest(const struct bpm_descriptor *payload,
+		      const struct bpm_descriptor *sig, char *out, size_t cap,
+		      size_t *len);
+
 /*
  * Fetch the signed tree publication at repository:reference, check every
- * layer against its descriptor and the payload against cert_path, and
- * parse it. -ENOENT when the reference does not exist yet.
+ * layer against its descriptor and the payload against trusted, or
+ * cert_path when trusted is NULL, and
+ * parse it. The manifest must be exactly bpm_tree_manifest() of its two
+ * layers, -EBADMSG otherwise, so that the digest a node records and a
+ * successor names follows from the signed layers alone. -ENOENT when the
+ * reference does not exist yet.
+ * bpm_tree_fetch_document() stops before the parse and hands over the
+ * checked bytes, which the caller frees with bpm_buffer_free().
  */
+int bpm_tree_fetch_document(struct bpm_oci_client *c,
+			    const char *repository, const char *reference,
+			    const char *cert_path,
+			    const struct trusted_set *trusted,
+			    struct bpm_buffer *payload,
+			    char *manifest_digest, size_t digest_sz);
 int bpm_tree_fetch_publication(struct bpm_oci_client *c,
 			       const char *repository, const char *reference,
 			       const char *cert_path,
+			       const struct trusted_set *trusted,
 			       struct tree_publication *pub,
 			       char *manifest_digest, size_t digest_sz);
 

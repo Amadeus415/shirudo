@@ -8,9 +8,10 @@
 status JSON
 ===========
 
-``shirudo status --json`` prints one JSON object on one line. The same
-object is the body of the status keepalive that ``status --otel``
-sends, see :doc:`otlp`. Options and exit status are in
+``shirudo status --json`` prints one JSON object on one line. The
+status keepalive that ``status --otel`` sends carries a smaller record,
+the keepalive body that ``status --keepalive`` prints, see :doc:`otlp`.
+Options, exit status and the keys of the keepalive body are in
 :doc:`/reference/cli/status`. How to read a report is in
 :doc:`/operate/run/read-status`.
 
@@ -62,15 +63,11 @@ determined, as noted.
        for ``ok``, see `Reasons`_.
    * - ``conditions``
      - array of object
-     - Six conditions, each with ``type``, ``status`` and ``detail``,
+     - Seven conditions, each with ``type``, ``status`` and ``detail``,
        see `Conditions`_.
    * - ``lsm_attached``
      - boolean
      - ``true`` when the pin ``/run/shirudo/bpffs/lsm_link`` opens.
-   * - ``mode``
-     - string
-     - ``production`` when ``lsm_attached`` is ``true``, else
-       ``inactive``.
    * - ``keyring_mode``
      - string
      - ``bpf`` when the ``.bpf`` keyring is present, else ``none``.
@@ -114,7 +111,7 @@ determined, as noted.
        see `Keyrings`_.
    * - ``dm_verity_keyring``
      - object
-     - The ``.dm-verity`` keyring, the config certificate and its key,
+     - The ``.dm-verity`` keyring, its config certificates and their keys,
        see `Keyrings`_.
    * - ``signing_key_present``
      - boolean
@@ -131,6 +128,11 @@ determined, as noted.
      - Attempts counted this boot, refused except ``SealSignal``, see
        `tamper_attempts`_. ``null``
        until ``init`` has pinned the counters.
+   * - ``integrity_attempts``
+     - object or ``null``
+     - Changes or reads of the running kernel refused this boot, see
+       `integrity_attempts`_. ``null`` until ``init`` has pinned the
+       counters.
    * - ``config``
      - object or ``null``
      - Config image activation, see `config`_. ``null`` on a host
@@ -157,13 +159,15 @@ Verdicts
    * - ``status``
      - Condition
    * - ``tampered``
-     - The live register differs from the eventlog replay, the
-       ``.bpf`` or ``.dm-verity`` keyring's serial differs from the
-       pinned serial, a keyring ``init`` pinned is gone, a keyring holds
-       a link ``init`` did not freeze, the config key ``init`` froze is
-       gone from ``.dm-verity``, a upatch is pinned or archived without
-       a record of this boot, or the selected config cannot be verified against its
-       activation records.
+     - The live register differs from the eventlog replay, the archive
+       of a loaded XDP upatch differs from what was loaded, a loaded
+       upatch is missing a link or its archive, a upatch is pinned or
+       archived without a record of this boot, the selected config
+       cannot be verified against its activation records, a keyring
+       ``init`` pinned is gone, the ``.bpf`` or ``.dm-verity`` keyring's
+       serial differs from the pinned serial, a keyring holds a link
+       ``init`` did not freeze, or the config key ``init`` froze is gone
+       from ``.dm-verity``.
    * - ``lsm-off``
      - The LSM link is not pinned. Enforcement is off.
    * - ``init-pending``
@@ -172,7 +176,8 @@ Verdicts
      - A config activation is pending until the next reboot.
    * - ``degraded``
      - No register is bound this boot: no TPM answered, or the NV index
-       is not written.
+       is not written. Or a device an XDP upatch selects does not run
+       it.
    * - ``ok``
      - None of the above.
 
@@ -182,7 +187,8 @@ Reasons
 ``reason`` is ``null`` for ``ok`` and otherwise one of these strings.
 For ``tampered`` it names the first cause that applies, in the order
 listed. For ``degraded`` it is ``no TPM answered`` when no TPM
-answered, else ``no register bound this boot``.
+answered, ``no register bound this boot`` when no register is bound,
+else ``a device an XDP upatch selects does not run it``.
 
 .. list-table::
    :header-rows: 1
@@ -193,7 +199,14 @@ answered, else ``no register bound this boot``.
    * - ``tampered``
      - ``live register differs from the eventlog replay``
    * -
+     - ``the archive of a loaded XDP upatch differs from what was
+       loaded``
+   * -
+     - ``a loaded upatch is missing a link or its archive``
+   * -
      - ``a upatch is pinned or archived without a record of this boot``
+   * -
+     - ``this boot's records do not fold to the measurement register``
    * -
      - ``the selected config cannot be verified against its records``
    * -
@@ -218,15 +231,19 @@ answered, else ``no register bound this boot``.
      - ``no register bound this boot``
    * -
      - ``no TPM answered``
+   * -
+     - ``a device an XDP upatch selects does not run it``
 
 Conditions
 ----------
 
-``conditions`` always holds these six types, in this order. ``status``
+``conditions`` always holds these seven types, in this order. ``status``
 is ``OK``, ``WARN`` or ``ALERT``. ``<serial>``, ``<n>`` and ``<root>``
 stand for a keyring serial, a number of links and the first 12 hex
 digits of the config root hash. ``KeyringSealed`` reports the first of
-its details that applies, in the order listed.
+its details that applies, in the order listed. A detail is at most 191
+bytes: a longer one, such as a long list of names, is cut and ends with
+``...``.
 
 .. list-table::
    :header-rows: 1
@@ -266,7 +283,7 @@ its details that applies, in the order listed.
      - ``the dm-verity keyring holds <n> link(s) init did not freeze``
    * -
      - ``ALERT``
-     - ``the config key init froze is gone from the dm-verity keyring``
+     - ``a config key init froze is gone from the dm-verity keyring``
    * -
      - ``OK``
      - ``bpf serial <serial>, dm-verity serial <serial>, pins match``
@@ -302,8 +319,20 @@ its details that applies, in the order listed.
      - ``WARN``
      - ``pins not checked against the records: <error>``
    * -
+     - ``WARN``
+     - ``links or archives not checked: <error>``
+   * -
+     - ``ALERT``
+     - ``<n> XDP archives differ from the loaded payload: <names>``
+   * -
+     - ``ALERT``
+     - ``<n> upatches are missing a link or their archive: <names>``
+   * -
      - ``ALERT``
      - ``<n> pinned or archived without a record of this boot: <names>``
+   * -
+     - ``ALERT``
+     - ``this boot's records do not fold to the measurement register``
    * - ``TpmMeasured``
      - ``OK``
      - ``NV index 0x01818E00 readable``
@@ -334,6 +363,16 @@ its details that applies, in the order listed.
      - ``ALERT``
      - ``the config PCR, activation records and mounted config
        disagree``
+   * - ``XdpCovered``
+     - ``OK``
+     - ``every device an XDP upatch selects runs it``
+   * -
+     - ``WARN``
+     - ``<n> selected devices run without their XDP upatch: <upatch>
+       on <device> (<why>), ...``
+   * -
+     - ``WARN``
+     - ``XDP coverage not checked: <error>``
 
 Keyrings
 --------
@@ -369,7 +408,7 @@ recorded its serial: every key of ``.bpf`` and the config key of
    * - ``certs``
      - array of object
      - The certificates the keyring should hold: the trusted set for
-       ``.bpf``, the config certificate the runtime image names for
+       ``.bpf``, the config certificates the runtime image names for
        ``.dm-verity``. Each is described below.
    * - ``other_links``
      - array of object
@@ -487,10 +526,6 @@ assets
      - integer or ``null``
      - ``.upatch`` files in ``/var/lib/shirudo/upatches``. ``null``
        when the directory is absent.
-   * - ``incoming``
-     - integer or ``null``
-     - Entries in ``/var/lib/shirudo/incoming``. ``null`` when the
-       directory is absent.
    * - ``bpffs_mounted``
      - boolean
      - ``/run/shirudo/bpffs`` is the root of a bpffs mount, not
@@ -516,6 +551,14 @@ tamper_attempts
 
 The counters live in a pinned BPF map under ``/run/shirudo/bpffs`` and
 start at zero at every boot.
+
+integrity_attempts
+------------------
+
+The same two fields as `tamper_attempts`_, ``total`` and ``counters``,
+for the integrity counters, which :doc:`/security/integrity-counters`
+lists. They live in their own pinned map and start at zero at every
+boot.
 
 config
 ------
@@ -635,7 +678,9 @@ upatch_tree
        replayed.
    * - ``eventlog_matches_state``
      - boolean or ``null``
-     - The replay equals ``projection_root``.
+     - The replay equals ``projection_root``; ``false`` when the tree
+       state cannot be read, as the keepalive's ``tree_log_mismatch``
+       has it, and ``null`` when the log cannot be replayed.
 
 :doc:`bpm-formats` defines the tree state.
 
@@ -670,8 +715,9 @@ Optional blocks
 ``status`` sizes its output buffer from the options, the eventlog size
 and the number of loaded upatches, at most 8 MiB. A document that does
 not fit is not printed: ``status`` writes ``status: json encode failed:
-<reason>`` to standard error, nothing to standard output, sends no
-keepalive and exits 1.
+<reason>`` to standard error, nothing to standard output, and exits 1.
+With ``--otel`` the keepalive is sent all the same: it does not carry
+this document.
 
 Fields to alert on
 ------------------
@@ -697,6 +743,13 @@ Fields to alert on
      - The counter that moved names the refused action,
        :doc:`/security/tamper-counters`.
    * - ``tamper_attempts``
+     - ``null`` on a target
+     - ``init`` has not pinned the counters this boot.
+   * - ``integrity_attempts.total``
+     - rises
+     - The counter that moved names the refused change of the running
+       kernel, :doc:`/security/integrity-counters`.
+   * - ``integrity_attempts``
      - ``null`` on a target
      - ``init`` has not pinned the counters this boot.
    * - ``lsm_attached``
@@ -782,10 +835,14 @@ indented here:
          "type": "ConfigActive",
          "status": "OK",
          "detail": "config 6d5ed552f448.. is active"
+       },
+       {
+         "type": "XdpCovered",
+         "status": "OK",
+         "detail": "every device an XDP upatch selects runs it"
        }
      ],
      "lsm_attached": true,
-     "mode": "production",
      "keyring_mode": "bpf",
      "keyring_present": true,
      "keyring_serial": 272801410,
@@ -877,11 +934,10 @@ indented here:
        "eventlog": true,
        "eventlog_bytes": 2324,
        "upatches": 1,
-       "incoming": 0,
        "bpffs_mounted": true
      },
      "tamper_attempts": {
-       "total": 35,
+       "total": 28,
        "counters": {
          "LoadNotLoader": 15,
          "LoadUnsigned": 0,
@@ -909,7 +965,7 @@ indented here:
          "SealSetattr": 0,
          "SealXattr": 0,
          "SealLabel": 0,
-         "SealPtrace": 7,
+         "SealPtrace": 0,
          "SealPerf": 0,
          "ExecTraced": 0,
          "SealEntry": 2,
@@ -919,7 +975,13 @@ indented here:
          "Kexec": 0,
          "TpmExtend": 0,
          "ObjGet": 0,
-         "SealSignal": 0
+         "SealSignal": 0,
+         "SealCoreDump": 0,
+         "SealUprobe": 0,
+         "ExecShared": 0,
+         "XattrHandle": 0,
+         "Lockdown": 0,
+         "SealRlimit": 0
        }
      },
      "config": {
@@ -964,7 +1026,7 @@ of the same target read:
 .. code-block:: json
 
    {
-     "total": 51,
+     "total": 44,
      "counters": {
        "LoadNotLoader": 27, "LoadUnsigned": 0, "LoadUnverified": 0, "LoadKeyringKind": 0,
        "LoadKeyring": 0, "MapCreate": 1, "MapWrite": 0, "MapFdWrite": 0,
@@ -972,10 +1034,11 @@ of the same target read:
        "ExeIdentity": 0, "KeyringWrite": 0, "PinUnlink": 1, "PinRename": 0,
        "PinXattr": 0, "BpffsUmount": 1, "BpffsUmountAbove": 0, "BpffsMount": 0,
        "SealWrite": 1, "SealUnlink": 0, "SealRename": 0, "SealSetattr": 0,
-       "SealXattr": 0, "SealLabel": 0, "SealPtrace": 7, "SealPerf": 0,
+       "SealXattr": 0, "SealLabel": 0, "SealPtrace": 0, "SealPerf": 0,
        "ExecTraced": 0, "SealEntry": 0, "PerfAttach": 0, "PinEntry": 0,
        "SealCopyUp": 0, "Kexec": 0, "TpmExtend": 0, "ObjGet": 1,
-       "SealSignal": 0
+       "SealSignal": 0, "SealCoreDump": 0, "SealUprobe": 0,
+       "ExecShared": 0, "XattrHandle": 0, "Lockdown": 0, "SealRlimit": 0
      }
    }
 

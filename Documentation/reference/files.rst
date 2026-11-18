@@ -61,6 +61,12 @@ Operator host
      - none
      - The compiler ``shirudo-build`` executes for ``.bpf.c`` input,
        clang 23.
+   * - ``$(bindir)/shirudo-quote-check``
+     - operator package, ``make install-operator``
+     - ``0755``
+     - Checks keepalive quotes for a telemetry backend. A static PIE.
+       It reads standard input alone and writes no file. See
+       :doc:`/reference/cli/quote-check`.
    * - ``/tmp/shirudo-build-XXXXXX.bpf.o``
      - ``build``
      - none
@@ -122,11 +128,6 @@ the label as foreign. In the initrd, ``init`` binds
      - ``0644``
      - Archive of every loaded upatch, restored by ``init`` at boot.
        ``upatch unload`` and a revocation purge remove it.
-   * - ``incoming/load-<pid>.upatch``
-     - ``upatch load``, ``upatch unload``
-     - ``0600``
-     - The one copy of the artifact an operation reads. Removed when it
-       ends.
    * - ``eventlog``
      - measuring commands
      - ``0600``
@@ -166,12 +167,18 @@ the label as foreign. In the initrd, ``init`` binds
    * - ``bpm/upatch-tree/state.json``
      - ``bpm tree sync``
      - ``0600``
-     - Tree cursor: tree id, generation, last sequence number,
-       projection root, manifest digest.
+     - Tree cursor: tree id, last sequence number and projection root,
+       and the generation, manifest digest and head of the publication
+       the target last accepted.
    * - ``bpm/upatch-tree/tree-eventlog``
      - ``bpm tree sync``
      - ``0600``
      - Append-only record of applied tree operations.
+   * - ``bpm/upatch-tree/outcomes``
+     - ``bpm tree sync``
+     - ``0600``
+     - One line for every tree operation the target processed, applied
+       or not, with its outcome and the roots after it. Never pruned.
    * - ``bpm/upatch-tree/pending.json``
      - ``bpm tree sync``
      - ``0600``
@@ -189,12 +196,18 @@ the label as foreign. In the initrd, ``init`` binds
      - ``init``, ``image update``
      - ``0600``
      - Config activation record and its event history.
+   * - ``config-update/next-boot``
+     - ``image stage``, ``init``
+     - ``0600``
+     - Candidate config for the next TPM boot and its parent activation
+       sequence and boot counts. Removed on cancellation, successful
+       boot initialization or a live update to a different root.
    * - ``images/<root-hash>.img``, ``.verity``, ``.roothash``, ``.p7s``
-     - ``image update``
+     - ``image update``, ``image stage``
      - ``0600``
      - Fetched config images, named by their dm-verity root hash.
    * - ``images/incoming-XXXXXX/``
-     - ``image update``
+     - ``image update``, ``image stage``
      - none
      - Staging directory of a fetch.
 
@@ -263,8 +276,10 @@ to ``/run/shirudo/runtime/``.
    * - ``etc/shirudo/shirudo.conf``
      - Runtime settings.
    * - ``etc/shirudo/config-cert.der``
-     - Certificate that verifies config image signatures, named by
-       ``config.verification_key``.
+     - First config verification certificate. Additional
+       ``--config-cert`` inputs become ``config-cert-2.der`` and on.
+       The bootstrap's repeated ``config.verification_key`` entries name
+       all allowed certificates.
    * - ``keys/cert.der``
      - The initial BPF signing certificate.
    * - Library paths
@@ -318,8 +333,8 @@ by ``BPF_OBJ_GET`` (``ObjGet``). Directories stay listable.
      - Content
    * - ``lsm_link``
      - Link of ``lsm/bpf``, the ``bpf()`` admission hook. Its presence
-       makes ``status`` report ``Mode: production``.
-   * - ``bpf2_bpf_map_link``, ``bpf2_bpf_prog_load_link``,
+       makes the ``LsmAttached`` condition report ``OK``.
+   * - ``bpf2_bpf_map_link``, ``bpf2_bpf_prog_link``, ``bpf2_bpf_prog_load_link``,
        ``bpf2_inode_unlink_link``, ``bpf2_inode_setxattr_link``,
        ``bpf2_inode_removexattr_link``, ``bpf2_key_permission_link``,
        ``bpf2_tpm_command_link``
@@ -331,7 +346,8 @@ by ``BPF_OBJ_GET`` (``ObjGet``). Directories stay listable.
    * - ``bpf2_task_prctl_link``, ``bpf2_bprm_check_security_link``,
        ``inode_rmdir_link``, ``bpf2_inode_rename_link``,
        ``inode_mkdir_link``, ``inode_symlink_link``, ``inode_link_link``,
-       ``kernel_load_data_link``, ``kernel_read_file_link``
+       ``kernel_load_data_link``, ``kernel_read_file_link``,
+       ``locked_down_link``
      - Links of the exec identity, directory entry and kexec guards.
    * - ``file_ioctl_link``, ``file_ioctl_compat_link``,
        ``bdev_integrity_link``, ``bdev_free_link``
@@ -346,6 +362,9 @@ by ``BPF_OBJ_GET`` (``ObjGet``). Directories stay listable.
    * - ``tamper``
      - Map ``shirudo_tamper``: the tamper counters. See
        :doc:`/security/tamper-counters`.
+   * - ``integrity``
+     - Map ``shirudo_integrity``: the integrity counters. See
+       :doc:`/security/integrity-counters`.
    * - ``task_authority``, ``config_roots``
      - Task storage maps of runtime authority and expected config roots.
    * - ``task_policy``, ``socket_policy``
@@ -370,9 +389,14 @@ written as ``~d``.
    * - Pin
      - Content
    * - ``link``
-     - The link of the only attached program.
+     - The link of the only attached program, when the artifact has no XDP.
    * - ``link_<n>``
-     - The link of attached program ``<n>`` when there are several.
+     - Attachment ``<n>`` when there are several programs or the artifact
+       contains XDP. XDP can produce multiple links per program, ordered
+       by program and then ifindex; skipped devices consume no pin number.
+   * - ``xdp_prog_<i>``
+     - XDP program ``<i>`` of the artifact's signed metadata. It holds the
+       program loaded whatever devices it is attached to.
    * - ``test``
      - A program with the test-run role.
    * - ``serializers/<map>``
@@ -405,6 +429,14 @@ Extended attributes
        bitset. Exec ORs the original file and interpreter values into
        task storage. Only a task with runtime authority may set, update
        or remove it (``SealLabel``).
+   * - ``security.bpf.shirudo.ancestor``
+     - Each directory above ``/var/lib/shirudo`` on its file system,
+       ``/var/lib`` and ``/var`` when the state is on the root file
+       system.
+     - ``1``, set by the run of ``init`` that brings enforcement up. The
+       seal refuses a task without runtime authority a rename of or over
+       a directory that carries it (``SealRename``), and the setting or
+       removal of it on any inode (``SealLabel``).
    * - ``security.bpf.shirudo.payload``
      - Each ``upatches/<bpffs-name>/`` directory in the private bpffs.
      - 32 bytes, the ``payload_sha256`` of the loaded upatch. Set after
@@ -492,10 +524,12 @@ Kernel and system interfaces
 Temporary files
 ---------------
 
-``bpm info`` and ``bpm key`` create ``/tmp/shirudo-bpm-*-XXXXXX``
-files. ``upatch map --s3-uri`` writes a
-snapshot to ``$TMPDIR/shirudo-map-snapshot.XXXXXX`` (``/tmp`` when
-``TMPDIR`` is unset) with mode ``0600``.
+The target commands create none. ``bpm info`` and ``bpm key`` keep a
+downloaded package in a memory file, ``memfd:shirudo-bpm-package``, and
+``upatch map --s3-uri`` its snapshot in ``memfd:shirudo-map-snapshot``:
+a file of ``/tmp`` or of ``TMPDIR``, which root chooses, could be
+created in a sealed directory bound there, with the label and content
+from a registry.
 
 Related
 -------

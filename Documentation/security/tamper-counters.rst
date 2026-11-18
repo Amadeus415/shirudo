@@ -16,6 +16,8 @@ the array map ``shirudo_tamper``, which ``init`` creates, freezes and
 pins at ``/run/shirudo/bpffs/tamper`` at every boot, so they count this
 boot's refusals. No task resets them from userspace; only the hooks add
 to them. Threat T10 of the :doc:`threat-model` explains their purpose.
+Refusals of changes to the running kernel count apart, as
+:doc:`integrity-counters`.
 
 Counters
 --------
@@ -120,7 +122,11 @@ counter.
      - unmount of a mount above the private bpffs
      - ``lsm/sb_umount``: an unmount whose subtree or propagation
        reaches the recorded bpffs mount, or a tree the walk cannot
-       finish, every caller
+       finish, every caller; ``lsm/inode_rmdir``,
+       ``lsm/inode_unlink``, ``lsm/inode_rename``: the removal or rename
+       of the mount point of that mount or of one above it, which
+       detaches or moves the mounts on it in every namespace, to a task
+       without authority
      - ``EPERM``
    * - ``BpffsMount``
      - move, mount over or remount of the private bpffs
@@ -136,8 +142,10 @@ counter.
      - ``lsm.s/inode_unlink``, ``lsm.s/inode_rmdir``
      - ``EACCES``
    * - ``SealRename``
-     - rename of or over a sealed file
-     - ``lsm.s/inode_rename``: a labeled source or victim
+     - rename of or over a sealed file, or of or over a directory above
+       the state root
+     - ``lsm.s/inode_rename``: a labeled source or victim, or one that
+       carries the ``security.bpf.shirudo.ancestor`` mark
      - ``EACCES``
    * - ``SealSetattr``
      - truncate, chmod, chown, utimes or chattr of a sealed file
@@ -151,12 +159,15 @@ counter.
    * - ``SealLabel``
      - seal or policy label changed by another executable
      - ``lsm.s/inode_setxattr`` or ``lsm.s/inode_removexattr``: the exact
-       names ``security.bpf.shirudo`` or
-       ``security.bpf.shirudo.policy`` on any inode
+       names ``security.bpf.shirudo``, ``security.bpf.shirudo.policy`` or
+       ``security.bpf.shirudo.ancestor`` on any inode
      - ``EACCES``
    * - ``SealPtrace``
      - ptrace of a shirudo task
-     - ``lsm/ptrace_access_check``
+     - ``lsm/ptrace_access_check``: an access mode that includes
+       ``PTRACE_MODE_ATTACH``, such as ``ptrace(2)`` attach,
+       ``/proc/<pid>/mem``, ``process_vm_readv(2)`` and
+       ``pidfd_getfd(2)``
      - ``EACCES``
    * - ``SealPerf``
      - perf event bound to a shirudo task
@@ -200,20 +211,69 @@ counter.
        from any caller
      - ``EACCES``
    * - ``ObjGet``
-     - pin, map or link opened by another executable
+     - pin, map, link or XDP program opened by another executable
      - ``lsm/bpf``: ``BPF_OBJ_GET``, ``BPF_MAP_GET_FD_BY_ID``,
        ``BPF_LINK_GET_FD_BY_ID``; ``lsm/bpf_map``: a read-only
-       descriptor; ``lsm/file_open`` in the ``bpf2`` object: a
+       descriptor; ``lsm/bpf_prog``: an XDP program descriptor;
+       ``lsm/file_open`` in the ``bpf2`` object: a
        non-directory inode in the private bpffs
      - ``EACCES``
    * - ``SealSignal``
      - signal to a shirudo task (let through)
      - ``lsm/task_kill``: a signal other than 0 to a marked task from a
-       task without authority; the signal is delivered
+       task without authority; the signal is delivered. The kernel's
+       own signals pass no hook and are not counted: ``SIGKILL`` from
+       ``cgroup.kill`` or the OOM killer, ``SIGPIPE`` on a pipe whose
+       reader is gone. Nor is the cgroup freezer, which stops a task
+       without a signal
      - none
+   * - ``SealCoreDump``
+     - core dump of a shirudo task, which acts without authority
+     - Any hook that asks for runtime authority, the first time a
+       marked task that is dumping core asks: the task loses its
+       authority for good, and the hook refuses the operation and moves
+       its own counter
+     - the hook's
+   * - ``SealUprobe``
+     - uprobe in a shirudo task, which acts without authority
+     - Any hook that asks for runtime authority, the first time a
+       marked task whose memory a uprobe reached asks: the task loses
+       its authority for good, and the hook refuses the operation and
+       moves its own counter
+     - the hook's
+   * - ``XattrHandle``
+     - XFS attribute change by file handle, which passes no xattr hook
+     - ``lsm/file_ioctl``, ``lsm/file_ioctl_compat``:
+       ``XFS_IOC_ATTRMULTI_BY_HANDLE`` on an XFS file system, reads
+       included, from a task without authority
+     - ``EACCES``
+   * - ``ExecShared``
+     - exec of the runtime binary by a task that shares its file system
+       context
+     - ``lsm.s/bprm_check_security``: an exec of the runtime binary
+       while another process shares the task's root and working
+       directory (``CLONE_FS``)
+     - ``EACCES``
+   * - ``SealRlimit``
+     - resource limit of a shirudo task changed by another task
+     - ``lsm/task_setrlimit``: ``prlimit`` on a marked task from a task
+       without authority, which could have the kernel stop it with
+       ``SIGXFSZ`` or ``SIGXCPU``
+     - ``EPERM``
 
 Unless the row says every caller, a task with runtime authority is
 not refused and moves nothing.
+
+.. note::
+
+   Every ptrace mode against a shirudo task is refused, but only an
+   attach-mode access is counted. A read-mode probe, such as journald
+   reading ``/proc/<pid>/exe`` for a log line or ``ps`` reading
+   ``/proc/<pid>/stat``, or a read of ``environ``, ``maps`` or the
+   ``fd`` links, is refused silently: the caller gets ``EACCES`` and may
+   log it, but ``SealPtrace`` and the keepalive do not move. Honest
+   system services make read-mode checks against every process that
+   logs, so counting them would make a healthy node read as tampered.
 
 Refusals without a counter
 --------------------------
@@ -248,6 +308,10 @@ counter:
    * - Exec of a runtime file under a seccomp filter, and an exec for
        which task storage cannot be allocated
      - ``lsm.s/bprm_check_security``
+   * - A read-mode ptrace access check against a shirudo task, such as
+       a read of ``/proc/<pid>/exe``, ``environ``, ``maps`` or the
+       ``fd`` links, ``kcmp(2)`` and ``process_madvise(2)``
+     - ``lsm/ptrace_access_check``
    * - A fork that cannot copy a task mark
      - ``lsm/task_alloc``
    * - A new inode under a marked directory that cannot receive the
@@ -282,10 +346,10 @@ count and its meaning. It prints ``none`` when every counter is zero,
 in ``counters``, so a collector's keys stay the same from one record to
 the next. The value is ``null`` before ``init`` has pinned the map.
 
-The keepalive, ``shirudo status --otel``, sends the same status as an
-OTLP log record and adds the total as the attribute
-``shirudo.tamper_attempts``. The attribute is absent when the counters
-cannot be read.
+The keepalive, ``shirudo status --otel``, carries every counter in the
+``tamper`` list of its body, zeros included and in the order of this
+page, and the TPM quotes the body. The list is ``null``, and bit 3 of
+the body's ``flags`` set, when the counters cannot be read.
 
 What a non-zero counter means
 -----------------------------
@@ -293,8 +357,14 @@ What a non-zero counter means
 A counter that moved means that a guard refused an operation this boot.
 The refusal is what moved it: the operation did not happen. The one
 exception is ``SealSignal``, which counts a signal the seal delivered:
-the task it went to may have been stopped, and the next upatch command
-and ``shirudo status`` find what a stopped load left.
+the task it went to may have been stopped, and the next upatch load or unload
+and ``shirudo status`` find what a stopped load left. ``SealCoreDump``
+counts a shirudo task that dumped core, after a crash or after an exec
+that failed past its point of no return, which root can bring about
+with a small stack limit; the dump did not get the task's authority.
+``SealUprobe`` counts a shirudo task whose memory a uprobe reached, one
+that root set through tracefs or perf on the runtime binary or on a
+library it maps.
 
 A non-zero counter does not mean:
 
@@ -318,5 +388,6 @@ evidence. To act on a counter, see
 Related
 -------
 
+- :doc:`integrity-counters` for the attempts on the running kernel
 - :doc:`threat-model`, threat T10, for the purpose and the limits
 - :doc:`/internals/enforcement` for the hooks

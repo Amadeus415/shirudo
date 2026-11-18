@@ -60,14 +60,14 @@ What shirudo provides
    * - Attempts leave a trace
      - Guards count their refusals in a frozen map that ``shirudo
        status`` and the keepalive report.
-     - Some refusals move no counter; telemetry is not authenticated.
+     - Some refusals move no counter; telemetry is the target's own
+       account.
      - :ref:`T10 <tm-t10>`, R17
    * - Delivered content is authentic
      - Indexes, tree publications and configs are signed; the kernel
        verifies loaders and config roots.
-     - A registry can withhold and replay; any key the kernel trusts for
-       dm-verity signs a config.
-     - :ref:`T7 <tm-t7>`, :ref:`T11 <tm-t11>`, R8, U2
+     - A registry can withhold and replay signed content.
+     - :ref:`T7 <tm-t7>`, :ref:`T11 <tm-t11>`, R8
 
 Main adversary
 --------------
@@ -95,9 +95,8 @@ The properties above hold only on a deployment that provides the
 
 - A trusted kernel with the BPF LSM, the signed-loader ABI and the
   carried kernel patches
-- Module signature enforcement and lockdown in integrity mode, no
-  32-bit compatibility, no hibernation and no writes under mounted
-  file systems
+- Module signatures, no 32-bit compatibility, no resume device in the
+  UKI and no writes under mounted file systems
 - Secure Boot with a signed, measured UKI and an authenticated kernel
   command line
 - A kernel whose dm-verity trust path consults only keys trusted to

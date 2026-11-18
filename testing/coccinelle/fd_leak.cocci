@@ -2,10 +2,11 @@
 // Copyright (c) 2026 Authors of shirudo
 //
 // A descriptor that was opened is closed, returned, stored or handed to
-// what closes it (fdopen(), fdopendir(), a BIO with BIO_CLOSE) on every
-// path out of the function once the open succeeded. A leak on an error
-// path goes unnoticed in a one-shot command until a loop or a retry
-// runs out of descriptors, and keeps open what it should not.
+// what closes it (fdopen(), fdopendir(), gzdopen(), a BIO with
+// BIO_CLOSE) on every path out of the function once the open succeeded.
+// A leak on an error path goes unnoticed in a one-shot command until a
+// loop or a retry runs out of descriptors, and keeps open what it should
+// not.
 
 virtual report
 
@@ -36,6 +37,7 @@ if (\(fd < 0\|fd == -1\)) S
     when != if (fd >= 0) S1
     when != fdopen(fd, ...)
     when != fdopendir(fd)
+    when != gzdopen(fd, ...)
     when != BIO_new_fd(fd, BIO_CLOSE)
     when != \(_exit\|exit\|abort\)(...)
 (
@@ -68,6 +70,7 @@ if (\(fd < 0\|fd == -1\)) S
     when != if (fd >= 0) S1
     when != fdopen(fd, ...)
     when != fdopendir(fd)
+    when != gzdopen(fd, ...)
     when != BIO_new_fd(fd, BIO_CLOSE)
     when != \(_exit\|exit\|abort\)(...)
 (

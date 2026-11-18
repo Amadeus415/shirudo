@@ -62,7 +62,7 @@ What is signed
      - None beyond the archive digest.
    * - Tree publication document
      - Detached CMS signature over the exact document bytes.
-     - ``bpm tree sync``, against the runtime image's initial certificate.
+     - ``bpm tree sync``, against the active config's non-revoked BPF signer set.
    * - Tree artifact manifest and ``.upatch`` layer
      - Not signed. Each signed operation pins them by
        ``manifest_digest``, ``layer_digest`` and ``payload_sha256``.
@@ -74,7 +74,8 @@ What is signed
 The detached signatures use the same CMS profile as the ``.upatch``
 signature: DER ``SignedData``, no encapsulated content, no certificates,
 ML-DSA-87, signer named by subject key identifier. The verifier checks it
-against the one configured certificate without a validity-time check.
+without a validity-time check: against the repository certificate for
+an index, or any active, enrolled BPF signer for a tree publication.
 
 Names
 -----
@@ -336,7 +337,20 @@ Tree objects in the registry
        ``--reference`` names another tag. OCI image manifest,
        ``schemaVersion`` 2, ``artifactType``
        ``application/vnd.shirudo.upatch.tree.v1``, the empty config, and
-       exactly one document layer and one signature layer.
+       exactly one document layer and one signature layer, in that order.
+       Its bytes are exactly those ``bpm tree append`` writes: compact
+       JSON with the keys ``schemaVersion``, ``mediaType``,
+       ``artifactType``, ``config`` and ``layers`` in this order, and each
+       descriptor's ``mediaType``, ``digest`` and ``size``. A target and
+       ``bpm tree append`` refuse a manifest in any other form, so that the
+       manifest digest a target records and a successor names as its
+       parent or segment follows from the two signed layers.
+   * - Sealed segment
+     - A publication manifest that a later segment names in
+       ``base.segment_manifest_digest``, unchanged since it was the
+       current one. Tagged ``segment-<k>``, ``k`` counting the sealed
+       segments from 1, only so that registry garbage collection keeps
+       it; targets fetch it by digest and never read the tag.
    * - Document layer
      - The publication document, media type
        ``application/vnd.shirudo.upatch.tree.v1+json``.
@@ -361,7 +375,9 @@ Publication document
     "tree_id": "<tree-id>",
     "generation": <n>,
     "parent_manifest_digest": "sha256:<hex>",
-    "base": {"seq": 0},
+    "base": {"seq": <b>,
+             "segment_manifest_digest": "sha256:<hex>",
+             "history_root": "<hex>"},
     "operations": [<operation>, ...],
     "head": {"seq": <n>}}
 
@@ -382,10 +398,19 @@ Publication document
      - Digest of the publication manifest this one replaces. Absent in
        the first publication.
    * - ``base.seq``
-     - Required. The target accepts only 0.
+     - Required. 0 for the first segment of the tree, otherwise the
+       ``head.seq`` of the sealed segment before it.
+   * - ``base.segment_manifest_digest``
+     - Required when ``base.seq`` is above 0 and refused at 0. Digest of
+       the sealed publication manifest of the segment before this one.
+   * - ``base.history_root``
+     - Required when ``base.seq`` is above 0 and refused at 0. 64 hex
+       digits: the ``history_root`` every node's ``outcomes`` record
+       holds at ``base.seq``, see `Node records`_.
    * - ``operations``
      - Required. At most 512. Each ``seq`` is one more than the previous
-       one, and the first is ``base.seq + 1``.
+       one, and the first is ``base.seq + 1``. At least one when
+       ``base.seq`` is above 0.
    * - ``head.seq``
      - Required. The ``seq`` of the last operation, or ``base.seq`` when
        there is none. Below 2\ :sup:`63` - 1.
@@ -403,6 +428,7 @@ Operation
                  "manifest_digest": "sha256:<hex>",
                  "layer_digest": "sha256:<hex>",
                  "payload_sha256": "sha256:<hex>"},
+    "fixes": ["<advisory-id>", ...],
     "operation_digest": "sha256:<hex>"}
 
 .. list-table::
@@ -428,6 +454,19 @@ Operation
      - Digest of the ``.upatch`` layer.
    * - ``artifact.payload_sha256``
      - ``sha256:`` and the artifact's header ``payload_sha256``.
+   * - ``fixes``
+     - Optional, on an ``add`` only: the IDs of the advisories the upatch
+       fixes, 1 to 16 strings of 1 to 255 bytes of letters, digits,
+       ``.``, ``_``, ``:`` and ``-``, each once, in byte order. A
+       convention of the keepalive backend, not of shirudo: the CMS
+       signature covers it, the operation digest does not, and the target
+       never reads, checks or measures it, so a malformed one never makes
+       a node refuse the publication. ``bpm tree append`` writes it after
+       ``artifact`` from the Beefile's ``fixes``
+       (:doc:`/upatches/publish/beefile`), leaves it out when the list is
+       empty, carries every earlier operation's list into the next
+       generation unchanged, and refuses to append to a publication whose
+       list breaks these rules.
    * - ``operation_digest``
      - ``sha256:`` and the SHA-256 of the canonical operation, see
        `Operation digest`_.
@@ -478,7 +517,7 @@ Operation digest
 ~~~~~~~~~~~~~~~~
 
 ``operation_digest`` is the SHA-256 of the compact JSON of the operation
-without ``operation_digest``, in this form:
+without ``operation_digest`` and ``fixes``, in this form:
 
 - Keys in the order ``seq``, ``op``, ``id``, ``selector``, ``artifact``.
 - ``selector`` keys in byte order: ``architecture``, ``kconfig``,
@@ -504,13 +543,27 @@ Target acceptance
 #. The signature verifies against the runtime image's initial
    certificate.
 #. The document parses with the rules above, ``tree_id`` is a package
-   name, ``base.seq`` is 0, and every operation has a valid ``id``,
-   ``op`` and digests and a correct ``operation_digest``.
+   name, and every operation has a valid ``id``, ``op`` and digests and a
+   correct ``operation_digest``.
 #. ``tree_id`` equals the one the node recorded.
 #. A publication other than the recorded one has a higher
    ``generation``. A direct successor that names a
    ``parent_manifest_digest`` names the recorded manifest.
 #. ``head.seq`` is not below the node's last applied ``seq``.
+#. When ``base.seq`` lies past the node's last applied ``seq``, 0 for a
+   node without a state, the node walks back to it through the sealed
+   segments, see `Walk`_.
+#. Base check: the ``history_root`` of the node's ``outcomes`` at
+   ``base.seq``, 32 zero bytes at 0, equals ``base.history_root``.
+#. Prefix check: the publication's operation digests, folded from
+   ``base.history_root`` up to the node's last applied ``seq``, give the
+   node's ``history_root`` there. This applies to every publication, so
+   a registry that serves operations other than the ones a node already
+   processed, inside a segment or at its base, is refused with
+   ``EKEYREJECTED``.
+
+The node then records the publication, see `Node records`_, and processes
+the operations after its last applied ``seq``.
 
 For each new operation whose selector matches, the target then fetches the
 artifact manifest by ``manifest_digest``, takes the layer with
@@ -518,6 +571,34 @@ artifact manifest by ``manifest_digest``, takes the layer with
 checks its digest and size, and refuses the ``.upatch`` unless its header
 ``payload_sha256`` equals ``artifact.payload_sha256``, its ``name`` equals
 ``id`` and it is an unload directive exactly when ``op`` is ``delete``.
+
+Walk
+~~~~
+
+A node behind the segment that ``<reference>`` names fetches back to the
+segment its last applied ``seq`` lies in, then applies the segments
+forwards. It keeps the manifest digest, ``base.seq``, ``head.seq`` and
+``generation`` of each segment, not the documents.
+
+#. While the oldest segment so far starts past the node's last applied
+   ``seq``, the node refuses the sync when the distance between the two
+   exceeds the walk limit (``E2BIG``), see `Limits`_, then fetches
+   ``manifests/<base.segment_manifest_digest>``. The sealed segment must
+   pass checks 1 to 3 above, hash to that digest, have the same
+   ``tree_id``, end at its successor's ``base.seq`` and have a lower
+   ``generation`` (``ERANGE``). A segment the registry does not serve
+   refuses the sync; the node never skips ahead.
+#. Oldest first, the node fetches each sealed segment again by its
+   digest and checks it as before, then runs checks 4 to 9 and applies
+   it as above. The segment ``<reference>`` names, which the walk holds,
+   comes last.
+
+An operation left in progress is completed against the oldest segment of
+the walk alone: the node records a segment before it processes it, so the
+operation lies in the segment its state names. ``state.json`` moves at
+each applied operation and at each segment recorded, so a walk that stops
+resumes with a shorter one. A reboot never walks: ``init`` reads
+``state.json`` alone.
 
 Node records
 ~~~~~~~~~~~~
@@ -532,10 +613,21 @@ not published.
    * - File
      - Content
    * - ``state.json``
-     - JSON object with ``schema`` (1), ``tree_id``, ``generation`` and
-       ``manifest_digest`` of the last applied publication, ``last_seq``,
-       ``projection_root`` and ``projection_root_tpm``. ``last_seq`` also
-       moves past operations whose selector does not match.
+     - JSON object with ``schema`` (1), ``tree_id``, ``generation``,
+       ``manifest_digest``, ``head_seq`` and ``segment_base_seq`` of the
+       publication the node last accepted, ``last_seq``,
+       ``projection_root`` and ``projection_root_tpm``. ``head_seq`` and
+       ``segment_base_seq`` are the publication's ``head.seq`` and
+       ``base.seq``. A sync records a publication, each segment of a walk
+       in turn, once it passes the checks above and an interrupted
+       operation is completed, before it processes the first new
+       operation of it, so a sync that stops among them leaves
+       ``last_seq`` from ``segment_base_seq`` to ``head_seq`` and the
+       node refuses
+       an older generation from then on. ``last_seq`` also moves past
+       operations whose selector does not match. A state without one of
+       ``tree_id``, ``last_seq``, the two roots, ``head_seq`` and
+       ``segment_base_seq`` is refused.
    * - ``tree-eventlog``
      - One JSON object per line and applied operation, with ``schema``
        (1), ``seq``, ``digest`` (the ``operation_digest``) and
@@ -543,12 +635,39 @@ not published.
        previous root followed by the raw operation digest, starting from
        32 zero bytes. A last line without its newline is an append that
        did not finish: the replay skips it and the next append drops it.
+   * - ``outcomes``
+     - One JSON object per line and processed operation, in order from
+       ``seq`` 1, with ``schema`` (1), ``seq``, ``outcome``,
+       ``projection_root`` and ``history_root``. ``outcome`` is 1 for an
+       operation that was applied, 2 for one whose selector did not
+       match and 3 for an ``add`` that was measured but not loaded
+       because of ``attach_target_missing``. ``projection_root`` is the
+       node's projection root after the operation, which an unmatched
+       one leaves where it was. ``history_root`` is the SHA-256 of
+       ``shirudo-tree-history``, a NUL byte, the previous history root
+       and the raw operation digest, starting from 32 zero bytes: it
+       counts every operation, whatever its outcome, so it is the same
+       on every node at the same ``seq``. A line is written and synced
+       to disk before the ``state.json`` that covers it, and a line at
+       or below ``last_seq`` is never rewritten. Lines past ``last_seq``
+       and a last line without its newline are what a sync that stopped
+       left: the next sync drops them before it appends. It then refuses
+       a state with ``last_seq`` above 0 whose ``outcomes`` is missing
+       (``ENOENT``), or has a gap or a malformed line or ends before
+       ``last_seq`` (``EBADMSG``). Nothing rebuilds or prunes the file:
+       the keepalive reads its last 512 operations from it whatever
+       segments held them (:doc:`/reference/cli/status`).
    * - ``pending.json``
      - JSON object with ``schema`` (1), ``seq``, ``id`` and
        ``operation_digest`` while an operation is in progress. The next
        sync completes the operation without applying it again when the
        tree eventlog or this boot's eventlog already records it, and
-       applies it again otherwise. An ``add`` applied again whose upatch
+       applies it again otherwise. Completing it writes the ``outcomes``
+       lines the stopped sync did not commit: outcome 2 for each
+       operation between ``last_seq`` and the pending one, which that
+       sync passed over, then the pending operation's, 3 when it is an
+       ``add`` whose upatch is not loaded, with its ``status/<id>``, and
+       1 otherwise. An ``add`` applied again whose upatch
        a stopped sync already loaded with its payload counts as
        installed.
    * - ``artifacts/<hex>.upatch``
@@ -581,10 +700,31 @@ Limits
      - 512
    * - Tree operations per publication
      - 512
+   * - Tree walk of a node that has processed an operation,
+       ``TREE_MAX_WALK_OPS``
+     - 65,536 operations from its last applied ``seq``
+   * - Tree walk of a node that has processed none, ``TREE_MAX_JOIN_OPS``
+     - 1,048,576 operations from ``seq`` 0
    * - JSON document
      - 8 MiB
    * - Detached signature
      - 64 KiB (writer)
+
+A walk past its limit refuses the sync with ``E2BIG`` before it fetches a
+sealed segment, see `Walk`_. The bound is on the distance from the node's
+last applied ``seq``, not on the size of the tree. A node that has
+applied nothing holds no upatch of the tree yet and is joining, so it
+gets the higher limit; a running node walks holding the bpm lock, which
+stops its keepalive, and gets the lower one. A higher limit only allows
+more verified fetches and never makes a node accept what it would
+otherwise refuse. Join time grows linearly with the tree: each segment
+of a walk costs two fetches of its manifest, document and signature and
+two signature checks, so a node that joins at the limit with the default
+64 operations per segment walks 16,384 segments, about 100,000 registry
+requests, besides fetching, loading and measuring each operation its
+selectors match. Both limits are compile-time defines, settled for now
+and to be revisited by experiment on live clusters; a node further
+behind than its limit is refused every sync of the tree.
 
 Related
 -------

@@ -6,8 +6,9 @@
 # check with file, line, rule and message, one that does not passes it,
 # a rule that can rewrite does with -D patch, a rule reads the headers
 # its #spatch line asks for, on a throwaway repository, each rule taken
-# from CERT C, each BPF hazard rule and each scrub rule report a sample of
-# what they refuse, and the tree itself.
+# from CERT C, each BPF hazard rule, each scrub rule and dead_store report
+# a sample of what they refuse, a file a rule gives up on at its time
+# limit is named rather than failed, and the tree itself.
 
 cd "$(dirname "$0")/.."
 . ./test-lib.sh
@@ -412,6 +413,35 @@ int digest_public(const char *hex)
 		return -EINVAL;
 	return use(digest);
 }
+
+int address_output(const char *hex)
+{
+	__u8 credential[16];
+
+	if (getrandom(&credential, sizeof(credential), 0) < 0)
+		return -EIO;
+	return use(credential);
+}
+
+int partial_scrub(const char *hex)
+{
+	__u8 credential[16];
+
+	if (hex_decode(hex, credential, sizeof(credential))) {
+		memzero_explicit(credential, 1);
+		return -EINVAL;
+	}
+	memzero_explicit(credential, 1);
+	return 0;
+}
+
+void credential_fallthrough(void)
+{
+	__u8 credential[16];
+
+	getrandom(credential, sizeof(credential), 0);
+	use(credential);
+}
 EOF
 }
 
@@ -420,7 +450,7 @@ EOF
 # return before its use, the scrubbed form and the __cleanup() one not.
 write_sensitive_samples() {
 	mkdir -p "$1/include" &&
-	printf 'struct client {\n\tchar name[32];\n\tchar __sensitive password[64];\n};\n' \
+	printf 'struct client {\n\tchar name[32];\n\tchar password[64] __sensitive;\n\tchar token[32] __sensitive;\n};\n' \
 		>"$1/include/client.h" &&
 	cat >"$1/sensitive.c" <<'EOF'
 int client_left(const char *url)
@@ -471,6 +501,17 @@ int client_field(const char *url)
 	memzero_explicit(c.password, sizeof(c.password));
 	return 0;
 }
+
+int client_partial_scrub(const char *url)
+{
+	struct client c = {};
+
+	if (client_parse(url, &c))
+		return -EINVAL;
+	memzero_explicit(&c, 1);
+	return use(&c);
+}
+
 EOF
 }
 
@@ -485,9 +526,149 @@ test_expect_success 'each scrub rule reports its samples and spares the scrubbed
 	write_sensitive_samples "$R4" &&
 	! (cd "$R4" && git add -A && sh "$S") >"$W/out" 2>"$W/err" &&
 	grep -q "2 of 2 rules matched" "$W/err" &&
-	[ "$(grep -c "^scrub_missing: samples.c:" "$W/err")" = 4 ] &&
-	[ "$(grep -c "^sensitive_scrub: sensitive.c:" "$W/err")" = 4 ] &&
-	[ "$(grep -c "^[a-z_]*: " "$W/err")" = 8 ]
+	[ "$(grep -c "^scrub_missing: samples.c:" "$W/err")" = 9 ] &&
+	[ "$(grep -c "^sensitive_scrub: sensitive.c:" "$W/err")" = 6 ] &&
+	[ "$(grep -c "^[a-z_]*: " "$W/err")" = 15 ]
+'
+
+test_expect_success 'curl_slist_free reports lists freed without scrubbing' '
+	R5=$W/curl-slist &&
+	mkdir -p "$R5/testing/coccinelle" &&
+	git init -q "$R5" &&
+	cp "$ROOT/testing/coccinelle/curl_slist_free.cocci" \
+		"$R5/testing/coccinelle/" &&
+	printf "void headers_free(struct curl_slist *headers)\n{\n\tcurl_slist_free_all(headers);\n}\n" \
+		>"$R5/samples.c" &&
+	! (cd "$R5" && git add -A && sh "$S") >"$W/out" 2>"$W/err" &&
+	[ "$(grep -c "^curl_slist_free: samples.c:" "$W/err")" = 1 ]
+'
+
+# The error of the first call is stored over before anything reads it;
+# a value read on an error path, one read through its address and one
+# the next store reads are all read first.
+write_dead_store_samples() {
+	cat >"$1" <<'EOF'
+int lost(const char *buf)
+{
+	int ret;
+
+	ret = parse_header(buf);
+	ret = parse_body(buf);
+	return ret;
+}
+
+int on_error_path(const char *buf)
+{
+	int ret;
+
+	ret = -EBADMSG;
+	if (!buf)
+		goto out;
+	ret = parse_body(buf);
+out:
+	return ret;
+}
+
+int through_address(int fd)
+{
+	int value;
+
+	value = 0;
+	read_into(fd, &value);
+	value = 1;
+	return value;
+}
+
+int accumulated(int n)
+{
+	int sum;
+
+	sum = n;
+	sum = sum + 1;
+	return sum;
+}
+EOF
+}
+
+test_expect_success 'dead_store reports a store stored over and spares the reads' '
+	R6=$W/dead-store &&
+	mkdir -p "$R6/testing/coccinelle" &&
+	git init -q "$R6" &&
+	cp "$ROOT/testing/coccinelle/dead_store.cocci" "$R6/testing/coccinelle/" &&
+	write_dead_store_samples "$R6/samples.c" &&
+	! (cd "$R6" && git add -A && sh "$S") >"$W/out" 2>"$W/err" &&
+	grep -q "^dead_store: samples.c:5:" "$W/err" &&
+	[ "$(grep -c "^dead_store: samples.c:" "$W/err")" = 1 ]
+'
+
+# An option compared by hand, which option_by_hand reports, beside the
+# standard output path "-", which is no option, and the parser itself,
+# whose file the rule leaves alone.
+write_option_samples() {
+	cat >"$1/samples.c" <<'EOF'
+int by_hand(int argc, const char **argv)
+{
+	return argc > 1 && !strcmp(argv[1], "--json");
+}
+
+int to_stdout(const char *path)
+{
+	return !strcmp(path, "-");
+}
+EOF
+	mkdir -p "$1/util" &&
+	cat >"$1/util/options.c" <<'EOF'
+int is_end(const char *arg)
+{
+	return !strcmp(arg, "--");
+}
+EOF
+}
+
+test_expect_success 'option_by_hand reports an option compared outside the parser' '
+	R7=$W/option &&
+	mkdir -p "$R7/testing/coccinelle" &&
+	git init -q "$R7" &&
+	cp "$ROOT/testing/coccinelle/option_by_hand.cocci" \
+		"$R7/testing/coccinelle/" &&
+	write_option_samples "$R7" &&
+	! (cd "$R7" && git add -A && sh "$S") >"$W/out" 2>"$W/err" &&
+	grep -q "^option_by_hand: samples.c:3:" "$W/err" &&
+	[ "$(grep -c "^option_by_hand:" "$W/err")" = 1 ]
+'
+
+# A spatch that gives up, as a rule with --timeout makes it: the file it
+# gave up on is named and the check passes, while another failure fails.
+write_fake_spatch() {
+	cat >"$1" <<'EOF'
+#!/bin/sh
+for arg; do
+	file=$arg
+done
+if [ -n "${FAKE_SPATCH_FAIL:-}" ]; then
+	echo "parse error" >&2
+else
+	echo "timeout (we abort): $file" >&2
+	echo "Fatal error: exception Coccinelle_modules.Common.Timeout" >&2
+fi
+exit 2
+EOF
+	chmod +x "$1"
+}
+
+test_expect_success 'a file a rule gives up on is named, not failed' '
+	R7=$W/timeout &&
+	mkdir -p "$R7/testing/coccinelle" "$W/bin" &&
+	git init -q "$R7" &&
+	cp "$ROOT/testing/coccinelle/dead_store.cocci" "$R7/testing/coccinelle/" &&
+	printf "int x;\n" >"$R7/slow.c" &&
+	write_fake_spatch "$W/bin/spatch" &&
+	(cd "$R7" && git add -A && PATH="$W/bin:$PATH" sh "$S") \
+		>"$W/out" 2>"$W/err" &&
+	grep -q "dead_store: gave up on slow.c at its time limit" "$W/err" &&
+	! (cd "$R7" && FAKE_SPATCH_FAIL=1 PATH="$W/bin:$PATH" sh "$S") \
+		>"$W/out" 2>"$W/err" &&
+	grep -q "dead_store: spatch failed" "$W/err"
 '
 
 test_expect_success 'the tree passes' '

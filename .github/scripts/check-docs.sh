@@ -4,9 +4,11 @@
 #
 # .github/scripts/check-docs.sh -- check Documentation/ against the tree:
 # every option a console example passes to shirudo exists in a parser,
-# every failure category the code emits, every tamper counter and every
-# proof has its entry in the reference, and every hook, counter, test,
-# proof and unit a page names exists.
+# every failure category the code emits, every tamper and integrity
+# counter and every proof has its entry in the reference, every hook,
+# counter, test, proof and unit a page names exists, every LSM program
+# and counter stands in the fact box of a threat, and every source file
+# is read by a proof or listed as read by none.
 #
 #   .github/scripts/check-docs.sh
 #
@@ -70,31 +72,66 @@ while IFS= read -r category; do
 		report "$categories" "no entry for the emitted category $category"
 done <"$work/categories"
 
-# Every tamper counter has an entry, and a page names no other.
-counters=Documentation/security/tamper-counters.rst
-grep -oE 'name: "[A-Za-z]+"' rust/src/util/tamper.rs | sed -E 's/.*"([A-Za-z]+)".*/\1/' |
-	sort -u >"$work/counters"
-while IFS= read -r counter; do
-	grep -qF "\`\`$counter\`\`" "$counters" ||
-		report "$counters" "no entry for the counter $counter"
-done <"$work/counters"
+# Every tamper and integrity counter has an entry on its page, and a
+# page names no other.
+counter_names() {
+	grep -oE 'name: "[A-Za-z]+"' "$1" | sed -E 's/.*"([A-Za-z]+)".*/\1/' |
+		sort -u
+}
+counter_names rust/src/util/tamper.rs >"$work/tamper_counters"
+counter_names rust/src/util/integrity.rs >"$work/integrity_counters"
+sort -u "$work/tamper_counters" "$work/integrity_counters" >"$work/counters"
+for kind in tamper integrity; do
+	counters=Documentation/security/$kind-counters.rst
+	while IFS= read -r counter; do
+		grep -qF "\`\`$counter\`\`" "$counters" ||
+			report "$counters" "no entry for the counter $counter"
+	done <"$work/${kind}_counters"
+done
 
-# The hooks, counters and tests a threat fact box names exist.
+# A field of a fact box, with the lines that continue it, as one line.
+field() {
+	awk -v name=":$1:" '
+		index($0, name) == 1 { on = 1; printf "%s", $0; next }
+		on && /^[ \t]+[^ \t]/ { printf " %s", $0; next }
+		on { print ""; on = 0 }
+		END { if (on) print "" }' "$2"
+}
+
+# The hooks and counters a threat fact box names exist. A hook is named
+# by its section, which says whether the program is sleepable.
 grep -ohE 'SEC\("lsm(\.s)?/[a-z_]+"\)' bpf/*.c bpf/lib/*.h |
-	sed -E 's/SEC\("lsm(\.s)?\/([a-z_]+)"\)/\2/' | sort -u >"$work/hooks"
+	sed -E 's/SEC\("(.*)"\)/\1/' | sort -u >"$work/hooks"
 while IFS= read -r page; do
-	grep -E '^:(Enforced at|Counters|Tests):' "$page" >"$work/facts" || continue
-	grep '^:Enforced at:' "$work/facts" | grep -oE '``(lsm/)?[a-z_]+``' |
-		tr -d '`' | sed 's|^lsm/||' | sort -u | while IFS= read -r hook; do
-		grep -qx "$hook" "$work/hooks" ||
-			report "$page" "no BPF program attaches to $hook"
+	field 'Enforced at' "$page" | grep -oE '``lsm(\.s)?/[a-z_]+``' |
+		tr -d '`' | sort -u | while IFS= read -r hook; do
+		grep -qxF "$hook" "$work/hooks" ||
+			report "$page" "no BPF program has the section $hook"
 	done
-	grep '^:Counters:' "$work/facts" | grep -oE '``[A-Za-z]+``' |
+	field Counters "$page" | grep -oE '``[A-Za-z]+``' |
 		tr -d '`' | sort -u | while IFS= read -r counter; do
 		grep -qx "$counter" "$work/counters" ||
-			report "$page" "no tamper counter is named $counter"
+			report "$page" "no counter is named $counter"
 	done
 done <"$work/pages"
+
+# Every LSM program and every counter stands in the fact box of some
+# threat. A page without one is no error of the loop.
+threats=Documentation/security/threat-model.rst
+while IFS= read -r page; do
+	field 'Enforced at' "$page" | grep -oE '``lsm(\.s)?/[a-z_]+``' || :
+done <"$work/pages" | tr -d '`' | sort -u >"$work/named_hooks"
+while IFS= read -r hook; do
+	grep -qxF "$hook" "$work/named_hooks" ||
+		report "$threats" "no threat names the program $hook"
+done <"$work/hooks"
+while IFS= read -r page; do
+	field Counters "$page" | grep -oE '``[A-Za-z]+``' || :
+done <"$work/pages" | tr -d '`' | sort -u >"$work/named_counters"
+while IFS= read -r counter; do
+	grep -qx "$counter" "$work/named_counters" ||
+		report "$threats" "no threat names the counter $counter"
+done <"$work/counters"
 
 # Every test id a page names exists under testing/.
 find testing -name 't[0-9][0-9][0-9][0-9]-*' | sed -E 's|.*/(t[0-9]{4}).*|\1|' |
@@ -121,12 +158,48 @@ while IFS= read -r proof; do
 		report "$coverage" "no row for the proof $proof"
 done <"$work/proofs"
 while IFS= read -r page; do
-	grep '^:Proofs:' "$page" | grep -oE '``[A-Za-z0-9.-]+``' | tr -d '`' |
+	field Proofs "$page" | grep -oE '``[A-Za-z0-9.-]+``' | tr -d '`' |
 		sort -u | while IFS= read -r proof; do
 		grep -qx "$proof" "$work/proofs" ||
 			report "$page" "no proof is named $proof"
 	done
 done <"$work/pages"
+
+# The tree files a harness includes, through another harness too.
+harness_reads() {
+	grep -oE '^#include "[^"]+"' "$1" | sed -E 's/^#include "(.*)"$/\1/' |
+		while IFS= read -r inc; do
+		case $inc in
+		../../../*) printf '%s\n' "${inc#../../../}" ;;
+		proof.h) ;;
+		*)
+			[ ! -e "testing/proofs/cbmc/$inc" ] ||
+				harness_reads "testing/proofs/cbmc/$inc"
+			;;
+		esac
+	done
+}
+
+# Every source file is read by a harness or listed on the coverage page
+# as read by none, and no file is both.
+for harness in testing/proofs/cbmc/*.c; do
+	harness_reads "$harness"
+done | sort -u >"$work/read"
+sed -n '/^Files without a proof$/,/^Not covered yet$/p' "$coverage" |
+	grep -oE ':src:`[^`]+\.c`' | sed -E 's/:src:`(.*)`/\1/' |
+	sort -u >"$work/unread"
+git ls-files 'util/*.c' 'builtin-*.c' shirudo.c 'tools/shirudo-build/*.c' |
+	sort >"$work/sources"
+while IFS= read -r source; do
+	grep -qxF "$source" "$work/read" || grep -qxF "$source" "$work/unread" ||
+		report "$coverage" "no proof reads $source and no line says why"
+done <"$work/sources"
+while IFS= read -r source; do
+	grep -qxF "$source" "$work/sources" ||
+		report "$coverage" "no source file is named $source"
+	! grep -qxF "$source" "$work/read" ||
+		report "$coverage" "a proof reads $source, which the page lists as read by none"
+done <"$work/unread"
 
 # Every unit a page names exists under systemd/.
 while IFS= read -r page; do

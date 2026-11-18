@@ -36,7 +36,8 @@ Agentless targets
 -----------------
 
 A target runs no daemon and opens no listening socket. Every operation
-is a one-shot ``shirudo`` command, started by hand or by a systemd timer.
+is a one-shot ``shirudo`` command, started by hand, by a systemd timer, or
+for ``upatch reconcile`` by systemd when udev reports a new network device.
 
 A long-running process is something root can trace, stop or feed
 input to for as long as it runs, and a socket is an attack surface for
@@ -46,7 +47,10 @@ kernel enforces without a helper, and the TPM keeps the record.
 
 The cost is that nothing on the target watches continuously. Package
 updates and telemetry run on timer periods, and a target reports its
-state only when a command runs.
+state only when a command runs. A new network device is the one event a
+command starts on, because a device left without its XDP upatch for a
+whole period is exposed for that long; the command still does one pass
+and exits.
 
 Pull-based delivery
 -------------------
@@ -215,6 +219,47 @@ ABI before its version number says so. :doc:`kernel-interfaces` lists
 what is required. The cost is a narrow set of kernels: bpf-next or a
 release that contains its signed-loader work, with the patches in
 :doc:`kernel-patches`.
+
+A tree key the node never parses
+--------------------------------
+
+``bpm tree append`` carries each earlier operation's ``fixes`` into the
+next generation from a second read of its own over the previous
+publication's bytes, with the JSON reader of :src:`util/json.c`, in the
+operator's helper. ``tree_parse()``, which reads the publication on the
+node as well, is unchanged and still skips the key; the shared emitter,
+``tree_emit_publication()``, takes only an optional callback that adds
+keys after an operation's ``artifact``, which the publisher passes and
+nothing else does.
+
+``tree_parse()`` is the node's parser of registry input. A key it reads
+is a key a malformed document can make the node refuse, and ``fixes`` is
+a convention of the keepalive backend that must never stop a node's
+sync (:doc:`/reference/formats/bpm-formats`). The cost is that the
+operator parses each previous publication twice. A single pass, in
+which ``tree_parse()`` takes an optional field and sink for extra
+operation keys that the publisher passes and the node leaves ``NULL``,
+would read it once, at the price of a change to the node's parser and
+to the ``bpm-tree-reader`` and ``bpm-tree-sync-model`` proofs that
+include it; it is left for later.
+
+A keepalive key for each run
+----------------------------
+
+``status --otel`` creates the attestation key it quotes the keepalive
+with at every run, with ``TPM2_CreatePrimary`` under the endorsement
+hierarchy, and flushes it after the quote. The key comes from a fixed
+template, so every run gets the same key and the backend the same name;
+nothing about it is kept on the target between runs.
+
+The cost is a primary key derivation once a minute, which a slow
+hardware TPM can take hundreds of milliseconds for
+(:doc:`/operate/plan/overhead`). The optimisation to take up if that
+cost matters is to keep the key under a persistent handle,
+``TPM2_EvictControl`` once and a lookup at every run. The rule against
+a persistent index concerns the measurement register and does not
+forbid it, but it adds TPM state that outlives a boot: a handle to
+allocate, to find taken, and to clear on decommission.
 
 Related
 -------

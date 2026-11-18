@@ -11,22 +11,41 @@ and what no proof covers yet. A change to code a proof covers adapts the
 harness or the Lean 4 model in the same commit, where the change moved
 what it states, and runs that proof (`git grep -n '<file>.c\|<function>'
 testing/proofs/cbmc` finds the harnesses that reach the code); a change to
-a proof or to what it covers updates the coverage page too.
+a proof or to what it covers updates the coverage page too. A source
+file that is new gets a harness or a line under "Files without a proof"
+there, and one a harness starts to read leaves that list:
+`check-docs.sh` fails on a file that is neither or both.
 
 ## Run
 
 ```sh
 make proofs                                  # CBMC and Lean 4
 make proofs-cbmc PROOFS="paths-bpffs-name"   # some CBMC proofs
+make proofs-cbmc CHANGED=origin/main..HEAD   # those reading a changed file
 testing/proofs/cbmc/run.sh -v <proof>        # whole output and traces
 make proofs-lean4                            # the Lean 4 proofs
+.github/scripts/proofs.sh run 3 8            # CI's shard 3 of 8
 ```
 
-CI does not run the proofs, as all of them take about an hour: run the
-ones covering the code you changed by name, and all of them after a
-change to `proof.h` or `run.sh`. Cap the memory of a long run, `ulimit
+The `Proofs` workflow runs them after a push to main, never on a pull
+request, as they take hours of CPU: before a change is sent, run the
+ones covering the code you changed, which `CHANGED` picks from what
+each harness includes, and all of them after a change to `proof.h` or
+`run.sh`, which `CHANGED` does too. Cap the memory of a long run, `ulimit
 -v 24000000` in the shell that starts it: a proof that grows past a few
 gigabytes is one to reshape, not to wait for.
+
+CI splits `proofs.list` into eight shards and runs each proof alone
+under the 14 GB and 60 minutes `.github/scripts/proofs.sh` caps it at;
+a proof added there has to fit both. It leaves out the proofs
+`testing/proofs/cbmc/ci-skip.list` names, each with why, which no run
+checks unless a developer starts it: run one by hand after a change to
+what it reads, and take it off the list once it fits. A proof that
+fails in CI prints its whole output, trace included, in its shard's
+job log and leaves it in the `cbmc-logs-<k>` artifact. `proofs.sh`
+pins CBMC 5.95.1 and elan, and Lean is the release `lean-toolchain`
+names; `proofs.sh install-cbmc` unpacks the same CBMC into `build/cbmc`
+without root.
 
 ## Write
 
@@ -34,6 +53,10 @@ gigabytes is one to reshape, not to wait for.
   proves, and defines `harness()`. Inputs come from `any_bytes(n)` and from
   variables left uninitialized; `__CPROVER_assume()` bounds them and
   `__CPROVER_assert(cond, "what holds")` states each property.
+- Only a local left uninitialized is any value. A `static` or global
+  object of a harness is zeros, as in C: a table meant to be any table
+  takes each entry from a local, or the proof runs on the one empty
+  table and holds of nothing else.
 - State the contract, not the implementation: which inputs are accepted,
   that every offset or pointer returned lies inside the input, that a
   refusal writes nothing, that output reads back. Proving the code equal
@@ -79,15 +102,22 @@ gigabytes is one to reshape, not to wait for.
   `--conversion-check`. Include the file between `#pragma CPROVER check
   push`, `#pragma CPROVER check disable "conversion"` and `#pragma CPROVER
   check pop`, and keep the check on everywhere else.
+- An array larger than `--max-field-sensitivity-array-size`, 64 by
+  default, is one object to CBMC, so the bytes stored in it stay
+  symbolic to every later read and comparison, constant strings
+  included. A proof that rests on such an array's contents raises the
+  bound to its size, as `bpm-tar-header` takes 512 for the tar header
+  and `bpm-tree-sync-model` 257 for the tree's 256-byte strings.
 - A write at a symbolic index makes every later read of that array
   symbolic, and a heap object of symbolic size blows up memory: give an
   allocation a fixed size the harness bounds. A write through a pointer
   into a big struct becomes an update of all of it; index the member in
   place.
-- `proof.h` models `vsnprintf()` for `%s` and `%d`, `%u`, `%x` with a zero
-  flag, a width and `ll`, and fails a proof on any other conversion;
-  CBMC does not promote variadic arguments, so the model reads each by
-  its size.
+- `proof.h` models `vsnprintf()` for `%s` and `%d`, `%u`, `%x`, `%o` with
+  a zero flag, a width, written out or `*`, and `ll`, and fails a proof
+  on any other conversion; CBMC does not promote variadic arguments, so
+  the model reads each by its size. `%o` writes each digit at a place
+  known beforehand, as `bpm-tar-writer` needs of the tar header's fields.
 - A struct of tens of kilobytes, such as a tree operation, makes even a
   few symbolic copies slow: prove the logic that reads its fields on a
   smaller harness, or leave it to the unit cases.
@@ -113,9 +143,10 @@ determining its events.
   `List.map_injective_iff`, is proved in the file.
 - The lakefile makes every warning an error, so a `sorry`, a deprecated
   name or an unused `simp` argument fails the build.
-- Link the model to the C with a CBMC proof where one is cheap, as
-  `paths-bpffs-name-model.c` checks the pin name encoding against
-  `PinName.lean` up to 8 bytes; the coverage page says which models follow the C by review.
+- A model proves the algorithm, not the C. Link the two with a CBMC
+  proof where one is cheap, as `paths-bpffs-name-model.c` checks the pin
+  name encoding against `PinName.lean` up to 8 bytes; the coverage page
+  says which models follow the C by review.
 - The toolchain is the one `lean-toolchain` names; elan installs it.
 
 ## When it fails
@@ -132,10 +163,20 @@ determining its events.
   5.95's `memcpy()` model, not the code: rerun the input as a constant
   to confirm, then define `PROOF_MEMCPY_BYTEWISE` before including
   `proof.h` (as `upatch-rodata.c` does).
+  pathologically slow, wrong bytes or not: when a proof stalls in
+  `memcpy()`, look for a literal source chosen by symbolic data first.
 - CBMC 5.95 also reads wrong bytes at a symbolic offset from a heap
   object of struct type that a `memcpy()` filled, `xreallocarray()`'s
   for one; a wrong value can make a check pass as well as fail. Read
   such an object by its members, never cast to bytes.
+- It does so without a `memcpy()` and on the stack too: a read through a
+  `char *` at an index that depends on the data, as
+  `release[strlen(prefix)]` is, from an object whose type starts with an
+  array of `char`, as `struct tree_selector` and `struct utsname` do, is
+  taken from that first member. Hold such an object inside one that
+  starts with another type, as `bpm-tree-overlap-model` holds a selector
+  in a `struct tree_operation`, and keep a harness's own reads at
+  indices its loops give.
 - `run.sh` passes `--unsigned-char`, as the build passes
   `-funsigned-char`; a conversion failure on `char` elsewhere means the
   proof is not built as the code is.

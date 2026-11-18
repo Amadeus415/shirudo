@@ -73,7 +73,7 @@ runtime authority:
      - ``MapFdWrite``
    * - ``BPF_OBJ_GET``, ``BPF_MAP_GET_FD_BY_ID``,
        ``BPF_LINK_GET_FD_BY_ID``, a read-only map descriptor, opening a
-       pin in shirudo's private bpffs
+       pin in shirudo's private bpffs, an XDP program descriptor
      - ``ObjGet``
    * - ``BPF_LINK_CREATE``, ``BPF_RAW_TRACEPOINT_OPEN``
      - ``ProgAttach``
@@ -245,8 +245,8 @@ systemd-keyring-setup
 :Symptom: ``init`` fails in the initrd. It stops at the ``.dm-verity``
    keyring with one of
    ``initrd boot keys: add config verification certificate: <error>``,
-   ``initrd boot keys: check dm-verity keyring holds only the config
-   certificate: Key was rejected by service`` or, when the tool enrolled
+   ``initrd boot keys: check dm-verity verification keys: Key was rejected
+   by service`` or, when the tool enrolled
    nothing, ``initrd boot keys: dm-verity keyring sealed empty at boot;
    boot with dm_verity.keyring_unsealed=1: Required key not available``,
    which names the boot parameter even when it is set. ``init: BPF
@@ -276,17 +276,25 @@ kexec and kdump
 Module loading and kernel live patching
 ---------------------------------------
 
-:Mechanism: shirudo does not gate module loading.
+:Mechanism: shirudo loads signed modules only.
    ``lsm/kernel_load_data`` and ``lsm/kernel_read_file`` let every load
-   other than a kexec image or initramfs through. Whether a module loads
-   is the kernel's decision: module signature enforcement and lockdown
+   other than a kexec image or initramfs through, and the kernel checks
+   the module's signature. When the signature is missing or the kernel
+   cannot verify it, and the kernel does not refuse the module itself,
+   it asks lockdown, and ``lsm/locked_down`` refuses it from ``init`` on
    (A4 in :doc:`/security/threat-model`). A livepatch module, as kpatch
    or the kernel's ``klp-build`` produce, is a kernel module like any
    other.
-:Symptom: None from shirudo.
-:What to do: Enforce module signatures, as :doc:`/operate/plan/hardening`
-   lists, and sign livepatch modules with a key the kernel trusts. A
-   module runs as kernel code outside every shirudo check. Unloading a
+:Symptom: ``init_module(2)`` and ``finit_module(2)`` of an unsigned
+   module fail with ``EPERM`` (``modprobe`` prints ``Operation not
+   permitted``), and the integrity counter ``ModuleSignature`` counts
+   it. ``modprobe --force``, which strips the version checks, makes a
+   signed module count as unsigned.
+:What to do: Build the kernel with ``CONFIG_MODULE_SIG``, as
+   :doc:`/operate/plan/hardening` lists, and sign every module the
+   target loads, livepatch modules included, with a key the kernel
+   trusts. A signed module runs as kernel code outside every shirudo
+   check. Unloading a
    module that a kprobe upatch targets leaves the upatch loaded and
    measured but without effect, a reading of the kernel source (R21).
    shirudo's tests do not cover a livepatch and an upatch on the same
@@ -325,16 +333,20 @@ Other LSMs
 Hibernation and suspend
 -----------------------
 
-:Mechanism: shirudo does not refuse hibernation. Lockdown in integrity
-   mode disables it (A9 in :doc:`/security/threat-model`), and the
-   behavior of the register across hibernation is not analyzed. Before a
-   suspend, the kernel's TPM driver sends ``TPM2_Shutdown(STATE)`` to a
+:Mechanism: shirudo refuses hibernation from ``init`` on:
+   ``lsm/locked_down`` refuses the kernel's hibernation check, and
+   ``lsm/file_open`` the write of the ``HibernateLocation`` EFI variable
+   from which systemd's initrd would resume (A9 in
+   :doc:`/security/threat-model`). The behavior of the register across
+   hibernation is not analyzed. Before a suspend, the kernel's TPM driver sends ``TPM2_Shutdown(STATE)`` to a
    TPM 2.0 unless the TPM stays powered, and the TPM counts that in its
    restart count (:doc:`/concepts/background/tpm`). The config activation
    record holds the TPM's reset and restart counts, and shirudo compares
    them with the TPM's before a command runs.
-:Symptom: After a resume, shirudo commands refuse with ``shirudo: image
-   state: Stale file handle`` and exit 1, and ``shirudo status`` reports
+:Symptom: ``/sys/power/state`` lists no ``disk``, and ``systemctl
+   hibernate`` fails as hibernation is not supported. After a resume
+   from suspend, shirudo commands refuse with ``shirudo: image state:
+   Stale file handle`` and exit 1, and ``shirudo status`` reports
    ``tampered``.
    :doc:`/operate/maintain/backup-recovery` describes the state. For suspend to
    RAM this is a reading of the code and of the TPM's counters and is not
@@ -381,14 +393,14 @@ Debuggers, tracing and /proc
 :Mechanism: The seal marks a task at its exec of a runtime file, and a
    fork inherits the mark. ``lsm/ptrace_access_check`` refuses every
    ptrace access check against a marked task, both attach and read
-   modes, and ``lsm/perf_event_alloc`` refuses a perf event bound to one.
+   modes, but counts only attach mode, and ``lsm/perf_event_alloc`` refuses a perf event bound to one.
    An exec of a runtime file by a traced task is refused. The ptrace
    check runs after the kernel's own user and capability checks, so only
    root, or a caller running as the same user, reaches it.
 :Symptom: See the table below.
 :What to do: Debug shirudo where it does not enforce, such as the test
-   VM (:doc:`/contribute/testing/testing`). Expect ``SealPtrace`` in the
-   baseline of a host that runs process monitors as root.
+   VM (:doc:`/contribute/testing/testing`). A read-mode refusal shows
+   only as ``EACCES`` to the caller, never in ``SealPtrace``.
 
 .. list-table::
    :header-rows: 1
@@ -403,18 +415,25 @@ Debuggers, tracing and /proc
    * - Starting shirudo under ``strace`` or ``gdb``
      - The exec fails with ``EACCES``
      - ``ExecTraced``
-   * - Reading ``/proc/<pid>/exe``, ``environ``, ``maps``, ``mem`` or
-       the ``fd`` links of a shirudo command
+   * - Starting shirudo from a process that shares its root and working
+       directory with another, made with ``clone(CLONE_FS)``
+     - The exec fails with ``EACCES``
+     - ``ExecShared``
+   * - Reading ``/proc/<pid>/mem`` of a shirudo command
      - ``EACCES``
      - ``SealPtrace``
+   * - Reading ``/proc/<pid>/exe``, ``environ``, ``maps`` or the ``fd``
+       links of a shirudo command
+     - ``EACCES``
+     - None
    * - Reading ``/proc/<pid>/stat`` of a shirudo command, as ``ps`` and
        ``top`` do
      - Succeeds, with the fields that need the check zeroed
-     - ``SealPtrace``
+     - None
    * - journald receiving a log line from a shirudo command
      - journald cannot read ``/proc/<pid>/exe``, so the entry has no
        ``_EXE=`` field
-     - ``SealPtrace``
+     - None
    * - ``perf record --pid``, ``perf stat --pid`` on a shirudo command
      - ``EACCES``
      - ``SealPerf``
@@ -424,6 +443,23 @@ Debuggers, tracing and /proc
 
 A task-bound perf event that a process opened before the exec that marks
 the task is not refused (D9 in :doc:`/security/threat-model`).
+
+XFS dump and restore
+--------------------
+
+:Mechanism: ``lsm/file_ioctl`` refuses ``XFS_IOC_ATTRMULTI_BY_HANDLE``
+   on an XFS file system to every task without runtime authority, since
+   XFS changes the attributes a handle names without passing an xattr
+   hook, and a seal label removed that way would unseal the inode.
+:Symptom: ``xfsdump`` and ``xfsrestore``, which read and write extended
+   attributes through that ioctl, fail on the attributes with
+   ``EACCES``, and ``XattrHandle`` moves.
+:Not refused: Reading and writing attributes through ``getfattr``,
+   ``setfattr`` and the other xattr system calls, which the seal checks
+   as it checks every xattr change.
+:What to do: Back up XFS file systems on a target with a tool that reads
+   attributes through the xattr system calls, or without extended
+   attributes.
 
 TPM tools
 ---------

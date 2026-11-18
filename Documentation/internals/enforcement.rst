@@ -42,7 +42,7 @@ device records of :src:`bpf/lib/`.
 ``init`` loads both without a signature, from the binary the
 authenticated initrd carries.
 
-The objects share seven maps, which ``init`` hands from ``bpf2`` to
+The objects share eight maps, which ``init`` hands from ``bpf2`` to
 ``seal`` with ``bpf_map__reuse_fd()`` and pins in the private bpffs:
 
 .. list-table::
@@ -59,7 +59,10 @@ The objects share seven maps, which ``init`` hands from ``bpf2`` to
        keyring serial and kind, the serials of the enrolled keys, the
        ``.dm-verity`` keyring and key serials, the NV index, the NV
        writer's public modulus and seed, and the ECC endorsement key
-       name used to salt authenticated sessions.
+       name used to salt authenticated sessions. Created with
+       ``BPF_F_RDONLY_PROG``, so the verifier refuses any BPF program
+       that writes it; only ``init``'s one update before the freeze
+       populates it.
    * - ``shirudo_tasks``
      - ``task_authority``
      - Task storage with each task's mark and exec candidate.
@@ -80,12 +83,27 @@ The objects share seven maps, which ``init`` hands from ``bpf2`` to
    * - ``shirudo_tamper``
      - ``tamper``
      - One counter per refusal point, see :doc:`/security/tamper-counters`.
+   * - ``shirudo_integrity``
+     - ``integrity``
+     - One counter per way to change or read the running kernel that
+       ``bpf2`` refuses, see :doc:`/security/integrity-counters`.
 
 ``init`` freezes every one of them against userspace writes except
 ``shirudo_roots``, which an authorized task writes before each config
 mapping. ``bpf2`` also keeps ``shirudo_mnt_rec`` for the bpffs
 mount it records, and ``seal`` keeps its scratch buffer and the inode
 storage of directory marks.
+
+A map no BPF program ever writes, such as ``shirudo_bpffs_sb``, is
+created with ``BPF_F_RDONLY_PROG`` as well as frozen: freezing
+(``BPF_MAP_FREEZE``) blocks only the syscall side, so without the flag
+a BPF program could still write the map's value through a lookup's
+return pointer and the verifier would allow it. A map a BPF program
+does write, even once, such as ``shirudo_mnt_rec`` or the task, socket
+and inode storage maps above, does not take the flag. The same applies
+to a map a future change adds: set ``BPF_F_RDONLY_PROG`` at creation
+the moment no BPF program writes it, and drop the flag the moment one
+does.
 
 Telling shirudo from root
 -------------------------
@@ -95,8 +113,12 @@ question: does the calling task have runtime authority? A task has it
 when it carries a mark in ``shirudo_tasks``. A task gets the mark by a
 successful exec of a file on the authenticated runtime image, or, for the
 ``init`` process in the initrd, from a seed ``init`` writes before it
-freezes the map. A fork inherits the mark. :doc:`seal` explains how the
-mark is granted and cleared.
+freezes the map. A fork inherits the mark. A task that dumps core, or
+whose memory a uprobe reaches, keeps its mark but not its authority:
+the kernel's dump code runs as the task and writes where
+``kernel.core_pattern`` says, and a uprobe has the kernel change the
+task's memory. :doc:`seal` explains how the mark is granted and
+cleared.
 
 The ``bpf()`` hooks have a second discriminator. ``lsm/bpf`` and
 ``lsm/bpf_prog_load`` receive ``bool kernel``, which is true for calls a
@@ -133,8 +155,10 @@ Descriptors and pins
     such a task, read-only or writable. ``lsm/file_open`` refuses such a
     task the opening of anything but a directory in the private bpffs,
     since a pin opened as a file reads a map's contents; directories stay
-    listable. ``BPF_PROG_GET_FD_BY_ID`` and ``BPF_BTF_GET_FD_BY_ID`` stay
-    allowed. Root without runtime authority therefore cannot read
+    listable. ``BPF_PROG_GET_FD_BY_ID`` stays allowed for types other than
+    XDP. ``lsm/bpf_prog`` keeps XDP descriptors to runtime authority,
+    since netlink can attach them without passing through ``bpf()``.
+    ``BPF_BTF_GET_FD_BY_ID`` stays allowed. Root without authority cannot read
     shirudo's maps or hold one of its links open by pin or by id.
     ``lsm/file_ioctl`` refuses ``PERF_EVENT_IOC_SET_BPF``, which binds a
     program to a perf event without a ``bpf()`` command, to the same
@@ -182,6 +206,17 @@ Kexec
     ``lsm/kernel_read_file`` refuse every kexec image and initramfs to
     every caller.
 
+Lockdown
+    ``lsm/locked_down`` refuses, to every caller, what the kernel's
+    lockdown in integrity mode refuses, the ways root has to change the
+    running kernel, and ``/proc/kcore``, which that mode leaves
+    readable, an unsigned module among them. The hibernation check is
+    refused without a count, as every read of ``/sys/power/state`` makes
+    one, and ``lsm/file_open`` refuses a write of the
+    ``HibernateLocation`` EFI variable, from which the next boot's
+    initrd would resume. The kernel's lockdown LSM, where it runs,
+    decides first, and covers the boot before ``init``.
+
 Writable state
     ``seal`` refuses changes to labeled inodes under
     ``/var/lib/shirudo`` to tasks without runtime authority.
@@ -197,11 +232,12 @@ up in this order:
 #. Fill the identity map and freeze it.
 #. Seed the bootstrap mark for its own process through a pidfd, freeze
    ``shirudo_tasks``, ``shirudo_devices``, ``shirudo_tamper``,
-   ``shirudo_task_policy`` and ``shirudo_sock_policy``, and pin them
-   with ``shirudo_roots``. Pin the identity map.
+   ``shirudo_task_policy``, ``shirudo_sock_policy`` and
+   ``shirudo_integrity``, and pin them with ``shirudo_roots``. Pin the
+   identity map.
 #. Attach ``task_prctl``, ``bprm_check_security``, ``inode_rmdir``,
    ``inode_rename``, ``inode_mkdir``, ``inode_symlink``, ``inode_link``,
-   ``kernel_load_data`` and ``kernel_read_file``.
+   ``kernel_load_data``, ``kernel_read_file`` and ``locked_down``.
 #. Attach ``file_ioctl``, ``file_ioctl_compat``, ``bdev_setintegrity``
    and ``bdev_free_security``.
 #. Attach ``inode_unlink``, ``inode_setxattr``, ``inode_removexattr``,
@@ -211,7 +247,8 @@ up in this order:
    the recorder notes the mount, and freeze that record.
 #. Load ``seal`` on the shared maps, freeze its scratch map, and attach
    its twenty-seven hooks, then ``mmap_file`` and ``file_mprotect``.
-#. Attach ``lsm/bpf_map``, then ``lsm/bpf_prog_load``, then ``lsm/bpf``.
+#. Attach ``lsm/bpf_map``, then ``lsm/bpf_prog``, then
+   ``lsm/bpf_prog_load``, then ``lsm/bpf``.
 
 ``init`` pins every link as it attaches it, before the next fallible
 step. A link that is not pinned detaches when ``init`` exits, and a
@@ -229,7 +266,12 @@ admission gates. ``init`` itself passes every guard on the way because
 its bootstrap mark is in place before the first one attaches.
 
 When any step fails, ``init`` unpins every link it attached and removes
-the map pins, so no partial enforcement survives a failed ``init``.
+the map pins, so no partial enforcement survives a failed ``init``. A
+crash skips that cleanup. When it came before the identity map was
+pinned, the next ``init`` removes the map pins it left. When it came
+later, every later ``init`` in the same boot refuses before it loads
+anything, with ``init: authenticated image settings: <error>``, and the
+guards attached so far stay until the next reboot.
 
 Order at run time
 -----------------
@@ -307,33 +349,44 @@ when the record it needs is missing.
      - ``EACCES``
      - ``MapFdWrite`` (writable), ``ObjGet`` (read-only)
      - Closed.
-   * - ``lsm/file_open`` (``bpf2``)
-     - Opening a non-directory inode of the private bpffs, through any
-       mount of it, to a task without authority. Records the bpffs mount
-       when the bootstrap task opens its root.
+   * - ``lsm/bpf_prog`` (``bpf2``)
+     - An XDP program descriptor to a task without authority, including
+       acquisition by program ID. Other program types stay allowed.
      - ``EACCES``
      - ``ObjGet``
      - Closed.
+   * - ``lsm/file_open`` (``bpf2``)
+     - Opening a non-directory inode of the private bpffs, through any
+       mount of it, to a task without authority. Records the bpffs mount
+       when the bootstrap task opens its root. Opening a
+       ``HibernateLocation`` EFI variable for writing, to every caller.
+     - ``EACCES``; ``EPERM`` for the EFI variable
+     - ``ObjGet``; ``HibernateLocation``
+     - Closed.
    * - ``lsm/file_ioctl``, ``lsm/file_ioctl_compat`` (``bpf2``)
-     - ``PERF_EVENT_IOC_SET_BPF`` on any file, and every device-mapper
+     - ``PERF_EVENT_IOC_SET_BPF`` on any file,
+       ``XFS_IOC_ATTRMULTI_BY_HANDLE`` on an XFS file system, which
+       changes attributes past every xattr hook, and every device-mapper
        control command except ``DM_VERSION``, ``DM_LIST_DEVICES``,
        ``DM_DEV_STATUS``, ``DM_DEV_WAIT``, ``DM_TABLE_DEPS``,
        ``DM_TABLE_STATUS``, ``DM_LIST_VERSIONS`` and
        ``DM_GET_TARGET_VERSION`` on the control device (10:236), to a
        task without authority.
-     - ``EACCES`` (perf), ``EPERM`` (DM)
-     - ``PerfAttach``; DM refusals uncounted
+     - ``EACCES`` (perf, XFS), ``EPERM`` (DM)
+     - ``PerfAttach``, ``XattrHandle``; DM refusals uncounted
      - Closed: unknown DM commands are refused.
    * - ``lsm/inode_unlink``, ``lsm/inode_rmdir``, ``lsm/inode_mkdir``,
        ``lsm/inode_symlink``, ``lsm/inode_link``, ``lsm/inode_rename``,
        ``lsm/inode_setxattr``, ``lsm/inode_removexattr`` (``bpf2``)
      - The operation in the private bpffs or the ``/run/shirudo`` tmpfs
        to a task without authority. Rename checks both directories.
-       Other file systems are not checked.
+       On any file system, unlink, rmdir and rename refuse such a task
+       the mount point of the recorded bpffs mount or of a mount above
+       it, which the kernel would detach or move in every namespace.
      - ``EPERM``
      - In the bpffs: ``PinUnlink``, ``PinEntry`` (mkdir, symlink, link),
-       ``PinRename``, ``PinXattr``. Rmdir and ``/run/shirudo`` refusals
-       uncounted.
+       ``PinRename``, ``PinXattr``. A mount point: ``BpffsUmountAbove``.
+       Rmdir and ``/run/shirudo`` refusals uncounted.
      - Closed for those two file systems.
    * - ``lsm/sb_umount`` (``bpf2``)
      - To every caller: unmounting the bpffs, an unmount whose subtree or
@@ -415,9 +468,10 @@ when the record it needs is missing.
    * - ``lsm.s/bprm_check_security`` (``seal``)
      - Stages the mark candidate: trusted when the file is a direct, not
        overlay, inode on a recorded runtime device. Refuses a trusted
-       candidate that is traced or has a seccomp filter.
+       candidate that is traced, shares its ``fs_struct`` with another
+       process or has a seccomp filter.
      - ``EACCES``
-     - ``ExecTraced``; seccomp uncounted
+     - ``ExecTraced``, ``ExecShared``; seccomp uncounted
      - Closed: no task storage refuses the exec with ``ENOMEM``.
    * - ``lsm.s/bprm_committed_creds`` (``seal``)
      - Commits the staged candidate as the task's mark when an exec
@@ -455,14 +509,30 @@ when the record it needs is missing.
      - None
      - ``SealSignal``
      - Which signal is an attack: a stop by root and one by systemd
-       count alike (R2).
+       count alike (R2). The kernel's own signals and the freezer pass
+       no hook.
+   * - ``lsm/task_setrlimit`` (``seal``)
+     - A change of a marked task's resource limits by another task
+       without authority, ``prlimit``, which could have the kernel
+       signal it. The task resets its own limits when it starts.
+     - ``EPERM``
+     - ``SealRlimit``
+     - Closed.
    * - ``lsm/ptrace_access_check`` (``seal``)
      - Every ptrace access mode against a marked task, which covers
-       attach, ``/proc/<pid>/mem``, ``pidfd_getfd()`` and
-       ``process_vm_readv()``.
+       attach, ``/proc/<pid>/mem``, ``pidfd_getfd()``,
+       ``process_vm_readv()`` and the read-mode ``/proc`` files such as
+       ``exe``, ``environ`` and ``maps``.
      - ``EACCES``
-     - ``SealPtrace``
+     - ``SealPtrace``, attach mode only
      - Closed.
+   * - ``lsm/mm_read_access`` (``seal``)
+     - A read-only access to a marked task's memory that
+       ``mm_access()`` would grant ``CAP_PERFMON`` after the ptrace check
+       refused it: ``environ``, ``maps``, ``smaps``, ``pagemap``.
+     - ``EACCES``
+     - None
+     - Closed, with carried patch 0005.
    * - ``lsm/perf_event_alloc`` (``seal``)
      - A perf event bound to a marked task. CPU-wide events have no task
        and are not checked.
@@ -488,6 +558,12 @@ when the record it needs is missing.
      - ``EPERM``
      - ``Kexec``
      - Unconditional.
+   * - ``lsm/locked_down`` (``bpf2``)
+     - Every lockdown reason of integrity mode, an unsigned module
+       included, and ``LOCKDOWN_KCORE``, to every caller.
+     - ``EPERM``
+     - The integrity counter of the reason; hibernation uncounted
+     - Unconditional; the kernel's lockdown LSM decides first.
    * - ``lsm.s/file_open`` (``seal``)
      - A write open of a labeled file to a task without authority. On a
        directory open, and on any open by an authorized task, records or
@@ -499,8 +575,8 @@ when the record it needs is missing.
        ``lsm.s/inode_setattr``, ``lsm.s/inode_removexattr`` (``seal``)
      - The operation on a labeled inode to a task without authority.
        Setattr covers truncate, chmod, chown and timestamps. Removing the
-       seal or the policy label is refused on any inode without
-       authority.
+       seal or the policy label or the ancestor mark is refused on any
+       inode without authority.
      - ``EACCES``
      - ``SealUnlink``, ``SealSetattr``, ``SealXattr``, ``SealLabel``
      - See the label verdict below.
@@ -512,8 +588,9 @@ when the record it needs is missing.
      - ``SealXattr``, ``SealSetattr``
      - See the label verdict below.
    * - ``lsm.s/inode_setxattr`` (``seal``)
-     - Setting ``security.bpf.shirudo`` or
-       ``security.bpf.shirudo.policy`` on any inode, and any other name
+     - Setting ``security.bpf.shirudo``,
+       ``security.bpf.shirudo.policy`` or
+       ``security.bpf.shirudo.ancestor`` on any inode, and any other name
        on a labeled inode, to a task without authority. Policy values
        must be exactly 8 bytes.
      - ``EACCES``
@@ -521,7 +598,8 @@ when the record it needs is missing.
      - See the label verdict below.
    * - ``lsm.s/inode_rename`` (``seal``)
      - A labeled source, a labeled destination directory or a labeled
-       inode it would replace, to a task without authority.
+       inode it would replace, or a source or replaced directory that
+       carries the ancestor mark, to a task without authority.
      - ``EACCES``
      - ``SealRename``, ``SealEntry``
      - See the label verdict below.
@@ -575,7 +653,8 @@ The hooks decide only what reaches them. These paths do not:
 - The ``kernel`` argument is true for every ``bpf()`` call through a
   kernel pointer, including BPF that kernel code loads with
   ``kern_sys_bpf()``, such as a light skeleton in a module.
-- ``BPF_PROG_GET_FD_BY_ID`` stays open. ``lsm/bpf`` and
+- ``BPF_PROG_GET_FD_BY_ID`` stays open except for XDP descriptors,
+  which ``lsm/bpf_prog`` guards. ``lsm/bpf`` and
   ``lsm/file_ioctl`` refuse the ``bpf()`` attach commands and the perf
   ioctl to tasks without authority; other kernel interfaces that take a
   program descriptor are not hooked here.

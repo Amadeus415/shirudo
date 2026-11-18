@@ -215,10 +215,12 @@ Exit status
      - The key or certificate is unusable, ``vmlinux.h`` or clang is
        missing, compilation failed, or packaging and signing failed.
    * - 2
-     - An unknown option, a second input, an input that is not
+     - A usage error: an unknown option or one given twice, a value
+       missing or empty, a second input, an input that is not
        ``.bpf.c``, ``.bpf.o`` or ``.o``, no input, an input together with
        ``--unload``, or a ``--payload-sha256`` that is not 64 hexadecimal
-       characters.
+       characters. Also a usage error of ``image sign-root`` or ``upatch
+       rewrite-rodata``.
    * - 127
      - ``shirudo`` cannot execute the helper.
 

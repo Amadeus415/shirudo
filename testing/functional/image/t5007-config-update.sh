@@ -240,9 +240,9 @@ test_expect_success 'seal failures prevent trusted journal creation' '
 if [ -x "$SIM" ]; then
 	test_expect_success 'actual TPM values match independently computed root events' '
 		mkdir -m 700 "$WORK/real-tpm" &&
-		SHIRUDO_TPM_TCTI="cmd:$SIM $WORK/tpm" SHIRUDO_TEST_CONFIG_TPM=1 \
+		SHIRUDO_TPM_TCTI="cmd:exec $SIM $WORK/tpm" SHIRUDO_TEST_CONFIG_TPM=1 \
 			"$H" "$WORK/real-tpm" boot A >"$WORK/real-a" &&
-		SHIRUDO_TPM_TCTI="cmd:$SIM $WORK/tpm" SHIRUDO_TEST_CONFIG_TPM=1 \
+		SHIRUDO_TPM_TCTI="cmd:exec $SIM $WORK/tpm" SHIRUDO_TEST_CONFIG_TPM=1 \
 			"$H" "$WORK/real-tpm" update B >"$WORK/real-b" &&
 		python3 - "$WORK/real-b" <<"PYTEST"
 import hashlib, sys
@@ -255,9 +255,9 @@ assert f["pcr_value"] == pcr.hex() and f["extends"] == "2"
 PYTEST
 	'
 	test_expect_success 'ambiguous real TPM completion refuses retries without another extension' '
-		! SHIRUDO_TPM_TCTI="cmd:$SIM $WORK/tpm" SHIRUDO_TEST_CONFIG_TPM=1 \
+		! SHIRUDO_TPM_TCTI="cmd:exec $SIM $WORK/tpm" SHIRUDO_TEST_CONFIG_TPM=1 \
 		SHIRUDO_TEST_CONFIG_EXTEND=ambiguous "$H" "$WORK/real-tpm" update C >/dev/null &&
-		! SHIRUDO_TPM_TCTI="cmd:$SIM $WORK/tpm" SHIRUDO_TEST_CONFIG_TPM=1 \
+		! SHIRUDO_TPM_TCTI="cmd:exec $SIM $WORK/tpm" SHIRUDO_TEST_CONFIG_TPM=1 \
 			"$H" "$WORK/real-tpm" update C >"$WORK/no-retry" &&
 		[ "$(field "$WORK/no-retry" extends)" = 3 ]
 	'

@@ -78,7 +78,8 @@ Exit status
        (``upatch get: '<name>': <error>``), or the JSON document could not
        be built.
    * - 2
-     - No name, a second name, an unknown option or an invalid name.
+     - A usage error: no name, a second name, an unknown option or one
+       given twice, or an invalid name.
 
 Examples
 --------

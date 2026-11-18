@@ -80,7 +80,7 @@ Exit status
        printed ``map_export`` or ``tls.classical_hosts`` settings are
        invalid. In the second case the configuration is still printed.
    * - 2
-     - An unknown argument.
+     - An option or an argument: ``config`` takes none.
 
 Files and environment
 ---------------------

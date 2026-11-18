@@ -23,7 +23,7 @@ cleanup() {
 	exit "$result"
 }
 trap cleanup EXIT HUP INT TERM
-export SHIRUDO_TPM_TCTI="cmd:$SIM $WORK/tpm"
+export SHIRUDO_TPM_TCTI="cmd:exec $SIM $WORK/tpm"
 export SHIRUDO_EVENTLOG_PATH="$WORK/eventlog"
 export SHIRUDO_KEYS_DIR="$WORK/keys"
 export SHIRUDO_INITRD_RELEASE="$WORK/initrd-release"
@@ -159,6 +159,14 @@ for document in "$WORK"/bad-*.json; do
 		fi
 	'
 done
+
+test_expect_success 'a config string longer than its field is a malformed document' '
+	status=0 &&
+	verify "$WORK/bad-trailing-root.json" >/dev/null \
+		2>"$WORK/trailing-root-err" || status=$? &&
+	test "$status" -eq 2 &&
+	grep -q "is not a shirudo evidence document" "$WORK/trailing-root-err"
+'
 
 test_expect_success 'an inconsistent config history names the check it fails' '
 	! verify "$WORK/bad-reordered.json" >"$WORK/reordered-report" 2>/dev/null &&

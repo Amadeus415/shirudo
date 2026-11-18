@@ -105,17 +105,19 @@ Figure 1 shows the two paths from a target to a collector.
 
 .. figure:: /images/background-telemetry-export.svg
    :alt: Map snapshots pass from a BPF map through a serializer or direct
-         read and a signed decoder into OTLP JSON; the status report
-         becomes a keepalive log; both are posted to a collector.
+         read and a signed decoder into OTLP JSON; the keepalive body,
+         quoted by the TPM, becomes a keepalive log; both are posted to a
+         collector.
 
    Figure 1. Telemetry export. Two one-shot commands, each started by a
    systemd timer, build OTLP JSON documents and post them to the
    collector. Nothing on the target listens for connections.
 
-``shirudo-keepalive.timer`` runs ``shirudo status --otel
---include-system``, and ``shirudo-map-export.timer`` runs ``shirudo
-upatch map --all``. Each timer starts its service five seconds after boot
-and again five seconds after the previous run finished.
+``shirudo-keepalive.timer`` runs ``shirudo status --otel``, and
+``shirudo-map-export.timer`` runs ``shirudo upatch map --all``. Each
+timer starts its service five seconds after boot. The keepalive timer
+starts it again a minute after the previous run finished, the map-export
+timer five seconds after.
 
 shirudo speaks OTLP over HTTP with the JSON encoding only and refuses an
 ``OTEL_EXPORTER_OTLP_PROTOCOL`` other than ``http/json``. Every request
@@ -124,14 +126,19 @@ carries the resource attributes ``service.name`` (``shirudo``),
 ``gethostname()`` returns.
 
 The keepalive is one log record with the event name
-``shirudo.keepalive``. Its body is the ``shirudo status --json``
-document. Its attributes are ``shirudo.status``, ``shirudo.version_id``
-and ``shirudo.tamper_attempts``, the number of refusals the guards counted
-this boot. The severity follows the status: ``INFO`` for ``ok``,
-``WARN`` for ``degraded``, ``init-pending`` and ``reboot-pending``, and
-``ERROR`` for every other status. ``shirudo status --otel`` sends the
-keepalive only when the signed config or the environment names an
-endpoint, and never falls back to the default ``localhost`` endpoint.
+``shirudo.keepalive``. Its body is a string, a compact JSON status
+record of about a kilobyte: the verdict, the conditions, the tamper
+counters, the build, the config and image, the tree the target follows
+and the upatches it has loaded. Its one attribute, ``shirudo.quote``, is
+a TPM quote of the SHA-256 of those bytes by the attestation key of
+``shirudo attest``. The body travels as a string because a collector may
+re-encode a structure, and the quote covers the exact bytes. The
+severity follows the verdict: ``INFO`` for ``ok``, ``WARN`` for
+``degraded``, ``init-pending`` and ``reboot-pending``, and ``ERROR`` for
+every other verdict. ``shirudo status --otel`` sends the keepalive only
+when the signed config or the environment names an endpoint, never falls
+back to the default ``localhost`` endpoint, and sends nothing when the
+TPM does not quote.
 
 A map snapshot goes through the decoder the upatch signed for that map,
 which declares whether the map becomes a log record or metrics. A log
@@ -176,17 +183,20 @@ target.
 Limits
 ------
 
-Telemetry carries no proof of origin. The documents are not signed and
-not bound to the TPM. The host name in them is whatever the host
-reports. The credentials and the CA certificate for the collector come
+Map snapshots carry no proof of origin: they are not signed and not
+bound to the TPM. The keepalive's quote shows that its body is unchanged
+since the attestation key signed it, and its clock orders the
+keepalives of one key. It does not show that the key lives in a genuine
+TPM, and the body is still what the target reports. The host name in a
+document is whatever the host reports. The credentials and the CA certificate for the collector come
 from ``/etc/shirudo/map-export.env``, a file root on the target can
 change, and ``map_export.otel_insecure`` turns off certificate
 verification.
 
 Root on the target can therefore stop the timers, drain a map by running
 ``shirudo upatch map`` itself, point the keepalive at another collector
-when the signed config names none, or post a keepalive of its own that
-reports ``ok`` with no refusals. A missing keepalive, or one at
+when the signed config names none, or have the TPM quote a body of its
+own that reports ``ok`` with no refusals. A missing keepalive, or one at
 ``ERROR``, is worth acting on. A keepalive that reports ``ok`` proves
 nothing.
 

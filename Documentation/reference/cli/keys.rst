@@ -61,7 +61,8 @@ directory, so that ``init`` enrolls it at the next boot:
 #. It refuses on a host with an active config image, which every
    production target has, with ``target: add vouched BPF signers to the
    signed config selected for boot and reboot to enroll them``. On such a
-   target, add vouched signers to the signed config image instead (see
+   target, add vouched signers to the signed config image, select it
+   with ``shirudo image stage`` and reboot when appropriate (see
    :doc:`/operate/maintain/keys`).
 #. It requires an ML-DSA-87 certificate and a trusted set under the keys
    directory, and refuses a certificate listed under ``<dir>/revoked``.
@@ -175,8 +176,10 @@ Exit status
        or is the signing key's own, or signing or writing failed.
        ``revoke``: always.
    * - 2
-     - An unknown option or subcommand, a missing certificate or
-       ``--vouch``, an extra argument, or an unusable keys directory path.
+     - A usage error: an unknown option or subcommand, an option given
+       twice, a value missing or empty, a missing certificate or
+       ``--vouch``, or an extra argument. Or an unusable keys directory
+       path.
    * - 127
      - ``vouch``: ``shirudo`` cannot execute the helper.
 

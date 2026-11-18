@@ -57,8 +57,9 @@ Description
    nothing. An archive without such a record, one root brought back
    after its unload or one a load stopped before its extend left, is
    ignored with a warning. An upatch already loaded with the archived
-   payload is kept. An archived upatch that is not loaded after this
-   boot's register was bound is refused as tampered.
+   payload and every link its signed metadata implies is kept; one
+   missing a link is refused as tampered. An archived upatch that is not
+   loaded after this boot's register was bound is refused as tampered.
 #. It binds the measurement register under PCRs 9 and 11 and records one
    init event that covers the certificate set, the restored upatches and
    the upatch tree root. Without tree state the root is 64 zeros; tree
@@ -94,6 +95,8 @@ Pre-flight checks
      - The kernel supports bpffs.
    * - ``signed_loader_kernel_abi``
      - The kernel has the signed-loader interface.
+   * - ``kernel_lsm_hooks``
+     - The kernel has every LSM hook the embedded programs attach to.
    * - ``cert_on_disk``
      - The primary certificate exists: ``/etc/shirudo/keys/cert.der`` in
        the initrd, ``/run/shirudo/runtime/keys/cert.der`` with an active
@@ -152,7 +155,8 @@ Exit status
        check failed (``init: pre-flight failed, <n> of <m> checks``), or
        a phase failed (``init: <phase> failed: <error>``).
    * - 2
-     - An unknown option, or ``--json`` without ``--check-only``.
+     - A usage error: an unknown option, an option given twice or an
+       argument, or ``--json`` without ``--check-only``.
 
 Files and environment
 ---------------------
@@ -181,13 +185,14 @@ Run the pre-flight checks on a target:
      OK    bpf_lsm_active
      OK    bpffs_supported
      OK    signed_loader_kernel_abi
+     OK    kernel_lsm_hooks
      OK    cert_on_disk
      OK    cert_algorithm
      OK    cert_kernel_support
      OK    kernel_keyring
      OK    embedded_loader
      OK    tpm2_reachable: TCTI from the config: device:/dev/tpmrm0
-   10 of 10 passed
+   11 of 11 passed
 
 Related
 -------

@@ -301,6 +301,18 @@ append that fails after
 a successful extension is reported as a desync for the operator to
 reconcile.
 
+The undo removes what the records do not cover, so the records it reads
+must be the register's and nobody else's. The boot ID and the eventlog
+are paths, which root binds over in a mount namespace of its own. The
+undo therefore takes the boot from the TPM, the last ``init`` record
+whose ``nv_name`` and ``tpm_reset_count`` are the live index's name and
+the TPM's reset count, derives every record's digest from its fields,
+and folds them to the value the TPM reports for the register. Records
+that do not fold make it refuse, ``tampered``, and so does the append
+failure above until the next reboot. The pending record counts only
+from a ``/run/shirudo`` that carries the seal label, which a directory
+of root's making cannot.
+
 ``init`` binds the register and writes its record without taking this
 lock, from the initrd, before any upatch command is admitted. Its run
 from the root file system, which upatch commands can run beside, holds

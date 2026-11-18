@@ -226,4 +226,19 @@ struct tpm_attest {
 int tpm_attest_parse(const __u8 *buf, size_t len,
 		     struct tpm_attest *out) __must_check;
 
+/*
+ * The checks of attest verify and of the keepalive quote checker, in one
+ * place so that neither gains a check the other lacks. tpm_attest_signer()
+ * sets *is when the TPM named the key of ak_name, an endorsement primary,
+ * as the signer. tpm_attest_verify() is 0 when the ECDSA signature over
+ * SHA-256 of attest verifies with the point x, y, -EKEYREJECTED when it
+ * does not, a point off the curve included, and -EBADMSG when sig does
+ * not parse.
+ */
+int tpm_attest_signer(const struct tpm_attest *a,
+		      const __u8 ak_name[TPM_NAME_LEN], bool *is) __must_check;
+int tpm_attest_verify(const __u8 *attest, size_t len,
+		      const __u8 *sig, size_t sig_len,
+		      const __u8 x[32], const __u8 y[32]) __must_check;
+
 #endif /* SHIRUDO_TPM_WIRE_H */

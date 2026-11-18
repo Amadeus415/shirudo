@@ -153,7 +153,10 @@ Build the runtime image
    boot: from then on the activation record selects the config.
    ``config.verification_key`` must be a path inside the runtime image,
    and ``shirudo-gen-runtime`` puts the config certificate at the path
-   shown. ``config.pcr`` is the TPM PCR that records config activations:
+   shown. For config-key overlap, repeat ``--config-cert`` when generating
+   the runtime; it installs numbered certificates and writes all their
+   paths into this bootstrap. See :doc:`/operate/maintain/keys`.
+   ``config.pcr`` is the TPM PCR that records config activations:
    0 to 15, except 9 and 11. Choose a PCR that nothing extends after the
    initrd has run, because a later extension makes every command but
    ``status`` refuse until the next reboot. :doc:`/operate/plan/hardening`
@@ -270,7 +273,7 @@ the initrd, from the binary the UKI authenticates.
 
       [Service]
       ExecStart=
-      ExecStart=/run/shirudo/runtime/usr/bin/shirudo status --otel --include-system
+      ExecStart=/run/shirudo/runtime/usr/bin/shirudo status --otel
 
 3. Write ``/etc/systemd/system/shirudo-map-export.service.d/runtime.conf``:
 
@@ -300,7 +303,15 @@ the initrd, from the binary the UKI authenticates.
       ExecStart=
       ExecStart=/run/shirudo/runtime/usr/bin/shirudo bpm tree sync
 
-6. Reload systemd:
+6. Write ``/etc/systemd/system/shirudo-xdp-reconcile.service.d/runtime.conf``:
+
+   .. code-block:: ini
+
+      [Service]
+      ExecStart=
+      ExecStart=/run/shirudo/runtime/usr/bin/shirudo upatch reconcile
+
+7. Reload systemd:
 
    .. code-block:: console
 
@@ -431,7 +442,6 @@ Boot and verify
       target# shirudo status
       Host:                  docs
       Roles:                 target
-      Mode:                  production
       Status:                ok
       Version ID:            d0d7aa800303439023907d1979d917d46a21bec21f816689c138728a28e84af9
 
@@ -443,6 +453,7 @@ Boot and verify
         UpatchesMeasured   OK      every pinned or archived upatch is in this boot's records
         TpmMeasured        OK      NV index 0x01818E00 readable
         ConfigActive       OK      config 6d5ed552f448.. is active
+        XdpCovered         OK      every device an XDP upatch selects runs it
 
       Tamper attempts (this boot):
         LoadNotLoader            15  program load that is not a signed loader
@@ -450,8 +461,10 @@ Boot and verify
         BpfCommand                8  detach, update, delete or unclassified bpf() command
         BpffsUmount               1  unmount of the private bpffs
         SealWrite                 1  write open of a sealed file
-        SealPtrace                7  ptrace of a shirudo task
         SealEntry                 2  entry into a sealed directory, or a sealed inode linked
+
+      Integrity attempts (this boot):
+        none
 
       Loaded upatches (1):
         NAME                      LOCATION                       MAPS  STATUS                        AGE
@@ -459,9 +472,10 @@ Boot and verify
 
       Folded: keyrings, TPM measurement, assets (--show-full)
 
-   Check for ``Mode: production``, ``Status: ok`` and six ``OK``
-   conditions. ``ConfigActive`` names the first 12 hex digits of the
-   active config root. ``shirudo status --show-full`` prints the folded
+   Check for ``Status: ok`` and six ``OK`` conditions. The
+   ``LsmAttached`` condition confirms the LSM link is pinned.
+   ``ConfigActive`` names the first 12 hex digits of the active config
+   root. ``shirudo status --show-full`` prints the folded
    TPM measurement section, whose ``Bound in:`` line must read
    ``initrd``. :doc:`/operate/run/read-status` explains every section.
 

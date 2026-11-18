@@ -59,6 +59,8 @@ The probe stops with ``shirudo: missing prerequisite:`` and an install
 hint for each module it cannot find. It writes what it found to
 ``config.mk``, which ``make distclean`` removes.
 
+.. _dev-openssl:
+
 Install OpenSSL 3.5
 -------------------
 
@@ -206,14 +208,22 @@ variables change it:
    * - ``SANITIZE=address,undefined``
      - Instruments the host binaries and the test helpers with ASan and
        UBSan. See :doc:`/contribute/testing/testing`.
+   * - ``SANITIZE=thread``
+     - Instruments them with TSan. See
+       :doc:`/contribute/testing/testing`.
+   * - ``SANITIZE=memory``
+     - Instruments them with MSan, the vendored libbpf included, and
+       wants the instrumented libraries
+       :src:`.github/scripts/msan-deps.sh` builds. See
+       :doc:`/contribute/testing/testing`.
 
 Build the shirudo-build helper
 ------------------------------
 
 The core binary never compiles or signs. ``shirudo build``, ``shirudo
 image build``, ``shirudo image verify``, ``shirudo keys vouch`` and the
-operator ``bpm`` subcommands (``build``, ``push``, ``tree append`` and
-``config update``) execute the separate ``shirudo-build`` helper, which
+operator ``bpm`` subcommands (``build``, ``push``, ``tree append``,
+``tree show`` and ``config update``) execute the separate ``shirudo-build`` helper, which
 is the only binary that links the signer.
 
 1. Build the helper:
@@ -245,8 +255,10 @@ path, which takes precedence over ``PATH``.
 ``bpm build`` compiles with the package directory as its working
 directory. To build a package with a checkout's ``vmlinux.h`` and BPF
 headers, give the package directory ``vendor`` and ``bpf`` symbolic
-links to the checkout's, as ``t7005`` and :src:`testing/end2end/host.sh`
-do.
+links to the checkout's, as ``t7005`` does. An installed operator package
+needs neither: ``shirudo-build`` falls back to the headers and
+``vmlinux.h`` it installs, as the operator VM of the end-to-end test
+builds ``kernel-obs``.
 
 Build the target binary
 -----------------------
@@ -314,9 +326,8 @@ The source revision is recorded in ``vendor/libbpf/COMMIT``. The
 binaries link no libbpf: :src:`rust/src/bpf/` reads objects and BTF,
 generates loaders and dumps values as this libbpf does, and the vendored
 copy builds the ``vmlinux.h`` generator and the tests that make BTF with
-it. After refreshing, reapply its local changes to
-``vendor/libbpf/bpf/gen_loader.c`` and ``btf_dump.c``, and check
-:src:`rust/src/bpf/` against the new libbpf.
+it. After refreshing, reapply the local changes :src:`vendor/libbpf/README.md`
+lists, and check :src:`rust/src/bpf/` against the new libbpf.
 
 Other make targets
 ------------------
@@ -333,10 +344,31 @@ Other make targets
    * - ``make install-target``
      - Installs the static target binary as ``shirudo``, the units and
        timers, the dracut module and ``shirudo-gen-initrd``.
+   * - ``make quote-check``
+     - Builds ``tools/quote-check/shirudo-quote-check``, the program a
+       telemetry backend runs on keepalive quotes, as a static PIE in
+       either profile. The link needs the static archives of the C
+       library and of ``libcrypto`` with those
+       ``pkg-config --static --libs libcrypto`` names: on Ubuntu 26.04,
+       ``libzstd-dev`` and ``libjitterentropy3-dev`` beside
+       ``libssl-dev`` and ``zlib1g-dev``. CI installs them with
+       :src:`.github/scripts/install-static-libcrypto-deps.sh`, which
+       reads that list. Where the distribution ships no
+       ``libcrypto.a``, as Fedora does not, ``make quote-check`` and
+       ``make install-operator`` first build a static OpenSSL into
+       ``build/quote-check-openssl`` with :src:`Makefile.target-deps`,
+       which needs ``perl``, and compile the checker's objects against
+       its headers under ``build/quote-check/``; the link then needs
+       ``glibc-static``. ``QUOTE_CHECK_OPENSSL=<prefix>`` names another
+       static OpenSSL. ``shirudo`` and ``shirudo-build`` still link the
+       distribution's OpenSSL. ``make distclean`` removes that build. A
+       ``SANITIZE=`` build links the checker against the shared
+       libraries, because the sanitizer runtimes do not link
+       statically. See :doc:`/reference/cli/quote-check`.
    * - ``make install-operator``
      - Installs the operator binary, the helper under
-       ``$(libexecdir)/shirudo``, the image scripts, ``vmlinux.h`` and
-       the BPF headers.
+       ``$(libexecdir)/shirudo``, ``shirudo-quote-check``, the image
+       scripts, ``vmlinux.h`` and the BPF headers.
    * - ``DESTDIR=<dir>``, ``prefix=<dir>``, ``bindir=<dir>``,
        ``libexecdir=<dir>``, ``systemdunitdir=<dir>``
      - Override the install paths. The unit and dracut directories are
@@ -349,10 +381,14 @@ Other make targets
      - Renders the documentation and serves it on
        ``http://127.0.0.1:8000``. See
        :doc:`/contribute/documentation/writing-docs`.
+   * - ``make tags``, ``make cscope``
+     - Index the C sources, untracked ones and the generated
+       ``vendor/linux/vmlinux.h`` included, for an editor: ``tags`` with
+       ctags, ``cscope.files`` and ``cscope.out`` with cscope.
    * - ``make clean``, ``make distclean``
      - Remove the build products, and with ``distclean`` also
        ``config.mk``, the target dependencies and the vendored libbpf
-       build.
+       build and the source indexes.
    * - ``make help``, ``make -C testing help``
      - List the targets.
 
@@ -387,7 +423,7 @@ Project layout
      - The headers more than one BPF program includes: the LSM helpers
        and verity device records of ``bpf2.c`` and ``seal.c``, and,
        shared with upatches and userspace, decoders, identity,
-       serializers, tamper counters and common helpers.
+       serializers, tamper and integrity counters and common helpers.
    * - :src:`include/shirudo/`
      - Integer types, string and number helpers, the ``.upatch``
        container layout, TPM types and the enforcement definitions
@@ -396,7 +432,11 @@ Project layout
      - The ``main()`` of the operator-only helper, whose commands are in
        :src:`rust/src/shirudo_build/`: compile, sign, unload directives,
        image signing, ``keys vouch``, ``bpm build``, ``push``,
-       ``tree append`` and ``config update``.
+       ``tree append``, ``tree show`` and ``config update``.
+   * - :src:`tools/quote-check/`
+     - ``shirudo-quote-check``, a program of its own that checks
+       keepalive quotes with the TPM parsers of :src:`util/tpm_wire.c`.
+       No other binary links it.
    * - :src:`tools/gen-image/`
      - ``shirudo-gen-image``, ``shirudo-gen-runtime`` and
        ``shirudo-gen-verity``, which make the runtime and config images,
@@ -469,6 +509,23 @@ the commit at ``HEAD`` alone without them.
        files.
    * - ``check-spdx.sh``
      - The SPDX tag of every tracked source. Takes no range.
+   * - ``check-unused.sh``
+     - An extern function of the userspace C that nothing calls: the
+       compiler reports an unused ``static`` function, never an extern
+       one. A call from a test counts. Takes no range.
+   * - ``scan-build.sh <vmlinux-btf>``
+     - The binary, the shirudo-build helper and the quote checker built
+       under clang's static analyzer with its default checkers, failing
+       on any finding: a NULL or uninitialized value used, memory leaked
+       or used after its free, a store never read and more. It installs
+       Debian testing's packages and clang 23's tools, so it runs in a
+       throwaway container; on a host that has them,
+       ``scan-build-23 --status-bugs --exclude vendor make ANALYZE=1``
+       does the same. ``ANALYZE=1`` builds without ``_FORTIFY_SOURCE``
+       and with ``-fno-inline``, whose absence would let glibc's
+       wrappers hide from the analyzer which libc function a call
+       makes. CI runs it as the ``scan-build`` job of the ``Build``
+       workflow and keeps the HTML report of a failed run.
    * - ``check-sparse.sh``
      - ``make sparse``: sparse over the userspace sources the binaries
        are built from, failing on any warning. It finds a value moved
@@ -482,7 +539,8 @@ the commit at ``HEAD`` alone without them.
        `Coccinelle rules`_.
    * - ``build-commits.sh <range>``
      - Builds every commit on its own: ``make``, ``make
-       shirudo-build`` and ``make -C testing test-helpers``. It
+       shirudo-build``, ``make quote-check`` and ``make -C testing
+       test-helpers``. It
        refuses to start with uncommitted changes and checks out each
        commit in the working tree.
    * - ``install-clang.sh [<package>...]``
@@ -523,6 +581,16 @@ the commit at ``HEAD`` alone without them.
        only host test dependencies. The arm64 job uses this to run unit,
        ``ci-checks`` and host functional tests without target VMs.
        Meant for CI runners, which are discarded afterwards.
+   * - ``proofs.sh install-cbmc|install-lean``,
+       ``proofs.sh list|run <k> <n>``
+     - Installs the CBMC and the elan CI pins, each verified by its
+       SHA-256, and Lean, all without root: CBMC into ``build/cbmc``,
+       elan and the toolchain ``lean-toolchain`` names into
+       ``ELAN_HOME``. Prints the directory to put on ``PATH``. ``run``
+       runs the CBMC proofs of shard ``<k>`` of ``<n>`` as the ``CBMC``
+       jobs of the ``Proofs`` workflow do, each alone under a memory and
+       time cap, and ``list`` prints them. See
+       :doc:`/contribute/testing/proofs`.
 
 ``check-style.sh`` fetches the kernel's ``checkpatch.pl`` at a pinned
 tag into ``build/checkpatch/`` and verifies its SHA-256. Set
@@ -538,6 +606,7 @@ Before you send a change:
       $ .github/scripts/check-dco.sh origin/main..HEAD
       $ .github/scripts/check-style.sh origin/main..HEAD
       $ .github/scripts/check-spdx.sh
+      $ .github/scripts/check-unused.sh
       $ .github/scripts/check-sparse.sh
       $ .github/scripts/check-coccinelle.sh
       $ .github/scripts/build-commits.sh origin/main..HEAD
@@ -598,15 +667,20 @@ can rewrite what it finds does so with ``-D patch``:
    * - ``scrub_missing``
      - A local filled with an activated credential, a KDF output or an
        ECDH shared value, or by ``hex_bytes()``, ``hex_decode()`` or
-       ``getrandom()`` when named for a secret, that a path out leaves
-       without ``memzero_explicit()``.
+       ``getrandom()`` when named for a secret, that a return or function
+       fallthrough leaves without a full-size ``memzero_explicit()``. It
+       recognizes output passed by address.
    * - ``sensitive_scrub``
      - A local of a struct with a member marked ``__sensitive`` that a
-       path out leaves, once the function has used it, without
-       ``memzero_explicit()`` of the whole struct or a ``__cleanup()``
-       function, and the address of a compound literal of such a struct.
+       return path leaves, once the function has used it, without
+       a full-size ``memzero_explicit()`` of the whole struct or a
+       ``__cleanup()`` function, and the address of a compound literal
+       of such a struct.
        The structs come from the headers under :src:`include/`,
        :src:`util/` and :src:`tools/` and at the top of the tree.
+   * - ``curl_slist_free``
+     - A libcurl header list freed without first scrubbing its copied
+       header strings with ``curl_slist_free_sensitive()``.
    * - ``secret_cmp``
      - ``memcmp()`` of a secret or what derives from one rather than
        ``memneq_explicit()``.
@@ -629,6 +703,12 @@ can rewrite what it finds does so with ``-D patch``:
    * - ``literal_len``
      - A length that does not match the string literal it compares or
        copies.
+   * - ``option_by_hand``
+     - A value compared with an option name, a literal that starts with
+       ``-`` and is longer than one character, outside
+       :src:`util/options.c`, which parses every command's options from
+       its table, and the help and image gate code that looks for
+       ``--help`` and the options an image refuses.
    * - ``test_after_use``
      - A pointer tested for NULL after its use.
    * - ``null_deref``
@@ -689,6 +769,12 @@ can rewrite what it finds does so with ``-D patch``:
    * - ``fclose_unchecked``
      - ``fclose()`` of a stream opened for writing with its result
        ignored, after CERT C ERR33-C.
+   * - ``dead_store``
+     - A value stored in a local and stored over on every path, the
+       error exits included, before anything reads it, after CERT C
+       MSC12-C. Following every path of a long function can take
+       minutes, so the rule gives up on a file after one; the check
+       names each file it gave up on.
    * - ``bpf_map_rmw``
      - ``++``, ``+=`` or ``|=`` through the value of a map that is not
        per-CPU, or through inode, socket or cgroup storage, which other
@@ -720,7 +806,10 @@ it refuses to ``t0006-check-coccinelle``, which shows that it matches.
 ``check-coccinelle.sh`` runs a rule without the headers a file includes,
 which keeps it fast but leaves the types they declare unknown. A rule
 that needs them, as ``sizeof_ptr`` needs the type of a struct member,
-names its include options on a ``#spatch`` line.
+names its include options on a ``#spatch`` line. A rule whose search can
+run long names ``--timeout <seconds>`` there, as ``dead_store`` does: the
+check then runs it one file at a time and names each file spatch gave up
+on, rather than failing.
 
 The ``bpf_`` rules read the BPF sources through
 :src:`testing/coccinelle/bpf.macros`, which tells Coccinelle what

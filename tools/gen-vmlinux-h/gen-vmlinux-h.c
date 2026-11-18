@@ -297,7 +297,9 @@ static int dump_kfuncs(struct btf_dump *d, struct btf *btf)
 		}
 	}
 
-	qsort_r(kfuncs.elems, kfuncs.cnt, sizeof(*kfuncs.elems), cmp_kfuncs, btf);
+	if (kfuncs.cnt)
+		qsort_r(kfuncs.elems, kfuncs.cnt, sizeof(*kfuncs.elems),
+			cmp_kfuncs, btf);
 	for (i = 0; i < kfuncs.cnt; i++) {
 		const struct btf_type *t = kfuncs.elems[i];
 

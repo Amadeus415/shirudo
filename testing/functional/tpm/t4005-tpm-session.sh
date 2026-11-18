@@ -19,7 +19,7 @@ trap cleanup EXIT
 
 for mode in unsalted-control nv-extend nv-replay pcr-extend nv-read \
 	    pcr-read clock policy-digest identity; do
-	export SHIRUDO_TPM_TCTI="cmd:$(pwd)/helper/tpmsim-cmd $WORK/$mode"
+	export SHIRUDO_TPM_TCTI="cmd:exec $(pwd)/helper/tpmsim-cmd $WORK/$mode"
 	test_expect_success "TPM session: $mode" '
 		./helper/test-tpm-session "$mode"
 	'

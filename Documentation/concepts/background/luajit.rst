@@ -100,16 +100,22 @@ The allocator function uses LuaJIT's allocator for addresses its garbage
 collector can represent, including on arm64 where the libc heap can sit
 above its 47-bit limit. A separate empty state owns the allocator arena
 and releases it after the decoder state closes. Decoder allocations are
-zeroed and scrubbed before release. The memory limit also covers finalizers
-run at close. The empty owner state and allocator bookkeeping are outside
-that limit.
+zeroed and scrubbed before release. The empty owner state and allocator
+bookkeeping are outside the limit.
 
 The state opens the standard libraries and then removes these globals:
 ``io``, ``os``, ``package``, ``require``, ``debug``, ``jit``, ``ffi``,
-``dofile``, ``loadfile``, ``load``, ``loadstring``, ``module`` and
-``collectgarbage``. What remains is the language itself with ``string``,
+``dofile``, ``loadfile``, ``load``, ``loadstring``, ``module``,
+``collectgarbage``, ``newproxy``, ``xpcall`` and ``print``, and the
+pattern functions ``find``, ``match``, ``gmatch`` and ``gsub`` from
+``string``. What remains is the language itself with ``string``,
 ``table``, ``math``, ``bit``, ``coroutine``, ``pcall`` and the other base
-functions, ``print`` among them.
+functions. LuaJIT runs finalizers with hooks off, and the handler
+``xpcall`` calls for an error the hook raised runs while the hook is
+still active, so either would run code the budget never counts:
+``newproxy`` is the one way to a value with a finalizer that the state
+leaves, and the metatable of the slot values shirudo hands the decoder
+is locked.
 
 shirudo turns off the JIT compiler for the state, so every instruction
 runs in the interpreter where the instruction hook sees it. It loads the
@@ -120,7 +126,10 @@ A count hook runs every 10,000 interpreter instructions and draws from a
 budget of one million instructions. The budget covers both running the
 chunk at the top of the source and the call to the entry point. When the
 budget is spent, the hook raises the error ``decoder instruction limit
-exceeded``.
+exceeded`` and from then on runs at every instruction, raising it again:
+``pcall`` or ``coroutine.resume`` catch the error, but the next
+instruction of their caller raises it anew, so the decoder unwinds to
+shirudo.
 
 The entry point receives one table: the upatch and map names, the start
 and current time as decimal nanosecond strings, the map's type and sizes,
@@ -153,28 +162,22 @@ the records afterwards, and :doc:`/operate/run/telemetry` sets up the export.
 Limits
 ------
 
-- The instruction budget is a Lua error like any other. ``pcall``,
-  ``xpcall`` and ``coroutine.resume`` catch it. Once the budget is spent,
-  the hook raises again every 10,000 instructions, but a loop around
-  ``pcall`` catches each error and runs without end.
-- Time spent inside a C function, such as ``string.rep``, a pattern match
-  in ``string.find`` or one of the ``shirudo`` helpers, does not count
-  against the budget.
-- There is no wall-clock deadline. A decoder that does not finish stalls
-  every export after it in the same run, until the systemd unit's start
-  timeout stops the service. A command run by hand has no such timeout.
+- Time spent inside a C function, such as ``string.rep``, the sorting
+  of ``table.sort`` or one of the ``shirudo`` helpers, does not count
+  against the budget. Each is bounded by the size of its arguments, which
+  the memory limit bounds in turn.
+- There is no wall-clock deadline. The instruction budget and the memory
+  limit are what bound a decoder.
 - The global list is a denylist. Every function of the standard library
-  that the list does not name stays available. ``print`` writes to the
-  command's standard output, the stream that ``--json`` without a path
-  also writes to.
+  that the list does not name stays available.
 - A decoder runs inside a process with runtime authority, not in a
   separate process. The LuaJIT interpreter is therefore part of the
   target's trusted computing base, and a flaw in it that a signed decoder
   can reach runs with shirudo's authority.
-- At export, shirudo reads the decoder from the archived artifact again.
-  The seal protects that file, but shirudo does not verify its signature
-  a second time or compare it with the payload digest of the programs it
-  loaded.
+- At export, shirudo reads the decoder from the archived artifact again
+  and compares its bytes with the payload digest on the pin directory,
+  but does not verify its signature a second time: the kernel did at
+  load, and the seal has protected the archive since.
 
 These limits bound a mistake or misbehavior in a decoder that carries a
 valid signature. A decoder without one never runs. The threat model

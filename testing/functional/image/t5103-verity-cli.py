@@ -19,7 +19,7 @@ def main():
                        ("bpm", "key", "add", "oci://example.invalid/package:latest")],
         "mutation": [("keys", "revoke", "a" * 64),
                      ("bpm", "config", "register", "add", "new",
-                      "oci://example.invalid", "--key-file", "missing.der"),
+                      "oci://example.invalid"),
                      ("bpm", "config", "register", "remove", "new"),
                      ("bpm", "config", "register", "rm", "new")],
         "help": [("keys", "add", "--help"), ("keys", "revoke", "--help"),

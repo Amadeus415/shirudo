@@ -23,6 +23,10 @@
 						       typeof(&(a)[0])))
 #define ARRAY_SIZE(a)	(sizeof(a) / sizeof((a)[0]) + __must_be_array(a))
 
+/* The text of x once its macros are expanded, as a string literal. */
+#define __stringify_1(x)	#x
+#define __stringify(x)		__stringify_1(x)
+
 /*
  * The size of a member, and the offset just past it, without an object;
  * the member may be a path such as a.b, as offsetof() takes it.

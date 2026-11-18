@@ -2,6 +2,7 @@
 /* Copyright (c) 2026 Authors of shirudo */
 
 #include <errno.h>
+#include <string.h>
 
 #include <shirudo/string.h>
 
@@ -50,8 +51,23 @@ static void manifest_layer_is_a_whole_descriptor(void)
 		  -EINVAL);
 }
 
+/* SHA-256 of "abc", FIPS 180-2 appendix B.1. */
+#define ABC_DIGEST \
+	"sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+
+static void digest_names_a_blob_as_a_registry_does(void)
+{
+	char out[80];
+
+	memset(out, 'x', sizeof(out));
+	ASSERT_EQ(bpm_sha256_digest("abc", 3, out, 72), 0);
+	EXPECT_STREQ(out, ABC_DIGEST);
+	EXPECT_EQ(bpm_sha256_digest("abc", 3, out, 71), -ENAMETOOLONG);
+}
+
 static const struct unit_case cases[] = {
 	UNIT_CASE(manifest_layer_is_a_whole_descriptor),
+	UNIT_CASE(digest_names_a_blob_as_a_registry_does),
 	{}
 };
 

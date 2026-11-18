@@ -9,7 +9,8 @@ shirudo status
 ==============
 
 Report the local readiness and state of this host, and optionally send the
-report as an OTLP keepalive.
+keepalive, the status record the TPM quotes, as an OTLP log, or print
+its body.
 
 Runs on: any host, and on a target as root with the runtime binary. It is the
 only command that runs while a config activation is pending or cannot be
@@ -21,8 +22,8 @@ Usage
 
 .. code-block:: none
 
-   shirudo status [--json | --otel] [--check] [--show-full]
-                  [--include-system] [--include-eventlog]
+   shirudo status [--json | --otel | --keepalive] [--check]
+                  [--show-full] [--include-system] [--include-eventlog]
 
 Description
 -----------
@@ -35,13 +36,10 @@ report. The roles come from what is present:
   ``init`` froze
 - operator: ``/var/lib/shirudo/keys/signing_key.pem``
 
-``Mode`` is ``production`` when the LSM link is pinned and ``inactive``
-otherwise. It says nothing about the keyring. The ``KeyringSealed``
-condition does.
-
-The report shows six conditions, each ``OK``, ``WARN`` or ``ALERT``:
+The report shows seven conditions, each ``OK``, ``WARN`` or ``ALERT``:
 ``LsmAttached``, ``KeyringSealed``, ``ChainIntact``,
-``UpatchesMeasured``, ``TpmMeasured`` and ``ConfigActive``. The verdict is the first of these that applies:
+``UpatchesMeasured``, ``TpmMeasured``, ``ConfigActive`` and
+``XdpCovered``. The verdict is the first of these that applies:
 
 .. list-table::
    :header-rows: 1
@@ -50,12 +48,14 @@ The report shows six conditions, each ``OK``, ``WARN`` or ``ALERT``:
    * - Verdict
      - Applies when
    * - ``tampered``
-     - The live register differs from the eventlog replay, the ``.bpf``
-       or ``.dm-verity`` keyring is not the one ``init`` froze or is
-       gone, a keyring holds a link ``init`` did not freeze, the config
-       key is gone from ``.dm-verity``, a upatch is pinned or archived
-       without a record of this boot, or the selected config cannot be verified
-       against its records.
+     - The live register differs from the eventlog replay, the archive
+       of a loaded XDP upatch differs from what was loaded, a loaded
+       upatch is missing a link or its archive, a upatch is pinned or
+       archived without a record of this boot, the selected config
+       cannot be verified against its records, the ``.bpf`` or
+       ``.dm-verity`` keyring is not the one ``init`` froze or is gone,
+       a keyring holds a link ``init`` did not freeze, or the config key
+       is gone from ``.dm-verity``.
    * - ``lsm-off``
      - The LSM link is not pinned.
    * - ``init-pending``
@@ -63,12 +63,13 @@ The report shows six conditions, each ``OK``, ``WARN`` or ``ALERT``:
    * - ``reboot-pending``
      - A config activation is pending until the next reboot.
    * - ``degraded``
-     - No TPM answered, or no register is bound this boot.
+     - No TPM answered, no register is bound this boot, or a device an
+       XDP upatch selects does not run it.
    * - ``ok``
      - None of the above.
 
 The human report follows the verdict with the conditions, the tamper
-counters that moved this boot and the loaded upatches. Three sections
+and integrity counters that moved this boot and the loaded upatches. Three sections
 are folded unless ``--show-full`` asks for them: the ``.bpf`` and
 ``.dm-verity`` keyrings with the certificates each should hold and the
 key that holds each one, the TPM measurement state and the assets under
@@ -78,14 +79,111 @@ key that holds each one, the TPM measurement state and the assets under
 sections that stayed folded. :doc:`/operate/run/read-status` explains
 each field and :doc:`/reference/formats/status-json` the JSON document.
 
-With ``--otel``, ``status`` builds the JSON report and sends it as one
-OTLP log record named ``shirudo.keepalive``, only when an endpoint is
-configured: ``map_export.otel_endpoint``, else
+With ``--otel``, ``status`` sends the keepalive, only when an endpoint
+is configured: ``map_export.otel_endpoint``, else
 ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT``, else
-``OTEL_EXPORTER_OTLP_ENDPOINT``. Without an endpoint it sends nothing and
-says nothing, except while a config activation is pending or unverifiable,
-when it prints a warning. ``--otel`` alone prints nothing on standard
-output. Add ``--json`` to print the document too.
+``OTEL_EXPORTER_OTLP_ENDPOINT``. It builds the keepalive body described
+below, has the TPM's attestation key quote the SHA-256 of the body, and
+sends one OTLP log record named ``shirudo.keepalive`` with the body as a
+string and the quote as its one attribute, ``shirudo.quote``
+(:doc:`/reference/formats/otlp`). The attestation key is the one
+:doc:`attest` uses, created for the quote and flushed after it. When no
+TPM answers or the quote fails, ``status`` sends nothing, says why on
+standard error and exits 1: a keepalive without a quote is worth nothing
+to the backend. Without an endpoint it sends nothing, quotes nothing and
+says nothing, except while a config activation is pending or
+unverifiable, when it prints a warning. ``--otel`` alone prints nothing
+on standard output. Add ``--json`` to print the JSON report too; it is
+the full document, not the keepalive body, and ``--include-system`` and
+``--include-eventlog`` change only it.
+
+With ``--keepalive``, ``status`` prints the keepalive body, the compact
+status record a node's TPM quotes, as one line on standard output. It
+neither quotes nor sends it and needs no TPM, so an operator can see
+what a node reports. The body has 23 keys in a fixed order: ``schema``
+(``shirudo.keepalive/1``), ``boot_id``, ``version_id``, ``config_root``,
+``kernel_release``, ``image_id``, ``image_version``, ``image_root``,
+``verdict``, ``cond``, ``flags``, ``tamper``, ``integrity``,
+``tree_id``, ``generation``, ``base_seq``, ``last_seq``, ``base_root``,
+``projection_root``, ``mask``, ``set_sha256``, ``count`` and ``not_ok``.
+A key that does not apply is ``null``:
+
+- ``config_root`` unless the selected config is active;
+- the seven tree keys, ``tree_id`` to ``mask``, when the node follows no
+  tree or its tree state cannot be read.
+
+``cond`` holds two bits per condition, condition *i* of the order above
+at bits ``2i`` and ``2i+1``, ``LsmAttached`` first and ``XdpCovered``
+last: ``00`` not evaluated, ``01`` ``OK``, ``10`` ``WARN``, ``11``
+``ALERT``. All seven ``OK`` is ``5461``. ``tamper`` lists every counter
+of :doc:`/security/tamper-counters`, zeros included, in the order of
+that page, and ``integrity`` every counter of
+:doc:`/security/integrity-counters` the same way. A collector reads a
+counter by its place: a new one is appended, never put between two.
+
+The tree keys report a window of the last 512 operations up to the head
+of the recorded publication, whatever segments hold them: ``base_seq``
+is the head less 512, or 0 for a tree of 512 operations or fewer, and
+``base_root`` the node's projection root after ``base_seq``, 64 zeros
+at 0. ``mask`` holds two bits per operation from ``base_seq + 1`` to the
+head: ``01`` applied, ``10`` passed over, ``11`` module absent, ``00``
+not reached. Both come from the outcomes record of
+:doc:`/reference/formats/bpm-formats`, which keeps every operation the
+node processed, those of sealed segments included. ``set_sha256`` is
+SHA-256 over a ``<payload_sha256> <name>`` line for every loaded upatch,
+sorted by name, the ``set_digest`` form of the ``init`` event.
+``not_ok`` counts the loaded upatches the tree holds a status file for.
+The bits of ``flags``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 8 24 68
+
+   * - Bit
+     - Name
+     - Set when
+   * - 0
+     - ``register_rebound``
+     - The register was bound more than once for this TPM reset.
+   * - 1
+     - ``bound_late``
+     - This boot's ``init`` record says the register was bound from the
+       root file system, not from the initrd.
+   * - 2
+     - ``tree_log_mismatch``
+     - The tree eventlog does not replay to the ``projection_root`` of
+       ``state.json``, or the outcomes record lacks a line the window
+       needs; ``base_root`` and ``mask`` are then ``null``.
+   * - 3
+     - ``tamper_unavailable``
+     - The tamper counters cannot be read; ``tamper`` is ``null``.
+   * - 4
+     - ``tree_op_pending``
+     - A tree operation was left in flight: ``pending.json`` existed
+       before or after the read, after a sync stopped mid-operation.
+   * - 5
+     - ``snapshot_unsettled``
+     - ``state.json`` kept changing while the body was read, which the
+       config operation lock leaves to a writer outside it.
+   * - 6
+     - ``integrity_unavailable``
+     - The integrity counters cannot be read; ``integrity`` is ``null``.
+
+``status`` holds the config operation lock for its whole run, as every
+target command does, a ``bpm tree sync`` included. It therefore never
+reads a tree a sync is changing: while one runs, ``status`` waits up to
+30 seconds for the lock and then fails, and no body is printed or sent. A sync
+writes ``pending.json`` before it loads or unloads anything and removes
+it only after ``state.json`` has the new ``last_seq``, so bit 4 says a
+sync stopped in the middle of an operation and the next sync completes
+it. ``status`` still reads ``state.json``, looks for ``pending.json``,
+reads the outcomes up to that ``last_seq`` and the loaded upatches, then
+looks for ``pending.json`` and reads ``state.json`` again, and starts
+over when the second ``state.json`` differs from the first, three times
+in all, printing the last read with bit 5 set; under the lock that
+happens only if something writes the tree without it. With bits 4 and 5
+clear the tree keys and the loaded set describe one point. The two bits
+say the node is busy, not that it is unhealthy.
 
 Options
 -------
@@ -105,7 +203,13 @@ Options
    * - ``--otel``
      - none
      - off
-     - Send the JSON report as an OTLP keepalive log record.
+     - Quote the keepalive body with the TPM and send it as an OTLP log
+       record.
+   * - ``--keepalive``
+     - none
+     - off
+     - Print the keepalive body without quoting or sending it. Not with
+       ``--json`` or ``--otel``.
    * - ``--include-system``
      - none
      - off
@@ -144,23 +248,32 @@ reads ``.status`` and the conditions from the JSON document.
      - The report was produced.
    * - 1
      - With ``--check``: the verdict is ``tampered``. With ``--otel``:
-       the configuration cannot be loaded or the OTLP request failed.
+       the configuration cannot be loaded, the body cannot be built, no
+       TPM answered, the quote failed or the OTLP request failed.
        With ``--json``: the document does not fit the output buffer.
-       Also an allocation failure.
+       With ``--keepalive``: the body cannot be built. Also an allocation
+       failure.
    * - 2
-     - An unknown option, or with ``--otel`` an invalid ``map_export``
-       configuration.
+     - A usage error: an unknown option, an option given twice or an
+       argument, ``--keepalive`` with ``--json`` or ``--otel``. Or, with
+       ``--otel``, an invalid ``map_export`` configuration.
 
 Files and environment
 ---------------------
 
-- Reads ``/run/shirudo/bpffs`` (pins, identity, tamper counters), the
+- Reads ``/run/shirudo/bpffs`` (pins, identity, tamper and integrity
+  counters), the
   ``.bpf`` and ``.dm-verity`` keyrings, the TPM register,
   ``/var/lib/shirudo/eventlog``, ``/var/lib/shirudo/keys``, the config
   certificate the runtime image's bootstrap names and the config
   activation records
-- With ``--otel``: ``map_export.*`` and the ``OTEL_EXPORTER_OTLP_*``
-  variables (see :doc:`/reference/environment`).
+- With ``--keepalive`` or ``--otel``: ``state.json``, ``pending.json``, ``outcomes``,
+  ``tree-eventlog`` and ``status/`` under
+  ``/var/lib/shirudo/bpm/upatch-tree``, ``/etc/os-release`` (else
+  ``/usr/lib/os-release``), ``/proc/cmdline`` and
+  ``/proc/sys/kernel/random/boot_id``
+- With ``--otel``: the TPM, ``map_export.*`` and the
+  ``OTEL_EXPORTER_OTLP_*`` variables (see :doc:`/reference/environment`).
   ``shirudo-keepalive.service`` reads them from
   ``/etc/shirudo/map-export.env``
 
@@ -174,7 +287,6 @@ Show the state of a target:
    target# shirudo status
    Host:                  docs
    Roles:                 target
-   Mode:                  production
    Status:                ok
    Version ID:            d0d7aa800303439023907d1979d917d46a21bec21f816689c138728a28e84af9
 
@@ -186,6 +298,7 @@ Show the state of a target:
      UpatchesMeasured   OK      every pinned or archived upatch is in this boot's records
      TpmMeasured        OK      NV index 0x01818E00 readable
      ConfigActive       OK      config 6d5ed552f448.. is active
+     XdpCovered         OK      every device an XDP upatch selects runs it
 
    Tamper attempts (this boot):
      LoadNotLoader            15  program load that is not a signed loader
@@ -193,8 +306,10 @@ Show the state of a target:
      BpfCommand                8  detach, update, delete or unclassified bpf() command
      BpffsUmount               1  unmount of the private bpffs
      SealWrite                 1  write open of a sealed file
-     SealPtrace                7  ptrace of a shirudo task
      SealEntry                 2  entry into a sealed directory, or a sealed inode linked
+
+   Integrity attempts (this boot):
+     none
 
    Loaded upatches (1):
      NAME                      LOCATION                       MAPS  STATUS                        AGE
@@ -210,7 +325,6 @@ system as well:
    target# shirudo status --show-full
    Host:                  docs
    Roles:                 target
-   Mode:                  production
    Status:                ok
    Version ID:            d0d7aa800303439023907d1979d917d46a21bec21f816689c138728a28e84af9
 
@@ -222,6 +336,7 @@ system as well:
      UpatchesMeasured   OK      every pinned or archived upatch is in this boot's records
      TpmMeasured        OK      NV index 0x01818E00 readable
      ConfigActive       OK      config 6d5ed552f448.. is active
+     XdpCovered         OK      every device an XDP upatch selects runs it
 
    Tamper attempts (this boot):
      LoadNotLoader            15  program load that is not a signed loader
@@ -229,8 +344,10 @@ system as well:
      BpfCommand                8  detach, update, delete or unclassified bpf() command
      BpffsUmount               1  unmount of the private bpffs
      SealWrite                 1  write open of a sealed file
-     SealPtrace                7  ptrace of a shirudo task
      SealEntry                 2  entry into a sealed directory, or a sealed inode linked
+
+   Integrity attempts (this boot):
+     none
 
    Loaded upatches (1):
      NAME                      LOCATION                       MAPS  STATUS                        AGE
@@ -277,7 +394,6 @@ system as well:
      keys/signing_key.pem   absent
      eventlog               present (2324 bytes)
      upatches/              1 archived
-     incoming/              empty
      bpffs/                 mounted
 
    System:
@@ -299,6 +415,13 @@ Read the verdict in a script:
 
    target# shirudo status --json | jq -r .status
    ok
+
+Print the keepalive body of the same target, which follows no tree:
+
+.. code-block:: console
+
+   target# shirudo status --keepalive
+   {"schema":"shirudo.keepalive/1","boot_id":"82639935-1127-4dab-91b5-f818eabc7f13","version_id":"d0d7aa800303439023907d1979d917d46a21bec21f816689c138728a28e84af9","config_root":"6d5ed552f448a1c07e3b9d24f5a86c1e0b7d93f2c4e5a6b7180c9d2e3f4a5b6c","kernel_release":"7.3.0-bpf-next+","image_id":null,"image_version":null,"image_root":null,"verdict":"ok","cond":5461,"flags":0,"tamper":[15,0,0,0,0,1,0,0,0,0,0,8,0,0,0,0,0,1,0,0,1,0,0,0,0,0,7,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0],"integrity":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"tree_id":null,"generation":null,"base_seq":null,"last_seq":null,"base_root":null,"projection_root":null,"mask":null,"set_sha256":"5f0c2e8b7a1d4c3f9e6b2a0d8c7f1e3b5a9d4c2e6f8b0a1d3c5e7f9b2d4a6c8e","count":1,"not_ok":0}
 
 Add this boot's eventlog to the report:
 

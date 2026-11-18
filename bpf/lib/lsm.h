@@ -21,6 +21,8 @@
 #define S_IFDIR		0040000
 #endif
 #define LSM_UNSAFE_PTRACE	2
+/* include/linux/ptrace.h; a #define, so not in BTF. */
+#define PTRACE_MODE_ATTACH	0x02
 #define PR_SET_MM		35
 #define PR_SET_MM_EXE_FILE	13
 #define PR_SET_MM_MAP		14
@@ -28,6 +30,7 @@
 #include <shirudo/enforcement.h>
 
 #include "identity.h"
+#include "integrity.h"
 #include "policy.h"
 #include "tamper.h"
 
@@ -38,7 +41,7 @@ struct task_authority {
 	__u8	trusted;
 	__u8	candidate_valid;
 	__u8	candidate_trusted;
-	__u8	pad;
+	__u8	revoked;
 	__u32	pad2;
 };
 
