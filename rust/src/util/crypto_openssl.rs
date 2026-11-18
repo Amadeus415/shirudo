@@ -1247,21 +1247,6 @@ mod capi {
 
     /// # Safety
     ///
-    /// `data` is NULL or holds `len` bytes, and `out` NULL or room for
-    /// `out_sz`.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn base64_encode(
-        data: *const u8,
-        len: usize,
-        out: *mut c_char,
-        out_sz: usize,
-    ) -> c_int {
-        // SAFETY: the caller's pointers.
-        unsafe { super::base64_encode(data, len, out, out_sz) }
-    }
-
-    /// # Safety
-    ///
     /// `path` is NULL or a C string, and `cert` NULL or points to a cert.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn cert_read_file(path: *const c_char, cert: *mut Cert) -> c_int {
