@@ -40,9 +40,9 @@ is present on the machine, not from a build option. The operator holds
 kernel keyrings, the private bpffs and the TPM register that ``shirudo
 init`` set up this boot.
 
-The operator commands, ``shirudo build``, ``shirudo bpm build``,
-``shirudo bpm push``, ``shirudo bpm tree append``, ``shirudo bpm tree
-show``, ``shirudo bpm config update``, ``shirudo image build``,
+The operator commands, ``shirudo build``, ``shirudo pwru``, ``shirudo bpm
+build``, ``shirudo bpm push``, ``shirudo bpm tree append``, ``shirudo bpm
+tree show``, ``shirudo bpm config update``, ``shirudo image build``,
 ``shirudo image verify`` and ``shirudo keys vouch``, execute the separate
 ``shirudo-build`` helper. Only that helper
 links the CMS signer (:src:`util/sign.c`) and the package builder and

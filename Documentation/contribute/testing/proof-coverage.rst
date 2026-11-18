@@ -1409,6 +1409,7 @@ a proof covers.
        :src:`shirudo.c`, :src:`tools/shirudo-build/bpm-show.c`,
        :src:`tools/shirudo-build/compile.c`,
        :src:`tools/shirudo-build/image.c`,
+       :src:`tools/shirudo-build/pwru.c`,
        :src:`tools/shirudo-build/shirudo-build.c`,
        :src:`tools/shirudo-build/vmlinux.c`,
        :src:`tools/shirudo-build/vouch.c`
@@ -1417,7 +1418,8 @@ a proof covers.
        ``upatch load`` and ``upatch unload``, by review, and the tree
        sync harnesses read ``builtin-bpm.c``; no proof reads the other
        commands. ``vouch.c`` has OpenSSL sign the bytes
-       ``keys_vouch_payload()`` gives it, which ``vouch-payload`` covers
+       ``keys_vouch_payload()`` gives it, which ``vouch-payload`` covers,
+       and ``pwru.c`` hands libbpf the code ``cbpf-translate`` covers
 
 Not covered yet
 ---------------

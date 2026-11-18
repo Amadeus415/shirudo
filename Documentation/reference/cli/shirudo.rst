@@ -41,6 +41,10 @@ Commands
    * - :doc:`build`
      - operator host, through the helper
      - Compile and sign a ``.upatch``, or sign an unload directive.
+   * - :doc:`pwru`
+     - operator host, through the helper
+     - Sign the ``pwru`` upatch, which records the packets a pcap filter
+       matches, without clang.
    * - :doc:`init`
      - target
      - Bring up enforcement and bind the measurement register.
@@ -210,9 +214,9 @@ A refusal prints ``shirudo: image state: <error>`` and exits with 1.
 Operator helper
 ~~~~~~~~~~~~~~~
 
-``build``, ``keys vouch``, ``image build``, ``image verify``, ``bpm
-build``, ``bpm push``, ``bpm tree append``, ``bpm tree show`` and ``bpm
-config update`` run
+``build``, ``pwru``, ``keys vouch``, ``image build``, ``image verify``,
+``bpm build``, ``bpm push``, ``bpm tree append``, ``bpm tree show`` and
+``bpm config update`` run
 in the separate ``shirudo-build`` binary, which the operator package
 installs. ``shirudo`` executes the first of:
 

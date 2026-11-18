@@ -10,6 +10,7 @@
 
 #include <shirudo/misc.h>
 
+struct bpf_object;
 struct upatch_policy_label_entry;
 
 /* A file compiled into the helper, under the name a manifest gives it. */
@@ -24,6 +25,15 @@ int build_package_load(const char *bpf_o, const char *src_path,
 		       const struct upatch_policy_label_entry *policies,
 		       __u32 nr_policies,
 		       const char *pkey_path, const char *cert_path);
+
+/*
+ * Signs obj, which it takes ownership of, into a .upatch at out_upatch;
+ * each decoder its manifests name is one of the nr_files files.
+ */
+int build_package_object(struct bpf_object *obj, const char *out_upatch,
+			 const char *upatch_name,
+			 const struct build_file *files, __u32 nr_files,
+			 const char *pkey_path, const char *cert_path);
 
 int build_package_unload(const char *name,
 			 const __u8 payload_sha256[32],

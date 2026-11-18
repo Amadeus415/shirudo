@@ -52,13 +52,14 @@ shirudo-build helper
 
 The code that signs artifacts is not in the core ``shirudo`` binary.
 Every operator command except ``genkey`` and the offline ``attest``
-commands executes a separate helper, ``shirudo-build``: ``build``, ``bpm
-build``, ``bpm push``, ``bpm tree append``, ``bpm tree show``, ``bpm
-config update``, ``image
-build``, ``image verify`` and ``keys vouch``. The helper links the
-signer, runs clang to compile BPF and runs ``veritysetup`` to build and
-check images. The core binary finds it through ``SHIRUDO_BUILD``, then
-the installed path under ``libexec``, then ``PATH``.
+commands executes a separate helper, ``shirudo-build``: ``build``,
+``pwru``, ``bpm build``, ``bpm push``, ``bpm tree append``, ``bpm tree
+show``, ``bpm config update``, ``image build``, ``image verify`` and
+``keys vouch``. The helper links the signer, runs clang to compile BPF,
+opens libpcap for the filter of ``pwru`` and runs ``veritysetup`` to
+build and check images. The core binary finds it through
+``SHIRUDO_BUILD``, then the installed path under ``libexec``, then
+``PATH``.
 
 The operator package installs the helper and the target package does not.
 On a target the operator commands fail with exit status 127, and neither a

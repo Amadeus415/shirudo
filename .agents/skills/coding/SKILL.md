@@ -319,7 +319,7 @@ already, or should. The basics:
 | A file name's extension | `name_has_suffix()` (`<shirudo/string.h>`), `upatch_select()` for a scandir of upatches |
 | Text from outside on a terminal | `text_sanitize()`; UTF-8 with `utf8_width()` |
 | Sizes and lengths | `check_add_overflow()` and kin, `size_add()`, `size_mul()`, `struct_size()`, `DIV_ROUND_UP()` (`<shirudo/overflow.h>`) |
-| Smaller or larger | `min()`, `max()` (`<shirudo/misc.h>`) |
+| Smaller or larger | `min()`, `max()` (`<shirudo/misc.h>`, and `bpf/lib/misc.h` in BPF) |
 | Memory | `xmalloc()`, `xcalloc()`, `xreallocarray()`, `xstrndup()`, `xasprintf()`, `xfree(p, size)` (`util/malloc.h`) |
 | Secrets | `memzero_explicit()`, `memneq_explicit()` |
 | Files | `read_file()`, `read_fd()`, `write_complete()`, `append_line()`, `lines_len()`, `open_beneath()`, `lock_exclusive()` (`util/io.h`) |

@@ -87,6 +87,8 @@ dirs=$(cd "$stage" && find . -mindepth 1 -type d -path '*/shirudo*' | sed 's#^\.
 	if [ "$role" = operator ]; then
 		# Operator-only compilers and the standard image format/verify tool.
 		printf 'Requires: bash, coreutils, clang >= 23, llvm, cryptsetup\n'
+		# shirudo pwru opens libpcap at run time to compile its filter.
+		printf 'Recommends: libpcap\n'
 	fi
 	printf '\n%%description\n'
 	if [ "$role" = target ]; then

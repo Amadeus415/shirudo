@@ -82,6 +82,13 @@ and ``--unload``:
 
    operator$ shirudo build --unload fix --payload-sha256 "$(shirudo upatch info --json fix.upatch | jq -r .payload_sha256)" -o fix.unload.upatch --keys-dir ~/shirudo-keys
 
+Sign the ``pwru`` upatch, which records the packets a pcap filter
+matches, with :doc:`cli/pwru`:
+
+.. code-block:: console
+
+   operator$ shirudo pwru -o pwru.upatch --keys-dir ~/shirudo-keys host 10.0.0.1 and tcp port 443
+
 Target state
 ------------
 

@@ -3,7 +3,8 @@
  * Copyright (c) 2026 Authors of shirudo
  *
  * Sole exec site in the core shirudo binary: dispatch to the
- * operator-only shirudo-build helper.
+ * operator-only shirudo-build helper, for shirudo build and pwru among
+ * others.
  */
 
 #include <errno.h>
@@ -136,6 +137,12 @@ int build_forward(const char *label, const char *const words[], int argc,
 	ret = build_exec(label, helper);
 	xfree(helper, count * sizeof(*helper));
 	return ret;
+}
+
+int cmd_pwru(int argc, const char **argv)
+{
+	return build_forward("pwru", (const char *const[]){ "pwru", NULL },
+			     argc - 1, argv + 1);
 }
 
 int cmd_build(int argc, const char **argv)

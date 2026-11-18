@@ -13,6 +13,7 @@
 /* Operator-side. */
 int cmd_genkey(int argc, const char **argv);
 int cmd_build(int argc, const char **argv);
+int cmd_pwru(int argc, const char **argv);
 
 /*
  * The operator package's helper: whether it is there, and the one exec

@@ -2355,6 +2355,23 @@ out:
 	return err;
 }
 
+int build_package_object(struct bpf_object *obj, const char *out_path,
+			 const char *upatch_name,
+			 const struct build_file *files, __u32 nr_files,
+			 const char *pkey_path, const char *cert_path)
+{
+	struct decoder_origin origin = { .files = files, .nr_files = nr_files };
+	int err;
+
+	err = check_upatch_name(upatch_name);
+	if (err) {
+		bpf_object__close(obj);
+		return err;
+	}
+	return finalize_object(obj, out_path, upatch_name, 0, NULL, &origin,
+			       NULL, 0, pkey_path, cert_path);
+}
+
 /* Locate the BPF .rodata map. libbpf names it "<objname>.rodata". */
 static struct bpf_map *find_rodata(struct bpf_object *obj)
 {

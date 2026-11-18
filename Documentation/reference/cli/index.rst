@@ -28,6 +28,7 @@ install beside ``shirudo``.
    version
    genkey
    build
+   pwru
    keys
    upatch-load
    upatch-unload

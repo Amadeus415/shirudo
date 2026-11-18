@@ -353,7 +353,8 @@ BUILD_SRCS := \
     tools/shirudo-build/vouch.c \
     tools/shirudo-build/image.c \
     tools/shirudo-build/cbpf.c \
-    tools/shirudo-build/pcap.c
+    tools/shirudo-build/pcap.c \
+    tools/shirudo-build/pwru.c
 
 # shirudo-quote-check is a backend's program: it checks keepalive quotes
 # with the TPM parsers of util/ and is never linked into shirudo.
@@ -489,6 +490,20 @@ bpf/%.bpf.o: bpf/%.c $(VMLINUX_H) $(BPF_LIBBPF_HEADERS) \
 	$(Q)$(CLANG_BPF) -Iinclude -Ibpf/lib -I$(dir $(VMLINUX_H)) -I$(LIBBPF_VENDOR) \
 	    -I$(BPF_UAPI_INCLUDE) \
 	    -c $< -o $@
+
+# shirudo pwru signs this object without clang, so shirudo-build carries
+# it built, as it carries bpf/unload.bpf.o. Its fentry programs read no
+# register, so one object serves every architecture.
+PWRU_BPF_O := upatches/pwru/pwru.bpf.o
+
+$(PWRU_BPF_O): upatches/pwru/pwru.bpf.c $(wildcard upatches/pwru/*.h) $(VMLINUX_H) \
+               $(BPF_LIBBPF_HEADERS) $(wildcard bpf/lib/*.h)
+	@printf '  CLANG   $@\n'
+	$(Q)$(CLANG_BPF) -Ibpf/lib \
+	    -I$(dir $(VMLINUX_H)) -I$(LIBBPF_VENDOR) -I$(BPF_UAPI_INCLUDE) \
+	    -c $< -o $@
+
+tools/shirudo-build/pwru.o: $(PWRU_BPF_O) upatches/pwru/decoders/pwru.lua
 
 # ----- version_id ------------------------------------------------
 
@@ -1396,7 +1411,7 @@ clean:
 	$(Q)rm -rf build/target build/unit build/quote-check build/fuzz-afl \
 	    build/fuzz-afl-cmplog
 	$(Q)rm -f $(DEPS) testing/helper/*.d
-	$(Q)rm -f $(BPF_OBJS) $(VMLINUX_H) systemd/shirudo.service \
+	$(Q)rm -f $(BPF_OBJS) $(PWRU_BPF_O) $(VMLINUX_H) systemd/shirudo.service \
 	    systemd/shirudo-initrd.service \
 	          systemd/shirudo-map-export.service \
 	          systemd/shirudo-keepalive.service \

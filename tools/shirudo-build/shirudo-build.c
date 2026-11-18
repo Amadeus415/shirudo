@@ -27,6 +27,7 @@
 #include "malloc.h"
 #include "package.h"
 #include "paths.h"
+#include "pwru.h"
 #include "sign.h"
 #include "upatch.h"
 #include "vmlinux.h"
@@ -97,8 +98,8 @@ static const struct help build_help = {
 	.sections   = build_sections,
 	.n_sections = ARRAY_SIZE(build_sections),
 	.footer	    = "The helper also serves shirudo image build and verify, "
-		      "the operator\nbpm commands and keys vouch; each takes "
-		      "--help.",
+		      "the operator\nbpm commands, keys vouch and pwru; each "
+		      "takes --help.",
 };
 
 /* foo/bar.bpf.c lands at foo/bar.bpf.upatch beside its input. */
@@ -217,6 +218,8 @@ int main(int argc, char **argv)
 		return build_upatch_cli(argc - 1, args + 1);
 	if (argc >= 2 && strcmp(args[1], "bpm") == 0)
 		return build_bpm(argc - 1, args + 1);
+	if (argc >= 2 && strcmp(args[1], "pwru") == 0)
+		return build_pwru(argc - 1, args + 1);
 	if (argc >= 3 && strcmp(args[1], "keys") == 0 &&
 	    strcmp(args[2], "vouch") == 0)
 		return build_keys_vouch(argc - 2, args + 2);

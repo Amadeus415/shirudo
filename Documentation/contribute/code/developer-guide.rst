@@ -208,10 +208,11 @@ Build the shirudo-build helper
 ------------------------------
 
 The core binary never compiles or signs. ``shirudo build``, ``shirudo
-image build``, ``shirudo image verify``, ``shirudo keys vouch`` and the
-operator ``bpm`` subcommands (``build``, ``push``, ``tree append``,
-``tree show`` and ``config update``) execute the separate ``shirudo-build`` helper, which
-is the only binary that links the signer.
+pwru``, ``shirudo image build``, ``shirudo image verify``, ``shirudo keys
+vouch`` and the operator ``bpm`` subcommands (``build``, ``push``,
+``tree append``, ``tree show`` and ``config update``) execute the
+separate ``shirudo-build`` helper, which is the only binary that links
+the signer.
 
 1. Build the helper:
 
@@ -396,7 +397,8 @@ Project layout
    * - :src:`tools/shirudo-build/`
      - The operator-only helper: compile, sign, unload directives,
        image signing, ``keys vouch``, ``bpm build``, ``push``,
-       ``tree append``, ``tree show`` and ``config update``.
+       ``tree append``, ``tree show``, ``config update`` and ``pwru``
+       with its classic BPF translation.
    * - :src:`tools/quote-check/`
      - ``shirudo-quote-check``, a program of its own that checks
        keepalive quotes with the TPM parsers of :src:`util/tpm_wire.c`.

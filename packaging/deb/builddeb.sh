@@ -61,6 +61,8 @@ depends=$("$here/depends.sh" $bins || true)
 if [ "$role" = operator ]; then
 	# Operator-only compilers and the standard image format/verify tool.
 	depends="${depends:+$depends, }clang-23, llvm, cryptsetup-bin"
+	# shirudo pwru opens libpcap at run time to compile its filter.
+	recommends="libpcap0.8t64 | libpcap0.8"
 fi
 
 # Installed-Size is in KiB, computed before DEBIAN/ exists.
@@ -77,6 +79,7 @@ mkdir -p "$stage/DEBIAN"
 	printf 'Maintainer: %s\n' "$maint"
 	[ -n "${size:-}" ] && printf 'Installed-Size: %s\n' "$size"
 	[ -n "${depends:-}" ] && printf 'Depends: %s\n' "$depends"
+	[ -n "${recommends:-}" ] && printf 'Recommends: %s\n' "$recommends"
 	printf 'Conflicts: %s\n' "$other"
 	printf 'Replaces: %s\n' "$other"
 	printf 'Description: %s\n' "$short"

@@ -11,7 +11,8 @@ Example packages
 The tree ships two packages under :src:`upatches/`: ``kernel-obs``, a
 complete observability package with arena tables, serializers, decoders
 and generated ``.rodata``, and ``kernel-cve``, a set of small CVE
-detectors exported from a mitigation campaign.
+detectors exported from a mitigation campaign. :src:`upatches/pwru/` is
+the upatch :doc:`/reference/cli/pwru` signs.
 
 kernel-obs
 ----------
@@ -100,6 +101,27 @@ checked against an exploit.
 to a package, as an ``fentry`` program. ``kernel-cve.bee`` itself does not
 build, and its tree entries do not match its upatch names.
 :doc:`/reference/formats/beefile` lists what is wrong with it.
+
+pwru
+----
+
+:src:`upatches/pwru/pwru.bpf.c` puts an ``fentry`` program on each
+function, and a ``tp_btf`` program on each tracepoint,
+:src:`upatches/pwru/pwru_funcs.h` lists and records, in an arena
+log that its serializer drains on every export, the ``sk_buff`` a pcap
+filter matches. The filter is a stub, two instructions that let every
+packet through, which ``shirudo pwru`` replaces with the eBPF it
+translates from the classic BPF libpcap compiles, so the upatch is
+signed without clang. A probe calls the stub as its one subprogram,
+which libbpf places at the end of the probe, where the longer filter
+moves no instruction a relocation names. The probes come last in the
+object, after its ``syscall`` programs, which libbpf loads first: the
+splice runs in the load callback of the first of those, by when libbpf
+has relocated every probe, and leaves the probes libbpf's own
+handling, which has the loader look up their target on the target. Its
+decoder,
+:src:`upatches/pwru/decoders/pwru.lua`, returns one record a packet and
+function. The object is not a package and has no Beefile.
 
 Related
 -------

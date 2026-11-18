@@ -41,6 +41,8 @@ static int cmd_help(int argc, const char **argv);
 static const struct cmd commands[] = {
 	{ "genkey",	cmd_genkey,	GROUP_OPERATOR,	"create the signing key and certificate" },
 	{ "build",	cmd_build,	GROUP_OPERATOR,	"compile and sign a .upatch" },
+	{ "pwru",	cmd_pwru,	GROUP_OPERATOR,
+	  "sign the pwru upatch for a pcap filter" },
 
 	{ "image", cmd_image, GROUP_LOCAL,
 	  "build, verify and activate dm-verity config images" },
