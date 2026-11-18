@@ -402,6 +402,22 @@ pub(crate) unsafe fn cert_read_der(der: *const u8, len: usize, cert: *mut Cert) 
     }
 }
 
+/// A DER or a PEM certificate in `buf`, as cert_read_file() takes one
+/// from a file, into `cert`: 0 or -EINVAL.
+pub(crate) fn cert_read_memory(buf: &[u8], cert: &mut Cert) -> c_int {
+    cert.imp = ptr::null_mut();
+    if buf.len() > c_int::MAX as usize {
+        return -EINVAL;
+    }
+    match X509::from_der(buf).or_else(|_| X509::from_pem(buf)) {
+        Ok(x509) => {
+            cert.hold(x509);
+            0
+        }
+        Err(_) => -EINVAL,
+    }
+}
+
 /// # Safety
 ///
 /// `path` is NULL or a C string, and `cert` NULL or points to a cert.

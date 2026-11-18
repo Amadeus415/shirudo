@@ -52,6 +52,24 @@ impl Gz {
         }
     }
 
+    /// The stream from the start of `fd`, on a descriptor of its own;
+    /// None, with errno set, when it cannot be.
+    fn open_fd(fd: std::os::fd::BorrowedFd<'_>) -> Option<Gz> {
+        use std::os::fd::AsRawFd;
+
+        // SAFETY: the caller's descriptor.
+        if unsafe { crate::sys::libc::lseek(fd.as_raw_fd(), 0, crate::sys::libc::SEEK_SET) } < 0 {
+            return None;
+        }
+        match fd.try_clone_to_owned() {
+            Ok(copy) => Some(Gz(GzRead::from_file(std::fs::File::from(copy)))),
+            Err(e) => {
+                crate::sys::libc::set_errno(e.raw_os_error().unwrap_or(EIO));
+                None
+            }
+        }
+    }
+
     /// Whether the file is read as it is, it not being gzip.
     fn direct(&mut self) -> bool {
         self.0.direct()
@@ -124,7 +142,30 @@ pub(super) fn read_member_in(
     found: &mut Found<'_>,
     max: usize,
 ) -> c_int {
-    let Some(mut gz) = Gz::open(archive) else {
+    read_member_gz(Gz::open(archive), member, package_dir, found, max)
+}
+
+/// [`read_member_in`] of the archive from the start of `fd`, which it
+/// leaves open.
+pub(super) fn read_member_fd(
+    fd: std::os::fd::BorrowedFd<'_>,
+    member: Option<&[u8]>,
+    package_dir: Option<&[u8]>,
+    found: &mut Found<'_>,
+    max: usize,
+) -> c_int {
+    read_member_gz(Gz::open_fd(fd), member, package_dir, found, max)
+}
+
+/// Takes `gz` over, and its open's errno when it is None.
+fn read_member_gz(
+    gz: Option<Gz>,
+    member: Option<&[u8]>,
+    package_dir: Option<&[u8]>,
+    found: &mut Found<'_>,
+    max: usize,
+) -> c_int {
+    let Some(mut gz) = gz else {
         return -errno();
     };
     if gz.direct() {
@@ -238,7 +279,22 @@ pub(super) fn visit_members(
     package_dir: Option<&[u8]>,
     visit: Option<Visit<'_>>,
 ) -> c_int {
-    let Some(mut gz) = Gz::open(archive) else {
+    visit_members_gz(Gz::open(archive), package_dir, visit)
+}
+
+/// [`visit_members`] of the archive from the start of `fd`, which it
+/// leaves open.
+pub(super) fn visit_members_fd(
+    fd: std::os::fd::BorrowedFd<'_>,
+    package_dir: Option<&[u8]>,
+    visit: Option<Visit<'_>>,
+) -> c_int {
+    visit_members_gz(Gz::open_fd(fd), package_dir, visit)
+}
+
+/// Takes `gz` over, and its open's errno when it is None.
+fn visit_members_gz(gz: Option<Gz>, package_dir: Option<&[u8]>, visit: Option<Visit<'_>>) -> c_int {
+    let Some(mut gz) = gz else {
         return -errno();
     };
     if gz.direct() {

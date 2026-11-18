@@ -92,7 +92,12 @@ impl GzRead {
     /// gzopen(): Err(errno) when the file does not open.
     pub(crate) fn open(path: &std::path::Path) -> Result<GzRead, i32> {
         let file = File::open(path).map_err(|e| e.raw_os_error().unwrap_or(crate::errno::EIO))?;
-        Ok(GzRead {
+        Ok(Self::from_file(file))
+    }
+
+    /// gzdopen(): the stream of `file` from where it is.
+    pub(crate) fn from_file(file: File) -> GzRead {
+        GzRead {
             file,
             inbuf: Vec::new(),
             next: 0,
@@ -106,7 +111,7 @@ impl GzRead {
             direct: true,
             err: Z_OK,
             inflate: None,
-        })
+        }
     }
 
     fn serious(&self) -> bool {
