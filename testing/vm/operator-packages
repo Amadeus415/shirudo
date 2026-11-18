@@ -1,4 +1,5 @@
 build-essential
+cargo
 cryptsetup-bin
 curl
 dpkg-dev
@@ -17,4 +18,5 @@ openssl
 pkg-config
 python3
 rsync
+rustc
 zlib1g-dev
