@@ -6,8 +6,7 @@
 use core::ffi::{CStr, c_char, c_int};
 
 use super::archive::{self, Found};
-use super::publication::{self};
-use super::{IndexEntry, PackageInfo, UpatchMember, index, info, semver, tar};
+use super::{IndexEntry, PackageInfo, index, info, semver};
 use crate::ffi;
 
 /// A C string the caller may pass as NULL.
@@ -48,47 +47,9 @@ pub unsafe extern "C" fn bpm_semver_compare(a: *const c_char, b: *const c_char) 
 /// # Safety
 ///
 /// `s` is NULL or a C string.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn bpm_semver_valid(s: *const c_char) -> bool {
     // SAFETY: the caller passes NULL or a C string.
     unsafe { opt_bytes(s) }.is_some_and(semver::valid)
-}
-
-/// # Safety
-///
-/// `name` is NULL or a C string.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn bpm_archive_rel_ok(name: *const c_char) -> bool {
-    // SAFETY: the caller passes NULL or a C string.
-    unsafe { opt_bytes(name) }.is_some_and(tar::archive_rel_ok)
-}
-
-/// # Safety
-///
-/// `name` holds `len` bytes.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn bpm_upatch_member(name: *const c_char, len: usize) -> UpatchMember {
-    // SAFETY: the caller passes len bytes at name.
-    tar::upatch_member(unsafe { ffi::slice(name.cast(), len) })
-}
-
-/// # Safety
-///
-/// `name` holds `len` bytes and `out` has room for `cap`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn bpm_upatch_pair(
-    name: *const c_char,
-    len: usize,
-    out: *mut c_char,
-    cap: usize,
-) -> c_int {
-    // SAFETY: the caller passes len bytes at name and the room at out.
-    unsafe {
-        tar::upatch_pair(
-            ffi::slice(name.cast(), len),
-            ffi::bytes_mut(out.cast(), cap),
-        )
-    }
 }
 
 /// # Safety
@@ -169,34 +130,4 @@ pub unsafe extern "C" fn bpm_pkg_load_info(
 ) -> c_int {
     // SAFETY: the caller passes its info.
     info::load_info(archive, unsafe { &mut *info })
-}
-
-/// The manifest of a tree publication whose layers are `payload` and
-/// `sig`, as bpm tree append writes it, into `out` of `cap` bytes with
-/// its length in `*len`: 0 or -errno.
-///
-/// # Safety
-///
-/// `payload` and `sig` are descriptors, `out` has room for `cap` bytes
-/// and `len` for a size.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn bpm_tree_manifest(
-    payload: *const crate::util::bpm_oci::Descriptor,
-    sig: *const crate::util::bpm_oci::Descriptor,
-    out: *mut c_char,
-    cap: usize,
-    len: *mut usize,
-) -> c_int {
-    // SAFETY: the caller's descriptors, room and size.
-    unsafe {
-        *len = 0;
-        let room = ffi::bytes_mut(out.cast(), cap);
-        match publication::emit_tree_manifest(&*payload, &*sig, room) {
-            Ok(n) => {
-                *len = n;
-                0
-            }
-            Err(err) => err,
-        }
-    }
 }
