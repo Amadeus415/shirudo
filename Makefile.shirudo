@@ -4,7 +4,7 @@
 # Makefile.shirudo -- main build graph.
 #
 # Five strict build phases:
-#   1. vendored libbpf (vendor/libbpf), for the vmlinux.h generator
+#   1. the vmlinux.h generator (tools/gen-vmlinux-h, a Rust program)
 #   2. generated headers   (vendor/linux/vmlinux.h)
 #   3. compiled objects    (build/main/*.o, bpf/*.bpf.o)
 #   4. embedded BPF        (bpf/*.lskel and bpf/*.skel.rs from tools/bpf-lskel;
@@ -43,13 +43,13 @@ AR      ?= ar
 LDFLAGS ?=
 SHIRUDO_BUNDLE_RPATH ?= 0
 CLANG   ?= clang
-# libbpf, its BPF-side headers and the BPF UAPI headers are vendored under
+# libbpf's BPF-side headers and the BPF UAPI headers are vendored under
 # vendor/libbpf (refreshed on demand with make bpf-deps); nothing in
-# a normal build reaches outside the repository for them. vmlinux.h is
-# dumped from BTF by the in-tree generator, so bpftool is not needed.
+# a normal build reaches outside the repository for them, and nothing
+# builds libbpf itself. vmlinux.h is dumped from BTF by the in-tree
+# generator, so bpftool is not needed.
 LIBBPF_VENDOR    := vendor/libbpf
 LIBBPF_DIR       := $(LIBBPF_VENDOR)/bpf
-LIBBPF_A         := $(LIBBPF_VENDOR)/libbpf.a
 BPF_UAPI_INCLUDE := $(LIBBPF_VENDOR)/include/uapi
 VMLINUX_GEN      := tools/gen-vmlinux-h/gen-vmlinux-h
 BPF_VMLINUX_H ?=
@@ -75,9 +75,9 @@ SHIRUDO_VMLINUX_PATH ?= $(sharedir)/shirudo/vmlinux.h
 # The clang shirudo-build runs, as it never searches PATH.
 SHIRUDO_CLANG_PATH ?= /usr/bin/clang
 
-# A warning fails the build, ours and that of the vendored libbpf and
-# the BPF objects alike; WERROR=0 lets a compiler newer than the tree
-# finish the build while its new warnings get fixed.
+# A warning fails the build, ours and the BPF objects' alike; WERROR=0
+# lets a compiler newer than the tree finish the build while its new
+# warnings get fixed.
 WERROR ?= 1
 WERROR_CFLAGS := $(if $(filter 1,$(WERROR)),-Werror)
 WARNINGS := -Wall -Wextra -Wno-unused-parameter -Wstrict-prototypes -Wvla \
@@ -152,10 +152,9 @@ CFLAGS_BASE := -O2 $(DEBUG_CFLAGS) -std=gnu11 $(WARNINGS) $(CC_WARNINGS) \
 # the test helpers; BPF objects come from clang -target bpf and are never
 # affected. Recovery is off so that every report fails the run. The
 # fortified libc calls stay out of such a build, as they would bypass the
-# sanitizer's own checks. SANITIZE=memory instruments the vendored libbpf
-# too and wants every library linked instrumented as well, which
-# .github/scripts/msan-deps.sh builds: MemorySanitizer takes what it did
-# not see written as uninitialized.
+# sanitizer's own checks. SANITIZE=memory wants every library linked
+# instrumented, which .github/scripts/msan-deps.sh builds:
+# MemorySanitizer takes what it did not see written as uninitialized.
 SANITIZE ?=
 comma := ,
 SANITIZE_MEMORY := $(filter memory,$(subst $(comma), ,$(SANITIZE)))
@@ -190,13 +189,8 @@ CFLAGS := $(CFLAGS_BASE) $(INCLUDES) \
           $(LIBELF_CFLAGS) $(ZLIB_CFLAGS) $(LIBCURL_CFLAGS) \
           $(CRYPTO_CFLAGS)
 
-# libbpf, linked from its archive, is for the tests that make BTF and
-# objects with it: the binaries link none, rust/src/bpf/ reading objects
-# and BTF and issuing bpf() itself. The normal shirudo binary keeps the
-# existing dynamic OpenSSL/libcurl profile for operator builds.
-STATIC_LIBS = \
-    $(LIBBPF_A)
-
+# The normal shirudo binary keeps the existing dynamic OpenSSL/libcurl
+# profile for operator builds.
 DYNAMIC_LIBS := \
     $(LIBSSL_LIBS) $(LIBCRYPTO_LIBS) $(TSS2_LIBS) \
     $(LIBELF_LIBS) $(ZLIB_LIBS) $(LIBCURL_LIBS)
@@ -287,7 +281,7 @@ VERSION_OBJ    := $(MAIN_DIR)/version_id.o
 
 .PHONY: all install install-common install-target install-operator clean distclean \
 		test-helpers verity-test-helpers unit-tests \
-        bpf libbpf rust
+        bpf rust
 
 all: shirudo
 
@@ -297,24 +291,7 @@ shirudo-build: tools/shirudo-build/shirudo-build
 
 quote-check: tools/quote-check/shirudo-quote-check
 
-# ----- phase 1: vendored libbpf and the vmlinux.h generator -------
-
-LIBBPF_SRCS := $(wildcard $(LIBBPF_DIR)/*.c $(LIBBPF_DIR)/*.h \
-                          $(LIBBPF_VENDOR)/include/linux/*.h \
-                          $(LIBBPF_VENDOR)/include/asm/*.h \
-                          $(LIBBPF_VENDOR)/include/uapi/linux/*.h \
-                          $(LIBBPF_VENDOR)/Makefile)
-
-libbpf: $(LIBBPF_A)
-
-# libbpf compiles against the libelf and zlib headers the binary links,
-# which need not be the system's.
-$(LIBBPF_A): $(LIBBPF_SRCS)
-	@printf '  LIBBPF\n'
-	$(Q)$(MAKE) -C $(LIBBPF_VENDOR) CC="$(CC)" Q="$(Q)" \
-		EXTRA_CFLAGS="$(WERROR_CFLAGS) $(LIBELF_CFLAGS) $(ZLIB_CFLAGS) \
-			$(if $(SANITIZE_MEMORY), \
-			-fno-omit-frame-pointer $(SANITIZE_CFLAGS))"
+# ----- phase 1: the vmlinux.h generator ---------------------------
 
 # The Rust library, which replaces C modules behind their headers. Every
 # binary that links util objects links it too, after them. The crate
@@ -373,11 +350,12 @@ $(RUST_LIB): $(RUST_SRCS) $(BPF_EMBEDDED) $(RUST_PATHS_CHANGED)
 .PHONY: FORCE_RUST_PATHS
 FORCE_RUST_PATHS:
 
-# Build-time only; links the vendored libbpf and dumps BTF as C.
-$(VMLINUX_GEN): tools/gen-vmlinux-h/gen-vmlinux-h.c $(LIBBPF_A)
-	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS_BASE) $(INCLUDES) $(LDFLAGS) -o $@ $< $(LIBBPF_A) \
-	    $(LIBELF_LIBS) $(ZLIB_LIBS)
+# Build-time only: dumps BTF as C, reading it with the crate's
+# rust/src/bpf/btf.rs. A program of its own, as the crate embeds the BPF
+# objects that compile against what it writes.
+$(VMLINUX_GEN): tools/gen-vmlinux-h/gen-vmlinux-h.rs rust/src/bpf/btf.rs
+	@printf '  RUSTC   $@\n'
+	$(Q)$(RUSTC) --edition 2024 -O $(RUSTFLAGS_WERROR) -o $@ $<
 
 # ----- phase 2: generated headers ---------------------------------
 
@@ -740,14 +718,14 @@ VERITY_TEST_LIBS := $(DYNAMIC_LIBS)
 endif
 
 build/verity-tests/shirudo-image-fault: $(MAIN_OBJ) $(VERSION_OBJ) \
-		$(LIBBPF_A) $(RUST_HELPER_LIB)
+		$(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) \
 		$(VERITY_TEST_LDFLAGS) -o $@ $^ \
 		-Wl,--wrap=main,--wrap=Esys_PCR_Extend \
 		-Wl,--wrap=syscall \
-		$(STATIC_LIBS) $(VERITY_TEST_LIBS) $(RUST_TEST_LDLIBS)
+		$(VERITY_TEST_LIBS) $(RUST_TEST_LDLIBS)
 
 verity-test-helpers: $(VERITY_TEST_HELPERS) build/verity-tests/shirudo-image-fault
 
@@ -815,28 +793,26 @@ testing/helper/test-harden: $(HELPER_MAIN_DIR)/test-harden.o \
 # never extends.
 # The register code pulls in the eventlog, which pulls in the seal
 # label writer and the JSON codec.
-REGISTER_OBJS := \
-                 $(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
 REGISTER_LIBS := $(LIBCRYPTO_LIBS) $(LIBSSL_LIBS) $(TSS2_LIBS) \
-                 $(LIBBPF_A) $(LIBELF_LIBS) $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
+                 $(RUST_TEST_LDLIBS)
 
 
-testing/helper/test-nv-writer: $(HELPER_MAIN_DIR)/test-nv-writer.o $(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+testing/helper/test-nv-writer: $(HELPER_MAIN_DIR)/test-nv-writer.o $(VERSION_OBJ) $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
 testing/helper/test-keyring-seal: $(HELPER_MAIN_DIR)/test-keyring-seal.o \
-		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+		$(VERSION_OBJ) $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ \
-		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
+		$(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-tpm-preopened: $(HELPER_MAIN_DIR)/test-tpm-preopened.o \
-		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+		$(VERSION_OBJ) $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS) -Wl,--wrap=prctl
 
-testing/helper/test-keys: $(HELPER_MAIN_DIR)/test-keys.o $(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+testing/helper/test-keys: $(HELPER_MAIN_DIR)/test-keys.o $(VERSION_OBJ) $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
@@ -845,7 +821,7 @@ testing/helper/test-seal: $(HELPER_MAIN_DIR)/test-seal.o \
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
-testing/helper/test-eventlog: $(HELPER_MAIN_DIR)/test-eventlog.o $(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+testing/helper/test-eventlog: $(HELPER_MAIN_DIR)/test-eventlog.o $(VERSION_OBJ) $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
@@ -855,17 +831,17 @@ testing/helper/test-tpm-wire: $(HELPER_MAIN_DIR)/test-tpm-wire.o \
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-register: $(HELPER_MAIN_DIR)/test-register.o \
-		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+		$(VERSION_OBJ) $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS) -Wl,--wrap=prctl
 
 testing/helper/test-register-cli: $(HELPER_MAIN_DIR)/test-register-cli.o \
-		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+		$(VERSION_OBJ) $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-keepalive-quote: $(HELPER_MAIN_DIR)/test-keepalive-quote.o \
-		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+		$(VERSION_OBJ) $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
@@ -874,12 +850,12 @@ testing/helper/tpmsim-cmd: $(HELPER_MAIN_DIR)/tpmsim-cmd.o $(RUST_HELPER_LIB)
 	$(Q)$(CC) $(CFLAGS_BASE) -o $@ $^ $(TPMSIM_LIBS) -lcrypto $(RUST_TEST_LDLIBS)
 
 testing/helper/test-nv-cphash: $(HELPER_MAIN_DIR)/test-nv-cphash.o \
-		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+		$(VERSION_OBJ) $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS) -Wl,--wrap=prctl
 
 testing/helper/test-tpm-session: $(HELPER_MAIN_DIR)/test-tpm-session.o \
-		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+		$(VERSION_OBJ) $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS) \
 		-Wl,--wrap=prctl,--wrap=syscall
@@ -957,12 +933,12 @@ testing/helper/test-upatch-prog-metadata: $(HELPER_MAIN_DIR)/test-upatch-prog-me
 testing/helper/test-upatch-serializer-pages: $(HELPER_MAIN_DIR)/test-upatch-serializer-pages.o \
                                        $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-rodata: $(HELPER_MAIN_DIR)/test-upatch-rodata.o \
                                $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-decode: $(HELPER_MAIN_DIR)/test-upatch-decode.o \
 			      $(RUST_HELPER_LIB)
@@ -988,20 +964,20 @@ testing/helper/test-config-image: $(HELPER_MAIN_DIR)/test-config-image.o \
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-config-update: $(HELPER_MAIN_DIR)/test-config-update.o \
-		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+		$(VERSION_OBJ) $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
 testing/helper/test-config-attest: $(HELPER_MAIN_DIR)/test-config-attest.o \
-		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+		$(VERSION_OBJ) $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
 testing/helper/test-image-keys: $(HELPER_MAIN_DIR)/test-image-keys.o \
-		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+		$(VERSION_OBJ) $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ \
-		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
+		$(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-image-config: $(HELPER_MAIN_DIR)/test-image-config.o \
 		$(RUST_HELPER_LIB)
@@ -1010,17 +986,17 @@ testing/helper/test-image-config: $(HELPER_MAIN_DIR)/test-image-config.o \
 		$(RUST_TEST_LDLIBS)
 
 testing/helper/test-image-cli: $(HELPER_MAIN_DIR)/test-image-cli.o \
-		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+		$(VERSION_OBJ) $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ \
 		$^ \
-		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
+		$(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-image-cleanup: $(HELPER_MAIN_DIR)/test-image-cleanup.o \
-		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+		$(VERSION_OBJ) $(RUST_HELPER_LIB)
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ \
-		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
+		$(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-mode-objects: $(HELPER_MAIN_DIR)/test-mode-objects.o \
 		$(RUST_HELPER_LIB)
@@ -1057,11 +1033,11 @@ $(UNIT_LIB): $(VERSION_OBJ)
 	$(Q)$(AR) rcs $@ $^
 
 build/unit/%: testing/unit/%.c testing/unit/unit.c testing/unit/unit.h \
-		$(UNIT_LIB) $(LIBBPF_A) $(RUST_LIB)
+		$(UNIT_LIB) $(RUST_LIB)
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) -Itesting/unit -o $@ $< testing/unit/unit.c \
 		-Wl,--start-group $(UNIT_LIB) $(RUST_LIB) -Wl,--end-group \
-		$(LIBBPF_A) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
+		$(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 # cargo names the binary by a hash, which its JSON says.
 $(UNIT_RUST): $(RUST_SRCS) $(BPF_EMBEDDED)

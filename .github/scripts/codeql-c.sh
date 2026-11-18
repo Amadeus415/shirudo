@@ -32,7 +32,7 @@ prepare)
 	sh .github/scripts/debian-deps.sh
 	make config
 	make -f Makefile.shirudo PROFILE=operator CONFIG_MK=config.mk \
-		vendor/libbpf/libbpf.a vendor/linux/vmlinux.h
+		vendor/linux/vmlinux.h
 	;;
 build)
 	make -j"$(nproc)"

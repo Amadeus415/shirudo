@@ -352,10 +352,10 @@ a change needs a newer libbpf or UAPI:
 :src:`tools/bpf-deps/bpf-deps.sh` makes a shallow clone of bpf-next.
 
 The source revision is recorded in ``vendor/libbpf/COMMIT``. The
-binaries link no libbpf: :src:`rust/src/bpf/` reads objects and BTF,
-generates loaders and dumps values as this libbpf does, and the vendored
-copy builds the ``vmlinux.h`` generator and the tests that make BTF with
-it. After refreshing, reapply the local changes :src:`vendor/libbpf/README.md`
+build links no libbpf: :src:`rust/src/bpf/` reads objects and BTF,
+generates loaders and dumps values as this libbpf does,
+:src:`tools/gen-vmlinux-h` dumps BTF as C as its ``btf_dump`` does, and
+the BPF programs take the vendored copy's BPF-side headers. After refreshing, reapply the local changes :src:`vendor/libbpf/README.md`
 lists, and check :src:`rust/src/bpf/` against the new libbpf.
 
 Other make targets
