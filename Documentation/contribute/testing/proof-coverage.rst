@@ -707,6 +707,19 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
        the certificate; the vouch admits that certificate under the
        member that signed it, and no other certificate of its length or
        longer; without memory nothing is written
+   * - ``cbpf-translate``
+     - ``cbpf_translate()`` of :src:`tools/shirudo-build/cbpf.c`,
+       appending to a program of one instruction, the allocators fixed
+       storage
+     - Filters of 1 to 3 instructions of any codes, jump offsets and
+       constants, every allocation allowed to fail
+     - A filter that does not end in a return is refused, and one
+       accepted jumps inside itself and names only words of ``M[]``. Its
+       code jumps only forward to its own instructions, reaches each of
+       them and ends in an exit; it writes only r0 to r9, reads and
+       writes no memory but the ``CBPF_STACK_SIZE`` bytes below r10, and
+       calls ``bpf_probe_read_kernel()`` alone. A refusal appends
+       nothing, and the program's instruction is kept
    * - ``json-string``
      - ``parse_string()`` of :src:`util/json.c`
      - Lengths 0 to 6, every room up to one byte more
@@ -1468,6 +1481,13 @@ in each of its copies: a proof over either runs for minutes. Of
 ``push_index()`` and what it calls; ``cmd_bpm_tree_append()`` and the
 steps it runs, ``tree_append_parse()`` to ``tree_append_free()``, have
 none.
+
+Of :src:`tools/shirudo-build/cbpf.c`, ``cbpf-translate`` proves the
+shape of the code a filter of up to three instructions becomes, not
+what it computes; a fourth instruction takes the proof past an hour.
+That the code returns what the filter returns for every packet, and
+that every word of the stack it reads was written before, which the
+verifier checks when it loads the code, have no proof.
 
 Within the ``.upatch`` reader, the proofs cover its parts but not their
 composition: ``upatch_parse()`` and ``upatch_open_memory()`` join the

@@ -854,7 +854,17 @@ missing or empty ``Premain-Class``, one outside the main section, and
 every truncation and byte flip of a jar. ``quote_check`` covers the rows of
 ``shirudo-quote-check`` in :src:`tools/quote-check/row.c`, on quotes a
 software P-256 key signs: every reject reason, the signer's qualified
-name, the empty PCR selection and the base64 of each field. The other
+name, the empty PCR selection and the base64 of each field. ``cbpf``
+covers the classic BPF translation of ``shirudo pwru`` in
+:src:`tools/shirudo-build/cbpf.c`: it runs each translation on an eBPF
+interpreter that faults on a read outside the packet or the stack, a
+register read before it is written and an unreachable instruction, and
+compares the result with that of a classic BPF interpreter with
+libpcap's semantics on truncated, changed and random packets, for
+hand-written filters of every instruction and, where the host has
+libpcap, for the filters it compiles of some twenty expressions for
+Ethernet frames and IP packets. It also checks the filters the kernel's
+checker refuses. The other
 modules are reached through the test helpers, the fuzz targets and the binaries
 the functional tests run.
 
