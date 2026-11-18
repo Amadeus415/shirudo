@@ -6,7 +6,6 @@
 //! transfer, and reference parsing.
 
 mod auth;
-mod capi;
 mod client;
 mod http;
 mod manifest;
@@ -15,9 +14,8 @@ mod refs;
 
 use core::ffi::{CStr, c_char, c_long};
 
-pub(crate) use capi::{bpm_oci_emit_descriptor, bpm_oci_push_blob, bpm_oci_put_manifest};
 pub(crate) use client::{Buffer, Client, manifest_layers};
-pub(crate) use http::{buffer_free, get_memory, get_signed, sha256_hex};
+pub(crate) use http::{buffer_free, get_memory, get_signed, push_blob, put_manifest, sha256_hex};
 pub(crate) use manifest::parse_manifest;
 pub(crate) use refs::url;
 
