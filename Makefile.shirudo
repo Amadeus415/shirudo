@@ -842,8 +842,8 @@ testing/helper/test-tpm-preopened: testing/helper/test-tpm-preopened.c \
 	$(Q)$(CC) $(CFLAGS) -o $@ $(filter-out %.h,$^) $(REGISTER_LIBS) \
 		-Wl,--wrap=prctl
 
-testing/helper/test-keys: testing/helper/test-keys.c $(REGISTER_OBJS)
-	@printf '  CC      $@\n'
+testing/helper/test-keys: $(HELPER_MAIN_DIR)/test-keys.o $(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
 testing/helper/test-seal: $(HELPER_MAIN_DIR)/test-seal.o \
@@ -972,9 +972,9 @@ testing/helper/test-upatch-decode: $(HELPER_MAIN_DIR)/test-upatch-decode.o \
 	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
-testing/helper/test-exec-churn: testing/helper/test-exec-churn.c \
-                                 $(RUST_LIB)
-	@printf '  CC      $@\n'
+testing/helper/test-exec-churn: $(HELPER_MAIN_DIR)/test-exec-churn.o \
+                                 $(RUST_HELPER_LIB)
+	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
 testing/end2end/exec-paths: testing/end2end/exec_paths.c
@@ -1000,9 +1000,9 @@ testing/helper/test-config-attest: testing/helper/test-config-attest.c \
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(REGISTER_LIBS)
 
-testing/helper/test-image-keys: testing/helper/test-image-keys.c \
-		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
-	@printf '  CC      $@\n'
+testing/helper/test-image-keys: $(HELPER_MAIN_DIR)/test-image-keys.o \
+		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ \
 		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
