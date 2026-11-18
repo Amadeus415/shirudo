@@ -12,6 +12,13 @@
 
 struct upatch_policy_label_entry;
 
+/* A file compiled into the helper, under the name a manifest gives it. */
+struct build_file {
+	const char	*name;
+	const void	*data;
+	size_t		size;
+};
+
 int build_package_load(const char *bpf_o, const char *src_path,
 		       const char *out_upatch, const char *upatch_name,
 		       const struct upatch_policy_label_entry *policies,

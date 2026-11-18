@@ -77,7 +77,6 @@ struct decoder_manifest_view {
 
 struct decoder_file {
 	struct decoder_manifest_view	manifest;
-	char				*path;
 	char				*source;
 	__u32				source_len;
 };
@@ -85,6 +84,17 @@ struct decoder_file {
 struct decoder_set {
 	struct decoder_file	*items;
 	__u32			nr_items;
+};
+
+/*
+ * Where the sources the decoder manifests name come from: the files
+ * compiled into the helper, or files relative to the directory of
+ * src_path, the current directory where it is NULL.
+ */
+struct decoder_origin {
+	const char		*src_path;
+	const struct build_file	*files;
+	__u32			nr_files;
 };
 
 static void pack_header(struct upatch_header *h,
@@ -1246,58 +1256,102 @@ static void free_decoder_set(struct decoder_set *set)
 {
 	__u32 i;
 
-	for (i = 0; i < set->nr_items; i++) {
-		xstrfree(set->items[i].path);
+	for (i = 0; i < set->nr_items; i++)
 		xfree(set->items[i].source, set->items[i].source_len + 1);
-	}
 	xfree(set->items, (size_t)set->nr_items * sizeof(set->items[0]));
 	memset(set, 0, sizeof(*set));
 }
 
+static int decoder_source_copy(const struct build_file *file, char **out,
+			       size_t *out_len)
+{
+	char *source;
+
+	if (!file->size || file->size > UINT32_MAX)
+		return -EINVAL;
+	source = xmalloc(file->size + 1);
+	if (!source)
+		return -ENOMEM;
+	memcpy(source, file->data, file->size);
+	source[file->size] = '\0';
+	*out = source;
+	*out_len = file->size;
+	return 0;
+}
+
+static int decoder_source_read(const char *src_path, const char *rel,
+			       char **out, size_t *out_len)
+{
+	char *path = NULL;
+	int err;
+
+	err = make_decoder_path(src_path, rel, &path);
+	if (err) {
+		pr_err("decoder source path '%s' is invalid", rel);
+		return err;
+	}
+	err = read_file(path, 16u * 1024u * 1024u, out, out_len);
+	if (!err && !*out_len) {
+		xfree(*out, 1);
+		*out = NULL;
+		err = -EINVAL;
+	}
+	if (err)
+		pr_err("read decoder source %s: %s", path, strerror(-err));
+	xstrfree(path);
+	return err;
+}
+
+/* A source buffer of *out_len bytes and a terminator, from origin. */
+static int decoder_source_load(const struct decoder_origin *origin,
+			       const char *rel, char **out, size_t *out_len)
+{
+	__u32 i;
+
+	*out = NULL;
+	*out_len = 0;
+	if (!origin->nr_files)
+		return decoder_source_read(origin->src_path, rel, out,
+					   out_len);
+	for (i = 0; i < origin->nr_files; i++)
+		if (strcmp(origin->files[i].name, rel) == 0)
+			return decoder_source_copy(&origin->files[i], out,
+						   out_len);
+	pr_err("decoder source '%s' is not compiled in", rel);
+	return -ENOENT;
+}
+
 static int decoder_set_add(struct decoder_set *set,
 			   const struct decoder_manifest_view *manifest,
-			   const char *src_path)
+			   const struct decoder_origin *origin)
 {
 	struct decoder_file *items;
 	struct decoder_file *item;
-	char *path = NULL;
 	size_t source_len = 0;
 	char *source = NULL;
 	int err;
 
-	err = make_decoder_path(src_path, manifest->source, &path);
-	if (err) {
-		pr_err("decoder source path '%s' is invalid", manifest->source);
+	err = decoder_source_load(origin, manifest->source, &source,
+				  &source_len);
+	if (err)
 		return err;
-	}
-	err = read_file(path, 16u * 1024u * 1024u, &source,
-			&source_len);
-	if (!err && !source_len)
-		err = -EINVAL;
-	if (err) {
-		pr_err("read decoder source %s: %s", path, strerror(-err));
-		xstrfree(path);
-		return err;
-	}
 
 	items = xreallocarray(set->items, set->nr_items, set->nr_items + 1,
 			      sizeof(set->items[0]));
 	if (!items) {
-		xstrfree(path);
 		xfree(source, source_len + 1);
 		return -ENOMEM;
 	}
 	set->items = items;
 	item = &set->items[set->nr_items++];
 	item->manifest = *manifest;
-	item->path = path;
 	item->source = source;
 	item->source_len = (__u32)source_len;
 	return 0;
 }
 
 static int collect_decoder_manifests(struct bpf_object *obj,
-				     const char *src_path,
+				     const struct decoder_origin *origin,
 				     const char *upatch_name,
 				     struct decoder_set *out)
 {
@@ -1353,7 +1407,7 @@ static int collect_decoder_manifests(struct bpf_object *obj,
 				goto err_free;
 			}
 		}
-		err = decoder_set_add(out, &manifest, src_path);
+		err = decoder_set_add(out, &manifest, origin);
 		if (err)
 			goto err_free;
 	}
@@ -1967,12 +2021,13 @@ static int write_artifact(const char *out_path, const struct upatch_header *hdr,
 }
 
 /*
- * Takes ownership of obj. src_path anchors relative decoder paths;
- * NULL for a .bpf.o input or an unload directive.
+ * Takes ownership of obj. origin gives the decoder sources; NULL for an
+ * unload directive, which has none.
  */
 static int finalize_object(struct bpf_object *obj, const char *out_path,
 			   const char *upatch_name, __u32 flags,
-			   const __u8 *unload_payload, const char *src_path,
+			   const __u8 *unload_payload,
+			   const struct decoder_origin *origin,
 			   const void *policy_labels, __u32 policy_labels_len,
 			   const char *pkey_path, const char *cert_path)
 {
@@ -2023,7 +2078,7 @@ static int finalize_object(struct bpf_object *obj, const char *out_path,
 		if (err)
 			goto out;
 
-		err = collect_decoder_manifests(obj, src_path, upatch_name,
+		err = collect_decoder_manifests(obj, origin, upatch_name,
 						&decoders);
 		if (err)
 			goto out;
@@ -2199,6 +2254,7 @@ int build_package_load(const char *bpf_o, const char *src_path,
 {
 	__u32 label_len = 0, policy_map_idx = 0, socket_policy_map_idx = 0;
 	struct upatch_policy_label_header *label_blob = NULL;
+	struct decoder_origin origin = { .src_path = src_path };
 	struct bpf_map *map, *task_map, *sock_map;
 	int handler_ids[3] = { -1, -1, -1 };
 	struct bpf_object *obj;
@@ -2289,7 +2345,7 @@ int build_package_load(const char *bpf_o, const char *src_path,
 		memcpy(label_blob + 1, policies,
 		       label_len - sizeof(*label_blob));
 	}
-	err = finalize_object(obj, out_path, upatch_name, 0, NULL, src_path,
+	err = finalize_object(obj, out_path, upatch_name, 0, NULL, &origin,
 			      label_blob, label_len, pkey_path, cert_path);
 	obj = NULL;
 out:
