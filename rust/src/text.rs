@@ -296,6 +296,9 @@ pub fn sanitize(s: &mut [u8], lines: bool) {
 
 /// The helpers of `include/shirudo/string.h` for C, and for Rust that
 /// walks C strings.
+#[cfg(test)]
+mod tests;
+
 pub(crate) mod capi {
     use core::ffi::{CStr, c_char, c_int};
 
@@ -347,7 +350,6 @@ pub(crate) mod capi {
     /// # Safety
     ///
     /// As parse_u64().
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn parse_x64(
         s: *const c_char,
         len: usize,
@@ -400,7 +402,6 @@ pub(crate) mod capi {
     /// # Safety
     ///
     /// `name` holds `len` bytes, and `suffix` is a C string.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn name_has_suffix(
         name: *const c_char,
         len: usize,
@@ -413,7 +414,6 @@ pub(crate) mod capi {
     /// # Safety
     ///
     /// `name` is a C string.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn dns_name_valid(name: *const c_char) -> bool {
         // SAFETY: the caller's C string.
         super::dns_name_valid(unsafe { CStr::from_ptr(name) }.to_bytes())
@@ -426,20 +426,5 @@ pub(crate) mod capi {
     pub unsafe extern "C" fn utf8_width(s: *const c_char, n: usize) -> usize {
         // SAFETY: the caller's bytes.
         super::utf8_width(unsafe { bytes(s, n) })
-    }
-
-    /// # Safety
-    ///
-    /// `s` holds `len` writable bytes.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn text_sanitize(s: *mut c_char, len: usize, lines: bool) {
-        if len == 0 {
-            return;
-        }
-        // SAFETY: the caller's bytes.
-        super::sanitize(
-            unsafe { core::slice::from_raw_parts_mut(s.cast::<u8>(), len) },
-            lines,
-        );
     }
 }
