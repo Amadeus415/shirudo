@@ -866,9 +866,9 @@ testing/helper/test-register: testing/helper/test-register.c \
 	$(Q)$(CC) $(CFLAGS) -o $@ $(filter-out %.h,$^) $(REGISTER_LIBS) \
 		-Wl,--wrap=prctl
 
-testing/helper/test-register-cli: testing/helper/test-register-cli.c \
-		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_LIB)
-	@printf '  CC      $@\n'
+testing/helper/test-register-cli: $(HELPER_MAIN_DIR)/test-register-cli.o \
+		$(VERSION_OBJ) $(LIBBPF_A) $(RUST_HELPER_LIB)
+	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-keepalive-quote: testing/helper/test-keepalive-quote.c \
@@ -947,9 +947,9 @@ testing/helper/test-otel-map: testing/helper/test-otel-map.c \
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
-testing/helper/test-upatch-map-types: testing/helper/test-upatch-map-types.c \
-                                    $(RUST_LIB)
-	@printf '  CC      $@\n'
+testing/helper/test-upatch-map-types: $(HELPER_MAIN_DIR)/test-upatch-map-types.o \
+                                    $(RUST_HELPER_LIB)
+	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
 testing/helper/test-upatch-prog-metadata: testing/helper/test-upatch-prog-metadata.c \
@@ -985,9 +985,9 @@ testing/end2end/policy-exec: testing/end2end/policy_exec.c
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^
 
-testing/helper/test-config-image: testing/helper/test-config-image.c \
-		$(RUST_LIB)
-	@printf '  CC      $@\n'
+testing/helper/test-config-image: $(HELPER_MAIN_DIR)/test-config-image.o \
+		$(RUST_HELPER_LIB)
+	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $^ -lcrypto -lssl $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
 
 testing/helper/test-config-update: testing/helper/test-config-update.c \
@@ -1025,9 +1025,9 @@ testing/helper/test-image-cleanup: $(HELPER_MAIN_DIR)/test-image-cleanup.o \
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(RPATH_LDFLAGS) -o $@ $^ \
 		$(STATIC_LIBS) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
-testing/helper/test-mode-objects: testing/helper/test-mode-objects.c \
-		$(RUST_LIB)
-	@printf '  CC      $@\n'
+testing/helper/test-mode-objects: $(HELPER_MAIN_DIR)/test-mode-objects.o \
+		$(RUST_HELPER_LIB)
+	@printf '  LD      $@\n'
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(RUST_TEST_LDLIBS)
 
 testing/helper/test-seal-output: testing/helper/test-seal-output.c \
