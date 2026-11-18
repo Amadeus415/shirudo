@@ -13,6 +13,8 @@
 #include "util/config.h"
 #include "util/image_config.h"
 
+#include "image-cli.h"
+
 int __wrap_keys_load_image_root(const char *primary, int root_fd,
 				bool with_trusted, struct trusted_set *set)
 {
