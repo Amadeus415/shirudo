@@ -10,6 +10,7 @@ libcurl4-openssl-dev
 libelf-dev
 libjitterentropy3-dev
 libluajit-5.1-dev
+libpcap0.8t64
 libssl-dev
 libtss2-dev
 libzstd-dev
