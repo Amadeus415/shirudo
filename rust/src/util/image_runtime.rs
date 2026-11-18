@@ -734,7 +734,16 @@ fn retry_busy(mut remove: impl FnMut() -> c_int) -> c_int {
             return ret;
         }
         if attempt < 99 {
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            let pause = crate::sys::libc::Timespec {
+                tv_sec: 0,
+                tv_nsec: 10_000_000,
+            };
+            // nanosleep() itself, not std::thread::sleep(), which calls
+            // clock_nanosleep(): testing/helper/test-image-cleanup counts
+            // the pauses through a --wrap of it.
+            // SAFETY: the pause, and no room for what is left of it: an
+            // interrupted pause only retries sooner.
+            unsafe { crate::sys::libc::nanosleep(&pause, ptr::null_mut()) };
         }
     }
     ret
