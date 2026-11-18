@@ -718,6 +718,26 @@ EOF
 	)
 }
 
+# shirudo pwru signs its upatch without clang; t3115 sends UDP to
+# 127.0.0.2 port 4242 over loopback, and other traffic, through it.
+build_pwru_fixture()
+{
+	local keys_dir="$1"
+	local payload
+
+	"$REPO_ROOT/tools/shirudo-build/shirudo-build" pwru \
+		--keys-dir "$keys_dir" -o "$TMP_DIR/fixtures/pwru.upatch" \
+		udp and host 127.0.0.2 and port 4242 >/dev/null
+	payload="$($REPO_ROOT/shirudo upatch info \
+		"$TMP_DIR/fixtures/pwru.upatch" --json |
+		python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
+	"$REPO_ROOT/tools/shirudo-build/shirudo-build" --unload pwru \
+		--payload-sha256 "$payload" \
+		-o "$TMP_DIR/fixtures/pwru.unload.upatch" \
+		--key "$keys_dir/signing_key.pem" \
+		--cert "$keys_dir/cert.der" >/dev/null
+}
+
 build_policy_labels_fixture()
 {
 	local source_dir="$FIXTURE_WORK/policy-labels"
@@ -813,6 +833,7 @@ queue_fixture build_policy_labels_fixture
 queue_fixture build_policy_exec_graph_fixture
 queue_fixture build_obs_fixture "$FIXTURE_WORK/trusted"
 queue_fixture build_java_fixture
+queue_fixture build_pwru_fixture "$FIXTURE_WORK/trusted"
 wait_fixture_jobs
 
 basic_payload="$($REPO_ROOT/shirudo upatch info \

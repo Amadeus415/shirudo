@@ -1489,7 +1489,8 @@ shape of the code a filter of up to three instructions becomes, not
 what it computes; a fourth instruction takes the proof past an hour.
 That the code returns what the filter returns for every packet, and
 that every word of the stack it reads was written before, which the
-verifier checks when it loads the code, have no proof.
+verifier checks when it loads the code, have no proof; ``t3115-pwru``
+checks one filter on the packets it sends.
 
 Within the ``.upatch`` reader, the proofs cover its parts but not their
 composition: ``upatch_parse()`` and ``upatch_open_memory()`` join the

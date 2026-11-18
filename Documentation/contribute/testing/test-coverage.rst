@@ -281,6 +281,20 @@ signed config image.
        admit, and a BPF unload directive that names the agent are
        refused; the unload removes options and archive, measures a
        ``java_unload`` and leaves a jar whose agent does nothing
+   * - ``t3115-pwru``
+     - The upatch ``shirudo pwru`` signs without clang, with the filter
+       ``udp and host 127.0.0.2 and port 4242``, loads with its 11
+       ``fentry`` programs and its 3 ``tp_btf`` ones, and records UDP over
+       loopback that the filter matches and no other: at ``ip_output``
+       and ``__dev_queue_xmit``, before the packet has an Ethernet
+       header, and at ``dev_hard_start_xmit``,
+       ``__netif_receive_skb_core``, ``ip_rcv_core`` and
+       ``ip_protocol_deliver_rcu`` with one, the same ``sk_buff`` on the
+       way out and in, and a datagram to a port nothing listens on at
+       the ``kfree_skb`` tracepoint with its reason. It returns them through
+       its decoder with their tuple, exports them to an OTLP collector,
+       which drains them, and unloads. The translation of the filter is
+       covered by the ``cbpf`` unit cases.
 
 ``tpm`` (4)
 ~~~~~~~~~~~
