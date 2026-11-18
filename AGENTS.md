@@ -138,7 +138,7 @@ message that carries a change.
   for sizes, `strscpy()` with its `-E2BIG` checked,
   the `xmalloc()` family, `min()` and `max()`,
   `memzero_explicit()` and `memneq_explicit()` for secrets,
-  `util/json.h` for all JSON and `rust/src/log.rs` for all logging. The libc names
+  `rust/src/util/json/` for all JSON and `rust/src/log.rs` for all logging. The libc names
   they replace are poisoned. Code that a second place needs moves into
   `util/` with unit cases rather than being copied.
 - `ret` names a return code and `err` an errno kept beside the value a

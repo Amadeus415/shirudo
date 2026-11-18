@@ -320,15 +320,15 @@ already, or should. The basics:
 | Text from outside on a terminal | `text_sanitize()`; UTF-8 with `utf8_width()` |
 | Sizes and lengths | `checked_add()`, `checked_mul()` and kin, `div_ceil()` |
 | Smaller or larger | `min()`, `max()` (`<shirudo/misc.h>`) |
-| Memory | `xmalloc()`, `xcalloc()`, `xreallocarray()`, `xstrndup()`, `xfree(p, size)` (`util/malloc.h`) |
+| Memory | `xmalloc()`, `xcalloc()`, `xreallocarray()`, `xstrndup()`, `xfree(p, size)` (`rust/src/heap.rs`) |
 | Secrets | `memzero_explicit()`, `memneq_explicit()` |
-| Files | `read_file()`, `read_fd()`, `write_complete()`, `append_line()`, `lines_len()`, `open_beneath()`, `lock_exclusive()` (`util/io.h`) |
-| Sealed state and paths root names | `seal_open()`, `seal_lock()`, `seal_append_line()`, `seal_write_file()`; `seal_output_create()` and `seal_output_commit()` for a report or export (`util/seal.h`) |
-| Bytes on the wire | `get_le32()`, `put_be32()`, `le32_to_cpu()` and kin (`<shirudo/byteorder.h>`), `hex_encode()`, `hex_decode()`, `hex_decode_max()` (`util/hex.h`) |
-| SHA-256 | `sha256_buffer()`, or `sha256_init()`, `sha256_update()` and `sha256_final()` over pieces (`util/crypto.h`); `sha256_digest_encode()` and `sha256_digest_decode()` for the `sha256:<hex>` form (`util/hex.h`), `bpm_sha256_digest()` to hash and write it at once (`util/bpm_oci.h`) |
-| JSON | `util/json.h`: `json_parse()` with a schema, `json_walk()`, `struct json_emit` |
+| Files | `read_file()`, `read_fd()`, `write_complete()`, `append_line()`, `lines_len()`, `open_beneath()`, `lock_exclusive()` (`rust/src/util/io.rs`) |
+| Sealed state and paths root names | `seal_open()`, `seal_lock()`, `seal_append_line()`, `seal_write_file()`; `seal_output_create()` and `seal_output_commit()` for a report or export (`rust/src/util/seal.rs`) |
+| Bytes on the wire | `from_le_bytes()`, `to_be_bytes()` and kin, `hex_encode()`, `hex_decode()`, `hex_decode_max()` (`rust/src/util/hex.rs`) |
+| SHA-256 | `sha256_buffer()`, or `sha256_init()`, `sha256_update()` and `sha256_final()` over pieces (`rust/src/util/crypto_openssl.rs`); `sha256_digest_encode()` and `sha256_digest_decode()` for the `sha256:<hex>` form (`rust/src/util/hex.rs`), `sha256_hex()` to hash and write it at once (`rust/src/util/bpm_oci/`) |
+| JSON | `rust/src/util/json/`: `json_parse()` with a schema, `json_walk()`, `struct json_emit` |
 | Messages | `log::err()`, `warn()`, `info()`, `audit()`, and `log_c!` for a C format (`rust/src/log.rs`) |
-| A command's options | a table of `struct opt_spec` indexed by the command's enum, `OPT_INIT()`, a switch over `opt_next()`, `opt_u64()`, `OPT_CHOICE()` for a value from a set of names, `opt_usage()` and `EXIT_USAGE` (`util/options.h`); `HELP_OPTIONS()` lists the same table in help, and `--list-opts` for completion; never compare `argv[]` by hand |
+| A command's options | a table of `struct opt_spec` indexed by the command's enum, `OPT_INIT()`, a switch over `opt_next()`, `opt_u64()`, `OPT_CHOICE()` for a value from a set of names, `opt_usage()` and `EXIT_USAGE` (`rust/src/util/options.rs`); `HELP_OPTIONS()` lists the same table in help, and `--list-opts` for completion; never compare `argv[]` by hand |
 
 Code that a second place needs moves into `util/<m>.c`, declared in
 `util/<m>.h`, or in `include/shirudo/` for the project's basics, with
@@ -387,7 +387,7 @@ without a body.
   compare it with `memneq_explicit()`. Mark a struct member that holds
   one `__sensitive`: a check then wants every local of that struct
   scrubbed the same way, member filled by a parser and all.
-- All JSON goes through `util/json.h`; text from outside is written
+- All JSON goes through `rust/src/util/json/`; text from outside is written
   with its lossy writers. All logging goes through `rust/src/log.rs` to syslog;
   shirudo writes no log file of its own.
 - Fields of a little- or big-endian format are read and written with
@@ -520,7 +520,7 @@ its contract while any C caller uses it.
   `parse_u64()`, over byte slices. Every `unsafe` block says in a
   `// SAFETY:` comment what part of the C contract makes it sound.
 - What the Rust code calls in C that std does not cover, the `*at()`
-  calls and ioctls, libcurl, zlib, OpenSSL past `util/crypto.h` and the
+  calls and ioctls, libcurl, zlib, OpenSSL past `rust/src/util/crypto_openssl.rs` and the
   `util/` modules not ported yet, is declared in `rust/src/sys/`, one
   module for each header, which goes when the C it declares does. A
   message goes through `rust/src/log.rs` and reads as the C's did.

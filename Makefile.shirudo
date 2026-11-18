@@ -453,7 +453,7 @@ $(VERSION_RS):
 	    echo "// Copyright (c) 2026 Authors of shirudo"; \
 	    echo "// AUTO-GENERATED. Do not edit. Do not commit."; \
 	    echo ""; \
-	    echo "//! The build identity of util/version.h, each a C string."; \
+	    echo "//! The build identity, each a C string."; \
 	    echo ""; \
 	    echo "#![no_std]"; \
 	    echo "#![allow(non_upper_case_globals)]"; \

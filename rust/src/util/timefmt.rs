@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 // Copyright (c) 2026 Authors of shirudo
 
-//! The time formats behind `util/timefmt.h`: a compact duration, and a
+//! The time formats: a compact duration, and a
 //! time as ISO-8601 UTC.
 
 use core::ffi::{c_int, c_long};

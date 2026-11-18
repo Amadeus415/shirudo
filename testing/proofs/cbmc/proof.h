@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Authors of shirudo
  *
  * What the CBMC harnesses share: memory of any contents, which the
- * allocators of util/malloc.h cannot give as they zero what they hand out.
+ * allocators of rust/src/heap.rs cannot give as they zero what they hand out.
  */
 
 #ifndef SHIRUDO_PROOF_H
