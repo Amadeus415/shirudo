@@ -242,6 +242,13 @@ int upatch_resolve_location(struct btf *vbtf, const char *name,
 		close(link_fd);
 		return ret ? ret : -EINVAL;
 	}
+	if (linfo.type == BPF_LINK_TYPE_KPROBE_MULTI) {
+		close(link_fd);
+		return strsprintf(out, cap, "%s (%u funcs)",
+				  linfo.kprobe_multi.flags & BPF_F_KPROBE_MULTI_RETURN ?
+				  "kretprobe.multi" : "kprobe.multi",
+				  linfo.kprobe_multi.count) < 0 ? -E2BIG : 0;
+	}
 	if (linfo.type == BPF_LINK_TYPE_UPROBE_MULTI) {
 		struct bpf_link_info detail = {};
 		__u32 count = linfo.uprobe_multi.count;

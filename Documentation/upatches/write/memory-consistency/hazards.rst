@@ -56,16 +56,17 @@ riscv64 offer differ in one thing that matters here, preemptible RCU,
      - Kernels before 7.0 only, where no task preempted a running
        program. The kernels shirudo needs have neither.
 
-``kprobe``, ``kretprobe`` and ``xdp`` programs run with preemption or
-bottom halves disabled on every model, ``syscall`` programs with only
-migration disabled on any kernel, and a sleepable program can sleep. On
-every kernel an interrupt can run a softirq on top of a run in a
-process, and an interrupt or an NMI can run other programs on top of any
-run. Besides, the kernel skips a second run of some program types on
-the CPU while one runs. The table gives, for each attach kind ``shirudo
-build`` accepts (:doc:`/upatches/write/attach-kinds` lists them),
-whether the kernel skips such a nested run and whether a run of another
-task can come in between on the CPU under each model:
+``kprobe``, ``kretprobe``, ``kprobe.multi``, ``kretprobe.multi`` and
+``xdp`` programs run with preemption or bottom halves disabled on every
+model, ``syscall`` programs with only migration disabled on any kernel,
+and a sleepable program can sleep. On every kernel an interrupt can run
+a softirq on top of a run in a process, and an interrupt or an NMI can
+run other programs on top of any run. Besides, the kernel skips a second
+run of some program types on the CPU while one runs. The table gives,
+for each attach kind ``shirudo build`` accepts
+(:doc:`/upatches/write/attach-kinds` lists them), whether the kernel
+skips such a nested run and whether a run of another task can come in
+between on the CPU under each model:
 
 .. list-table::
    :header-rows: 1
@@ -76,9 +77,9 @@ task can come in between on the CPU under each model:
      - Another task between, without preemptible RCU
      - With preemptible RCU
      - On ``PREEMPT_RT``
-   * - ``kprobe``, ``kretprobe``
-     - Yes, while any ``kprobe`` or ``kretprobe`` program runs on the
-       CPU
+   * - ``kprobe``, ``kretprobe``, ``kprobe.multi``,
+       ``kretprobe.multi``
+     - Yes, while any program of these four kinds runs on the CPU
      - No
      - No
      - No

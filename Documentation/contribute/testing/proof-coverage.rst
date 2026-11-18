@@ -655,13 +655,17 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
        reads back each role, kind, target, offset and map; a refusal
        leaves nothing written and nothing allocated
    * - ``upatch-writer-kprobes``
-     - The kprobe entries of ``build_prog_metadata()``
-     - 16 objects from a table: a symbol of 1 to 127 bytes, alone or with
-       a decimal or hexadecimal offset of up to 64 bits, and the sections
-       the writer must refuse, a symbol of 128 bytes and an offset behind
-       ``kretprobe`` among them
-     - The symbol and offset read back are the section's; what the reader
-       refuses, or would cut short, is refused
+     - The kprobe entries and the kprobe multi target block of
+       ``build_prog_metadata()``
+     - 23 objects from a table: a symbol of 1 to 127 bytes, alone or with
+       a decimal or hexadecimal offset of up to 64 bits; a kprobe multi
+       list of one name or two out of order, alone, beside another list
+       or behind a uprobe; and the sections the writer must refuse, a
+       symbol of 128 bytes, an offset behind ``kretprobe``, a glob, a name
+       given twice and an empty name among them
+     - The symbol and offset read back are the section's, and a list's
+       names its own, sorted; a uprobe and a list in one object both read
+       back; what the reader refuses, or would cut short, is refused
    * - ``upatch-writer-xdp``
      - The XDP entries of ``build_prog_metadata()``
      - ``xdp/`` with a first digit of 0 to 4, 8 or 9 and any 3 bytes

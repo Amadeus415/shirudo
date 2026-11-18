@@ -2,9 +2,10 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * The attach metadata proof for kprobe and kretprobe sections: a symbol of
- * up to 127 bytes and an offset of up to 64 bits, decimal or hexadecimal,
- * read back as written, and the sections the writer must refuse.
+ * The attach metadata proof for kprobe sections: a symbol of up to 127
+ * bytes and an offset of up to 64 bits read back as written, kprobe multi
+ * name lists read back sorted, beside a uprobe or another list, and the
+ * sections the writer must refuse.
  */
 
 #define KPROBE_OBJECTS

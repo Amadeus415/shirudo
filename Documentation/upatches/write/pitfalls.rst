@@ -21,12 +21,19 @@ Runs the kernel skips
 The kernel skips some runs of a program and counts them only in the
 program's ``recursion_misses``, which ``struct bpf_prog_info`` reports:
 
-- A ``kprobe`` or ``kretprobe`` run, while another ``kprobe`` or
-  ``kretprobe`` program runs on the CPU, and while the CPU is in a
-  ``bpf()`` call that looks up, updates or deletes a map element from
-  userspace, as shirudo makes when it reads a upatch's maps. A
-  ``kprobe`` hit inside the handler of another ``kprobe`` is missed by
-  the kprobe itself.
+- A ``kprobe``, ``kretprobe``, ``kprobe.multi`` or ``kretprobe.multi``
+  run, while another program of these four kinds runs on the CPU, and
+  while the CPU is in a ``bpf()`` call that looks up, updates or deletes
+  a map element from userspace, as shirudo makes when it reads a
+  upatch's maps. A ``kprobe`` hit inside the handler of another
+  ``kprobe`` is missed by the kprobe itself.
+- A ``kprobe.multi`` or ``kretprobe.multi`` hit while ftrace already
+  traces a function in the same context on the CPU, such as a watched
+  function the program calls itself, and the return of a function a
+  ``kretprobe.multi`` watches when the task's return stack is full. The
+  kernel counts neither. A return it has no room to keep the probe's
+  data for is counted in the link's ``kprobe_multi.missed``, which
+  ``struct bpf_link_info`` reports, not in ``recursion_misses``.
 - An ``fentry``, ``fexit``, ``fmod_ret`` or ``tp_btf`` run of a program
   that is already running on the CPU: one a preempted task left there
   with preemptible RCU, or one an NMI interrupted.

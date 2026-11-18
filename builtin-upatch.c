@@ -167,6 +167,7 @@ static const char *cat_from_attach_err(int err)
 		return "attach_scope_mismatch";
 	case -ENOENT:
 	case -ENOTDIR:
+	case -ESRCH:
 		return "attach_target_missing";
 	case -ESTALE:
 		return "binary_mismatch";
@@ -1217,6 +1218,10 @@ static const char *attach_kind_name(__u32 kind)
 		return "uprobe.multi";
 	case UPATCH_ATTACH_XDP:
 		return "xdp";
+	case UPATCH_ATTACH_KPROBE_MULTI:
+		return "kprobe.multi";
+	case UPATCH_ATTACH_KRETPROBE_MULTI:
+		return "kretprobe.multi";
 	case UPATCH_ATTACH_URETPROBE_MULTI:
 		return "uretprobe.multi";
 	case UPATCH_ATTACH_UPROBE:
@@ -1337,6 +1342,23 @@ static int perf_event_open_uprobe(const struct prog_spec *spec)
 				     spec->kind == UPATCH_ATTACH_URETPROBE);
 }
 
+static int prog_attach_kprobe_multi(int prog_fd, const struct prog_spec *spec)
+{
+	union bpf_attr attr = {};
+	long fd;
+
+	if (!spec->kprobe_syms || !spec->nr_kprobe_syms)
+		return -EINVAL;
+	attr.link_create.prog_fd = (__u32)prog_fd;
+	attr.link_create.attach_type = BPF_TRACE_KPROBE_MULTI;
+	attr.link_create.kprobe_multi.syms = ptr_to_u64(spec->kprobe_syms);
+	attr.link_create.kprobe_multi.cnt = spec->nr_kprobe_syms;
+	if (spec->kind == UPATCH_ATTACH_KRETPROBE_MULTI)
+		attr.link_create.kprobe_multi.flags = BPF_F_KPROBE_MULTI_RETURN;
+	fd = syscall(__NR_bpf, BPF_LINK_CREATE, &attr, sizeof(attr));
+	return fd >= 0 ? (int)fd : -errno;
+}
+
 static int prog_attach_for_spec(int prog_fd,
 				const struct prog_spec *spec)
 {
@@ -1358,6 +1380,9 @@ static int prog_attach_for_spec(int prog_fd,
 	case UPATCH_ATTACH_UPROBE_MULTI:
 	case UPATCH_ATTACH_URETPROBE_MULTI:
 		return prog_attach_uprobe_multi(prog_fd, spec);
+	case UPATCH_ATTACH_KPROBE_MULTI:
+	case UPATCH_ATTACH_KRETPROBE_MULTI:
+		return prog_attach_kprobe_multi(prog_fd, spec);
 	case UPATCH_ATTACH_KPROBE:
 	case UPATCH_ATTACH_KRETPROBE:
 		perf_fd = perf_event_open_probe("kprobe", spec->target, spec->offset,
@@ -1456,6 +1481,14 @@ static int link_matches_spec(int link_fd,
 		if (info.type != BPF_LINK_TYPE_UPROBE_MULTI ||
 		    info.uprobe_multi.count != spec->nr_uprobe_offsets ||
 		    !!(info.uprobe_multi.flags & BPF_F_UPROBE_MULTI_RETURN) != ret)
+			return -EXDEV;
+		return 0;
+	case UPATCH_ATTACH_KPROBE_MULTI:
+	case UPATCH_ATTACH_KRETPROBE_MULTI:
+		ret = spec->kind == UPATCH_ATTACH_KRETPROBE_MULTI;
+		if (info.type != BPF_LINK_TYPE_KPROBE_MULTI ||
+		    info.kprobe_multi.count != spec->nr_kprobe_syms ||
+		    !!(info.kprobe_multi.flags & BPF_F_KPROBE_MULTI_RETURN) != ret)
 			return -EXDEV;
 		return 0;
 	case UPATCH_ATTACH_FMOD_RET:
@@ -1775,6 +1808,10 @@ static int attach_and_pin_progs(const struct loader_ctx *cx,
 				       attach_kind_name(spec->kind),
 				       spec->uprobe_path, spec->target,
 				       strerror(-link_fd));
+			else if (kind_is_kprobe_multi(spec->kind))
+				pr_err("attach prog %u (%s, %u symbols): %s", i,
+				       attach_kind_name(spec->kind), spec->nr_kprobe_syms,
+				       strerror(-link_fd));
 			else if (spec->target[0])
 				pr_err("attach prog %u (%s %s): %s",
 				       i, attach_kind_name(spec->kind),
@@ -1789,10 +1826,15 @@ static int attach_and_pin_progs(const struct loader_ctx *cx,
 		/* Unpinned, a closed link detaches. */
 		ret = link_matches_spec(link_fd, spec, 0);
 		if (ret) {
-			pr_err("attach prog %u (%s %s): the link is not at "
-			       "the site the metadata names: %s", i,
-			       attach_kind_name(spec->kind), spec->target,
-			       strerror(-ret));
+			if (kind_is_kprobe_multi(spec->kind))
+				pr_err("attach prog %u (%s, %u symbols): the link "
+				       "is not at the site the metadata names: %s",
+				       i, attach_kind_name(spec->kind),
+				       spec->nr_kprobe_syms, strerror(-ret));
+			else
+				pr_err("attach prog %u (%s %s): the link is not at "
+				       "the site the metadata names: %s", i,
+				       attach_kind_name(spec->kind), spec->target, strerror(-ret));
 			close(link_fd);
 			goto out;
 		}

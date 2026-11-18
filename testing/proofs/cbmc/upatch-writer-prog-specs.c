@@ -38,7 +38,8 @@ enum { TAKEN, EITHER, REFUSED };
  * A program: its section and name, any TAIL bytes behind the one or the
  * other where tail says so, whether the writer takes it, and what the
  * reader then gives. A uprobe's binary has a build ID of build_id_len
- * bytes, and the resolver finds it unless no_binary is set.
+ * bytes, and the resolver finds it unless no_binary is set. A kprobe multi
+ * program reads back syms, its names sorted and joined by ','.
  */
 struct shape {
 	const char	*sec;
@@ -51,6 +52,7 @@ struct shape {
 	__u64		offset;
 	__u32		build_id_len;
 	bool		no_binary;
+	const char	*syms;
 };
 
 #define PROG(sec, verdict, kind, ...) \
@@ -80,6 +82,8 @@ struct shape {
 	PROG(sec, TAKEN, kind, target, 0, build_id_len)
 #define NO_BINARY(sec, kind) \
 	PROG(sec, REFUSED, kind, "f", 0, 20, true)
+#define KMULTI(sec, kind, syms) \
+	PROG(sec, TAKEN, kind, "", 0, 0, false, syms)
 
 static const struct {
 	__u32		nr_progs;
@@ -100,7 +104,16 @@ static const struct {
 	{ 1, { REFUSE("kprobe/+1") } },
 	{ 1, { REFUSE("kprobe/f+") } },
 	{ 1, { REFUSE("kprobe/f+07") } },
-	{ 1, { REFUSE("kprobe.multi/f") } },
+	{ 1, { KMULTI("kprobe.multi/f", KPROBE_MULTI, "f") } },
+	{ 1, { KMULTI("kretprobe.multi/g,f", KRETPROBE_MULTI, "f,g") } },
+	{ 2, { KMULTI("kprobe.multi/f", KPROBE_MULTI, "f"),
+	       KMULTI("kretprobe.multi/g", KRETPROBE_MULTI, "g") } },
+	{ 2, { UPROBE(AT("uprobe", "f"), UPROBE, "f", 0, 20),
+	       KMULTI("kprobe.multi/g", KPROBE_MULTI, "g") } },
+	{ 1, { REFUSE("kprobe.multi/f*") } },
+	{ 1, { REFUSE("kprobe.multi/f,f") } },
+	{ 1, { REFUSE("kprobe.multi/f,") } },
+	{ 1, { REFUSE("kprobe.multi/") } },
 	{ 1, { REFUSE("kprobe") } },
 	{ 1, { REFUSE("kprobe/") } },
 	{ 1, { REFUSE("kretprobe") } },
@@ -256,6 +269,31 @@ void pr_err(const char *fmt, ...)
 {
 }
 
+/* A body for strpbrk(), which proof.h does not give, as it does strnlen(). */
+char *strpbrk(const char *s, const char *accept)
+{
+	for (; *s; s++)
+		if (strchr(accept, *s))
+			return (char *)s;
+	return NULL;
+}
+
+/* CBMC models no qsort(); the writer sorts at most two names here. */
+void qsort(void *base, size_t nmemb, size_t size,
+	   int (*compare)(const void *, const void *))
+{
+	char **names = base;
+	char *first;
+
+	__CPROVER_assert(nmemb <= 2 && size == sizeof(*names),
+			 "at most two names to sort");
+	if (nmemb == 2 && compare(&names[0], &names[1]) > 0) {
+		first = names[0];
+		names[0] = names[1];
+		names[1] = first;
+	}
+}
+
 char *strerror(int err)
 {
 	return "error";
@@ -344,21 +382,29 @@ static void text(char *dst, const char *prefix, bool tail)
 	dst[n] = '\0';
 }
 
-/* The table of the format: a header, the entries, the uprobe targets. */
+/*
+ * The table of the format: a header, the entries, the uprobe targets and
+ * the kprobe multi targets.
+ */
 static __u32 table_len(void)
 {
-	__u32 len = 16 + 160 * NR_PROGS, nr_uprobes = 0, i;
+	__u32 len = 16 + 160 * NR_PROGS, nr_uprobes = 0, nr_kprobes = 0, i;
 
 	for (i = 0; i < NR_PROGS; i++) {
 		const struct shape *shape = &objects[LEN].progs[i];
 
+		if (kind_is_kprobe_multi(shape->kind)) {
+			len += 12 + strlen(shape->syms) + 1;
+			nr_kprobes++;
+			continue;
+		}
 		if (!kind_has_uprobe_target(shape->kind))
 			continue;
 		len += 16 + strlen(UPROBE_PATH) + shape->build_id_len +
 		       8 * (kind_is_uprobe_multi(shape->kind) ? NR_OFFSETS : 1);
 		nr_uprobes++;
 	}
-	return len + (nr_uprobes ? 16 : 0);
+	return len + (nr_uprobes ? 16 : 0) + (nr_kprobes ? 16 : 0);
 }
 
 static void uprobe_target(const struct prog_spec *s,
@@ -382,6 +428,23 @@ static void uprobe_target(const struct prog_spec *s,
 	__CPROVER_assert(kind_is_uprobe_multi(s->kind) ||
 			 s->uprobe_offsets[0] <= UINT32_MAX,
 			 "a function below 4 GiB");
+}
+
+/* The names of syms, in its order, each NUL-terminated in the record. */
+static void kprobe_syms(const struct prog_spec *s, const char *syms)
+{
+	const char *want = syms;
+	__u32 i;
+
+	for (i = 0; i < s->nr_kprobe_syms; i++) {
+		size_t len = strlen(s->kprobe_syms[i]);
+
+		__CPROVER_assert(*want && !strncmp(s->kprobe_syms[i], want, len) &&
+				 (want[len] == ',' || !want[len]),
+				 "the names the section lists, sorted");
+		want += len + (want[len] == ',');
+	}
+	__CPROVER_assert(s->nr_kprobe_syms && !*want, "every name the section lists");
 }
 
 static __u32 decimal(const char *digits)
@@ -413,6 +476,8 @@ static void read_back(const struct prog_spec *s, const char *sec,
 				 "the target and offset the section names");
 	if (kind_has_uprobe_target(s->kind))
 		uprobe_target(s, shape, nth_uprobe);
+	if (kind_is_kprobe_multi(s->kind))
+		kprobe_syms(s, shape->syms);
 }
 
 void harness(void)

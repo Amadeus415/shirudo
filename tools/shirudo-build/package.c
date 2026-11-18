@@ -582,10 +582,31 @@ int build_upatch_cli(int argc, const char **argv)
 	return ret ? 1 : 0;
 }
 
+static const char *kprobe_multi_section_target(const char *sec, __u32 *kind)
+{
+	size_t n;
+
+	n = str_has_prefix(sec, "kprobe.multi/");
+	if (n && sec[n]) {
+		*kind = UPATCH_ATTACH_KPROBE_MULTI;
+		return sec + n;
+	}
+	n = str_has_prefix(sec, "kretprobe.multi/");
+	if (n && sec[n]) {
+		*kind = UPATCH_ATTACH_KRETPROBE_MULTI;
+		return sec + n;
+	}
+	return NULL;
+}
+
 static bool unsupported_kprobe_section(const char *sec)
 {
+	__u32 kind;
+
 	if (sec && sec[0] == '?')
 		sec++;
+	if (sec && kprobe_multi_section_target(sec, &kind))
+		return false;
 	return sec &&
 	       (strcmp(sec, "kprobe") == 0 ||
 		strcmp(sec, "kretprobe") == 0 ||
@@ -735,6 +756,9 @@ static __u32 attach_kind_from_section(const char *sec,
 		return UPATCH_ATTACH_KRETPROBE;
 	}
 	*target = uprobe_section_target(sec, &kind);
+	if (*target)
+		return kind;
+	*target = kprobe_multi_section_target(sec, &kind);
 	if (*target)
 		return kind;
 	if (strcmp(sec, "cgroup_skb/ingress") == 0)
@@ -953,6 +977,137 @@ static __u8 *write_uprobe_targets(__u8 *cursor, const struct build_uprobe_target
 
 			memcpy(cursor, &offset, sizeof(offset));
 			cursor += sizeof(offset);
+		}
+	}
+	return cursor;
+}
+
+struct build_kprobe_target {
+	__u32 prog_idx;
+	char *buf;
+	size_t buf_len;
+	char **syms;
+	__u32 nr_syms;
+};
+
+static void free_kprobe_targets(struct build_kprobe_target *targets,
+				__u32 nr_targets, __u32 nr_progs)
+{
+	__u32 i;
+
+	if (!targets)
+		return;
+	for (i = 0; i < nr_targets; i++) {
+		xfree(targets[i].buf, targets[i].buf_len);
+		xfree(targets[i].syms, (size_t)targets[i].nr_syms * sizeof(*targets[i].syms));
+	}
+	xfree(targets, (size_t)nr_progs * sizeof(*targets));
+}
+
+static int sym_cmp(const void *a, const void *b)
+{
+	return strcmp(*(char * const *)a, *(char * const *)b);
+}
+
+/*
+ * Splits "<name>[,<name>...]" into sorted names. The buffer keeps them in
+ * the order given; it is as long as the signed record, which
+ * write_kprobe_targets() fills in sorted order. On failure kt owns
+ * nothing: -EOPNOTSUPP for a glob, -EEXIST for a name given twice, -E2BIG
+ * for too many names, -EINVAL for an invalid one.
+ */
+static int split_kprobe_multi_target(const char *list, struct build_kprobe_target *kt)
+{
+	size_t list_len = strlen(list), buf_len;
+	__u32 nr_syms = 1, i;
+	const char *comma;
+	char **syms;
+	char *buf, *name;
+	int ret = -EINVAL;
+
+	if (strpbrk(list, "*?"))
+		return -EOPNOTSUPP;
+	for (comma = strchr(list, ','); comma; comma = strchr(comma + 1, ','))
+		if (++nr_syms > UPATCH_KPROBE_SYMS_MAX)
+			return -E2BIG;
+	if (check_add_overflow(list_len, 1, &buf_len) || buf_len > UINT32_MAX)
+		return -E2BIG;
+	buf = xstrndup(list, list_len);
+	if (!buf)
+		return -ENOMEM;
+	syms = xcalloc(nr_syms, sizeof(*syms));
+	if (!syms) {
+		ret = -ENOMEM;
+		goto err_buf;
+	}
+	name = buf;
+	for (i = 0; i < nr_syms; i++) {
+		char *end = strchr(name, ',');
+		size_t len = end ? (size_t)(end - name) : strlen(name);
+
+		if (!kprobe_sym_valid(name, len))
+			goto err_syms;
+		name[len] = '\0';
+		syms[i] = name;
+		name += len + 1;
+	}
+	qsort(syms, nr_syms, sizeof(*syms), sym_cmp);
+	for (i = 1; i < nr_syms; i++) {
+		if (!strcmp(syms[i - 1], syms[i])) {
+			ret = -EEXIST;
+			goto err_syms;
+		}
+	}
+	kt->buf = buf;
+	kt->buf_len = buf_len;
+	kt->syms = syms;
+	kt->nr_syms = nr_syms;
+	return 0;
+err_syms:
+	xfree(syms, (size_t)nr_syms * sizeof(*syms));
+err_buf:
+	xfree(buf, buf_len);
+	return ret;
+}
+
+static size_t kprobe_targets_block_len(const struct build_kprobe_target *targets, __u32 nr_targets)
+{
+	size_t len = sizeof(struct upatch_kprobe_targets);
+	__u32 i;
+
+	for (i = 0; i < nr_targets; i++)
+		len = size_add(len, size_add(sizeof(struct upatch_kprobe_target),
+					     targets[i].buf_len));
+	return len;
+}
+
+static __u8 *write_kprobe_targets(__u8 *cursor, const struct build_kprobe_target *targets,
+				  __u32 nr_targets)
+{
+	struct upatch_kprobe_targets header = {
+		.magic = cpu_to_le32(UPATCH_KPROBE_TARGET_MAGIC),
+		.version = cpu_to_le32(UPATCH_KPROBE_TARGET_VERSION),
+		.nr_targets = cpu_to_le32(nr_targets),
+	};
+	__u32 i, j;
+
+	memcpy(cursor, &header, sizeof(header));
+	cursor += sizeof(header);
+	for (i = 0; i < nr_targets; i++) {
+		const struct build_kprobe_target *kt = &targets[i];
+		struct upatch_kprobe_target record = {
+			.prog_idx = cpu_to_le32(kt->prog_idx),
+			.nr_syms = cpu_to_le32(kt->nr_syms),
+			.syms_len = cpu_to_le32((__u32)kt->buf_len),
+		};
+
+		memcpy(cursor, &record, sizeof(record));
+		cursor += sizeof(record);
+		for (j = 0; j < kt->nr_syms; j++) {
+			size_t sym_size = strlen(kt->syms[j]) + 1;
+
+			memcpy(cursor, kt->syms[j], sym_size);
+			cursor += sym_size;
 		}
 	}
 	return cursor;
@@ -1372,11 +1527,13 @@ static int build_prog_metadata(struct bpf_object *obj, __u32 nr_maps,
 			       __u32 nr_progs, void **out, __u32 *out_len)
 {
 	struct build_uprobe_target *uprobe_targets = NULL;
+	struct build_kprobe_target *kprobe_targets = NULL;
 	char (*seen_maps)[UPATCH_PROG_MAP_MAX] = NULL;
 	struct upatch_prog_metadata *md;
 	struct bpf_program *p;
+	__u32 i = 0, n_seen = 0, nr_uprobe_targets = 0, nr_kprobe_targets = 0;
+	__u32 xdp_classes = 0;
 	size_t len, base_len;
-	__u32 i = 0, n_seen = 0, nr_uprobe_targets = 0, xdp_classes = 0;
 	bool has_serializer = false, has_test_run = false;
 	int err;
 
@@ -1411,6 +1568,11 @@ static int build_prog_metadata(struct bpf_object *obj, __u32 nr_maps,
 	}
 	uprobe_targets = xcalloc(nr_progs, sizeof(*uprobe_targets));
 	if (!uprobe_targets) {
+		err = -ENOMEM;
+		goto err_free;
+	}
+	kprobe_targets = xcalloc(nr_progs, sizeof(*kprobe_targets));
+	if (!kprobe_targets) {
 		err = -ENOMEM;
 		goto err_free;
 	}
@@ -1491,7 +1653,7 @@ static int build_prog_metadata(struct bpf_object *obj, __u32 nr_maps,
 			continue;
 		}
 		if (unsupported_kprobe_section(sec)) {
-			pr_err("unsupported kprobe section '%s'; use kprobe/<symbol> or kretprobe/<symbol>",
+			pr_err("unsupported kprobe section '%s'; use kprobe/<symbol>, kretprobe/<symbol>, kprobe.multi/<symbol>[,<symbol>...] or kretprobe.multi/<symbol>[,<symbol>...]",
 			       sec);
 			err = -EOPNOTSUPP;
 			goto err_free;
@@ -1529,7 +1691,7 @@ static int build_prog_metadata(struct bpf_object *obj, __u32 nr_maps,
 		kind = attach_kind_from_section(sec, &target);
 		if (kind == UPATCH_ATTACH_RAW_TRACEPOINT &&
 		    !default_attach_section(sec)) {
-			pr_err("unsupported section '%s'; supported are fentry, fexit, fmod_ret, lsm, tp_btf, kprobe, kretprobe, uprobe[.s], uretprobe[.s], uprobe.multi[.s], uretprobe.multi[.s], cgroup_skb, netfilter and xdp/<mask>",
+			pr_err("unsupported section '%s'; supported are fentry, fexit, fmod_ret, lsm, tp_btf, kprobe, kretprobe, kprobe.multi, kretprobe.multi, uprobe[.s], uretprobe[.s], uprobe.multi[.s], uretprobe.multi[.s], cgroup_skb, netfilter and xdp/<mask>",
 			       sec);
 			err = -EOPNOTSUPP;
 			goto err_free;
@@ -1599,6 +1761,28 @@ static int build_prog_metadata(struct bpf_object *obj, __u32 nr_maps,
 					       strerror(-err));
 				goto err_free;
 			}
+		} else if (kind_is_kprobe_multi(kind)) {
+			struct build_kprobe_target *kt = &kprobe_targets[nr_kprobe_targets];
+
+			err = split_kprobe_multi_target(target, kt);
+			if (err) {
+				if (err == -ENOMEM)
+					pr_err("kprobe multi section '%s': %s", sec,
+					       strerror(-err));
+				else if (err == -EOPNOTSUPP)
+					pr_err("invalid kprobe multi section '%s': globs are unsupported; name each function",
+					       sec);
+				else if (err == -EEXIST)
+					pr_err("invalid kprobe multi section '%s': a function is named twice",
+					       sec);
+				else
+					pr_err("invalid kprobe multi section '%s'; expected a comma-separated list of 1 to %u function names of at most %u bytes",
+					       sec, UPATCH_KPROBE_SYMS_MAX,
+					       UPATCH_KPROBE_SYM_MAX - 1);
+				goto err_free;
+			}
+			kt->prog_idx = i;
+			nr_kprobe_targets++;
 		} else if (target) {
 			err = split_probe_target(target, md->progs[i].target,
 						 sizeof(md->progs[i].target),
@@ -1620,33 +1804,51 @@ static int build_prog_metadata(struct bpf_object *obj, __u32 nr_maps,
 	}
 
 	len = base_len;
-	if (nr_uprobe_targets) {
+	if (nr_uprobe_targets &&
+	    check_add_overflow(len, uprobe_targets_block_len(uprobe_targets, nr_uprobe_targets),
+			       &len)) {
+		err = -EOVERFLOW;
+		goto err_free;
+	}
+	if (nr_kprobe_targets &&
+	    check_add_overflow(len, kprobe_targets_block_len(kprobe_targets, nr_kprobe_targets),
+			       &len)) {
+		err = -EOVERFLOW;
+		goto err_free;
+	}
+	if (len > UINT32_MAX) {
+		err = -EOVERFLOW;
+		goto err_free;
+	}
+	if (len != base_len) {
+		__u8 *cursor;
 		void *grown;
 
-		if (check_add_overflow(len,
-				       uprobe_targets_block_len(uprobe_targets, nr_uprobe_targets),
-				       &len) || len > UINT32_MAX) {
-			err = -EOVERFLOW;
-			goto err_free;
-		}
 		grown = xreallocarray(md, base_len, len, 1);
 		if (!grown) {
 			err = -ENOMEM;
 			goto err_free;
 		}
 		md = grown;
-		write_uprobe_targets((__u8 *)md + base_len, uprobe_targets, nr_uprobe_targets);
+		cursor = (__u8 *)md + base_len;
+		/* prog_specs_parse() reads the uprobe block first. */
+		if (nr_uprobe_targets)
+			cursor = write_uprobe_targets(cursor, uprobe_targets, nr_uprobe_targets);
+		if (nr_kprobe_targets)
+			write_kprobe_targets(cursor, kprobe_targets, nr_kprobe_targets);
 	}
 
 	*out = md;
 	*out_len = (__u32)len;
 	xfree(seen_maps, (size_t)nr_progs * sizeof(*seen_maps));
 	free_uprobe_targets(uprobe_targets, nr_uprobe_targets, nr_progs);
+	free_kprobe_targets(kprobe_targets, nr_kprobe_targets, nr_progs);
 	return 0;
 
 err_free:
 	xfree(seen_maps, (size_t)nr_progs * sizeof(*seen_maps));
 	free_uprobe_targets(uprobe_targets, nr_uprobe_targets, nr_progs);
+	free_kprobe_targets(kprobe_targets, nr_kprobe_targets, nr_progs);
 	xfree(md, base_len);
 	return err;
 }
