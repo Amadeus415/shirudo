@@ -298,7 +298,7 @@ pub fn sanitize(s: &mut [u8], lines: bool) {
 mod tests;
 
 pub(crate) mod capi {
-    use core::ffi::{CStr, c_char, c_int};
+    use core::ffi::{CStr, c_char};
 
     use crate::errno::E2BIG;
     use crate::sys::libc::strnlen;
@@ -309,33 +309,6 @@ pub(crate) mod capi {
     unsafe fn bytes<'a>(s: *const c_char, len: usize) -> &'a [u8] {
         // SAFETY: as the caller passes them.
         unsafe { crate::ffi::slice(s.cast::<u8>(), len) }
-    }
-
-    /// # Safety
-    ///
-    /// `out` is room for a `T`.
-    unsafe fn put<T>(r: Result<T, c_int>, out: *mut T) -> c_int {
-        match r {
-            Ok(v) => {
-                // SAFETY: the caller's room for the value.
-                unsafe { out.write(v) };
-                0
-            }
-            Err(e) => e,
-        }
-    }
-
-    /// # Safety
-    ///
-    /// `s` holds `len` bytes, and `out` is room for the value.
-    pub unsafe extern "C" fn parse_x64(
-        s: *const c_char,
-        len: usize,
-        max: u64,
-        out: *mut u64,
-    ) -> c_int {
-        // SAFETY: the caller's bytes, and its room for the value.
-        unsafe { put(super::parse_x64(bytes(s, len), max), out) }
     }
 
     /// # Safety
