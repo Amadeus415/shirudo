@@ -22,6 +22,7 @@ make tests VM=0                             # without the target tests
 make tests VM=0 SANITIZE=address,undefined  # CI: once with gcc, once with clang
 make tests VM=0 SANITIZE=thread CC=clang    # CI: TSan, for threads and handlers
 make -C testing valgrind                    # memcheck: unit tests, fuzz corpora
+make -C testing miri                        # Miri: the suites that call no C
 make -C testing fuzz [FUZZ_SECONDS=60] [FUZZERS=<target>...]
 .github/scripts/afl-deps.sh                 # AFL++ for clang 23, into build/afl
 PATH=$PWD/build/afl/bin:$PATH make -C testing afl [AFL_SECONDS=600]
