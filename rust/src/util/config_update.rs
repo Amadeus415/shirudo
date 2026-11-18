@@ -7,7 +7,7 @@
 //! the next, under the journal's lock, through the operations the
 //! caller supplies.
 
-use core::ffi::{c_char, c_int, c_void};
+use core::ffi::{CStr, c_char, c_int, c_void};
 use core::ptr;
 
 use crate::errno::{
@@ -77,13 +77,19 @@ const _: () = assert!(core::mem::offset_of!(ConfigUpdateRecord, sequence) == 416
 const _: () = assert!(core::mem::offset_of!(ConfigUpdateRecord, kind) == 4180);
 const _: () = assert!(core::mem::offset_of!(ConfigUpdateRecord, pending) == 4184);
 
+impl ConfigUpdateTarget {
+    pub(crate) const fn zeroed() -> Self {
+        ConfigUpdateTarget {
+            prefix: [0; PREFIX_MAX],
+            root_hash: [0; 32],
+        }
+    }
+}
+
 impl ConfigUpdateRecord {
     pub(crate) const fn zeroed() -> Self {
         ConfigUpdateRecord {
-            target: ConfigUpdateTarget {
-                prefix: [0; PREFIX_MAX],
-                root_hash: [0; 32],
-            },
+            target: ConfigUpdateTarget::zeroed(),
             initial_pcr: [0; 32],
             sequence: 0,
             reset_count: 0,
@@ -513,17 +519,22 @@ fn close_journal(u: &mut ConfigUpdate) {
     u.lock_fd = -1;
 }
 
-/// config_update_read(): the state file's record into `out`.
-fn read_state(u: &ConfigUpdate, out: &mut ConfigUpdateRecord) -> c_int {
+/// The selection record in the file `name` of the journal into `out`:
+/// `state`, the one in force, or `next-boot`, one staged for the boot
+/// after this.
+fn selection_read(u: &ConfigUpdate, name: &CStr, out: &mut ConfigUpdateRecord) -> c_int {
     let mut wire = [0u8; RECORD_MAX];
     let mut st = Statx::zeroed();
     let mut done = 0usize;
 
+    if u.dir_fd < 0 {
+        return -EINVAL;
+    }
     // SAFETY: the journal's directory and a C string.
     let fd = unsafe {
         openat(
             u.dir_fd,
-            c"state".as_ptr(),
+            name.as_ptr(),
             O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK,
         )
     };
@@ -567,9 +578,21 @@ fn read_state(u: &ConfigUpdate, out: &mut ConfigUpdateRecord) -> c_int {
     ret
 }
 
-/// The state file replaced by `record`, through a sealed temporary file
-/// renamed over it; `inject` lets the caller's checkpoints stop it.
-fn state_save(u: &ConfigUpdate, record: &ConfigUpdateRecord, inject: bool) -> c_int {
+/// config_update_read(): the state file's record into `out`.
+fn read_state(u: &ConfigUpdate, out: &mut ConfigUpdateRecord) -> c_int {
+    selection_read(u, c"state", out)
+}
+
+/// The selection file `name` replaced by `record`, through the sealed
+/// temporary file `temporary` renamed over it; `inject` lets the
+/// caller's checkpoints stop it.
+fn selection_save(
+    u: &ConfigUpdate,
+    record: &ConfigUpdateRecord,
+    name: &CStr,
+    temporary: &CStr,
+    inject: bool,
+) -> c_int {
     let mut wire = [0u8; RECORD_MAX];
     let mut length = 0;
 
@@ -578,14 +601,14 @@ fn state_save(u: &ConfigUpdate, record: &ConfigUpdateRecord, inject: bool) -> c_
         return ret;
     }
     // SAFETY: the journal's directory and a C string.
-    if unsafe { unlinkat(u.dir_fd, c".state.tmp".as_ptr(), 0) } != 0 && errno() != ENOENT {
+    if unsafe { unlinkat(u.dir_fd, temporary.as_ptr(), 0) } != 0 && errno() != ENOENT {
         return -errno();
     }
     // SAFETY: as above.
     let fd = unsafe {
         openat(
             u.dir_fd,
-            c".state.tmp".as_ptr(),
+            temporary.as_ptr(),
             O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
             0o600,
         )
@@ -611,7 +634,7 @@ fn state_save(u: &ConfigUpdate, record: &ConfigUpdateRecord, inject: bool) -> c_
     }
     if ret == 0
         // SAFETY: the journal's directory and two C strings.
-        && unsafe { renameat(u.dir_fd, c".state.tmp".as_ptr(), u.dir_fd, c"state".as_ptr()) } != 0
+        && unsafe { renameat(u.dir_fd, temporary.as_ptr(), u.dir_fd, name.as_ptr()) } != 0
     {
         ret = -errno();
     }
@@ -624,13 +647,22 @@ fn state_save(u: &ConfigUpdate, record: &ConfigUpdateRecord, inject: bool) -> c_
     }
     if ret != 0 {
         // SAFETY: the journal's directory and a C string.
-        unsafe { unlinkat(u.dir_fd, c".state.tmp".as_ptr(), 0) };
+        unsafe { unlinkat(u.dir_fd, temporary.as_ptr(), 0) };
     }
     ret
 }
 
+/// The state file replaced by `record`.
+fn state_save(u: &ConfigUpdate, record: &ConfigUpdateRecord, inject: bool) -> c_int {
+    selection_save(u, record, c"state", c".state.tmp", inject)
+}
+
 fn same_boot(a: &ConfigUpdateRecord, b: &ConfigUpdateRecord) -> bool {
     a.reset_count == b.reset_count && a.restart_count == b.restart_count
+}
+
+fn same_target(a: &ConfigUpdateTarget, b: &ConfigUpdateTarget) -> bool {
+    cstr(&a.prefix) == cstr(&b.prefix) && a.root_hash == b.root_hash
 }
 
 fn same_event(a: &ConfigUpdateRecord, b: &ConfigUpdateRecord) -> bool {
@@ -1106,6 +1138,100 @@ unsafe fn journal<'a>(update: *mut ConfigUpdate) -> Option<&'a mut ConfigUpdate>
     unsafe { update.as_mut() }.filter(|u| u.dir_fd >= 0)
 }
 
+/// config_update_stage_read(): the record staged for the next boot.
+fn stage_read(u: &ConfigUpdate, out: &mut ConfigUpdateRecord) -> c_int {
+    selection_read(u, c"next-boot", out)
+}
+
+/// config_update_clear_staged(): no selection staged for the next boot.
+fn clear_staged(u: &ConfigUpdate) -> c_int {
+    if u.dir_fd < 0 || u.lock_fd < 0 {
+        return -EINVAL;
+    }
+    // SAFETY: the journal's directory and a C string.
+    if unsafe { unlinkat(u.dir_fd, c"next-boot".as_ptr(), 0) } != 0 {
+        let err = errno();
+        return if err == ENOENT { 0 } else { -err };
+    }
+    // SAFETY: the journal's directory.
+    if unsafe { fsync(u.dir_fd) } != 0 {
+        -errno()
+    } else {
+        0
+    }
+}
+
+/// config_update_stage(): `target` staged for the next boot, in the
+/// selection record format: its target the candidate, its sequence and
+/// TPM counts those of the selection it was staged from.
+fn stage(u: &ConfigUpdate, target: Option<&ConfigUpdateTarget>) -> c_int {
+    let Some(target) = target.filter(|t| u.lock_fd >= 0 && target_valid(Some(t)) == 0) else {
+        return -EINVAL;
+    };
+    let mut record = ConfigUpdateRecord::zeroed();
+
+    let ret = check(u, Some(&mut record));
+    if ret != 0 {
+        return ret;
+    }
+    record.target = *target;
+    selection_save(u, &record, c"next-boot", c".next-boot.tmp", false)
+}
+
+/// config_update_staged(): 1 with the staged target in `target` when the
+/// boot after `previous` takes it, 0 to keep the selection in force.
+fn staged(
+    u: &ConfigUpdate,
+    previous: &ConfigUpdateRecord,
+    reset: u32,
+    restart: u32,
+    target: &mut ConfigUpdateTarget,
+) -> c_int {
+    let mut staged = ConfigUpdateRecord::zeroed();
+
+    let ret = stage_read(u, &mut staged);
+    if ret != 0 {
+        return if ret == -ENOENT { 0 } else { ret };
+    }
+    if staged.pending {
+        return -EBADMSG;
+    }
+    if staged.reset_count == reset && staged.restart_count == restart {
+        return 0;
+    }
+    if same_target(&staged.target, &previous.target) {
+        return 0;
+    }
+    if staged.sequence != previous.sequence || !same_boot(&staged, previous) {
+        // SAFETY: a format without arguments.
+        unsafe {
+            crate::log::log_c!(
+                crate::log::warn,
+                c"image: ignoring staged config because the active selection changed".as_ptr()
+            )
+        };
+        return 0;
+    }
+    *target = staged.target;
+    1
+}
+
+/// A staged selection the boot in force came from goes with it.
+fn complete_staged(u: &ConfigUpdate) -> c_int {
+    let mut staged = ConfigUpdateRecord::zeroed();
+    let mut current = ConfigUpdateRecord::zeroed();
+
+    let ret = stage_read(u, &mut staged);
+    if ret != 0 {
+        return if ret == -ENOENT { 0 } else { ret };
+    }
+    let ret = read_state(u, &mut current);
+    if ret != 0 || same_boot(&current, &staged) {
+        return ret;
+    }
+    clear_staged(u)
+}
+
 /// config_update_begin().
 ///
 /// # Safety
@@ -1133,7 +1259,22 @@ unsafe fn begin(update: *mut ConfigUpdate, t: *const ConfigUpdateTarget, pcr: u3
         return 0;
     }
     // SAFETY: as above.
-    unsafe { begin_event(u, t, &previous, pcr, EVENT_UPDATE) }
+    let ret = unsafe { begin_event(u, t, &previous, pcr, EVENT_UPDATE) };
+    if ret == 0 {
+        let err = clear_staged(u);
+
+        if err != 0 {
+            // SAFETY: a format of one C string, strerror()'s.
+            unsafe {
+                crate::log::log_c!(
+                    crate::log::warn,
+                    c"image: cannot remove obsolete staged config: %s".as_ptr(),
+                    strerror(-err)
+                )
+            };
+        }
+    }
+    ret
 }
 
 /// config_update_boot().
@@ -1174,11 +1315,16 @@ unsafe fn boot(update: *mut ConfigUpdate, t: *const ConfigUpdateTarget, pcr: u32
         }
         return check(u, None);
     }
-    if previous.sequence != 0
-        && (cstr(&target.prefix) != cstr(&previous.target.prefix)
-            || target.root_hash != previous.target.root_hash)
-    {
-        return -EUCLEAN;
+    if previous.sequence != 0 && !same_target(target, &previous.target) {
+        let mut next = ConfigUpdateTarget::zeroed();
+        let ret = staged(u, &previous, reset, restart, &mut next);
+
+        if ret < 0 {
+            return ret;
+        }
+        if ret == 0 || !same_target(target, &next) {
+            return -EUCLEAN;
+        }
     }
     // SAFETY: NULL for what the scan need not give.
     let ret = unsafe {
@@ -1209,8 +1355,9 @@ unsafe fn boot(update: *mut ConfigUpdate, t: *const ConfigUpdateTarget, pcr: u32
 }
 
 pub(crate) use capi::{
-    config_update_begin, config_update_boot, config_update_check, config_update_close,
-    config_update_complete_boot, config_update_events, config_update_open, config_update_read,
+    config_update_begin, config_update_boot, config_update_check, config_update_clear_staged,
+    config_update_close, config_update_complete_boot, config_update_events, config_update_open,
+    config_update_read, config_update_stage, config_update_stage_read, config_update_staged,
 };
 
 mod capi {
@@ -1289,6 +1436,73 @@ mod capi {
 
     /// # Safety
     ///
+    /// `update` is NULL or a journal, and `target` NULL or a target.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn config_update_stage(
+        update: *mut ConfigUpdate,
+        target: *const ConfigUpdateTarget,
+    ) -> c_int {
+        // SAFETY: the caller's journal or NULL.
+        let Some(u) = (unsafe { super::journal(update) }) else {
+            return -super::EINVAL;
+        };
+        // SAFETY: the caller's target or NULL.
+        super::stage(u, unsafe { target.as_ref() })
+    }
+
+    /// # Safety
+    ///
+    /// `update` is NULL or a journal, and `out` NULL or room for a
+    /// record.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn config_update_stage_read(
+        update: *mut ConfigUpdate,
+        out: *mut ConfigUpdateRecord,
+    ) -> c_int {
+        // SAFETY: the caller's journal and room, or NULL.
+        match (unsafe { super::journal(update) }, unsafe { out.as_mut() }) {
+            (Some(u), Some(out)) => super::stage_read(u, out),
+            _ => -super::EINVAL,
+        }
+    }
+
+    /// # Safety
+    ///
+    /// `update` is NULL or a journal, `previous` NULL or a record and
+    /// `target` NULL or room for a target.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn config_update_staged(
+        update: *mut ConfigUpdate,
+        previous: *const ConfigUpdateRecord,
+        reset: u32,
+        restart: u32,
+        target: *mut ConfigUpdateTarget,
+    ) -> c_int {
+        // SAFETY: the caller's journal, record and room, or NULL.
+        let (Some(u), Some(previous), Some(target)) = (
+            unsafe { super::journal(update) },
+            unsafe { previous.as_ref() },
+            unsafe { target.as_mut() },
+        ) else {
+            return -super::EINVAL;
+        };
+        super::staged(u, previous, reset, restart, target)
+    }
+
+    /// # Safety
+    ///
+    /// `update` is NULL or a journal.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn config_update_clear_staged(update: *mut ConfigUpdate) -> c_int {
+        // SAFETY: the caller's journal or NULL.
+        match unsafe { super::journal(update) } {
+            Some(u) => super::clear_staged(u),
+            None => -super::EINVAL,
+        }
+    }
+
+    /// # Safety
+    ///
     /// `update` is NULL or a journal.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn config_update_complete_boot(update: *mut ConfigUpdate) -> c_int {
@@ -1296,11 +1510,17 @@ mod capi {
         let Some(u) = (unsafe { super::journal(update) }) else {
             return -super::EINVAL;
         };
-        if !u.boot_pending {
-            return super::check(u, None);
+        let ret = if u.boot_pending {
+            u.boot_pending = false;
+            super::complete(u)
+        } else {
+            super::check(u, None)
+        };
+        if ret != 0 {
+            ret
+        } else {
+            super::complete_staged(u)
         }
-        u.boot_pending = false;
-        super::complete(u)
     }
 
     /// # Safety
