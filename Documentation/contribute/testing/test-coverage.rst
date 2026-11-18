@@ -791,14 +791,10 @@ modules in :src:`rust/src/util/`: ``attest``, ``bpm_oci``,
 ``kernel_build_id``, ``kernel_release``, ``measured``, ``options``,
 ``sysinfo``, ``tamper``, ``upatch``, ``upatch_pins``,
 ``upatch_resolve``, ``upatch_verify`` and ``xdp``, and
-:src:`rust/src/text.rs`, the parsers and copies behind
-:src:`include/shirudo/string.h`. ``quote_check``'s cover the rows of
+:src:`rust/src/text.rs`, the string parsers and copies. ``quote_check``'s cover the rows of
 ``shirudo-quote-check`` in :src:`rust/src/quote_check.rs`, on quotes a
 software P-256 key signs: every reject reason, the signer's qualified
-name, the empty PCR selection and the base64 of each field. Two suites
-in :src:`testing/unit/` test the C the tree still holds:
-``overflow`` the arithmetic of :src:`include/shirudo/overflow.h`, and
-``string`` the inline helpers of :src:`include/shirudo/string.h`. The other
+name, the empty PCR selection and the base64 of each field. The other
 modules are reached through the test helpers, the fuzz targets and the binaries
 the functional tests run.
 

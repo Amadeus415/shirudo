@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 // Copyright (c) 2026 Authors of shirudo
 
-//! The string rules of `include/shirudo/string.h` and the C library, for
-//! Rust callers: a C string is the bytes of a buffer before its first
+//! The string rules of the C library, for Rust callers: a C string is the bytes of a buffer before its first
 //! NUL, and a function here does to them what its C namesake does.
 
 use core::ffi::c_int;
@@ -294,8 +293,7 @@ pub fn sanitize(s: &mut [u8], lines: bool) {
     }
 }
 
-/// The helpers of `include/shirudo/string.h` for C, and for Rust that
-/// walks C strings.
+/// The helpers, for Rust that walks C strings.
 #[cfg(test)]
 mod tests;
 

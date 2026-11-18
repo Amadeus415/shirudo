@@ -312,13 +312,13 @@ already, or should. The basics:
 
 | Need | Use |
 |---|---|
-| Parse a number | `parse_u64()`, `parse_s64()`, `parse_x64()`, `digits()` (`<shirudo/string.h>`) |
+| Parse a number | `parse_u64()`, `parse_s64()`, `parse_x64()`, `digits()` (`rust/src/text.rs`) |
 | Copy a string | `strscpy()`, and check `-E2BIG` |
 | An upatch's pin directory or a pin in it | `upatch_pin_path()` (`util/paths.h`) |
-| A string's prefix, or a span that must be one literal | `str_has_prefix()` to test a prefix, `str_skip_prefix()` to step past it, `span_equals()` for a span of known length (`<shirudo/string.h>`); never `strncmp()` with a length counted by hand |
-| A file name's extension | `name_has_suffix()` (`<shirudo/string.h>`), `upatch_select()` for a scandir of upatches |
+| A string's prefix, or a span that must be one literal | `starts_with()` to test a prefix, `strip_prefix()` to step past it, `==` for a span; never a length counted by hand |
+| A file name's extension | `name_has_suffix()` (`rust/src/text.rs`), `upatch_select()` for a scandir of upatches |
 | Text from outside on a terminal | `text_sanitize()`; UTF-8 with `utf8_width()` |
-| Sizes and lengths | `check_add_overflow()` and kin, `size_add()`, `size_mul()`, `struct_size()`, `DIV_ROUND_UP()` (`<shirudo/overflow.h>`) |
+| Sizes and lengths | `checked_add()`, `checked_mul()` and kin, `div_ceil()` |
 | Smaller or larger | `min()`, `max()` (`<shirudo/misc.h>`) |
 | Memory | `xmalloc()`, `xcalloc()`, `xreallocarray()`, `xstrndup()`, `xfree(p, size)` (`util/malloc.h`) |
 | Secrets | `memzero_explicit()`, `memneq_explicit()` |
@@ -516,7 +516,7 @@ its contract while any C caller uses it.
   `bytes_mut()` for a C buffer to write into as it is,
   `zeroed_slice_mut()` for room C has not initialised, and
   `rust/src/text.rs` gives Rust code the string rules of
-  `include/shirudo/string.h` and the C library, `strscpy()` to
+  the C library, `strscpy()` to
   `parse_u64()`, over byte slices. Every `unsafe` block says in a
   `// SAFETY:` comment what part of the C contract makes it sound.
 - What the Rust code calls in C that std does not cover, the `*at()`

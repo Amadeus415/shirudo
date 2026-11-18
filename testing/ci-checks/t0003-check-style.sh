@@ -211,7 +211,7 @@ test_expect_success 'the C library'"'"'s number parsers are refused outside the 
 		"	return strtoll(s, NULL, 10) + atoi(s);" "}" \
 		>>"$R/good.c" &&
 	! check --diff &&
-	grep -q "^ERROR:NUMBER_PARSING: parse numbers with parse_u64(), parse_s64() or parse_x64() from <shirudo/string.h>, not strtoll()" "$W/out" &&
+	grep -q "^ERROR:NUMBER_PARSING: parse numbers with parse_u64(), parse_s64() or parse_x64() of rust/src/text.rs, not strtoll()" "$W/out" &&
 	[ "$(grep -c "^ERROR:NUMBER_PARSING" "$W/out")" = 1 ] &&
 	git -C "$R" checkout -q -- good.c &&
 	put testing/helper/args.c "// SPDX-License-Identifier: BSD-2-Clause" "" \
@@ -227,14 +227,14 @@ test_expect_success 'strings are copied with strscpy() outside the tests' '
 		"	snprintf(d, 8, \"%s\", s);" "	snprintf(d, 8, \"%d\", 1);" "}" \
 		>>"$R/good.c" &&
 	! check --diff &&
-	grep -q "^ERROR:STRING_COPY: copy strings with strscpy() from <shirudo/string.h>, not strcpy()" "$W/out" &&
-	grep -q "^ERROR:STRING_COPY: copy strings with strscpy() from <shirudo/string.h>, not snprintf()" "$W/out" &&
+	grep -q "^ERROR:STRING_COPY: copy strings with strscpy() of rust/src/text.rs, not strcpy()" "$W/out" &&
+	grep -q "^ERROR:STRING_COPY: copy strings with strscpy() of rust/src/text.rs, not snprintf()" "$W/out" &&
 	[ "$(grep -c "^ERROR:STRING_COPY" "$W/out")" = 2 ] &&
 	git -C "$R" checkout -q -- good.c &&
 	put tools/x/name.c "// SPDX-License-Identifier: BSD-2-Clause" "" \
 		"void name(char *d, const char *s)" "{" "	strncpy(d, s, 8);" "}" &&
 	! check --files tools/x/name.c &&
-	grep -q "^ERROR:STRING_COPY: copy strings with strscpy() from <shirudo/string.h>, not strncpy()" "$W/out" &&
+	grep -q "^ERROR:STRING_COPY: copy strings with strscpy() of rust/src/text.rs, not strncpy()" "$W/out" &&
 	put testing/helper/name.c "// SPDX-License-Identifier: BSD-2-Clause" "" \
 		"void name(char *d, const char *s)" "{" "	strcpy(d, s);" "}" &&
 	check --files testing/helper/name.c &&

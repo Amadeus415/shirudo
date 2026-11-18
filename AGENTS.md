@@ -134,7 +134,7 @@ message that carries a change.
   `__u64` and `__s8` to `__s64`; a system header that uses `uint8_t` and
   its kin goes above the first shirudo header, which poisons them.
 - Use the helpers of `util/` and `include/shirudo/` over libc and open
-  code: `parse_u64()` and its kin for numbers, `<shirudo/overflow.h>`
+  code: `parse_u64()` and its kin for numbers, checked arithmetic
   for sizes, `strscpy()` with its `-E2BIG` checked,
   the `xmalloc()` family, `min()` and `max()`,
   `memzero_explicit()` and `memneq_explicit()` for secrets,

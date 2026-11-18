@@ -92,7 +92,7 @@ ignored_types() {
 	# It asks for the kernel-internal u32, which userspace does not have;
 	# check_spellings below asks for __u32 and its kin instead.
 	PREFER_KERNEL_TYPES
-	# check_spellings below asks for the strscpy() of <shirudo/string.h>
+	# check_spellings below asks for the strscpy() of rust/src/text.rs
 	# in tools/ too, which these leave out, and fallthrough;, __packed
 	# and most other compiler.h macros do not exist in userspace, which
 	# has those of <shirudo/compiler.h>; BPF has what bpf_helpers.h
@@ -186,7 +186,7 @@ locate_checkpatch() {
 # util/libbpf_internal.h; util/sign.c is vendored.
 # A call to strtoul() and its kin or atoi() is
 # reported too, outside the tests: a number is parsed with parse_u64() and
-# its kin from <shirudo/string.h>, which take a length, read nothing past
+# its kin of rust/src/text.rs, which take a length, read nothing past
 # it and refuse a sign, blank or base prefix. So is a string copied with
 # strcpy() and its kin or with snprintf("%s") on one line: strscpy() always
 # terminates and says when it cut.
@@ -276,7 +276,7 @@ check_spellings() {
 		    match(code, /(^|[^A-Za-z0-9_])(strto(u?ll?|d|f|ld|imax|umax)|ato(i|l|ll|f))[ \t]*\(/)) {
 			fn = substr(code, RSTART, RLENGTH)
 			gsub(/[^A-Za-z0-9_]/, "", fn)
-			printf "ERROR:NUMBER_PARSING: parse numbers with parse_u64(), parse_s64() or parse_x64() from <shirudo/string.h>, not %s()\n#%d: FILE: %s:%d:\n%s\n\n",
+			printf "ERROR:NUMBER_PARSING: parse numbers with parse_u64(), parse_s64() or parse_x64() of rust/src/text.rs, not %s()\n#%d: FILE: %s:%d:\n%s\n\n",
 				fn, NR, file, line, $0
 			bad = 1
 		}
@@ -287,7 +287,7 @@ check_spellings() {
 			fn = substr(code, RSTART, RLENGTH)
 			sub(/\(.*/, "", fn)
 			gsub(/[^A-Za-z0-9_]/, "", fn)
-			printf "ERROR:STRING_COPY: copy strings with strscpy() from <shirudo/string.h>, not %s()\n#%d: FILE: %s:%d:\n%s\n\n",
+			printf "ERROR:STRING_COPY: copy strings with strscpy() of rust/src/text.rs, not %s()\n#%d: FILE: %s:%d:\n%s\n\n",
 				fn, NR, file, line, $0
 			bad = 1
 		}

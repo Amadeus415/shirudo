@@ -1017,27 +1017,9 @@ test-helpers: $(TEST_HELPERS)
 # with the debug assertions on; testing/run-tests.sh runs it, a suite by
 # the name of its module. rustc links it against the libraries the
 # system has, so a MemorySanitizer build, whose libraries are
-# instrumented, leaves it out: it tests nothing MSan sees. A suite still
-# in C, testing/unit/<m>.c, links the library from an archive, so it
-# pulls in only what its module needs.
-UNIT_SRCS  := $(filter-out testing/unit/unit.c,$(wildcard testing/unit/*.c))
-UNIT_TESTS := $(patsubst testing/unit/%.c,build/unit/%,$(UNIT_SRCS))
-UNIT_LIB   := build/unit/libshirudo.a
+# instrumented, leaves it out: it tests nothing MSan sees.
 UNIT_RUST  := build/unit/shirudo-unit
 RUST_TEST_TARGET := build/rust-test
-
-$(UNIT_LIB): $(VERSION_OBJ)
-	@printf '  AR      $@\n'
-	$(Q)mkdir -p $(dir $@)
-	$(Q)rm -f $@
-	$(Q)$(AR) rcs $@ $^
-
-build/unit/%: testing/unit/%.c testing/unit/unit.c testing/unit/unit.h \
-		$(UNIT_LIB) $(RUST_LIB)
-	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) -Itesting/unit -o $@ $< testing/unit/unit.c \
-		-Wl,--start-group $(UNIT_LIB) $(RUST_LIB) -Wl,--end-group \
-		$(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
 
 # cargo names the binary by a hash, which its JSON says.
 $(UNIT_RUST): $(RUST_SRCS) $(BPF_EMBEDDED)
@@ -1051,7 +1033,7 @@ $(UNIT_RUST): $(RUST_SRCS) $(BPF_EMBEDDED)
 	    sed -n 's/.*"executable":"\([^"]*\)".*/\1/p') && \
 	    [ -n "$$exe" ] && cp "$$exe" $@
 
-unit-tests: $(UNIT_TESTS) $(if $(SANITIZE_MEMORY),,$(UNIT_RUST))
+unit-tests: $(if $(SANITIZE_MEMORY),,$(UNIT_RUST))
 
 # ----- sparse -----------------------------------------------------
 

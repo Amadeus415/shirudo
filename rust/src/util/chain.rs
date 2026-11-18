@@ -89,7 +89,7 @@ const _: () = assert!(size_of::<ChainStatus>() == 624);
 const _: () = assert!(core::mem::offset_of!(ChainStatus, name_len) == 72);
 const _: () = assert!(core::mem::offset_of!(ChainStatus, init) == 80);
 
-/// memneq_explicit() of include/shirudo/string.h: whether the two
+/// memneq_explicit(): whether the two
 /// differ, in a time that depends on their length alone.
 /// The history root of a tree after one more operation, whatever its
 /// outcome on this node: SHA-256 of "shirudo-tree-history" with its NUL,

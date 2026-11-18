@@ -121,7 +121,7 @@ classes below (`openssl_ret`, `errno_clobber`, `alloc_unchecked`,
 - **Parse before verify.** Anything read before its signature or digest
   is checked (`upatch info`, `bpm info`, manifests, indexes, the
   evidence on the verifier) gets the worst input: offsets, counts,
-  integer overflow (`<shirudo/overflow.h>`), recursion, loops and output
+  integer overflow (`checked_*()` arithmetic), recursion, loops and output
   that grow with input.
 - **Checked is not used.** The bytes verified differ from the bytes
   loaded or applied: reopened by path, read twice, a file root can

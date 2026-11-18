@@ -14,14 +14,11 @@ its BPF programs, with these rules of its own, which
   not ``uint32_t`` and its kin, and not ``unsigned int``, ``unsigned
   long`` and their kin outside the files the script names. ``__u64``
   prints with ``%llu``.
-- Parse numbers with ``parse_u64()``, ``parse_s64()`` and
-  ``parse_x64()`` from ``<shirudo/string.h>``, which take a length and
-  refuse a sign, a blank or a base prefix. ``strtoul()``, ``atoi()`` and
-  their kin are refused.
+- ``strtoul()``, ``atoi()`` and their kin are refused: numbers are parsed
+  by ``parse_u64()`` and its kin in :src:`rust/src/text.rs`, which take a
+  length and refuse a sign, a blank or a base prefix.
 - Copy strings with ``strscpy()`` and check its result. ``strcpy()``,
   ``strncpy()``, ``sprintf()`` and their kin are refused.
-- Check size arithmetic with the helpers of ``<shirudo/overflow.h>``,
-  not by hand.
 - No ``(void)`` cast. A result a caller must not drop belongs to a
   ``__must_check`` function, and every call checks it.
 - Name a return code ``ret``, and an errno a function keeps beside the

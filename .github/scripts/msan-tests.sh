@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: BSD-2-Clause
 # Copyright (c) 2026 Authors of shirudo
 #
-# The MemorySanitizer suite: the unit tests and a run of every fuzz target
-# for the seconds given, built with SANITIZE=memory against the libraries
-# msan-deps.sh instrumented. What runs Lua is left out: LuaJIT's
+# The MemorySanitizer suite: a run of every fuzz target for the seconds
+# given, built with SANITIZE=memory against the libraries msan-deps.sh
+# instrumented. The unit tests are Rust's, which MSan does not see. What
+# runs Lua is left out: LuaJIT's
 # interpreter is assembly no sanitizer instruments, so what it hands back
 # would read as uninitialized. ASan and UBSan cover those.
 #
@@ -14,7 +15,6 @@ set -eu
 
 seconds=${1:-30}
 prefix=${MSAN_PREFIX:-/tmp/shirudo-msan}
-lua_units='upatch_decode'
 lua_fuzzers='decoder'
 
 # The libraries are found by the binaries' run path, not by
@@ -32,12 +32,6 @@ listed() {
 	return 1
 }
 
-units=
-for f in testing/unit/*.c; do
-	s=${f##*/}
-	s=${s%.c}
-	[ "$s" = unit ] || listed "$s" "$lua_units" || units="$units unit/$s"
-done
 fuzzers=
 for d in testing/fuzz/corpus/*/; do
 	t=${d%/}
@@ -45,10 +39,7 @@ for d in testing/fuzz/corpus/*/; do
 	listed "$t" "$lua_fuzzers" || fuzzers="$fuzzers $t"
 done
 
-# The builds run in parallel, the suites one after the other.
+# The builds run in parallel, the targets one after the other.
 jobs=$(nproc)
-make -j"$jobs" -C testing SANITIZE=memory build-unit
-# shellcheck disable=SC2086 # one word per suite
-make -C testing SANITIZE=memory $units
 make -j"$jobs" -C testing fuzz SANITIZE=memory FUZZ_CC="$CC" \
 	FUZZ_SECONDS="$seconds" FUZZERS="${fuzzers# }"

@@ -28,10 +28,10 @@ namespace Shirudo.Hex
 /-- `SIZE_MAX`. -/
 def sizeMax : Nat := 18446744073709551615
 
-/-- `size_mul()` of include/shirudo/overflow.h. -/
+/-- A product saturated at `SIZE_MAX`. -/
 def sizeMul (a b : Nat) : Nat := if a * b ≤ sizeMax then a * b else sizeMax
 
-/-- `size_add()` of include/shirudo/overflow.h. -/
+/-- A sum saturated at `SIZE_MAX`. -/
 def sizeAdd (a b : Nat) : Nat := if a + b ≤ sizeMax then a + b else sizeMax
 
 /-- The digit table `d` of `hex_encode()`. -/

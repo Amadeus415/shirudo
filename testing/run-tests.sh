@@ -6,7 +6,7 @@
 # -- the tests of each tier named, all of them without an argument, that
 # run on the build host: the unit tests and the operator tests (t?0??) in
 # number order. A unit suite is the tests of a Rust module of that name,
-# which ../build/unit/shirudo-unit holds, or a C one, ../build/unit/<suite>.
+# which ../build/unit/shirudo-unit holds.
 # The target tests run in the test VM through run-target-tests.sh.
 # CI-friendly; the exit status counts the suites that failed.
 
@@ -16,19 +16,20 @@ cd "$(dirname "$0")"
 . ./test-filter.sh
 
 [ $# -gt 0 ] || set -- unit ci-checks functional end2end
-units=
+unit=
 rust_suites=
 dirs=
 for what; do
 	case "$what" in
-	unit) units="$units ../build/unit/*" ;;
+	unit) unit=all ;;
 	unit/*)
 		suite=${what#unit/}
-		if [ -n "$(find ../rust/src -path "*/$suite/tests.rs")" ]; then
-			rust_suites="$rust_suites $suite"
-			continue
-		fi
-		units="$units ../build/unit/$suite"
+		[ -n "$(find ../rust/src -path "*/$suite/tests.rs")" ] || {
+			printf 'no tests %s\n' "$what" >&2
+			exit 2
+		}
+		rust_suites="$rust_suites $suite"
+		continue
 		;;
 	functional) dirs="$dirs functional/*" ;;
 	*) dirs="$dirs $what" ;;
@@ -39,17 +40,10 @@ for what; do
 	}
 done
 
-# A C suite's binary while its source is there: one a suite since ported
-# to Rust left behind is not.
-unit_tests()
+# The unit tests' binary, when any are asked for.
+unit_binary()
 {
-	for t in $units; do
-		case "${t##*/}" in
-		shirudo-unit) ;;
-		*) [ -e "unit/${t##*/}.c" ] || continue ;;
-		esac
-		[ -f "$t" ] && [ -x "$t" ] && printf '%s\n' "$t"
-	done
+	[ -z "$unit$rust_suites" ] || printf '%s\n' ../build/unit/shirudo-unit
 }
 
 # The Rust suites named, as filters of the binary's test names.
@@ -73,12 +67,17 @@ operator_tests()
 
 fail=0
 : "${SHIRUDO_TEST_SUITE_FAILURES_FILE:=}"
-for t in $(unit_tests) ${rust_suites:+../build/unit/shirudo-unit} \
-		$(operator_tests); do
+for t in $(unit_binary) $(operator_tests); do
 	test_matches "$t" || continue
 	case "$t" in
 	*.sh) set -- sh "$t" ;;
-	*/shirudo-unit) set -- "$t" $(rust_filters) ;;
+	*/shirudo-unit)
+		if [ -n "$unit" ]; then
+			set -- "$t"
+		else
+			set -- "$t" $(rust_filters)
+		fi
+		;;
 	*) set -- "$t" ;;
 	esac
 	if "$@"; then
