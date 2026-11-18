@@ -1158,8 +1158,6 @@ FUZZ_BASE :=
 FUZZ_TARGETS := $(patsubst testing/fuzz/%.c,$(FUZZ_OUT)/%, \
                 $(wildcard testing/fuzz/fuzz-*.c))
 
-testing/fuzz/fuzz-json: testing/fuzz/fuzz-json.c $(FUZZ_BASE)
-testing/fuzz/fuzz-tree: testing/fuzz/fuzz-tree.c $(FUZZ_BASE)
 testing/fuzz/fuzz-rodata: testing/fuzz/fuzz-rodata.c $(FUZZ_BASE) \
                           $(LIBBPF_A)
 testing/fuzz/fuzz-rodata: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
@@ -1169,7 +1167,6 @@ testing/fuzz/fuzz-attest: testing/fuzz/fuzz-attest.c $(FUZZ_BASE) \
                           $(LIBBPF_A)
 testing/fuzz/fuzz-attest: FUZZ_CFLAGS += $(TSS2_CFLAGS) $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-attest: FUZZ_LIBS += $(TSS2_LIBS) $(LIBBPF_A) $(LIBELF_LIBS) $(ZLIB_LIBS)
-testing/fuzz/fuzz-eventlog: testing/fuzz/fuzz-eventlog.c $(FUZZ_BASE)
 testing/fuzz/fuzz-elf: $(LIBBPF_A)
 testing/fuzz/fuzz-elf: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-elf: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS)
@@ -1178,12 +1175,11 @@ testing/fuzz/fuzz-serializer: testing/fuzz/fuzz-serializer.c $(FUZZ_BASE) \
 testing/fuzz/fuzz-serializer: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-serializer: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS) \
 	-Wl,--wrap=syscall
-testing/fuzz/fuzz-cms: testing/fuzz/fuzz-cms.c $(FUZZ_BASE)
 testing/fuzz/fuzz-decoder: testing/fuzz/fuzz-decoder.c $(FUZZ_BASE)
 testing/fuzz/fuzz-decoder: FUZZ_LIBS += $(LUAJIT_LIBS)
 # The decoders it runs, which it reads from the tree it was built in.
 testing/fuzz/fuzz-decoder: FUZZ_CFLAGS += -DFUZZ_SOURCE_TREE='"$(CURDIR)"'
-testing/fuzz/fuzz-otel: testing/fuzz/fuzz-otel.c $(FUZZ_BASE) \
+testing/fuzz/fuzz-otel: \
                         $(VERSION_OBJ)
 testing/fuzz/fuzz-beefile: \
                            $(VERSION_OBJ)
@@ -1200,7 +1196,8 @@ $(FUZZ_TARGETS): testing/fuzz/fuzz.h $(RUST_FUZZ_LIB)
 # The targets written in Rust: functions of the fuzz build of the library,
 # each run by an entry object made from testing/fuzz/target.rs.in.
 FUZZ_RUST := kernel beefile elf tree-state image prog-metadata upatch \
-	     bpm-tar bpm-index bpm-package oci-manifest oci-http oci-ref registry-auth config tpm-wire
+	     bpm-tar bpm-index bpm-package oci-manifest oci-http oci-ref registry-auth config tpm-wire \
+	     json tree cms eventlog otel
 FUZZ_MAIN_DIR := build/fuzz-main
 FUZZ_RUST_TARGETS := $(addprefix $(FUZZ_OUT)/fuzz-,$(FUZZ_RUST))
 
