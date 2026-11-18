@@ -29,7 +29,7 @@ test-vm-arch = $(shell TEST_VM_ARCH='$(TEST_VM_ARCH)'; \
 .DEFAULT_GOAL := all
 .PHONY: all help clean unit ci-checks functional end2end build-operator build-unit \
 	test-helpers \
-	fuzz afl bundle test-vm-bundle kernel bpf-next vm vm-console vm-ssh vm-stop vm-clean \
+	fuzz afl valgrind bundle test-vm-bundle kernel bpf-next vm vm-console vm-ssh vm-stop vm-clean \
 	vm-operator-end2end
 
 KERNEL_PATCHES ?= $(if $(wildcard $(ROOT)/kernel/*.patch),$(ROOT)/kernel/,)
@@ -435,6 +435,13 @@ afl:
 		fuzz-targets FUZZ_CC=$(AFL_CC) FUZZ_OUT=build/fuzz-afl-cmplog
 	$(Q)sh $(ROOT)/testing/fuzz/afl.sh $(AFL_SECONDS) $(FUZZERS)
 
+# Valgrind's memcheck over the unit tests and each fuzz target's seed
+# corpus, each input once, for a read of memory never written, which ASan
+# and UBSan do not see, in the Rust and in the C it calls. Needs valgrind.
+valgrind: build-unit
+	+$(Q)flock $(BUILD_LOCK) $(MAKE) -C $(ROOT) -f Makefile.shirudo replay-targets
+	$(Q)sh $(ROOT)/testing/valgrind.sh
+
 bundle: test-vm-bundle
 
 help:
@@ -450,6 +457,7 @@ help:
 	  '  make -j boots several at once.' \
 	  '  make -C testing fuzz [FUZZ_SECONDS=60] [FUZZ_CORPUS=<dir>] [FUZZERS=<target>...]' \
 	  '  make -C testing afl [AFL_SECONDS=600] [FUZZ_CORPUS=<dir>] [FUZZERS=<target>...]' \
+	  '  make -C testing valgrind                memcheck over unit tests and fuzz corpora' \
 	  '  make -C testing vm, vm-console, vm-ssh, vm-stop, or vm-clean' \
 	  '  make -C testing vm KERNEL=7.4' \
 	  '  make -C testing kernel KERNEL_TAG=v7.4' \

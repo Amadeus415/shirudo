@@ -152,14 +152,11 @@ CFLAGS_BASE := -O2 $(DEBUG_CFLAGS) -std=gnu11 $(WARNINGS) $(CC_WARNINGS) \
 # the test helpers; BPF objects come from clang -target bpf and are never
 # affected. Recovery is off so that every report fails the run. The
 # fortified libc calls stay out of such a build, as they would bypass the
-# sanitizer's own checks. SANITIZE=memory wants every library linked
-# instrumented, which .github/scripts/msan-deps.sh builds:
-# MemorySanitizer takes what it did not see written as uninitialized.
+# sanitizer's own checks. Reads of memory never written are memcheck's,
+# make -C testing valgrind.
 SANITIZE ?=
 comma := ,
-SANITIZE_MEMORY := $(filter memory,$(subst $(comma), ,$(SANITIZE)))
-SANITIZE_CFLAGS := $(if $(SANITIZE),-fsanitize=$(SANITIZE)) \
-                   $(if $(SANITIZE_MEMORY),-fsanitize-memory-track-origins=2)
+SANITIZE_CFLAGS := $(if $(SANITIZE),-fsanitize=$(SANITIZE))
 ifneq ($(SANITIZE),)
 CFLAGS_BASE += -O1 -fno-omit-frame-pointer $(SANITIZE_CFLAGS) \
                -fno-sanitize-recover=all -U_FORTIFY_SOURCE
@@ -1044,9 +1041,7 @@ parity-oracles: $(PARITY_ORACLES)
 # The Rust is tested by the tests in a tests.rs beside each module, which
 # cargo builds into one binary, build/unit/shirudo-unit, unoptimized and
 # with the debug assertions on; testing/run-tests.sh runs it, a suite by
-# the name of its module. rustc links it against the libraries the
-# system has, so a MemorySanitizer build, whose libraries are
-# instrumented, leaves it out: it tests nothing MSan sees.
+# the name of its module.
 UNIT_RUST  := build/unit/shirudo-unit
 RUST_TEST_TARGET := build/rust-test
 
@@ -1062,7 +1057,7 @@ $(UNIT_RUST): $(RUST_SRCS) $(BPF_EMBEDDED)
 	    sed -n 's/.*"executable":"\([^"]*\)".*/\1/p') && \
 	    [ -n "$$exe" ] && cp "$$exe" $@
 
-unit-tests: $(if $(SANITIZE_MEMORY),,$(UNIT_RUST))
+unit-tests: $(UNIT_RUST)
 
 # ----- sparse -----------------------------------------------------
 
@@ -1144,12 +1139,15 @@ FUZZ_NAMES := attest beefile bpm-index bpm-package bpm-tar cms config \
 	      registry-auth rodata serializer tpm-wire tree tree-state upatch
 FUZZ_MAIN_DIR := build/fuzz-main
 FUZZ_TARGETS := $(addprefix $(FUZZ_OUT)/fuzz-,$(FUZZ_NAMES))
+# Where the targets built for memcheck go; see replay-targets below.
+REPLAY_OUT   := build/fuzz-replay
 
-$(FUZZ_OUT)/fuzz-attest: FUZZ_LIBS += $(TSS2_LIBS)
-$(FUZZ_OUT)/fuzz-decoder: FUZZ_LIBS += $(LUAJIT_LIBS)
+$(FUZZ_OUT)/fuzz-attest $(REPLAY_OUT)/fuzz-attest: FUZZ_LIBS += $(TSS2_LIBS)
+$(FUZZ_OUT)/fuzz-decoder $(REPLAY_OUT)/fuzz-decoder: FUZZ_LIBS += $(LUAJIT_LIBS)
 # Its map's lookups come from the input through a wrap of syscall().
-$(FUZZ_OUT)/fuzz-serializer: FUZZ_LIBS += -Wl,--wrap=syscall
-$(FUZZ_OUT)/fuzz-attest $(FUZZ_OUT)/fuzz-otel $(FUZZ_OUT)/fuzz-beefile: \
+$(FUZZ_OUT)/fuzz-serializer $(REPLAY_OUT)/fuzz-serializer: FUZZ_LIBS += -Wl,--wrap=syscall
+$(FUZZ_OUT)/fuzz-attest $(FUZZ_OUT)/fuzz-otel $(FUZZ_OUT)/fuzz-beefile \
+$(REPLAY_OUT)/fuzz-attest $(REPLAY_OUT)/fuzz-otel $(REPLAY_OUT)/fuzz-beefile: \
 	$(VERSION_OBJ)
 
 $(FUZZ_MAIN_DIR)/%.o: testing/fuzz/target.rs.in
@@ -1161,9 +1159,41 @@ $(FUZZ_MAIN_DIR)/%.o: testing/fuzz/target.rs.in
 
 $(FUZZ_TARGETS): $(FUZZ_OUT)/fuzz-%: $(FUZZ_MAIN_DIR)/%.o $(RUST_FUZZ_LIB)
 	@printf '  FUZZ    $@\n'
+	$(Q)mkdir -p $(dir $@)
 	$(Q)$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ $(filter %.o,$^) $(FUZZ_LIBS)
 
 fuzz-targets: $(FUZZ_TARGETS)
+
+# The targets once more for memcheck, which takes the comparisons
+# libFuzzer's coverage traces for reads of memory never written: each
+# target's entry object with the main() of testing/fuzz/replay.rs, which
+# runs every file it is given through it once, over the library built
+# without the coverage.
+RUST_REPLAY_TARGET := build/rust-fuzz-replay
+RUST_REPLAY_LIB    := $(RUST_REPLAY_TARGET)/release/libshirudo_rs.a
+REPLAY_MAIN_OBJ    := $(FUZZ_MAIN_DIR)/replay-main.o
+REPLAY_TARGETS     := $(addprefix $(REPLAY_OUT)/fuzz-,$(FUZZ_NAMES))
+
+$(RUST_REPLAY_LIB): $(RUST_SRCS) $(BPF_EMBEDDED)
+	@printf '  CARGO   $@\n'
+	$(Q)RUSTFLAGS="$(RUSTFLAGS_WERROR) --cfg shirudo_fuzz" \
+	    $(CARGO) build --quiet --release --locked --offline \
+	    --manifest-path $(RUST_DIR)/Cargo.toml --target-dir $(RUST_REPLAY_TARGET)
+	$(Q)touch $@
+
+$(REPLAY_MAIN_OBJ): testing/fuzz/replay.rs
+	@printf '  RUSTC   $@\n'
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(RUSTC_OBJ) --crate-name fuzz_replay_main -o $@ $<
+
+$(REPLAY_TARGETS): $(REPLAY_OUT)/fuzz-%: $(FUZZ_MAIN_DIR)/%.o $(REPLAY_MAIN_OBJ) \
+		$(RUST_REPLAY_LIB)
+	@printf '  LD      $@\n'
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(CC) -g -o $@ $(filter %.o,$^) \
+	    $(subst $(RUST_FUZZ_LIB),$(RUST_REPLAY_LIB),$(FUZZ_LIBS))
+
+replay-targets: $(REPLAY_TARGETS)
 
 # ----- clean ------------------------------------------------------
 
