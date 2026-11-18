@@ -446,3 +446,48 @@ pub unsafe extern "C" fn tpm_attest_parse(
         parse::attest_parse(ffi::slice(buf, len), &mut *out)
     }
 }
+
+/// # Safety
+///
+/// `a` is an attestation, `ak_name` holds a name and `is` is room for
+/// whether it signed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tpm_attest_signer(
+    a: *const TpmAttest,
+    ak_name: *const u8,
+    is: *mut bool,
+) -> c_int {
+    // SAFETY: the caller passes the attestation, the name and the room.
+    unsafe {
+        match super::attest_signer(&*a, &copy::<NAME_LEN>(ak_name)) {
+            Ok(signed) => {
+                is.write(signed);
+                0
+            }
+            Err(err) => err,
+        }
+    }
+}
+
+/// # Safety
+///
+/// `attest` holds `len` bytes, `sig` `sig_len`, and `x` and `y` 32 each.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tpm_attest_verify(
+    attest: *const u8,
+    len: usize,
+    sig: *const u8,
+    sig_len: usize,
+    x: *const u8,
+    y: *const u8,
+) -> c_int {
+    // SAFETY: the caller passes the bytes and the point.
+    unsafe {
+        super::attest_verify(
+            ffi::slice(attest, len),
+            ffi::slice(sig, sig_len),
+            &copy::<32>(x),
+            &copy::<32>(y),
+        )
+    }
+}
