@@ -18,11 +18,8 @@
 #include "unit.h"
 
 #define UNIT_TIMEOUT	60
-#define UNIT_SKIPPED	77
-#define UNIT_REASON_MAX	256
 
 static int unit_failed;
-static char *unit_reason;
 
 void unit_fail(const char *file, int line, const char *fmt, ...)
 {
@@ -53,19 +50,6 @@ void unit_abort(void)
 	fflush(stdout);
 	fflush(stderr);
 	_exit(1);
-}
-
-void unit_skip(const char *reason)
-{
-	size_t n = strlen(reason);
-
-	if (n >= UNIT_REASON_MAX)
-		n = UNIT_REASON_MAX - 1;
-	memcpy(unit_reason, reason, n);
-	unit_reason[n] = '\0';
-	fflush(stdout);
-	fflush(stderr);
-	_exit(UNIT_SKIPPED);
 }
 
 /* A failing case's stderr comes back as TAP diagnostics. */
@@ -100,7 +84,6 @@ static int run_case(const struct unit_case *c, size_t nr)
 		       strerror(errno));
 		return 1;
 	}
-	unit_reason[0] = '\0';
 	fflush(stdout);
 	fflush(stderr);
 	pid = fork();
@@ -129,11 +112,6 @@ static int run_case(const struct unit_case *c, size_t nr)
 		close(fd);
 		return 0;
 	}
-	if (WIFEXITED(status) && WEXITSTATUS(status) == UNIT_SKIPPED) {
-		printf("ok %zu - %s # SKIP %s\n", nr, c->name, unit_reason);
-		close(fd);
-		return 0;
-	}
 	printf("not ok %zu - %s\n", nr, c->name);
 	if (WIFSIGNALED(status))
 		printf("# %s\n", WTERMSIG(status) == SIGALRM ?
@@ -148,12 +126,6 @@ int main(int argc, char **argv)
 	const char *only = argc > 1 ? argv[1] : NULL;
 	size_t nr = 0, failed = 0;
 
-	unit_reason = mmap(NULL, UNIT_REASON_MAX, PROT_READ | PROT_WRITE,
-			   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-	if (unit_reason == MAP_FAILED) {
-		printf("Bail out! mmap: %s\n", strerror(errno));
-		return 1;
-	}
 	printf("# %s\n", unit_suite.name);
 	for (const struct unit_case *c = unit_suite.cases; c->name; c++) {
 		if (only && !strstr(c->name, only))
