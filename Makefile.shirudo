@@ -1161,18 +1161,11 @@ FUZZ_TARGETS := $(patsubst testing/fuzz/%.c,$(FUZZ_OUT)/%, \
 testing/fuzz/fuzz-json: testing/fuzz/fuzz-json.c $(FUZZ_BASE)
 testing/fuzz/fuzz-oci-manifest: testing/fuzz/fuzz-oci-manifest.c \
                                 $(FUZZ_BASE)
-testing/fuzz/fuzz-bpm-index: testing/fuzz/fuzz-bpm-index.c \
-                             $(FUZZ_BASE)
 testing/fuzz/fuzz-tree: testing/fuzz/fuzz-tree.c $(FUZZ_BASE)
-testing/fuzz/fuzz-upatch: testing/fuzz/fuzz-upatch.c $(FUZZ_BASE)
-testing/fuzz/fuzz-prog-metadata: testing/fuzz/fuzz-prog-metadata.c \
-                                 $(FUZZ_BASE)
 testing/fuzz/fuzz-rodata: testing/fuzz/fuzz-rodata.c $(FUZZ_BASE) \
                           $(LIBBPF_A)
 testing/fuzz/fuzz-rodata: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-rodata: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS) $(ZLIB_LIBS)
-testing/fuzz/fuzz-bpm-tar: testing/fuzz/fuzz-bpm-tar.c $(FUZZ_BASE)
-testing/fuzz/fuzz-bpm-package: testing/fuzz/fuzz-bpm-package.c $(FUZZ_BASE)
 testing/fuzz/fuzz-tpm-wire: testing/fuzz/fuzz-tpm-wire.c $(FUZZ_BASE)
 testing/fuzz/fuzz-attest: testing/fuzz/fuzz-attest.c $(FUZZ_BASE) \
                           $(VERSION_OBJ) \
@@ -1180,8 +1173,7 @@ testing/fuzz/fuzz-attest: testing/fuzz/fuzz-attest.c $(FUZZ_BASE) \
 testing/fuzz/fuzz-attest: FUZZ_CFLAGS += $(TSS2_CFLAGS) $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-attest: FUZZ_LIBS += $(TSS2_LIBS) $(LIBBPF_A) $(LIBELF_LIBS) $(ZLIB_LIBS)
 testing/fuzz/fuzz-eventlog: testing/fuzz/fuzz-eventlog.c $(FUZZ_BASE)
-testing/fuzz/fuzz-kernel: testing/fuzz/fuzz-kernel.c $(FUZZ_BASE)
-testing/fuzz/fuzz-elf: testing/fuzz/fuzz-elf.c $(FUZZ_BASE) $(LIBBPF_A)
+testing/fuzz/fuzz-elf: $(LIBBPF_A)
 testing/fuzz/fuzz-elf: FUZZ_CFLAGS += $(LIBELF_CFLAGS)
 testing/fuzz/fuzz-elf: FUZZ_LIBS += $(LIBBPF_A) $(LIBELF_LIBS)
 testing/fuzz/fuzz-serializer: testing/fuzz/fuzz-serializer.c $(FUZZ_BASE) \
@@ -1196,17 +1188,15 @@ testing/fuzz/fuzz-decoder: FUZZ_LIBS += $(LUAJIT_LIBS)
 testing/fuzz/fuzz-decoder: FUZZ_CFLAGS += -DFUZZ_SOURCE_TREE='"$(CURDIR)"'
 testing/fuzz/fuzz-otel: testing/fuzz/fuzz-otel.c $(FUZZ_BASE) \
                         $(VERSION_OBJ)
-testing/fuzz/fuzz-beefile: testing/fuzz/fuzz-beefile.c $(FUZZ_BASE) \
+testing/fuzz/fuzz-beefile: \
                            $(VERSION_OBJ)
 testing/fuzz/fuzz-oci-http: testing/fuzz/fuzz-oci-http.c $(FUZZ_BASE)
 testing/fuzz/fuzz-oci-ref: testing/fuzz/fuzz-oci-ref.c $(FUZZ_BASE)
 testing/fuzz/fuzz-registry-auth: testing/fuzz/fuzz-registry-auth.c \
                                  $(FUZZ_BASE)
 testing/fuzz/fuzz-config: testing/fuzz/fuzz-config.c $(FUZZ_BASE)
-testing/fuzz/fuzz-image: testing/fuzz/fuzz-image.c $(FUZZ_BASE)
 testing/fuzz/fuzz-config-update: testing/fuzz/fuzz-config-update.c \
                                  $(FUZZ_BASE)
-testing/fuzz/fuzz-tree-state: testing/fuzz/fuzz-tree-state.c $(FUZZ_BASE)
 testing/fuzz/fuzz-kconfig: testing/fuzz/fuzz-kconfig.c $(FUZZ_BASE)
 testing/fuzz/fuzz-quote-check: testing/fuzz/fuzz-quote-check.c $(FUZZ_BASE)
 
@@ -1215,7 +1205,25 @@ $(FUZZ_TARGETS): testing/fuzz/fuzz.h $(RUST_FUZZ_LIB)
 	$(Q)$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ \
 		$(filter-out $(FUZZ_INCLUDED),$(filter %.c %.o,$^)) $(FUZZ_LIBS)
 
-fuzz-targets: $(FUZZ_TARGETS)
+# The targets written in Rust: functions of the fuzz build of the library,
+# each run by an entry object made from testing/fuzz/target.rs.in.
+FUZZ_RUST := kernel beefile elf tree-state image prog-metadata upatch \
+	     bpm-tar bpm-index bpm-package
+FUZZ_MAIN_DIR := build/fuzz-main
+FUZZ_RUST_TARGETS := $(addprefix $(FUZZ_OUT)/fuzz-,$(FUZZ_RUST))
+
+$(FUZZ_MAIN_DIR)/%.o: testing/fuzz/target.rs.in
+	@printf '  RUSTC   $@\n'
+	$(Q)mkdir -p $(dir $@)
+	$(Q)sed 's/@TARGET@/$(subst -,_,$*)/g' $< > $(FUZZ_MAIN_DIR)/$*.rs
+	$(Q)$(RUSTC_OBJ) --crate-name fuzz_$(subst -,_,$*)_main -o $@ \
+	    $(FUZZ_MAIN_DIR)/$*.rs
+
+$(FUZZ_RUST_TARGETS): $(FUZZ_OUT)/fuzz-%: $(FUZZ_MAIN_DIR)/%.o $(RUST_FUZZ_LIB)
+	@printf '  FUZZ    $@\n'
+	$(Q)$(FUZZ_CC) $(FUZZ_CFLAGS) -o $@ $(filter %.o,$^) $(FUZZ_LIBS)
+
+fuzz-targets: $(FUZZ_TARGETS) $(FUZZ_RUST_TARGETS)
 
 # ----- clean ------------------------------------------------------
 
@@ -1225,7 +1233,8 @@ clean:
 	$(Q)rm -f $(MAIN_OBJ) $(BUILD_MAIN_OBJ) $(QUOTE_CHECK_MAIN_OBJ) \
 	          $(VERSION_OBJ) $(VERSION_RS)
 	$(Q)rm -rf build/target build/unit $(RUST_TARGET) $(RUST_TEST_TARGET) \
-		$(RUST_HELPER_TARGET) $(HELPER_MAIN_DIR) $(RUST_FUZZ_TARGET)
+		$(RUST_HELPER_TARGET) $(HELPER_MAIN_DIR) $(RUST_FUZZ_TARGET) \
+		$(FUZZ_MAIN_DIR)
 	$(Q)rm -f $(BPF_OBJS) $(BPF_LSKELS) $(BPF_SKEL_RS) $(BPF_LSKEL_TOOL) $(VMLINUX_H) \
 	    systemd/shirudo.service \
 	    systemd/shirudo-initrd.service \

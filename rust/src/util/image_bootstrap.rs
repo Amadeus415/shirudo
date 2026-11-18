@@ -169,6 +169,9 @@ unsafe fn parse(f: *mut File, boot: &mut ImageBootstrap, initial: bool) -> c_int
 
 pub(crate) use capi::{image_bootstrap_read, image_bootstrap_read_fd};
 
+#[cfg(shirudo_fuzz)]
+mod fuzz;
+
 mod capi {
     use core::ffi::{c_char, c_int};
 
