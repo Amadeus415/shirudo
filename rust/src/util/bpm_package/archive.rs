@@ -4,7 +4,8 @@
 //! Reading a `.bee`, a gzip'd ustar archive of one top-level directory:
 //! one member, the names of all, or all of it unpacked.
 
-use core::ffi::{CStr, c_char, c_int, c_uint};
+use core::ffi::{CStr, c_char, c_int};
+use std::os::unix::ffi::OsStrExt;
 
 use super::tar::{
     BLOCK, NAME, PREFIX, SIZE, TYPEFLAG, archive_rel_ok, header_ok, octal, package_member_name_ok,
@@ -14,9 +15,9 @@ use crate::errno::{E2BIG, EFBIG, EINVAL, EIO, ENAMETOOLONG, ENOENT, ENOMEM, EPER
 use crate::ffi;
 use crate::heap::{xfree, xmalloc};
 use crate::sys::libc::{O_CREAT, O_EXCL, O_WRONLY, PATH_MAX, close, errno, fchmod};
-use crate::sys::zlib::{GzFileS, Z_OK, gzclose, gzdirect, gzopen, gzread};
 use crate::text::{at, cstr, strsprintf};
 use crate::util::bpm_oci::{MAX_PACKAGE_BYTES, MAX_PACKAGE_ENTRIES};
+use crate::util::gzip::{GzRead, Z_OK};
 use crate::util::io::write_complete;
 use crate::util::seal::{seal_mkdir_p, seal_open};
 
@@ -30,47 +31,42 @@ const ROOT_MAX: usize = 256;
 /// type: 0 to go on, anything else to stop the walk with it.
 pub(super) type Visit<'a> = &'a mut dyn FnMut(&CStr, c_char) -> c_int;
 
-/// A gzip file open for reading.
-struct Gz(*mut GzFileS);
+/// A gzip file open for reading, as zlib's gzopen() opens it.
+struct Gz(GzRead);
 
 impl Gz {
     /// `path` opened; None, with errno set, when it cannot be.
     fn open(path: *const c_char) -> Option<Gz> {
-        // SAFETY: gzopen() refuses a NULL path and reads a C string,
-        // which the caller passes otherwise.
-        let file = unsafe { gzopen(path, c"rb".as_ptr()) };
-
-        (!file.is_null()).then_some(Gz(file))
+        if path.is_null() {
+            crate::sys::libc::set_errno(crate::errno::EINVAL);
+            return None;
+        }
+        // SAFETY: a C string the caller passes.
+        let path = unsafe { CStr::from_ptr(path) }.to_bytes();
+        match GzRead::open(std::path::Path::new(std::ffi::OsStr::from_bytes(path))) {
+            Ok(gz) => Some(Gz(gz)),
+            Err(err) => {
+                crate::sys::libc::set_errno(err);
+                None
+            }
+        }
     }
 
-    /// Whether zlib reads the file as it is, it not being gzip.
-    fn direct(&self) -> bool {
-        // SAFETY: an open file.
-        unsafe { gzdirect(self.0) != 0 }
+    /// Whether the file is read as it is, it not being gzip.
+    fn direct(&mut self) -> bool {
+        self.0.direct()
     }
 
     /// Up to `buf.len()` bytes, at most `CHUNK`: how many, 0 at the end,
     /// below 0 on an error.
     fn read(&mut self, buf: &mut [u8]) -> c_int {
         debug_assert!(buf.len() <= CHUNK);
-        // SAFETY: an open file, and buf.len() writable bytes.
-        unsafe { gzread(self.0, buf.as_mut_ptr().cast(), buf.len() as c_uint) }
+        self.0.read(buf)
     }
 
     /// Z_OK, or what went wrong reading the file, its trailer included.
     fn close(self) -> c_int {
-        let file = self.0;
-
-        core::mem::forget(self);
-        // SAFETY: an open file, closed once, here.
-        unsafe { gzclose(file) }
-    }
-}
-
-impl Drop for Gz {
-    fn drop(&mut self) {
-        // SAFETY: an open file, closed once, here.
-        unsafe { gzclose(self.0) };
+        self.0.close()
     }
 }
 

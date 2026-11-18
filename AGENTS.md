@@ -308,14 +308,18 @@ one usually still compiles and passes tests.
   ML-DSA-87 is the only signing algorithm, TLS is 1.3 with hybrid ML-KEM
   only), `libcurl`, `libtss2-esys` + `libtss2-tctildr`, `zlib`,
   `libluajit`, the vendored `libbpf` and, linked in, Rust's
-  standard library with the unwinder from `libgcc_eh`. A new library, a
+  standard library with the unwinder from `libgcc_eh` and the crates
+  vendored in `rust/vendor`: `miniz_oxide`, with `adler2`, which deflates
+  the gzip `rust/src/util/gzip.rs` writes. A new library, a
   Rust crate included, must be absolutely necessary, universally available, actively maintained,
   BSD-2-Clause compatible and load-bearing for one thing. `libsystemd`,
   `libsubcmd`, `libkeyutils`, `libcap` and any JSON/YAML/TOML parser
   are refused; whiteroom or open-code instead.
 - Every line in the binary is fresh BSD-2-Clause or vendored from a
   permissive OR-branch with its SPDX header kept (`vendor/libbpf`; the
-  CMS signer keeps the notice of bpftool's it was re-implemented from).
+  CMS signer keeps the notice of bpftool's it was re-implemented from),
+  or a crate vendored with its licence files in `rust/vendor` under a
+  permissive OR-licence its Cargo.toml declares.
   Never copy or link GPL-2.0 code; study a pattern,
   then write it from scratch without the GPL source open.
 - No kernel tree or submodule is needed to build: libbpf and the BPF

@@ -193,8 +193,10 @@ CFLAGS += $(LUAJIT_CFLAGS) -DHAVE_LUAJIT
 DYNAMIC_LIBS += $(LUAJIT_LIBS)
 
 # What the binaries link: libelf is libbpf's, which reads ELF for the
-# tests, where the binaries read it themselves (util/elf_file.rs).
-PRODUCT_LIBS = $(filter-out $(LIBELF_LIBS),$(DYNAMIC_LIBS))
+# tests, where the binaries read it themselves (util/elf_file.rs), and
+# the binaries gzip and gunzip themselves (util/gzip.rs) where zlib is
+# libbpf's and libcurl's.
+PRODUCT_LIBS = $(filter-out $(LIBELF_LIBS) $(ZLIB_LIBS),$(DYNAMIC_LIBS))
 
 ifeq ($(PROFILE),target)
 CFLAGS += -fPIE
