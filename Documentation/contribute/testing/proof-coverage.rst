@@ -267,6 +267,26 @@ the model follows the C.
        ``bpm-tree-follows`` of ``tree_publication_follows()`` and
        ``bpm-tree-sync-model`` of the writes of a sync of up to two
        operations went with ``util/bpm_tree.c`` in the port to Rust
+   * - ``Shirudo.TreeOverlap``, :src:`rust/src/util/bpm_tree_overlap.rs`
+       against ``selector_matches()`` of
+       :src:`rust/src/util/bpm_tree_state.rs`
+     - ``disjoint_sound``: no node matches two selectors that
+       ``selectors_disjoint()`` calls disjoint; ``covers_sound``: a
+       selector that ``selector_covers()`` says covers another matches
+       every node the other matches; ``addLive_false``: an add that
+       ``add_live()`` says is no longer live is followed by a delete of
+       the same upatch that matches every node the add matches;
+       ``prefixes_meet_iff``: two release prefixes take a common release
+       exactly when one takes the other read as a release;
+       ``disjoint_comm``, ``covers_refl``: the order of two selectors
+       does not matter, and a selector covers itself
+     - One node for both selectors: its release, machine, build ID,
+       config values and labels are the same for the two matches, and
+       ``/proc/config.gz`` and ``/boot/config-<release>`` give an option
+       the same value; a match that returns an error is no answer
+     - Review; the CBMC harnesses of the publisher's checks and the
+       node's match went with ``util/bpm_tree_overlap.c`` and
+       ``util/bpm_tree_state.c`` in the port to Rust
 
 Not covered yet
 ---------------

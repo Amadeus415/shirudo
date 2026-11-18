@@ -75,7 +75,7 @@ done <"$work/categories"
 # Every tamper and integrity counter has an entry on its page, and a
 # page names no other.
 counter_names() {
-	grep -oE 'name: "[A-Za-z]+"' "$1" | sed -E 's/.*"([A-Za-z]+)".*/\1/' |
+	grep -oE 'name: c?"[A-Za-z]+"' "$1" | sed -E 's/.*"([A-Za-z]+)".*/\1/' |
 		sort -u
 }
 counter_names rust/src/util/tamper.rs >"$work/tamper_counters"
