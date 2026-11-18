@@ -263,37 +263,12 @@ pub(crate) unsafe fn report_set_log(r: &mut OpReport, log: *const c_char) {
 pub(crate) use capi::report_free;
 
 mod capi {
-    use core::ffi::{c_char, c_int};
 
     use super::OpReport;
 
     /// # Safety
     ///
-    /// `path` is a C string, and `r` points to a report whose strings
-    /// are NULL or C strings.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn report_emit(path: *const c_char, r: *const OpReport) -> c_int {
-        // SAFETY: the caller passes a path and a report.
-        unsafe { super::report_emit(path, &*r) }
-    }
-
-    /// # Safety
-    ///
-    /// `r` is NULL or points to a report whose log is NULL or from
-    /// xstrndup(), and `log` is NULL or a C string.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn report_set_log(r: *mut OpReport, log: *const c_char) {
-        if r.is_null() {
-            return;
-        }
-        // SAFETY: the caller passes a report and a log.
-        unsafe { super::report_set_log(&mut *r, log) }
-    }
-
-    /// # Safety
-    ///
     /// `r` points to a report whose log is NULL or from xstrndup().
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn report_free(r: *mut OpReport) {
         // SAFETY: the caller passes a report.
         let r = unsafe { &mut *r };

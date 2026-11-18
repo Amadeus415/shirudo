@@ -224,40 +224,9 @@ pub(super) use capi::cmd_build;
 mod capi {
     use core::ffi::{c_char, c_int};
 
-    #[unsafe(no_mangle)]
-    pub extern "C" fn build_available() -> bool {
-        super::available()
-    }
-
-    /// # Safety
-    ///
-    /// `label` is a C string, and `argv` an array of C strings after its
-    /// first, up to a NULL.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn build_exec(label: *const c_char, argv: *mut *const c_char) -> c_int {
-        // SAFETY: the caller passes the label and the arguments.
-        unsafe { super::exec(label, argv) }
-    }
-
-    /// # Safety
-    ///
-    /// `label` is a C string, `words` C strings up to a NULL, and `argv`
-    /// holds `argc` C strings.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn build_forward(
-        label: *const c_char,
-        words: *const *const c_char,
-        argc: c_int,
-        argv: *const *const c_char,
-    ) -> c_int {
-        // SAFETY: the caller passes the label, words and arguments.
-        unsafe { super::forward(label, words, argc, argv) }
-    }
-
     /// # Safety
     ///
     /// `argv` holds `argc` C strings and a NULL after them.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn cmd_build(argc: c_int, argv: *mut *const c_char) -> c_int {
         // SAFETY: the caller passes the command line.
         unsafe { super::build(argc, argv) }

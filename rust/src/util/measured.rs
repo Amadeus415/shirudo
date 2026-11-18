@@ -472,7 +472,6 @@ mod capi {
     /// # Safety
     ///
     /// `out` is room for a pointer.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn measured_set_boot(out: *mut *mut MeasuredSet) -> c_int {
         // SAFETY: the caller passes the room.
         unsafe { super::fold(out, false) }
@@ -481,7 +480,6 @@ mod capi {
     /// # Safety
     ///
     /// `out` is room for a pointer.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn measured_set_log(out: *mut *mut MeasuredSet) -> c_int {
         // SAFETY: the caller passes the room.
         unsafe { super::fold(out, true) }
@@ -490,7 +488,6 @@ mod capi {
     /// # Safety
     ///
     /// `s` is a set, and `name` and `payload_hex` C strings.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn measured_holds(
         s: *const MeasuredSet,
         name: *const c_char,
@@ -503,7 +500,6 @@ mod capi {
     /// # Safety
     ///
     /// `s` is NULL or a set, freed once.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn measured_set_free(s: *mut MeasuredSet) {
         // SAFETY: the caller passes NULL or a set.
         unsafe { super::set_free(s) }
@@ -512,7 +508,6 @@ mod capi {
     /// # Safety
     ///
     /// `e` is room for a member and `u` an open upatch.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn measured_upatch_of(e: *mut MeasuredUpatch, u: *const Upatch) {
         // SAFETY: the caller passes the room and the upatch.
         unsafe { super::upatch_of(e, u) }
@@ -537,7 +532,6 @@ mod capi {
     /// # Safety
     ///
     /// `s` is a set, and `cb` NULL or a function that takes `ctx`.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn measured_unmeasured_pins(
         s: *const MeasuredSet,
         cb: Option<PinFn>,
@@ -550,7 +544,6 @@ mod capi {
     /// # Safety
     ///
     /// `s` is a set, and `cb` NULL or a function that takes `ctx`.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn measured_unmeasured_archives(
         s: *const MeasuredSet,
         cb: Option<ArchiveFn>,

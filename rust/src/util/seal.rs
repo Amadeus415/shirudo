@@ -804,7 +804,6 @@ mod capi {
         super::label(unsafe { CStr::from_ptr(path) })
     }
 
-    #[unsafe(no_mangle)]
     pub extern "C" fn seal_label_tree(allow_first: bool) -> c_int {
         super::label_tree(allow_first)
     }
@@ -825,7 +824,6 @@ mod capi {
     /// # Safety
     ///
     /// `path` is a C string.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn seal_open_read(path: *const c_char) -> c_int {
         // SAFETY: the caller's C string.
         fd_or_err(super::open_read(unsafe { CStr::from_ptr(path) }.to_bytes()))
@@ -834,28 +832,6 @@ mod capi {
     /// # Safety
     ///
     /// `path` is a C string.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn seal_open_sealed(path: *const c_char) -> c_int {
-        // SAFETY: the caller's C string.
-        fd_or_err(super::open_file(
-            unsafe { CStr::from_ptr(path) }.to_bytes(),
-            true,
-        ))
-    }
-
-    /// # Safety
-    ///
-    /// `path` is a C string.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn seal_parent_labeled(path: *const c_char) -> bool {
-        // SAFETY: the caller's C string.
-        super::parent_labeled(unsafe { CStr::from_ptr(path) }.to_bytes())
-    }
-
-    /// # Safety
-    ///
-    /// `path` is a C string.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn seal_owns(path: *const c_char) -> bool {
         // SAFETY: the caller's C string.
         super::open_read(unsafe { CStr::from_ptr(path) }.to_bytes()).is_ok()
@@ -893,7 +869,6 @@ mod capi {
     /// # Safety
     ///
     /// `path` is a C string.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn seal_lock(path: *const c_char) -> c_int {
         // SAFETY: the caller's C string.
         fd_or_err(super::lock(unsafe { CStr::from_ptr(path) }.to_bytes()))
@@ -902,7 +877,6 @@ mod capi {
     /// # Safety
     ///
     /// `path` is a C string and `line` holds `len` bytes.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn seal_append_line(
         path: *const c_char,
         line: *const c_char,
@@ -915,7 +889,6 @@ mod capi {
     /// # Safety
     ///
     /// `path` is a C string.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn seal_output_open(
         path: *const c_char,
         flags: c_int,
@@ -973,7 +946,6 @@ mod capi {
         }
     }
 
-    #[unsafe(no_mangle)]
     pub extern "C" fn seal_inherit(dfd: c_int, fd: c_int) -> c_int {
         super::inherit(dfd, fd)
     }

@@ -2032,7 +2032,6 @@ mod capi {
     /// # Safety
     ///
     /// `out` is room for a pointer.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_open_quiet(out: *mut *mut Tpm) -> c_int {
         // SAFETY: the caller passes room.
         unsafe { super::open_tpm(out, true) }
@@ -2352,7 +2351,6 @@ mod capi {
     ///
     /// `t` is a connection, `out` room for `cap` bytes, and `len` and
     /// `rsa` room for a length and a flag.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_ek_certificate(
         t: *mut Tpm,
         out: *mut u8,

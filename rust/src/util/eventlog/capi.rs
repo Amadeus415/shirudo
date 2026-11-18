@@ -45,12 +45,10 @@ pub extern "C" fn eventlog_adopt_pending() -> c_int {
     super::adopt_pending_locked()
 }
 
-#[unsafe(no_mangle)]
 pub extern "C" fn eventlog_lock() -> c_int {
     super::lock()
 }
 
-#[unsafe(no_mangle)]
 pub extern "C" fn eventlog_unlock(fd: c_int) {
     super::unlock(fd)
 }
@@ -108,12 +106,10 @@ pub unsafe extern "C" fn eventlog_boot_upatches(cb: Option<UpatchFn>, ctx: *mut 
 /// # Safety
 ///
 /// `cb` takes `ctx`.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn eventlog_upatches(cb: Option<UpatchFn>, ctx: *mut c_void) -> c_int {
     records::upatches(true, cb, ctx)
 }
 
-#[unsafe(no_mangle)]
 pub extern "C" fn eventlog_would_exceed(max_bytes: u64) -> c_int {
     super::would_exceed(max_bytes)
 }

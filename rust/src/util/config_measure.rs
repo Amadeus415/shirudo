@@ -47,7 +47,6 @@ mod capi {
     use super::{event, pcr_valid};
     use crate::errno::EINVAL;
 
-    #[unsafe(no_mangle)]
     pub extern "C" fn config_measure_pcr_valid(pcr: u32) -> c_int {
         pcr_valid(pcr)
     }

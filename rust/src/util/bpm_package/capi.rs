@@ -3,17 +3,12 @@
 
 //! The C interface of `util/bpm_package.h`.
 
-use core::ffi::{CStr, c_char, c_int, c_void};
+use core::ffi::{CStr, c_char, c_int};
 
 use super::archive::{self, Found};
-use super::publication::{self, Signed};
+use super::publication::{self};
 use super::{IndexEntry, PackageInfo, UpatchMember, index, info, semver, tar};
 use crate::ffi;
-use crate::util::bpm_oci::OciClient;
-use crate::util::bpm_tree::TreePublication;
-
-/// The `bpm_pkg_member_fn` a member walk calls.
-type MemberFn = unsafe extern "C" fn(ctx: *mut c_void, member: *const c_char, ty: c_char) -> c_int;
 
 /// A C string the caller may pass as NULL.
 ///
@@ -61,49 +56,6 @@ pub unsafe extern "C" fn bpm_semver_valid(s: *const c_char) -> bool {
 
 /// # Safety
 ///
-/// `payload` and `sig` are NULL or hold their lengths' bytes, and
-/// `cert_path` is NULL or a C string.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn bpm_verify_cms(
-    payload: *const u8,
-    payload_len: usize,
-    sig: *const u8,
-    sig_len: usize,
-    cert_path: *const c_char,
-) -> c_int {
-    let signed = Signed {
-        payload,
-        payload_len,
-        sig,
-        sig_len,
-    };
-
-    publication::verify_cms(&signed, cert_path)
-}
-
-/// # Safety
-///
-/// `payload` and `sig` are NULL or hold their lengths' bytes.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn bpm_verify_cms_fd(
-    payload: *const u8,
-    payload_len: usize,
-    sig: *const u8,
-    sig_len: usize,
-    cert_fd: c_int,
-) -> c_int {
-    let signed = Signed {
-        payload,
-        payload_len,
-        sig,
-        sig_len,
-    };
-
-    publication::verify_cms_fd(&signed, cert_fd)
-}
-
-/// # Safety
-///
 /// `name` is NULL or a C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bpm_archive_rel_ok(name: *const c_char) -> bool {
@@ -136,33 +88,6 @@ pub unsafe extern "C" fn bpm_upatch_pair(
             ffi::slice(name.cast(), len),
             ffi::bytes_mut(out.cast(), cap),
         )
-    }
-}
-
-/// # Safety
-///
-/// `archive` and `package_dir` are NULL or C strings, and `visit` NULL
-/// or a function that takes `ctx`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn bpm_pkg_visit_members(
-    archive: *const c_char,
-    package_dir: *const c_char,
-    visit: Option<MemberFn>,
-    ctx: *mut c_void,
-) -> c_int {
-    // SAFETY: the caller passes NULL or a C string.
-    let package_dir = unsafe { opt_bytes(package_dir) };
-
-    match visit {
-        Some(visit) => {
-            let mut call = |member: &CStr, ty: c_char| {
-                // SAFETY: the caller's function, with its context and the
-                // member's terminated name, which lives for the call.
-                unsafe { visit(ctx, member.as_ptr(), ty) }
-            };
-            archive::visit_members(archive, package_dir, Some(&mut call))
-        }
-        None => archive::visit_members(archive, package_dir, None),
     }
 }
 
@@ -205,7 +130,6 @@ pub unsafe extern "C" fn bpm_pkg_read_member_in(
 ///
 /// `archive` and `member` are NULL or C strings, and `out` and `out_len`
 /// take the member.
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn bpm_pkg_read_member(
     archive: *const c_char,
     member: *const c_char,
@@ -245,38 +169,6 @@ pub unsafe extern "C" fn bpm_pkg_load_info(
 ) -> c_int {
     // SAFETY: the caller passes its info.
     info::load_info(archive, unsafe { &mut *info })
-}
-
-/// # Safety
-///
-/// `c` is a client, `repository` and `reference` are C strings,
-/// `cert_path` NULL or one, `trusted` NULL or a trusted set,
-/// `publication` a publication to fill and `manifest_digest` has room
-/// for `digest_sz`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn bpm_tree_fetch_publication(
-    c: *mut OciClient,
-    repository: *const c_char,
-    reference: *const c_char,
-    cert_path: *const c_char,
-    trusted: *const crate::util::keys::TrustedSet,
-    publication: *mut TreePublication,
-    manifest_digest: *mut c_char,
-    digest_sz: usize,
-) -> c_int {
-    // SAFETY: the caller passes its client, C strings, its publication
-    // and room for the digest.
-    unsafe {
-        publication::fetch_publication(
-            &mut *c,
-            ffi::c_str(repository),
-            ffi::c_str(reference),
-            cert_path,
-            trusted.as_ref(),
-            publication,
-            ffi::bytes_mut(manifest_digest.cast(), digest_sz),
-        )
-    }
 }
 
 /// The manifest of a tree publication whose layers are `payload` and

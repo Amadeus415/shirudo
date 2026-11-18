@@ -556,7 +556,6 @@ mod capi {
     use core::ffi::{c_char, c_int, c_void};
 
     use crate::ffi;
-    use crate::sys::libc::File;
 
     /// # Safety
     ///
@@ -603,55 +602,6 @@ mod capi {
     ) -> c_int {
         // SAFETY: the caller passes a C string and the rooms.
         unsafe { super::read_file(path, max, out, len) }
-    }
-
-    /// # Safety
-    ///
-    /// `label` is a C string, `out` room for a pointer and `len` for a
-    /// length.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn read_fd(
-        fd: c_int,
-        label: *const c_char,
-        max: usize,
-        out: *mut c_void,
-        len: *mut usize,
-    ) -> c_int {
-        // SAFETY: the caller passes a C string and the rooms.
-        unsafe { super::read_fd(fd, label, max, out, len) }
-    }
-
-    /// # Safety
-    ///
-    /// `rel` is NULL or a C string.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn open_beneath(dirfd: c_int, rel: *const c_char, flags: c_int) -> c_int {
-        // SAFETY: the caller passes NULL or a C string.
-        unsafe { super::open_beneath(dirfd, rel, flags) }
-    }
-
-    /// # Safety
-    ///
-    /// `f` is an open stream, and `line` and `cap` getline()'s buffer
-    /// and its size.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn read_text_line(
-        f: *mut File,
-        line: *mut *mut c_char,
-        cap: *mut usize,
-        max: usize,
-    ) -> c_int {
-        // SAFETY: the caller passes the stream and the buffer.
-        unsafe { super::read_text_line(f, line, cap, max) }
-    }
-
-    /// # Safety
-    ///
-    /// `path` is a C string.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn check_trusted(fd: c_int, path: *const c_char, secret: bool) -> c_int {
-        // SAFETY: the caller passes a C string.
-        unsafe { super::check_trusted(fd, path, secret) }
     }
 
     #[unsafe(no_mangle)]
