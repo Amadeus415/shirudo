@@ -1032,9 +1032,11 @@ $(UNIT_LIB): $(VERSION_OBJ)
 build/unit/%: testing/unit/%.c testing/unit/unit.c testing/unit/unit.h \
 		$(UNIT_LIB) $(LIBBPF_A) $(RUST_LIB)
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -Itesting/unit -o $@ $< testing/unit/unit.c \
+	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) -Itesting/unit -o $@ $< testing/unit/unit.c \
 		-Wl,--start-group $(UNIT_LIB) $(RUST_LIB) -Wl,--end-group \
 		$(LIBBPF_A) $(DYNAMIC_LIBS) $(RUST_TEST_LDLIBS)
+
+build/unit/curl: LDFLAGS += -Wl,--wrap=curl_slist_free_all
 
 unit-tests: $(UNIT_TESTS)
 
