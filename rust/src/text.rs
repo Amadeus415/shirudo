@@ -393,12 +393,4 @@ pub(crate) mod capi {
         // SAFETY: the caller's bytes and C string.
         unsafe { super::name_has_suffix(bytes(name, len), CStr::from_ptr(suffix).to_bytes()) }
     }
-
-    /// # Safety
-    ///
-    /// `name` is a C string.
-    pub unsafe extern "C" fn dns_name_valid(name: *const c_char) -> bool {
-        // SAFETY: the caller's C string.
-        super::dns_name_valid(unsafe { CStr::from_ptr(name) }.to_bytes())
-    }
 }

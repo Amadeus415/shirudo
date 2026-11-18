@@ -18,8 +18,8 @@ pub use libc::{
     open, openat, opendir, openlog, personality, posix_memalign, prctl, pread, printf, putchar,
     read, readdir, recvmsg, renameat, rmdir, sendto, setenv, setitimer, setrlimit, setsockopt,
     setxattr, snprintf, socket, sscanf, statfs, statvfs, statx, strcasecmp, strcmp, strerror,
-    strftime, strlen, strncasecmp, strnlen, strptime, syscall, sysconf, syslog, timegm, umount2,
-    uname, unlink, unlinkat, unsetenv, write,
+    strftime, strlen, strnlen, strptime, syscall, sysconf, syslog, timegm, umount2, uname, unlink,
+    unlinkat, unsetenv, write,
 };
 
 /// explicit_bzero(3), for Miri, which cannot call the C library: the `n`
