@@ -250,14 +250,16 @@ pub unsafe extern "C" fn bpm_pkg_load_info(
 /// # Safety
 ///
 /// `c` is a client, `repository` and `reference` are C strings,
-/// `cert_path` NULL or one, `publication` a publication to fill and
-/// `manifest_digest` has room for `digest_sz`.
+/// `cert_path` NULL or one, `trusted` NULL or a trusted set,
+/// `publication` a publication to fill and `manifest_digest` has room
+/// for `digest_sz`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bpm_tree_fetch_publication(
     c: *mut OciClient,
     repository: *const c_char,
     reference: *const c_char,
     cert_path: *const c_char,
+    trusted: *const crate::util::keys::TrustedSet,
     publication: *mut TreePublication,
     manifest_digest: *mut c_char,
     digest_sz: usize,
@@ -270,6 +272,7 @@ pub unsafe extern "C" fn bpm_tree_fetch_publication(
             ffi::c_str(repository),
             ffi::c_str(reference),
             cert_path,
+            trusted.as_ref(),
             publication,
             ffi::bytes_mut(manifest_digest.cast(), digest_sz),
         )

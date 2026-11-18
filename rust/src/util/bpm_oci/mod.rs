@@ -10,6 +10,7 @@ mod capi;
 mod client;
 mod http;
 mod manifest;
+pub(crate) use manifest::emit_descriptor;
 mod refs;
 
 use core::ffi::{CStr, c_char, c_long};
@@ -36,6 +37,8 @@ pub(crate) const MAX_PACKAGE_ENTRIES: u32 = 4096;
 pub(crate) const MANIFEST_MEDIA: &CStr = c"application/vnd.oci.image.manifest.v1+json";
 pub(crate) const TREE_MEDIA: &[u8] = b"application/vnd.shirudo.upatch.tree.v1+json";
 pub(crate) const TREE_SIG_MEDIA: &[u8] = b"application/vnd.shirudo.upatch.tree.signature.v1";
+pub(crate) const TREE_ARTIFACT: &[u8] = b"application/vnd.shirudo.upatch.tree.v1";
+pub(crate) const EMPTY_CONFIG_MEDIA: &[u8] = b"application/vnd.oci.empty.v1+json";
 const USERNAME_SIZE: usize = 256;
 const PASSWORD_SIZE: usize = 4096;
 const TOKEN_SIZE: usize = 4096;
@@ -113,6 +116,16 @@ impl HttpResponse {
 }
 
 impl Descriptor {
+    /// A blob's descriptor: its media type, digest and size.
+    pub(crate) fn of(media: &[u8], digest: &[u8], size: i64) -> Self {
+        let mut d = Descriptor::new();
+
+        copy_string(&mut d.media, media);
+        copy_string(&mut d.digest, digest);
+        d.size = size;
+        d
+    }
+
     pub(crate) const fn new() -> Self {
         Descriptor {
             media: [0; MAX_MEDIA],

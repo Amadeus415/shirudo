@@ -116,7 +116,7 @@ pub(crate) fn parse_manifest(
     0
 }
 
-pub(super) fn emit_descriptor(
+pub(crate) fn emit_descriptor(
     e: &mut JsonEmit,
     key: Option<&[u8]>,
     d: &Descriptor,
