@@ -12,9 +12,17 @@
 #include <shirudo/string.h>
 
 #include "../../util/bpm_tree.h"
+#include "../../util/crypto.h"
 #include "../../util/io.h"
+#include "../../util/malloc.h"
 
 #include "unit.h"
+
+/* The longest line the outcome record takes, rust/src/util/bpm_tree_state.rs's. */
+#define OUTCOME_LINE_MAX	256
+
+static char tree_dir[4200], state_path[4300], outcomes_path[4300];
+static char events_path[4300], pending_path[4300];
 
 static char path[4096];
 
@@ -157,7 +165,7 @@ static void labels_are_cut_at_the_first_equals(void)
 
 	write_config("# site=x\n  site = a \t\nzone=b=c\njunk\nempty=\t\n",
 		     false);
-	ASSERT_EQ(read_config_file(path, labels, &n, ARRAY_SIZE(labels)), 0);
+	ASSERT_EQ(tree_labels_read(path, labels, &n, ARRAY_SIZE(labels)), 0);
 	unlink(path);
 	ASSERT_EQ(n, 3);
 	EXPECT_STREQ(labels[0].key, "site ");
@@ -166,7 +174,7 @@ static void labels_are_cut_at_the_first_equals(void)
 	EXPECT_STREQ(labels[1].value, "b=c");
 	EXPECT_STREQ(labels[2].key, "empty");
 	EXPECT_STREQ(labels[2].value, "");
-	EXPECT_EQ(read_config_file("/nonexistent/node.labels", labels, &n,
+	EXPECT_EQ(tree_labels_read("/nonexistent/node.labels", labels, &n,
 				   ARRAY_SIZE(labels)), -ENOENT);
 	EXPECT_EQ(n, 0);
 }
@@ -191,6 +199,7 @@ static void use_tree(void)
 			       "%s/tree-eventlog", tree_dir) > 0);
 	ASSERT_TRUE(strsprintf(pending_path, sizeof(pending_path),
 			       "%s/pending.json", tree_dir) > 0);
+	ASSERT_EQ(tree_var_dir_set(tree_dir), 0);
 }
 
 static void drop_tree(void)

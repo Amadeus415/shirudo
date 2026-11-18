@@ -16,14 +16,12 @@ static char fuzz_path[64];
 
 int LLVMFuzzerTestOneInput(const __u8 *data, size_t size)
 {
-	struct tree_state state;
-	int fd, rc;
+	int fd;
 
 	fd = fuzz_file(data, size, fuzz_path, sizeof(fuzz_path));
 	if (fd < 0)
 		return 0;
-	tree_state_read_path(fuzz_path, &state);
-	tree_event_replay_path(fuzz_path, root);
+	tree_state_fuzz(fuzz_path, fd, size);
 	close(fd);
 	return 0;
 }
