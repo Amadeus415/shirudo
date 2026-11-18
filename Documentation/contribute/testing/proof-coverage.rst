@@ -1370,10 +1370,11 @@ a proof covers.
        :src:`util/elf_target.c`, :src:`util/kernel_abi.c`,
        :src:`util/nv_writer.c`, :src:`util/sign.c`,
        :src:`util/keepalive_quote.c`, :src:`util/tls_openssl.c`,
-       :src:`util/tpm.c`, :src:`util/upatch_decode.c`
+       :src:`util/tpm.c`, :src:`util/upatch_decode.c`,
+       :src:`tools/shirudo-build/pcap.c`
      - Mostly calls into a library a harness would have to model whole:
-       OpenSSL, libcurl, libelf, the BTF reader of libbpf, tpm2-tss and
-       LuaJIT
+       OpenSSL, libcurl, libelf, the BTF reader of libbpf, tpm2-tss,
+       LuaJIT and libpcap
    * - :src:`util/format.c`, :src:`util/help.c`, :src:`util/report.c`,
        :src:`util/timefmt.c`, :src:`util/upatch_table.c`
      - Output for people: sizes, durations, help, the load report and
