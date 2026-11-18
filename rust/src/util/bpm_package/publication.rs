@@ -225,7 +225,9 @@ fn fetch_checked(
     }
     // SAFETY: the manifest's len bytes.
     let manifest = unsafe { ffi::slice(f.manifest.data, f.manifest.len) };
-    let ret = parse_manifest(manifest, f.layers, MAX_ENTRIES as c_int, &mut nl, None);
+    // SAFETY: the room xcalloc() gave for MAX_ENTRIES descriptors, zeroed.
+    let room = unsafe { core::slice::from_raw_parts_mut(f.layers, MAX_ENTRIES) };
+    let ret = parse_manifest(manifest, room, &mut nl, None);
     if ret != 0 {
         return ret;
     }
