@@ -310,7 +310,10 @@ one usually still compiles and passes tests.
   the vendored `libbpf` and, linked in, Rust's
   standard library with the unwinder from `libgcc_eh` and the crates
   vendored in `rust/vendor`: `miniz_oxide`, with `adler2`, which deflates
-  the gzip `rust/src/util/gzip.rs` writes. A new library, a
+  the gzip `rust/src/util/gzip.rs` writes, and `openssl`, with
+  `openssl-sys`, `foreign-types`, `bitflags`, `cfg-if` and `libc`, the
+  safe face of libcrypto and libssl; `rust/src/sys/openssl.rs` declares
+  only the calls `openssl-sys` lacks. A new library, a
   Rust crate included, must be absolutely necessary, universally available, actively maintained,
   BSD-2-Clause compatible and load-bearing for one thing. `libsystemd`,
   `libsubcmd`, `libkeyutils`, `libcap` and any JSON/YAML/TOML parser
@@ -319,7 +322,8 @@ one usually still compiles and passes tests.
   permissive OR-branch with its SPDX header kept (`vendor/libbpf`; the
   CMS signer keeps the notice of bpftool's it was re-implemented from),
   or a crate vendored with its licence files in `rust/vendor` under a
-  permissive OR-licence its Cargo.toml declares.
+  permissive licence its Cargo.toml declares, one
+  `.github/scripts/check-spdx.sh` accepts.
   Never copy or link GPL-2.0 code; study a pattern,
   then write it from scratch without the GPL source open.
 - No kernel tree or submodule is needed to build: libbpf and the BPF
