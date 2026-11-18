@@ -396,6 +396,7 @@ build-operator: build-unit
 	+$(Q)flock $(BUILD_LOCK) $(MAKE) -C $(ROOT) shirudo-build
 	+$(Q)flock $(BUILD_LOCK) $(MAKE) -C $(ROOT) quote-check
 	+$(Q)flock $(BUILD_LOCK) $(MAKE) -C $(ROOT) -f Makefile.shirudo test-helpers
+	+$(Q)flock $(BUILD_LOCK) $(MAKE) -C $(ROOT) -f Makefile.shirudo parity-oracles
 
 build-unit:
 	$(Q)mkdir -p $(dir $(BUILD_LOCK))

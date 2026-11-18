@@ -280,7 +280,7 @@ VERSION_OBJ    := $(MAIN_DIR)/version_id.o
 # ----- top-level goals --------------------------------------------
 
 .PHONY: all install install-common install-target install-operator clean distclean \
-		test-helpers verity-test-helpers unit-tests \
+		test-helpers verity-test-helpers unit-tests parity-oracles \
         bpf rust
 
 all: shirudo
@@ -1010,6 +1010,35 @@ testing/helper/test-seal-output: $(HELPER_MAIN_DIR)/test-seal-output.o \
 
 test-helpers: $(TEST_HELPERS)
 
+# ----- libbpf parity ----------------------------------------------
+
+# The Rust does what the build once took from the vendored libbpf:
+# tools/gen-vmlinux-h dumps BTF as its btf_dump does, and tools/bpf-lskel
+# generates loaders as its gen_loader does. The C of testing/parity/
+# drives the vendored libbpf to do the same, and t1012 compares the two
+# byte for byte, so that a refresh of vendor/libbpf that changes either
+# fails there until the Rust follows. Nothing else builds libbpf.
+LIBBPF_A       := $(LIBBPF_VENDOR)/libbpf.a
+LIBBPF_SRCS    := $(wildcard $(LIBBPF_DIR)/*.c $(LIBBPF_DIR)/*.h \
+                             $(LIBBPF_VENDOR)/include/linux/*.h \
+                             $(LIBBPF_VENDOR)/include/asm/*.h \
+                             $(LIBBPF_VENDOR)/include/uapi/linux/*.h \
+                             $(LIBBPF_VENDOR)/Makefile)
+PARITY_ORACLES := testing/parity/gen-vmlinux-h testing/parity/gen-loader
+
+# libbpf compiles against the libelf and zlib headers it links.
+$(LIBBPF_A): $(LIBBPF_SRCS)
+	@printf '  LIBBPF\n'
+	$(Q)$(MAKE) -C $(LIBBPF_VENDOR) CC="$(CC)" Q="$(Q)" \
+		EXTRA_CFLAGS="$(WERROR_CFLAGS) $(LIBELF_CFLAGS) $(ZLIB_CFLAGS)"
+
+$(PARITY_ORACLES): testing/parity/%: testing/parity/%.c $(LIBBPF_A)
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS_BASE) $(INCLUDES) $(LDFLAGS) -o $@ $< $(LIBBPF_A) \
+	    $(LIBELF_LIBS) $(ZLIB_LIBS)
+
+parity-oracles: $(PARITY_ORACLES)
+
 # ----- unit tests -------------------------------------------------
 
 # The Rust is tested by the tests in a tests.rs beside each module, which
@@ -1140,7 +1169,8 @@ fuzz-targets: $(FUZZ_TARGETS)
 
 clean:
 	$(Q)rm -f shirudo shirudo-target tools/shirudo-build/shirudo-build \
-	          tools/quote-check/shirudo-quote-check $(TEST_HELPERS)
+	          tools/quote-check/shirudo-quote-check $(TEST_HELPERS) \
+	          $(PARITY_ORACLES)
 	$(Q)rm -f $(MAIN_OBJ) $(BUILD_MAIN_OBJ) $(QUOTE_CHECK_MAIN_OBJ) \
 	          $(VERSION_OBJ) $(VERSION_RS)
 	$(Q)rm -rf build/target build/unit $(RUST_TARGET) $(RUST_TEST_TARGET) \

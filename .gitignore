@@ -62,6 +62,8 @@
 /testing/helper/*
 /testing/end2end/exec-paths
 /testing/end2end/policy-exec
+/testing/parity/gen-vmlinux-h
+/testing/parity/gen-loader
 !/testing/helper/main.rs.in
 !/testing/helper/test-preload.rs
 !/testing/helper/version.rs

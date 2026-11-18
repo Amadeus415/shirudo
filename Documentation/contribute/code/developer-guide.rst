@@ -355,7 +355,12 @@ The source revision is recorded in ``vendor/libbpf/COMMIT``. The
 build links no libbpf: :src:`rust/src/bpf/` reads objects and BTF,
 generates loaders and dumps values as this libbpf does,
 :src:`tools/gen-vmlinux-h` dumps BTF as C as its ``btf_dump`` does, and
-the BPF programs take the vendored copy's BPF-side headers. After refreshing, reapply the local changes :src:`vendor/libbpf/README.md`
+the BPF programs take the vendored copy's BPF-side headers. The
+copy builds for one test alone,
+:src:`testing/functional/build/t1012-libbpf-parity.sh`, which holds the
+Rust to it byte for byte through the C of :src:`testing/parity/`: a
+refresh that changes what ``btf_dump`` or ``gen_loader`` does fails there
+until the Rust follows. After refreshing, reapply the local changes :src:`vendor/libbpf/README.md`
 lists, and check :src:`rust/src/bpf/` against the new libbpf.
 
 Other make targets

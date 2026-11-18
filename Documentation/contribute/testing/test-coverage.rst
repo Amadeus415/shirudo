@@ -124,6 +124,11 @@ signed config image.
        options from ``--list-opts``, a value by its placeholder, and a
        command without subcommands that answers ``--list-cmds`` with
        nothing and logs nothing
+   * - ``t1012-libbpf-parity``
+     - The Rust ports match the vendored libbpf byte for byte:
+       ``gen-vmlinux-h`` against ``btf_dump`` on the test kernel's and the
+       BPF objects' BTF, and the bpf2 and seal loaders against
+       ``gen_loader``
 
 ``signing`` (2)
 ~~~~~~~~~~~~~~~
