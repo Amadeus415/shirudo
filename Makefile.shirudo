@@ -1018,11 +1018,19 @@ test-helpers: $(TEST_HELPERS)
 
 # ----- unit tests -------------------------------------------------
 
-# util/<m>.c is tested by testing/unit/<m>.c. Each test links the util
-# objects from an archive, so it pulls in only what its module needs.
+# The Rust is tested by the tests in a tests.rs beside each module, which
+# cargo builds into one binary, build/unit/shirudo-unit, unoptimized and
+# with the debug assertions on; testing/run-tests.sh runs it, a suite by
+# the name of its module. rustc links it against the libraries the
+# system has, so a MemorySanitizer build, whose libraries are
+# instrumented, leaves it out: it tests nothing MSan sees. A suite still
+# in C, testing/unit/<m>.c, links the library from an archive, so it
+# pulls in only what its module needs.
 UNIT_SRCS  := $(filter-out testing/unit/unit.c,$(wildcard testing/unit/*.c))
 UNIT_TESTS := $(patsubst testing/unit/%.c,build/unit/%,$(UNIT_SRCS))
 UNIT_LIB   := build/unit/libshirudo.a
+UNIT_RUST  := build/unit/shirudo-unit
+RUST_TEST_TARGET := build/rust-test
 
 $(UNIT_LIB): $(VERSION_OBJ)
 	@printf '  AR      $@\n'
@@ -1039,7 +1047,19 @@ build/unit/%: testing/unit/%.c testing/unit/unit.c testing/unit/unit.h \
 
 build/unit/curl: LDFLAGS += -Wl,--wrap=curl_slist_free_all
 
-unit-tests: $(UNIT_TESTS)
+# cargo names the binary by a hash, which its JSON says.
+$(UNIT_RUST): $(RUST_SRCS) $(BPF_EMBEDDED)
+	@printf '  CARGO   $@\n'
+	$(Q)mkdir -p $(dir $@)
+	$(Q)exe=$$(RUSTFLAGS="$(RUSTFLAGS_WERROR)" \
+	    $(CARGO) test --quiet --no-run --lib --locked --offline \
+	    --manifest-path $(RUST_DIR)/Cargo.toml \
+	    --target-dir $(RUST_TEST_TARGET) \
+	    --message-format=json-render-diagnostics | \
+	    sed -n 's/.*"executable":"\([^"]*\)".*/\1/p') && \
+	    [ -n "$$exe" ] && cp "$$exe" $@
+
+unit-tests: $(UNIT_TESTS) $(if $(SANITIZE_MEMORY),,$(UNIT_RUST))
 
 # ----- sparse -----------------------------------------------------
 
@@ -1188,7 +1208,8 @@ clean:
 	          tools/quote-check/shirudo-quote-check $(TEST_HELPERS)
 	$(Q)rm -f $(MAIN_OBJ) $(BUILD_MAIN_OBJ) $(QUOTE_CHECK_MAIN_OBJ) \
 	          $(VERSION_OBJ) $(VERSION_RS)
-	$(Q)rm -rf build/target build/unit $(RUST_TARGET) $(RUST_FUZZ_TARGET)
+	$(Q)rm -rf build/target build/unit $(RUST_TARGET) $(RUST_TEST_TARGET) \
+		$(RUST_FUZZ_TARGET)
 	$(Q)rm -f testing/helper/*.d
 	$(Q)rm -f $(BPF_OBJS) $(BPF_LSKELS) $(BPF_SKEL_RS) $(BPF_LSKEL_TOOL) $(VMLINUX_H) \
 	    systemd/shirudo.service \
