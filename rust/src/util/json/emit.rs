@@ -41,18 +41,24 @@ fn control_escape(c: u8) -> [u8; 6] {
 }
 
 /// The decimal digits of `v`, as `%lld` writes them, at the end of `buf`.
-fn format_s64(v: i64, buf: &mut [u8; 20]) -> &[u8] {
+/// The decimal digits of `n`, at the end of `buf`, one byte left
+/// before them for a sign.
+fn format_u64(mut n: u64, buf: &mut [u8; 21]) -> usize {
     let mut pos = buf.len();
-    let mut n = v.unsigned_abs();
 
     loop {
         pos -= 1;
         buf[pos] = b'0' + (n % 10) as u8;
         n /= 10;
         if n == 0 {
-            break;
+            return pos;
         }
     }
+}
+
+fn format_s64(v: i64, buf: &mut [u8; 21]) -> &[u8] {
+    let mut pos = format_u64(v.unsigned_abs(), buf);
+
     if v < 0 {
         pos -= 1;
         buf[pos] = b'-';
@@ -314,11 +320,24 @@ impl JsonEmit {
     }
 
     pub(crate) fn kv_int(&mut self, key: &[u8], val: i64) {
-        let mut buf = [0; 20];
+        let mut buf = [0; 21];
         let digits = format_s64(val, &mut buf);
 
         self.member(key);
         self.put_raw(digits);
+    }
+
+    /// All 64 bits of an unsigned number, as a value.
+    pub(crate) fn u64_value(&mut self, val: u64) {
+        let mut buf = [0; 21];
+        let pos = format_u64(val, &mut buf);
+
+        self.raw_value(&buf[pos..]);
+    }
+
+    pub(crate) fn kv_u64(&mut self, key: &[u8], val: u64) {
+        self.key(key);
+        self.u64_value(val);
     }
 
     pub(crate) fn kv_bool(&mut self, key: &[u8], val: bool) {
@@ -478,6 +497,40 @@ mod capi {
     pub unsafe extern "C" fn json_kv_int(e: *mut JsonEmit, key: *const c_char, val: i64) {
         // SAFETY: the caller passes a valid emitter and a C string.
         unsafe { emitter(e).kv_int(ffi::c_str(key), val) };
+    }
+
+    /// # Safety
+    ///
+    /// `e` is a valid emitter, `key` a C string and `val` holds `len`
+    /// bytes.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn json_kv_string_n(
+        e: *mut JsonEmit,
+        key: *const c_char,
+        val: *const c_char,
+        len: usize,
+    ) {
+        // SAFETY: the caller passes a valid emitter, a C string and the
+        // bytes.
+        unsafe { emitter(e).kv_string(ffi::c_str(key), ffi::slice(val.cast(), len)) };
+    }
+
+    /// # Safety
+    ///
+    /// `e` is a valid emitter.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn json_u64_value(e: *mut JsonEmit, val: u64) {
+        // SAFETY: the caller passes a valid emitter.
+        unsafe { emitter(e).u64_value(val) };
+    }
+
+    /// # Safety
+    ///
+    /// `e` is a valid emitter and `key` a C string.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn json_kv_u64(e: *mut JsonEmit, key: *const c_char, val: u64) {
+        // SAFETY: the caller passes a valid emitter and a C string.
+        unsafe { emitter(e).kv_u64(ffi::c_str(key), val) };
     }
 
     /// # Safety

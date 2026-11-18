@@ -2,15 +2,16 @@
 /*
  * Copyright (c) 2026 Authors of shirudo
  *
- * Bounded number parsing, string copies and formatting, file name
- * suffixes, DNS names, UTF-8 characters and text for a terminal, and
- * compares with a string literal, from rust/src/text.rs, and the scrub
- * and compare for secrets.
+ * Bounded number parsing, string copies, file name suffixes, DNS names,
+ * UTF-8 characters and text for a terminal, and compares with a string
+ * literal, from rust/src/text.rs; bounded formatting; and the scrub and
+ * compare for secrets.
  */
 
 #ifndef SHIRUDO_STRING_H
 #define SHIRUDO_STRING_H
 
+#include <errno.h>
 #include <inttypes.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -43,6 +44,36 @@ int parse_s64(const char *s, size_t len, __s64 min, __s64 max, __s64 *out);
  * as much of it as did.
  */
 ssize_t strscpy(char *dst, const char *src, size_t size);
+
+/*
+ * snprintf() into the size bytes at buf: the length written, or -E2BIG,
+ * with buf left empty, when the output did not fit. vstrsprintf() takes
+ * the arguments as a va_list. Inline, as the Rust exports no variadic
+ * function.
+ */
+static inline __printf(3, 0) __must_check
+int vstrsprintf(char *buf, size_t size, const char *fmt, va_list ap)
+{
+	int n = vsnprintf(buf, size, fmt, ap);
+
+	if (n >= 0 && (size_t)n < size)
+		return n;
+	if (size)
+		buf[0] = '\0';
+	return -E2BIG;
+}
+
+static inline __printf(3, 4) __must_check
+int strsprintf(char *buf, size_t size, const char *fmt, ...)
+{
+	va_list ap;
+	int n;
+
+	va_start(ap, fmt);
+	n = vstrsprintf(buf, size, fmt, ap);
+	va_end(ap);
+	return n;
+}
 
 /*
  * Whether the len bytes at name are a stem of at least one byte and then
