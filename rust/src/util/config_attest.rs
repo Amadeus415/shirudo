@@ -223,7 +223,7 @@ unsafe fn collect(update: *mut ConfigUpdate, out: *mut Evidence) -> c_int {
 ///
 /// `view` is NULL or points to a view whose events are NULL or from
 /// xreallocarray().
-unsafe fn clear(view: *mut Evidence) {
+pub(crate) unsafe fn clear(view: *mut Evidence) {
     if view.is_null() {
         return;
     }
@@ -320,7 +320,7 @@ unsafe extern "C" fn on_event(opaque: *mut c_void) -> c_int {
 /// # Safety
 ///
 /// `out` points to room for a view.
-unsafe fn parse(evidence: &[u8], out: *mut Evidence) -> c_int {
+pub(crate) unsafe fn parse(evidence: &[u8], out: *mut Evidence) -> c_int {
     let (mut schema, mut reset, mut restart, mut pcr) = (0i64, 0i64, 0i64, 0i64);
     let mut initial = [0u8; 65];
     let mut parser = EventParser {
@@ -411,17 +411,17 @@ unsafe fn parse(evidence: &[u8], out: *mut Evidence) -> c_int {
 
 /// What a quote says: the PCRs it covers, the TPM boot it was made in,
 /// and the PCR values.
-struct Quote<'a> {
-    mask: u32,
-    reset: u32,
-    restart: u32,
-    pcrs: &'a [[u8; 32]; 24],
+pub(crate) struct Quote<'a> {
+    pub(crate) mask: u32,
+    pub(crate) reset: u32,
+    pub(crate) restart: u32,
+    pub(crate) pcrs: &'a [[u8; 32]; 24],
 }
 
 /// Whether the evidence is the history of the quoted config PCR, in the
 /// quote's TPM boot, ending in the root an operator approved: 0 or
 /// -EKEYREJECTED, and the reason.
-fn verify(
+pub(crate) fn verify(
     view: &Evidence,
     quote: &Quote,
     expected_root: Option<&[u8; 32]>,
