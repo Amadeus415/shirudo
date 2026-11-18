@@ -1374,7 +1374,6 @@ mod capi {
     ///
     /// `directory` is NULL or a C string, `ops` NULL or operations that
     /// outlive the journal and take `ctx`, and `out` NULL or room.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn config_update_open(
         directory: *const c_char,
         ops: *const ConfigUpdateOps,
@@ -1388,7 +1387,6 @@ mod capi {
     /// # Safety
     ///
     /// `update` is NULL or a journal.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn config_update_close(update: *mut ConfigUpdate) {
         // SAFETY: the caller's journal or NULL.
         if let Some(u) = unsafe { update.as_mut() } {
@@ -1400,7 +1398,6 @@ mod capi {
     ///
     /// `update` is NULL or a journal, and `out` NULL or room for a
     /// record.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn config_update_read(
         update: *mut ConfigUpdate,
         out: *mut ConfigUpdateRecord,
@@ -1415,7 +1412,6 @@ mod capi {
     /// # Safety
     ///
     /// `update` is NULL or a journal, and `t` NULL or a target.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn config_update_begin(
         update: *mut ConfigUpdate,
         t: *const ConfigUpdateTarget,
@@ -1428,7 +1424,6 @@ mod capi {
     /// # Safety
     ///
     /// `update` is NULL or a journal, and `t` NULL or a target.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn config_update_boot(
         update: *mut ConfigUpdate,
         t: *const ConfigUpdateTarget,
@@ -1441,7 +1436,6 @@ mod capi {
     /// # Safety
     ///
     /// `update` is NULL or a journal, and `target` NULL or a target.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn config_update_stage(
         update: *mut ConfigUpdate,
         target: *const ConfigUpdateTarget,
@@ -1458,7 +1452,6 @@ mod capi {
     ///
     /// `update` is NULL or a journal, and `out` NULL or room for a
     /// record.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn config_update_stage_read(
         update: *mut ConfigUpdate,
         out: *mut ConfigUpdateRecord,
@@ -1474,7 +1467,6 @@ mod capi {
     ///
     /// `update` is NULL or a journal, `previous` NULL or a record and
     /// `target` NULL or room for a target.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn config_update_staged(
         update: *mut ConfigUpdate,
         previous: *const ConfigUpdateRecord,
@@ -1496,7 +1488,6 @@ mod capi {
     /// # Safety
     ///
     /// `update` is NULL or a journal.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn config_update_clear_staged(update: *mut ConfigUpdate) -> c_int {
         // SAFETY: the caller's journal or NULL.
         match unsafe { super::journal(update) } {
@@ -1508,7 +1499,6 @@ mod capi {
     /// # Safety
     ///
     /// `update` is NULL or a journal.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn config_update_complete_boot(update: *mut ConfigUpdate) -> c_int {
         // SAFETY: the caller's journal or NULL.
         let Some(u) = (unsafe { super::journal(update) }) else {
@@ -1531,7 +1521,6 @@ mod capi {
     ///
     /// `update` is NULL or a journal, and `out` NULL or room for a
     /// record.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn config_update_check(
         update: *mut ConfigUpdate,
         out: *mut ConfigUpdateRecord,
@@ -1551,7 +1540,6 @@ mod capi {
     /// # Safety
     ///
     /// `update` is NULL or a journal, and `consume` takes `ctx`.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn config_update_events(
         update: *mut ConfigUpdate,
         consume: Option<ConfigCb>,
@@ -1578,39 +1566,5 @@ mod capi {
                 ctx,
             )
         }
-    }
-
-    /// # Safety
-    ///
-    /// `data` holds `length` bytes, or is NULL with none, and `record` is
-    /// room for one.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn config_update_record_decode(
-        data: *const c_char,
-        length: usize,
-        state: bool,
-        record: *mut ConfigUpdateRecord,
-    ) -> c_int {
-        // SAFETY: the caller's bytes and room.
-        unsafe { super::record_decode(data.cast(), length, state, &mut *record) }
-    }
-
-    /// # Safety
-    ///
-    /// `update` is a journal whose directory is open, `last` room for a
-    /// record, `value` NULL or room for a digest, `end` NULL or room for
-    /// an offset, and `consume` takes `ctx`.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn config_update_events_scan(
-        update: *mut ConfigUpdate,
-        last: *mut ConfigUpdateRecord,
-        value: *mut u8,
-        end: *mut i64,
-        partial: bool,
-        consume: Option<ConfigCb>,
-        ctx: *mut c_void,
-    ) -> c_int {
-        // SAFETY: the caller passes what the scan takes.
-        unsafe { super::events_scan(&*update, &mut *last, value, end, partial, consume, ctx) }
     }
 }

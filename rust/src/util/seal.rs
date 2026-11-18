@@ -798,7 +798,6 @@ mod capi {
     /// # Safety
     ///
     /// `path` is a C string.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn seal_label(path: *const c_char) -> c_int {
         // SAFETY: the caller's C string.
         super::label(unsafe { CStr::from_ptr(path) })
@@ -811,7 +810,6 @@ mod capi {
     /// # Safety
     ///
     /// `path` is a C string.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn seal_open(path: *const c_char, flags: c_int, mode: u32) -> c_int {
         // SAFETY: the caller's C string.
         fd_or_err(super::open(
@@ -840,7 +838,6 @@ mod capi {
     /// # Safety
     ///
     /// `path` is a C string.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn seal_mkdir_p(path: *const c_char, mode: u32) -> c_int {
         // SAFETY: the caller's C string.
         super::mkdir_p(unsafe { CStr::from_ptr(path) }.to_bytes(), mode)
@@ -849,7 +846,6 @@ mod capi {
     /// # Safety
     ///
     /// `path` is a C string and `data` holds `len` bytes.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn seal_write_file(
         path: *const c_char,
         data: *const c_void,
@@ -905,7 +901,6 @@ mod capi {
     ///
     /// `out` is room for an output and `path` a C string that outlives
     /// it, which keeps the name in it.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn seal_output_create(
         out: *mut SealOutput,
         path: *const c_char,
@@ -932,7 +927,6 @@ mod capi {
     ///
     /// `out` is an output seal_output_create() made, its path still
     /// valid, and `buf` holds `len` bytes.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn seal_output_commit(
         out: *mut SealOutput,
         buf: *const c_void,
@@ -953,7 +947,6 @@ mod capi {
     /// # Safety
     ///
     /// `path` is a C string.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn seal_inherit_path(path: *const c_char) -> c_int {
         // SAFETY: the caller's C string.
         let p = unsafe { CStr::from_ptr(path) };

@@ -550,39 +550,6 @@ pub(crate) fn lock_exclusive(fd: c_int) -> c_int {
 #[cfg(test)]
 mod tests;
 
-mod capi {
-    use core::ffi::{c_char, c_int, c_void};
-
-    /// # Safety
-    ///
-    /// `buf` holds `len` bytes.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn write_complete(fd: c_int, buf: *const c_void, len: usize) -> c_int {
-        // SAFETY: the caller passes the bytes.
-        unsafe { super::write_complete(fd, buf, len) }
-    }
-
-    /// # Safety
-    ///
-    /// `path` is a C string, `out` room for a pointer and `len` for a
-    /// length.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn read_file(
-        path: *const c_char,
-        max: usize,
-        out: *mut c_void,
-        len: *mut usize,
-    ) -> c_int {
-        // SAFETY: the caller passes a C string and the rooms.
-        unsafe { super::read_file(path, max, out, len) }
-    }
-
-    #[unsafe(no_mangle)]
-    pub extern "C" fn kernel_dev(dev: u64) -> u32 {
-        super::kernel_dev(dev)
-    }
-}
-
 /// An anonymous file in memory, named `name` where /proc shows its
 /// descriptors, closed on exec: what a download is kept in rather than a
 /// file of /tmp.

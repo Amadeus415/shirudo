@@ -14,8 +14,8 @@ mod parse;
 mod policy;
 
 pub(crate) use capi::{
-    shirudo_tpm_ek_policy, tpm_attest_parse, tpm_credential_protect, tpm_ecc_public_parse,
-    tpm_kdfe, tpm_nv_name, tpm_object_name, tpm_public_parse, tpm_register_policy,
+    EK_POLICY, tpm_attest_parse, tpm_credential_protect, tpm_ecc_public_parse, tpm_kdfe,
+    tpm_nv_name, tpm_object_name, tpm_public_parse, tpm_register_policy,
 };
 pub(crate) use parse::{attest_parse, public_marshal, public_parse};
 pub(crate) use policy::{

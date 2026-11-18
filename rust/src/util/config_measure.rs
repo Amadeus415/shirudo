@@ -44,27 +44,9 @@ pub(crate) use capi::config_measure_pcr_valid;
 mod capi {
     use core::ffi::c_int;
 
-    use super::{event, pcr_valid};
-    use crate::errno::EINVAL;
+    use super::pcr_valid;
 
     pub extern "C" fn config_measure_pcr_valid(pcr: u32) -> c_int {
         pcr_valid(pcr)
-    }
-
-    /// # Safety
-    ///
-    /// `root_hash` is NULL or holds 32 bytes, and `out` is NULL or has
-    /// room for 32.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn config_measure_event(
-        kind: c_int,
-        root_hash: *const u8,
-        out: *mut u8,
-    ) -> c_int {
-        if root_hash.is_null() || out.is_null() {
-            return -EINVAL;
-        }
-        // SAFETY: the caller passes 32 bytes at root_hash.
-        event(kind, unsafe { &*root_hash.cast::<[u8; 32]>() }, out)
     }
 }

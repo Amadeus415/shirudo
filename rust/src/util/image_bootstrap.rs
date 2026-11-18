@@ -182,7 +182,6 @@ mod capi {
     /// # Safety
     ///
     /// `path` is a C string and `boot` a bootstrap to fill.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn image_bootstrap_read(
         path: *const c_char,
         boot: *mut ImageBootstrap,
@@ -203,7 +202,6 @@ mod capi {
     /// # Safety
     ///
     /// `boot` is a bootstrap to fill.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn image_bootstrap_read_fd(
         fd: c_int,
         boot: *mut ImageBootstrap,

@@ -1103,7 +1103,7 @@ mod tests;
 mod capi {
     use core::ffi::{c_char, c_int};
 
-    use super::{ChainInitInfo, ChainStatus, DIGEST_LEN, MeasuredUpatch};
+    use super::{DIGEST_LEN, MeasuredUpatch};
 
     /// # Safety
     ///
@@ -1145,7 +1145,6 @@ mod capi {
     ///
     /// `tag` and `name` are C strings, `payload` a digest and `event`
     /// room for one.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn chain_upatch_event(
         tag: *const c_char,
         name: *const c_char,
@@ -1159,7 +1158,6 @@ mod capi {
     /// # Safety
     ///
     /// `operation_digest` is a digest and `event` room for one.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn chain_tree_event(
         seq: i64,
         operation_digest: *const u8,
@@ -1172,7 +1170,6 @@ mod capi {
     /// # Safety
     ///
     /// `chain` and `event` are digests, which may be the same.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn chain_fold(chain: *mut u8, event: *const u8) -> c_int {
         // SAFETY: the caller passes two digests.
         unsafe { super::fold(chain, event) }
@@ -1181,7 +1178,6 @@ mod capi {
     /// # Safety
     ///
     /// `name` is a name and `out` has room for `cap` bytes.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn chain_anchor(name: *const u8, out: *mut c_char, cap: usize) -> c_int {
         // SAFETY: the caller passes a name and the room.
         unsafe { super::anchor(name, out.cast(), cap) }
@@ -1189,17 +1185,7 @@ mod capi {
 
     /// # Safety
     ///
-    /// `event` is a digest and `info` a structure to fill.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn chain_init(event: *const u8, info: *mut ChainInitInfo) -> c_int {
-        // SAFETY: the caller passes a digest and the structure.
-        unsafe { super::init(&*event.cast(), &mut *info) }
-    }
-
-    /// # Safety
-    ///
     /// `event` is a digest and `out_chain` NULL or room for one.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn chain_extend(event: *const u8, out_chain: *mut u8) -> c_int {
         // SAFETY: the caller passes a digest and NULL or the room.
         unsafe { super::extend(&*event.cast(), out_chain) }
@@ -1208,7 +1194,6 @@ mod capi {
     /// # Safety
     ///
     /// `out` has room for a digest.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn chain_read(out: *mut u8) -> c_int {
         // SAFETY: the caller passes the room.
         unsafe { super::read(out) }
@@ -1216,14 +1201,5 @@ mod capi {
 
     pub extern "C" fn chain_bound() -> bool {
         super::bound()
-    }
-
-    /// # Safety
-    ///
-    /// `st` is a structure to fill.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn chain_status(st: *mut ChainStatus) -> c_int {
-        // SAFETY: the caller passes the structure.
-        unsafe { super::status(&mut *st) }
     }
 }

@@ -127,10 +127,3 @@ macro_rules! log_c {
     }};
 }
 pub(crate) use log_c;
-
-mod capi {
-    #[unsafe(no_mangle)]
-    pub extern "C" fn log_init() {
-        super::init();
-    }
-}

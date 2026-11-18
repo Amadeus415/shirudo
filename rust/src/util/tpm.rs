@@ -24,8 +24,8 @@ use crate::util::config::{self, Scrubbed};
 use crate::util::identity;
 use crate::util::image_config;
 use crate::util::tpm_wire::{
-    TpmPublic, nv_extend_cphash, object_name, public_marshal, register_policy_final,
-    shirudo_tpm_ek_policy, writer_auth_hash, writer_public,
+    EK_POLICY, TpmPublic, nv_extend_cphash, object_name, public_marshal, register_policy_final,
+    writer_auth_hash, writer_public,
 };
 
 const EK_CERT_NV_RSA: u32 = 0x01C0_0002;
@@ -1602,7 +1602,7 @@ fn ek_create(t: &Tpm, rsa: bool, ek: &mut TpmKey) -> c_int {
     p.nameAlg = ALG_SHA256;
     p.objectAttributes = EK_ATTRS;
     p.authPolicy.size = 32;
-    p.authPolicy.buffer[..32].copy_from_slice(&shirudo_tpm_ek_policy);
+    p.authPolicy.buffer[..32].copy_from_slice(&EK_POLICY);
     if rsa {
         p.parameters.rsaDetail = RsaParms {
             symmetric,
@@ -1999,11 +1999,11 @@ mod capi {
 
     use super::{
         Branches, Credential, DIGEST_LEN, NAME_LEN, NV_RSA_BYTES, Tpm, TpmAttestation, TpmKey,
-        TpmNvInfo, WriterAuthorization,
+        TpmNvInfo,
     };
     use crate::errno::{EACCES, EINVAL};
     use crate::ffi;
-    use crate::sys::tss2::{ESYS_TR_NONE, EsysTr, Rc};
+    use crate::sys::tss2::ESYS_TR_NONE;
 
     /// A fixed-size array at `p`.
     ///
@@ -2028,7 +2028,6 @@ mod capi {
     /// # Safety
     ///
     /// `buf` is room for `size` bytes.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_tcti(buf: *mut c_char, size: usize) -> c_int {
         // SAFETY: the caller passes room.
         unsafe { super::tcti(buf.cast(), size) }
@@ -2037,7 +2036,6 @@ mod capi {
     /// # Safety
     ///
     /// `out` is room for a pointer.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_open(out: *mut *mut Tpm) -> c_int {
         // SAFETY: the caller passes room.
         unsafe { super::open_tpm(out, false) }
@@ -2054,7 +2052,6 @@ mod capi {
     /// # Safety
     ///
     /// `t` is NULL or a connection tpm_open() gave.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_close(t: *mut Tpm) {
         // SAFETY: the caller passes a connection.
         unsafe { super::close(t) }
@@ -2063,7 +2060,6 @@ mod capi {
     /// # Safety
     ///
     /// `t` is a connection, and `out` room for a name.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_ek_name(t: *mut Tpm, out: *mut u8) {
         // SAFETY: the caller passes a connection and room.
         unsafe { *arr_mut::<NAME_LEN>(out) = (*t).session_key.name };
@@ -2073,7 +2069,6 @@ mod capi {
     ///
     /// `t` is NULL or a connection, and `seed` and `public` NULL or a
     /// seed and a modulus.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_nv_set_writer(
         t: *mut Tpm,
         seed: *const u8,
@@ -2100,7 +2095,6 @@ mod capi {
     /// # Safety
     ///
     /// `t` is a connection, and `out` room for a digest.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_pcr_read(t: *mut Tpm, pcr: u32, out: *mut u8) -> c_int {
         // SAFETY: the caller passes a connection and room.
         unsafe { super::pcr_read(&*t, pcr, arr_mut(out)) }
@@ -2109,7 +2103,6 @@ mod capi {
     /// # Safety
     ///
     /// `t` is a connection, and `digest` a digest.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_pcr_extend(t: *mut Tpm, pcr: u32, digest: *const u8) -> c_int {
         // SAFETY: the caller passes a connection and a digest.
         unsafe { super::pcr_extend(&*t, pcr, arr(digest)) }
@@ -2118,7 +2111,6 @@ mod capi {
     /// # Safety
     ///
     /// `t` is a connection, and `out` room for a count.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_reset_count(t: *mut Tpm, out: *mut u32) -> c_int {
         // SAFETY: the caller passes a connection and room.
         match super::read_clock(unsafe { &*t }) {
@@ -2135,7 +2127,6 @@ mod capi {
     ///
     /// `t`, `reset` and `restart` are NULL or a connection and room for
     /// two counts.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_boot_identity(
         t: *mut Tpm,
         reset: *mut u32,
@@ -2161,7 +2152,6 @@ mod capi {
     /// # Safety
     ///
     /// `t` is a connection, and `info` room for the info.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_nv_info(t: *mut Tpm, index: u32, info: *mut TpmNvInfo) -> c_int {
         // SAFETY: the caller passes a connection and room.
         unsafe { super::nv_info(&*t, index, &mut *info) }
@@ -2171,7 +2161,6 @@ mod capi {
     ///
     /// `t` is a connection, `policy` a digest, and `owner_auth` holds
     /// `owner_auth_len` bytes.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_nv_define(
         t: *mut Tpm,
         index: u32,
@@ -2188,7 +2177,6 @@ mod capi {
     ///
     /// `t` is a connection, and `owner_auth` holds `owner_auth_len`
     /// bytes.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_nv_undefine(
         t: *mut Tpm,
         index: u32,
@@ -2202,7 +2190,6 @@ mod capi {
     /// # Safety
     ///
     /// `t` is a connection, and `out` room for a digest.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_nv_read(t: *mut Tpm, index: u32, out: *mut u8) -> c_int {
         // SAFETY: the caller passes a connection and room.
         unsafe { super::nv_read(&*t, index, arr_mut(out)) }
@@ -2211,7 +2198,6 @@ mod capi {
     /// # Safety
     ///
     /// `t` is a connection, and the rest are digests.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_nv_extend_first(
         t: *mut Tpm,
         index: u32,
@@ -2234,7 +2220,6 @@ mod capi {
     /// # Safety
     ///
     /// `t` is a connection, and the rest are digests.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_nv_extend(
         t: *mut Tpm,
         index: u32,
@@ -2256,7 +2241,6 @@ mod capi {
     /// # Safety
     ///
     /// `t` is a connection, and `ak` room for a key.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_ak_create(t: *mut Tpm, ak: *mut TpmKey) -> c_int {
         // SAFETY: the caller passes a connection and room.
         unsafe { super::ak_create(&*t, &mut *ak) }
@@ -2265,7 +2249,6 @@ mod capi {
     /// # Safety
     ///
     /// `t` is a connection, and `ek` room for a key.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_ek_create(t: *mut Tpm, rsa: bool, ek: *mut TpmKey) -> c_int {
         // SAFETY: the caller passes a connection and room.
         unsafe { super::ek_create(&*t, rsa, &mut *ek) }
@@ -2275,7 +2258,6 @@ mod capi {
     ///
     /// `t` is a connection, `ak` and `ek` keys, `blob` and `secret` hold
     /// their lengths' bytes, and `out` is room for `cap`.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_activate_credential(
         t: *mut Tpm,
         ak: *const TpmKey,
@@ -2312,7 +2294,6 @@ mod capi {
     /// `key` is a key, and `t` a connection when the key holds a handle:
     /// as the C did, an empty key is flushed without one, so a caller's
     /// cleanup may pass a connection it already closed.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_key_flush(t: *mut Tpm, key: *mut TpmKey) {
         // SAFETY: the caller passes a key.
         let key = unsafe { &mut *key };
@@ -2329,7 +2310,6 @@ mod capi {
     ///
     /// `t` is a connection, `ak` a key, `nonce` holds `nonce_len` bytes,
     /// and `out` is room for an attestation.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_quote(
         t: *mut Tpm,
         ak: *const TpmKey,
@@ -2347,7 +2327,6 @@ mod capi {
     ///
     /// `t` is a connection, `ak` a key, `nonce` holds `nonce_len` bytes,
     /// and `out` is room for an attestation.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_nv_certify(
         t: *mut Tpm,
         ak: *const TpmKey,
@@ -2378,63 +2357,8 @@ mod capi {
 
     /// # Safety
     ///
-    /// `t` is a connection, and `session` room for a handle.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn tpm_policy_session_start(t: *mut Tpm, session: *mut EsysTr) -> c_int {
-        // SAFETY: the caller passes a connection and room.
-        unsafe {
-            let t = &*t;
-
-            super::session_start(
-                t.esys,
-                t.session_key.handle,
-                crate::sys::tss2::SE_POLICY,
-                &mut *session,
-            )
-        }
-    }
-
-    /// # Safety
-    ///
-    /// `t` is a connection, and `expected` a digest.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn tpm_policy_session_finish(
-        t: *mut Tpm,
-        session: EsysTr,
-        expected: *const u8,
-    ) -> c_int {
-        // SAFETY: the caller passes a connection and a digest.
-        unsafe { super::policy_session_finish(&*t, session, arr(expected)) }
-    }
-
-    /// # Safety
-    ///
-    /// `t` is a connection, `seed` a seed, `expected_public` NULL or a
-    /// modulus, and `key` room for a handle.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn tpm_writer_load(
-        t: *mut Tpm,
-        seed: *const u8,
-        expected_public: *const u8,
-        key: *mut EsysTr,
-    ) -> c_int {
-        let mut public = [0u8; NV_RSA_BYTES];
-
-        // SAFETY: the caller passes a connection, a seed, a modulus or
-        // NULL, and room.
-        unsafe {
-            let expected =
-                (!expected_public.is_null()).then(|| arr::<NV_RSA_BYTES>(expected_public));
-
-            super::writer_primary(&*t, arr(seed), expected, &mut public, &mut *key)
-        }
-    }
-
-    /// # Safety
-    ///
     /// `t` is a connection, `seed` a seed, and `public` room for a
     /// modulus.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tpm_writer_create(
         t: *mut Tpm,
         seed: *const u8,
@@ -2450,39 +2374,5 @@ mod capi {
             super::session_flush(t, key);
             e
         }
-    }
-
-    /// # Safety
-    ///
-    /// `t` is a connection, `name` and `event` a name and a digest, and
-    /// `authorization` room for one.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn tpm_writer_prepare(
-        t: *mut Tpm,
-        session: EsysTr,
-        name: *const u8,
-        event: *const u8,
-        authorization: *mut WriterAuthorization,
-    ) -> c_int {
-        // SAFETY: the caller passes a connection, a name, a digest and
-        // room.
-        unsafe { super::writer_prepare(&*t, session, arr(name), arr(event), &mut *authorization) }
-    }
-
-    /// # Safety
-    ///
-    /// `t` is a connection, `authorization` one writer_prepare() filled,
-    /// and `signature` the writer's signature.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn tpm_writer_authorize(
-        t: *mut Tpm,
-        key: EsysTr,
-        session: EsysTr,
-        authorization: *const WriterAuthorization,
-        signature: *const u8,
-    ) -> Rc {
-        // SAFETY: the caller passes a connection, an authorization and a
-        // signature.
-        unsafe { super::writer_authorize(&*t, key, session, &*authorization, arr(signature)) }
     }
 }

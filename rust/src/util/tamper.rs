@@ -318,5 +318,3 @@ fn counters_read_into(pin: &CStr, count: &mut [u64]) -> Result<u64, c_int> {
 
 #[cfg(test)]
 mod tests;
-
-mod capi {}
