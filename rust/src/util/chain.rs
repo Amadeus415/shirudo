@@ -1171,27 +1171,6 @@ mod capi {
 
     /// # Safety
     ///
-    /// `prev` and `operation_digest` hold 32 bytes, and `out` has room for
-    /// 32, which may be `prev`'s.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn chain_history_step(
-        prev: *const [u8; 32],
-        operation_digest: *const [u8; 32],
-        out: *mut [u8; 32],
-    ) -> c_int {
-        // SAFETY: the caller's 32 bytes at each, read before out is
-        // written.
-        let (ret, root) = match unsafe { super::history_step(&*prev, &*operation_digest) } {
-            Ok(root) => (0, root),
-            Err(err) => (err, [0; 32]),
-        };
-        // SAFETY: the caller's room.
-        unsafe { *out = root };
-        ret
-    }
-
-    /// # Safety
-    ///
     /// `chain` and `event` are digests, which may be the same.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn chain_fold(chain: *mut u8, event: *const u8) -> c_int {

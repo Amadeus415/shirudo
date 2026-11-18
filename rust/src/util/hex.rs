@@ -138,7 +138,6 @@ mod capi {
     /// # Safety
     ///
     /// `digest` is NULL or a C string, and `out` room for 32 bytes.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sha256_digest_decode(digest: *const c_char, out: *mut u8) -> c_int {
         if digest.is_null() {
             return -EINVAL;

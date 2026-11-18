@@ -1268,6 +1268,9 @@ impl Drop for Publication {
     }
 }
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) use capi::{
     tree_parse, tree_publication_append, tree_selector_copy, tree_selector_free,
     tree_selector_kv_add,
@@ -1276,9 +1279,7 @@ pub(crate) use capi::{
 mod capi {
     use core::ffi::{c_char, c_int};
 
-    use super::{
-        TreeEmitExtra, TreeOperation, TreePublication, TreeSelector, TreeSelectorKv, TreeState,
-    };
+    use super::{TreeEmitExtra, TreeOperation, TreePublication, TreeSelector, TreeSelectorKv};
     use crate::errno::EINVAL;
     use crate::ffi;
     use crate::util::json::JsonEmit;
@@ -1321,7 +1322,6 @@ mod capi {
     /// # Safety
     ///
     /// `s` is NULL or a selector whose pairs are as its counts say.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tree_selector_free(s: *mut TreeSelector) {
         // SAFETY: the caller's selector.
         if let Some(s) = unsafe { s.as_mut() } {
@@ -1353,7 +1353,6 @@ mod capi {
     /// `p` is NULL or a publication whose operations come from the
     /// xmalloc family, and `op` NULL or an operation, each with pairs as
     /// their counts say.
-    #[unsafe(no_mangle)]
     pub unsafe extern "C" fn tree_publication_append(
         p: *mut TreePublication,
         op: *const TreeOperation,
@@ -1489,38 +1488,5 @@ mod capi {
     ) -> c_int {
         // SAFETY: the caller's publications and string.
         unsafe { super::segment_precedes(&*pred, ffi::c_str(pred_manifest_digest), &*succ) }
-    }
-
-    #[unsafe(no_mangle)]
-    pub extern "C" fn tree_walk_within(base_seq: i64, last_seq: i64) -> c_int {
-        super::walk_within(base_seq, last_seq)
-    }
-
-    /// # Safety
-    ///
-    /// `p` is a publication whose operations are as its count says, and
-    /// `out` room for 32 bytes.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn tree_history_at(
-        p: *const TreePublication,
-        seq: i64,
-        out: *mut [u8; 32],
-    ) -> c_int {
-        // SAFETY: the caller's publication and room.
-        unsafe { super::history_at(&*p, seq, &mut *out) }
-    }
-
-    /// # Safety
-    ///
-    /// `p` is a publication, `state` NULL or a state, and
-    /// `manifest_digest` a C string.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn tree_publication_follows(
-        p: *const TreePublication,
-        state: *const TreeState,
-        manifest_digest: *const c_char,
-    ) -> c_int {
-        // SAFETY: the caller's publication, state and string.
-        unsafe { super::publication_follows(&*p, state.as_ref(), ffi::c_str(manifest_digest)) }
     }
 }

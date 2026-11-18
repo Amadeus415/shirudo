@@ -535,19 +535,6 @@ mod capi {
 
     /// # Safety
     ///
-    /// `e` is a valid emitter and `value` holds `value_len` bytes.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn json_raw_value(
-        e: *mut JsonEmit,
-        value: *const c_char,
-        value_len: usize,
-    ) {
-        // SAFETY: the caller passes a valid emitter and value_len bytes.
-        unsafe { emitter(e).raw_value(ffi::slice(value.cast(), value_len)) };
-    }
-
-    /// # Safety
-    ///
     /// `e` is a valid emitter and `s` holds `n` bytes.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn json_str_lossy(e: *mut JsonEmit, s: *const c_char, n: usize) {
