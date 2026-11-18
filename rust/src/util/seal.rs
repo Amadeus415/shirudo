@@ -781,24 +781,3 @@ pub(crate) fn write_file(path: &[u8], data: &[u8], mode: u32) -> Result<(), c_in
     }
     placed
 }
-
-/// The C-shaped entry point that util/decode.rs still calls, over the
-/// functions above.
-mod capi {
-    use core::ffi::{CStr, c_char, c_int};
-    use std::os::fd::IntoRawFd;
-
-    /// [`super::open_read`]: the fd, the caller's to close, or -errno.
-    ///
-    /// # Safety
-    ///
-    /// `path` is a C string.
-    pub(crate) unsafe fn seal_open_read(path: *const c_char) -> c_int {
-        // SAFETY: the caller's C string.
-        let path = unsafe { CStr::from_ptr(path) };
-
-        super::open_read(path.to_bytes()).map_or_else(|err| err, IntoRawFd::into_raw_fd)
-    }
-}
-
-pub(crate) use capi::seal_open_read;
