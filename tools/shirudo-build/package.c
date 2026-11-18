@@ -881,6 +881,83 @@ invalid:
 	return -EINVAL;
 }
 
+struct build_uprobe_target {
+	__u32 prog_idx;
+	char *path;
+	__u32 path_len;
+	struct elf_target elf;
+};
+
+static void free_uprobe_targets(struct build_uprobe_target *targets,
+				__u32 nr_targets, __u32 nr_progs)
+{
+	__u32 i;
+
+	if (!targets)
+		return;
+	for (i = 0; i < nr_targets; i++) {
+		xstrfree(targets[i].path);
+		elf_target_free(&targets[i].elf);
+	}
+	xfree(targets, (size_t)nr_progs * sizeof(*targets));
+}
+
+static size_t uprobe_targets_block_len(const struct build_uprobe_target *targets,
+				       __u32 nr_targets)
+{
+	size_t len = sizeof(struct upatch_uprobe_targets);
+	__u32 i;
+
+	for (i = 0; i < nr_targets; i++) {
+		const struct build_uprobe_target *ut = &targets[i];
+		size_t record_len;
+
+		record_len = size_add(sizeof(struct upatch_uprobe_target),
+				      size_add(ut->path_len, ut->elf.build_id_len));
+		record_len = size_add(record_len,
+				      size_mul(ut->elf.nr_offsets, sizeof(__u64)));
+		len = size_add(len, record_len);
+	}
+	return len;
+}
+
+static __u8 *write_uprobe_targets(__u8 *cursor, const struct build_uprobe_target *targets,
+				  __u32 nr_targets)
+{
+	struct upatch_uprobe_targets header = {
+		.magic = cpu_to_le32(UPATCH_UPROBE_TARGET_MAGIC),
+		.version = cpu_to_le32(UPATCH_UPROBE_TARGET_VERSION),
+		.nr_targets = cpu_to_le32(nr_targets),
+	};
+	__u32 i, j;
+
+	memcpy(cursor, &header, sizeof(header));
+	cursor += sizeof(header);
+	for (i = 0; i < nr_targets; i++) {
+		const struct build_uprobe_target *ut = &targets[i];
+		struct upatch_uprobe_target record = {
+			.prog_idx = cpu_to_le32(ut->prog_idx),
+			.path_len = cpu_to_le32(ut->path_len),
+			.build_id_len = cpu_to_le32(ut->elf.build_id_len),
+			.nr_offsets = cpu_to_le32(ut->elf.nr_offsets),
+		};
+
+		memcpy(cursor, &record, sizeof(record));
+		cursor += sizeof(record);
+		memcpy(cursor, ut->path, ut->path_len);
+		cursor += ut->path_len;
+		memcpy(cursor, ut->elf.build_id, ut->elf.build_id_len);
+		cursor += ut->elf.build_id_len;
+		for (j = 0; j < ut->elf.nr_offsets; j++) {
+			__le64 offset = cpu_to_le64(ut->elf.offsets[j]);
+
+			memcpy(cursor, &offset, sizeof(offset));
+			cursor += sizeof(offset);
+		}
+	}
+	return cursor;
+}
+
 static bool is_syscall_section(const char *sec)
 {
 	return sec && strcmp(sec, "syscall") == 0;
@@ -1294,17 +1371,11 @@ static int validate_serializer_output_map(struct bpf_object *obj)
 static int build_prog_metadata(struct bpf_object *obj, __u32 nr_maps,
 			       __u32 nr_progs, void **out, __u32 *out_len)
 {
-	struct build_uprobe_target {
-		__u32 prog_idx;
-		char *path;
-		__u32 path_len;
-		struct elf_target elf;
-	};
-	struct upatch_prog_metadata *md;
 	struct build_uprobe_target *uprobe_targets = NULL;
 	char (*seen_maps)[UPATCH_PROG_MAP_MAX] = NULL;
+	struct upatch_prog_metadata *md;
 	struct bpf_program *p;
-	size_t len, base_len, md_alloc_len;
+	size_t len, base_len;
 	__u32 i = 0, n_seen = 0, nr_uprobe_targets = 0, xdp_classes = 0;
 	bool has_serializer = false, has_test_run = false;
 	int err;
@@ -1325,12 +1396,10 @@ static int build_prog_metadata(struct bpf_object *obj, __u32 nr_maps,
 	base_len = struct_size(md, progs, nr_progs);
 	if (base_len > UINT32_MAX)
 		return -EOVERFLOW;
-	len = base_len;
-	md_alloc_len = base_len;
-	md = xmalloc(len);
+	md = xmalloc(base_len);
 	if (!md)
 		return -ENOMEM;
-	memset(md, 0, len);
+	memset(md, 0, base_len);
 	md->magic = cpu_to_le32(UPATCH_PROG_MAGIC);
 	md->version = cpu_to_le32(UPATCH_PROG_VERSION);
 	md->nr_progs = cpu_to_le32(nr_progs);
@@ -1491,8 +1560,7 @@ static int build_prog_metadata(struct bpf_object *obj, __u32 nr_maps,
 			i++;
 			continue;
 		} else if (kind_is_uprobe_single(kind)) {
-			struct build_uprobe_target *ut =
-				&uprobe_targets[nr_uprobe_targets++];
+			struct build_uprobe_target *ut = &uprobe_targets[nr_uprobe_targets++];
 
 			ut->prog_idx = i;
 			err = resolve_single_uprobe(sec, kind, target, &md->progs[i], &ut->path,
@@ -1502,8 +1570,7 @@ static int build_prog_metadata(struct bpf_object *obj, __u32 nr_maps,
 			i++;
 			continue;
 		} else if (kind_is_uprobe_multi(kind)) {
-			struct build_uprobe_target *ut =
-				&uprobe_targets[nr_uprobe_targets];
+			struct build_uprobe_target *ut = &uprobe_targets[nr_uprobe_targets];
 
 			err = split_uprobe_target(target, &ut->path,
 						  &ut->path_len,
@@ -1552,89 +1619,35 @@ static int build_prog_metadata(struct bpf_object *obj, __u32 nr_maps,
 		i++;
 	}
 
+	len = base_len;
 	if (nr_uprobe_targets) {
-		struct upatch_uprobe_targets targets = {};
-		__u8 *cursor;
-		__u32 j;
+		void *grown;
 
-		if (check_add_overflow(len, sizeof(targets), &len) ||
-		    len > UINT32_MAX) {
+		if (check_add_overflow(len,
+				       uprobe_targets_block_len(uprobe_targets, nr_uprobe_targets),
+				       &len) || len > UINT32_MAX) {
 			err = -EOVERFLOW;
 			goto err_free;
 		}
-		for (j = 0; j < nr_uprobe_targets; j++) {
-			const struct build_uprobe_target *ut = &uprobe_targets[j];
-			size_t record_len;
-
-			record_len = size_add(sizeof(struct upatch_uprobe_target),
-					      size_add(ut->path_len,
-						       ut->elf.build_id_len));
-			record_len = size_add(record_len,
-					      size_mul(ut->elf.nr_offsets,
-						       sizeof(__u64)));
-			if (check_add_overflow(len, record_len, &len) ||
-			    len > UINT32_MAX) {
-				err = -EOVERFLOW;
-				goto err_free;
-			}
+		grown = xreallocarray(md, base_len, len, 1);
+		if (!grown) {
+			err = -ENOMEM;
+			goto err_free;
 		}
-		{
-			void *grown = xreallocarray(md, base_len, len, 1);
-
-			if (!grown) {
-				err = -ENOMEM;
-				goto err_free;
-			}
-			md = grown;
-		}
-		targets.magic = cpu_to_le32(UPATCH_UPROBE_TARGET_MAGIC);
-		targets.version = cpu_to_le32(UPATCH_UPROBE_TARGET_VERSION);
-		targets.nr_targets = cpu_to_le32(nr_uprobe_targets);
-		cursor = (__u8 *)md + base_len;
-		memcpy(cursor, &targets, sizeof(targets));
-		cursor += sizeof(targets);
-		for (j = 0; j < nr_uprobe_targets; j++) {
-			const struct build_uprobe_target *ut = &uprobe_targets[j];
-			struct upatch_uprobe_target record = {};
-			__u32 k;
-
-			record.prog_idx = cpu_to_le32(ut->prog_idx);
-			record.path_len = cpu_to_le32(ut->path_len);
-			record.build_id_len = cpu_to_le32(ut->elf.build_id_len);
-			record.nr_offsets = cpu_to_le32(ut->elf.nr_offsets);
-			memcpy(cursor, &record, sizeof(record));
-			cursor += sizeof(record);
-			memcpy(cursor, ut->path, ut->path_len);
-			cursor += ut->path_len;
-			memcpy(cursor, ut->elf.build_id, ut->elf.build_id_len);
-			cursor += ut->elf.build_id_len;
-			for (k = 0; k < ut->elf.nr_offsets; k++) {
-				__le64 offset = cpu_to_le64(ut->elf.offsets[k]);
-
-				memcpy(cursor, &offset, sizeof(offset));
-				cursor += sizeof(offset);
-			}
-		}
+		md = grown;
+		write_uprobe_targets((__u8 *)md + base_len, uprobe_targets, nr_uprobe_targets);
 	}
 
 	*out = md;
 	*out_len = (__u32)len;
 	xfree(seen_maps, (size_t)nr_progs * sizeof(*seen_maps));
-	for (i = 0; i < nr_uprobe_targets; i++) {
-		xstrfree(uprobe_targets[i].path);
-		elf_target_free(&uprobe_targets[i].elf);
-	}
-	xfree(uprobe_targets, (size_t)nr_progs * sizeof(*uprobe_targets));
+	free_uprobe_targets(uprobe_targets, nr_uprobe_targets, nr_progs);
 	return 0;
 
 err_free:
 	xfree(seen_maps, (size_t)nr_progs * sizeof(*seen_maps));
-	for (i = 0; i < nr_uprobe_targets; i++) {
-		xstrfree(uprobe_targets[i].path);
-		elf_target_free(&uprobe_targets[i].elf);
-	}
-	xfree(uprobe_targets, (size_t)nr_progs * sizeof(*uprobe_targets));
-	xfree(md, md_alloc_len);
+	free_uprobe_targets(uprobe_targets, nr_uprobe_targets, nr_progs);
+	xfree(md, base_len);
 	return err;
 }
 
