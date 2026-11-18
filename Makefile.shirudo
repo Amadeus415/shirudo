@@ -787,7 +787,8 @@ testing/helper/test-conditions: testing/helper/test-conditions.c \
 testing/helper/test-harden: testing/helper/test-harden.c \
 		$(RUST_LIB)
 	@printf '  CC      $@\n'
-	$(Q)$(CC) $(CFLAGS) -o $@ $^ $(LIBCRYPTO_LIBS) $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
+	$(Q)$(CC) $(CFLAGS) -o $@ $^ -Wl,--wrap=mlockall \
+		$(LIBCRYPTO_LIBS) $(ZLIB_LIBS) $(RUST_TEST_LDLIBS)
 
 # The register, in the Rust library, reads and extends through the TPM
 # client (libtss2), so the symbols must resolve even for a helper that
