@@ -782,20 +782,23 @@ signed config image.
 Unit suites and fuzz targets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The unit suites in :src:`testing/unit/` cover 32 of the modules in
-:src:`util/`: ``attest``, ``bpm_oci``, ``bpm_package``, ``bpm_state``,
-``bpm_tree``, ``bpm_tree_overlap``, ``bpm_tree_state``, ``chain``,
-``chain_history``, ``conditions``, ``crypto_openssl``,
-``eventlog``, ``format``, ``hex``, ``io``, ``json``, ``kernel_abi``,
-``keepalive``, ``keepalive_quote``, ``kernel_build_id``,
-``kernel_release``, ``measured``, ``options``,
-``paths``, ``string``, ``sysinfo``, ``upatch``, ``upatch_decode``,
-``upatch_pins``, ``upatch_resolve``, ``upatch_verify`` and ``xdp``, and
-``overflow`` the arithmetic of
-:src:`include/shirudo/overflow.h`. ``quote_check`` covers the rows of
+The unit tests, a ``tests.rs`` beside each module, cover 32 of the
+modules in :src:`rust/src/util/`: ``attest``, ``bpm_oci``,
+``bpm_package``, ``bpm_state``, ``bpm_tree``, ``bpm_tree_overlap``,
+``bpm_tree_state``, ``chain``, ``conditions``, ``crypto_openssl``,
+``curl``, ``decode``, ``eventlog``, ``format``, ``hex``, ``integrity``,
+``io``, ``json``, ``keepalive``, ``keepalive_quote``, ``kernel_abi``,
+``kernel_build_id``, ``kernel_release``, ``measured``, ``options``,
+``sysinfo``, ``tamper``, ``upatch``, ``upatch_pins``,
+``upatch_resolve``, ``upatch_verify`` and ``xdp``, and
+:src:`rust/src/text.rs`, the parsers and copies behind
+:src:`include/shirudo/string.h`. ``quote_check``'s cover the rows of
 ``shirudo-quote-check`` in :src:`rust/src/quote_check.rs`, on quotes a
 software P-256 key signs: every reject reason, the signer's qualified
-name, the empty PCR selection and the base64 of each field. The other
+name, the empty PCR selection and the base64 of each field. Two suites
+in :src:`testing/unit/` test the C the tree still holds:
+``overflow`` the arithmetic of :src:`include/shirudo/overflow.h`, and
+``string`` the inline helpers of :src:`include/shirudo/string.h`. The other
 modules are reached through the test helpers, the fuzz targets and the binaries
 the functional tests run.
 
@@ -1214,7 +1217,8 @@ Parsers and units
 - The dm-verity superblock check in
   :src:`rust/src/util/config_image.rs` has no fuzz target. ``t5001``
   covers truncation and unsupported fields.
-- 54 of the 62 modules in :src:`util/` have no unit suite of their own.
+- 44 of the 76 modules in :src:`rust/src/util/` have no unit tests of
+  their own.
 
 Related
 -------
