@@ -225,7 +225,8 @@ A tree key the node never parses
 
 ``bpm tree append`` carries each earlier operation's ``fixes`` into the
 next generation from a second read of its own over the previous
-publication's bytes, with the JSON reader of :src:`util/json.c`, in the
+publication's bytes, with the JSON reader of
+:src:`rust/src/util/json/parse.rs`, in the
 operator's helper. ``TreePublication::parse()``, which reads the
 publication on the node as well, is unchanged and still skips the key;
 the shared emitter, ``emit_publication()``, takes only an optional
