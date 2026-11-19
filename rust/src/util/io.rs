@@ -563,15 +563,16 @@ pub(crate) unsafe fn bpffs_mounted_at(path: *const c_char) -> c_int {
     ret
 }
 
-/// An exclusive flock() on `fd`, waited for through signals.
-pub(crate) fn lock_exclusive(fd: c_int) -> c_int {
+/// An exclusive flock() on `fd`, waited for through signals, held until
+/// the file is closed or unlocked: -errno.
+pub(crate) fn lock_exclusive(fd: BorrowedFd<'_>) -> Result<(), c_int> {
     // SAFETY: the caller's fd.
-    while unsafe { flock(fd, LOCK_EX) } != 0 {
+    while unsafe { flock(fd.as_raw_fd(), LOCK_EX) } != 0 {
         if errno() != EINTR {
-            return -errno();
+            return Err(-errno());
         }
     }
-    0
+    Ok(())
 }
 
 #[cfg(test)]

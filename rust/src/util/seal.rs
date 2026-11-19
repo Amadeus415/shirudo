@@ -65,10 +65,6 @@ fn shown(p: &[u8]) -> std::borrow::Cow<'_, str> {
     String::from_utf8_lossy(p)
 }
 
-fn status(ret: c_int) -> Result<(), c_int> {
-    if ret == 0 { Ok(()) } else { Err(ret) }
-}
-
 /// `name` opened in the directory `dir`, or in the working directory
 /// for none.
 fn open_at(
@@ -716,7 +712,7 @@ fn open_file(path: &[u8], in_sealed_dir: bool) -> Result<OwnedFd, c_int> {
 pub(crate) fn lock(path: &[u8]) -> Result<OwnedFd, c_int> {
     let fd = open(path, O_RDWR | O_CREAT, 0o600)?;
 
-    status(lock_exclusive(fd.as_raw_fd()))?;
+    lock_exclusive(fd.as_fd())?;
     Ok(fd)
 }
 
@@ -724,8 +720,7 @@ pub(crate) fn lock(path: &[u8]) -> Result<OwnedFd, c_int> {
 /// lock that keeps its appenders apart.
 pub(crate) fn append(path: &CStr, line: &[u8]) -> Result<(), c_int> {
     let fd = open(path.to_bytes(), O_RDWR | O_CREAT | O_APPEND, 0o600)?;
-    let appended =
-        status(lock_exclusive(fd.as_raw_fd())).and_then(|()| append_line(fd.as_fd(), path, line));
+    let appended = lock_exclusive(fd.as_fd()).and_then(|()| append_line(fd.as_fd(), path, line));
 
     appended.and(close_checked(fd))
 }
