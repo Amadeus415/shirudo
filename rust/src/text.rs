@@ -293,30 +293,5 @@ pub fn sanitize(s: &mut [u8], lines: bool) {
     }
 }
 
-/// The helpers, for Rust that walks C strings.
 #[cfg(test)]
 mod tests;
-
-pub(crate) mod capi {
-    use core::ffi::{CStr, c_char};
-
-    /// # Safety
-    ///
-    /// `s` holds `len` bytes.
-    unsafe fn bytes<'a>(s: *const c_char, len: usize) -> &'a [u8] {
-        // SAFETY: as the caller passes them.
-        unsafe { crate::ffi::slice(s.cast::<u8>(), len) }
-    }
-
-    /// # Safety
-    ///
-    /// `name` holds `len` bytes, and `suffix` is a C string.
-    pub unsafe extern "C" fn name_has_suffix(
-        name: *const c_char,
-        len: usize,
-        suffix: *const c_char,
-    ) -> bool {
-        // SAFETY: the caller's bytes and C string.
-        unsafe { super::name_has_suffix(bytes(name, len), CStr::from_ptr(suffix).to_bytes()) }
-    }
-}
