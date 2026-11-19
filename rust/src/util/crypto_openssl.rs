@@ -13,7 +13,7 @@ use core::ptr;
 use std::ffi::CString;
 use std::fs::File;
 use std::io::Read;
-use std::os::fd::{AsFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, FromRawFd, OwnedFd};
 
 use foreign_types::{ForeignType, ForeignTypeRef};
 use openssl::asn1::{Asn1Time, Asn1TimeRef};
@@ -453,8 +453,8 @@ pub(crate) unsafe fn cert_read_file(path: *const c_char, cert: *mut Cert) -> c_i
 /// # Safety
 ///
 /// `cert` is NULL or points to a cert.
-pub(crate) unsafe fn cert_read_fd(fd: c_int, cert: *mut Cert) -> c_int {
-    if fd < 0 || cert.is_null() {
+pub(crate) unsafe fn cert_read_fd(fd: BorrowedFd<'_>, cert: *mut Cert) -> c_int {
+    if cert.is_null() {
         return -EINVAL;
     }
     let der = match read_whole(fd, c"certificate", KEYS_DER_MAX) {
