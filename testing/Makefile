@@ -263,6 +263,10 @@ vm-enroll:
 	$(Q)VM_NAME="$(VM_NAME)" \
 		TEST_VM_WORK_DIR="$(TEST_VM_WORK_DIR)" $(ROOT)/testing/vm/run.sh --enroll
 
+xtop:
+	+$(Q)$(MAKE) -s -C $(ROOT)/tools/xtop
+	$(Q)$(ROOT)/testing/vm/stack.sh xtop
+
 define run-target-vm
 VM_MODE=$(or $(4),$(if $(filter $(1),$(VM_SERVE_SUITES)),serve,test)) \
 		TEST_VM_SUITE="$(1)" VM_VERBOSE="$(TEST_VM_VERBOSE)" VM_NAME="$(2)" VM_TENANT="$(VM_TENANT)" \
@@ -449,7 +453,7 @@ help:
 	  '  make -C testing vm KERNEL=7.4' \
 	  '  make -C testing kernel KERNEL_TAG=v7.4' \
 	  '  make -C testing bpf-next, bundle or test-helpers' \
-	  '  make -C testing stack-up, oci, telemetry or stack-down' \
+	  '  make -C testing stack-up, oci, telemetry, xtop or stack-down' \
 	  '  make -C testing clean'
 
 clean:
@@ -462,7 +466,7 @@ clean:
 			"$(abspath $(TEST_VM_HOST_PRIVATE_DIR))/operator-keys" \
 			$(ROOT)/build/test-vm/end2end
 
-.PHONY: oci telemetry stack-up stack-down
+.PHONY: oci telemetry stack-up stack-down xtop
 stack-up: oci telemetry
 
 oci telemetry:
