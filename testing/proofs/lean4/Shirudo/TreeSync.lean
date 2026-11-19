@@ -6,8 +6,8 @@ import Shirudo.Chain
 /-!
 `bpm tree sync`, `sync()` of rust/src/builtin/bpm/tree.rs. It reads the
 node's state, fetches a signed tree publication, refuses one that
-`tree_parse()`, `tree_publication_check()`, `tree_operation_validate()` or
-`tree_publication_follows()` refuses, cuts the outcomes record to the cursor,
+`TreePublication::parse()`, `publication_check()`, `operation_validate()` or
+`publication_follows()` refuses, cuts the outcomes record to the cursor,
 runs `tree_recover_pending()` and writes the state with the publication's
 generation, manifest digest and head. Then, for each operation past the
 cursor that its selector matches, it writes `pending.json`, installs the
@@ -47,7 +47,7 @@ operation from 1 to the cursor, in order (`outcomes_cover`), no line at or
 below the cursor ever changes (`outcomes_fixed`), and the cursor never passes
 the head of the recorded publication (`lastSeq_le_head`).
 
-The generation rests on the generation check of `Follows`, on `tree_parse()`
+The generation rests on the generation check of `Follows`, on the parse
 refusing a negative generation, and on a manifest digest naming one
 publication. The cursor
 and the order rest on the loop's own cursor check and recovery's; that each
@@ -56,7 +56,7 @@ root and on its look at this boot's records, with the hash collision
 resistant. The outcomes record rests on the order of the writes, a line
 before the state that covers it, on the cut at the start of a sync, on
 recovery writing the lines of the operations the stopped sync passed over,
-and on `tree_publication_check()` numbering the operations without a gap;
+and on `publication_check()` numbering the operations without a gap;
 the head on the state written at acceptance and on the cursor check of
 `Follows`. The parent check of `Follows` is not needed by any of these
 theorems. `Assumptions` states what the C cannot show.
@@ -205,7 +205,7 @@ def cursor (n : Node T M I D) : Int :=
 
 /-! ### The checks before anything is applied -/
 
-/-- What `tree_parse()` and `tree_publication_check()` require of a
+/-- What `TreePublication::parse()` and `publication_check()` require of a
 publication's numbers: a generation of 0 or more, a base of 0 or more, and
 operations numbered from base + 1 to head without a gap. A segment past
 the first, base above 0, is one of these too; the keys that name its
@@ -220,7 +220,7 @@ def Checked (pub : Pub T M I D) : Prop :=
 instance (pub : Pub T M I D) : Decidable (Checked pub) := by
   unfold Checked; infer_instance
 
-/-- What the sync takes of `tree_publication_follows()`, a return of 0,
+/-- What the sync takes of `publication_follows()`, a return of 0,
 as the CBMC harness `bpm-tree-follows.c` stated it and proved the C met
 for every `__s64` before the function moved to rust/src/util/bpm_tree.rs.
 A publication that starts past the cursor, for which the function asks
@@ -555,7 +555,7 @@ def recover (n : Node T M I D) (pub : Pub T M I D) (st : State T M D) :
           else none
 
 /-- The loop of `cmd_bpm_tree_sync()` over the operations, with `sel` what
-`tree_selector_matches()` says of each: the writes and the state it ends
+`selector_matches()` says of each: the writes and the state it ends
 with. An operation at or below the cursor is passed over, one the selector
 does not match gets its outcome line and moves the cursor in memory, and one
 it does is applied, its outcome line written before its state. -/
