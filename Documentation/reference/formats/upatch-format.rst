@@ -753,14 +753,12 @@ unload later refuses for the section it lacks, and
    ``api_version``, ``input_format`` and ``export_signal``, and each source
    inside the section behind the entries.
 
-CBMC proves these checks of the reader for every header, of a file of
-any size, and for the signed sections, decoders, policy labels and
-program table within the bounds
-:doc:`/contribute/testing/proof-coverage` lists: what the reader accepts
-lies inside the file, and what it refuses leaves nothing behind. Within
-the bounds listed there it also proves that the reader takes what the
-writer lays out, and reads back the header, the signed sections, the
-decoders and the program table as they were written.
+No proof covers these checks of the reader since it moved to Rust: the
+CBMC proofs of the C reader went with the C, as
+:doc:`/contribute/testing/proof-coverage` says. The fuzz targets in
+:doc:`/contribute/testing/test-coverage` cover the reader, and its unit
+tests, which read containers the writer lays out and cut and change
+them, run under Miri.
 
 Target admission
 ----------------
