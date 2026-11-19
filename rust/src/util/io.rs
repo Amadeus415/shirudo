@@ -19,7 +19,7 @@ use crate::sys::libc::{
 };
 use crate::util::seal;
 use core::ptr::NonNull;
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
 
 /// `ETC_DIR` of util/paths.h.
 const ETC_DIR: &CStr = c"/etc/shirudo";
@@ -293,18 +293,17 @@ pub(crate) fn open_beneath(dirfd: c_int, rel: &CStr, flags: c_int) -> Result<Own
 
 /// The whole regular file behind `fd`, from its start, of at most `max`
 /// bytes, which may steer trust as `label` says.
-pub(crate) fn read_whole(fd: c_int, label: &CStr, max: usize) -> Result<Vec<u8>, c_int> {
+pub(crate) fn read_whole(fd: BorrowedFd<'_>, label: &CStr, max: usize) -> Result<Vec<u8>, c_int> {
     let mut st = Statx::zeroed();
 
-    let ret = stat_fd(fd, &mut st);
+    let ret = stat_fd(fd.as_raw_fd(), &mut st);
     if ret != 0 {
         return Err(ret);
     }
     if st.stx_mode & S_IFMT != S_IFREG {
         return Err(-EINVAL);
     }
-    // SAFETY: the caller's fd, open for the call.
-    let ret = check_trusted(unsafe { BorrowedFd::borrow_raw(fd) }, label, false);
+    let ret = check_trusted(fd, label, false);
     if ret != 0 {
         return Err(ret);
     }
@@ -318,7 +317,7 @@ pub(crate) fn read_whole(fd: c_int, label: &CStr, max: usize) -> Result<Vec<u8>,
         // SAFETY: the caller's fd, and the room left in buf.
         let n = unsafe {
             pread(
-                fd,
+                fd.as_raw_fd(),
                 buf[done..].as_mut_ptr().cast(),
                 size - done,
                 done as i64,
@@ -418,7 +417,7 @@ pub(crate) fn read(path: &CStr, max: usize) -> Result<Vec<u8>, c_int> {
         // goes.
         unsafe { OwnedFd::from_raw_fd(fd) }
     };
-    read_whole(fd.as_raw_fd(), path, max)
+    read_whole(fd.as_fd(), path, max)
 }
 
 /// As [`read`], into `*out`, xmalloc'd to `*len + 1` bytes and
