@@ -16,6 +16,39 @@ runs every proof after a push to main but the CBMC proofs
 :src:`testing/proofs/cbmc/ci-skip.list` names, which take hours each:
 only a run a developer starts checks those.
 
+The :doc:`aeneas` pilot extracts unchanged production Rust items and
+checks concrete refinements for ``same_event()`` and ``event_follows()``
+against the config activation model. These prove exact event equality
+for every record and the successor check, including successful
+termination and Rust results ``Ok(())`` and ``Err(-117)``, on the decoded
+record domain with a zero-sequence initial sentinel. The copied production-source
+mutation that drops the sequence comparison breaks the equality proof.
+The compiler, Charon, Aeneas, their library models and source selection
+remain trusted. This connection does not cover the activation journal,
+TPM or config record decoder.
+
+The extracted ``archive_rel_ok()`` and ``package_member_name_ok()``
+terminate and agree exactly with ``ArchivePath.relOk`` and
+``ArchivePath.memberNameOk`` for slices of at most ``2^63 - 1`` bytes,
+under an explicit ``System.Platform.numBits = 64`` premise matching the
+extraction target. The member contract includes ``None`` returning
+false and complete suffix equality after the first slash. These include
+embedded NUL as an ordinary byte; filesystem containment still requires
+the caller's NUL-free domain. They do not cover tar checksums or the
+archive extraction procedure.
+
+The same pilot proves the extracted ``pin_name()`` encoder equal to
+``PinName.encode`` when its encoded length is at most 255, with no dot
+in the result. For tilde-free names, the existing pure decoder reverses
+the generated encoder and its encodings are collision-free. The
+extracted Rust decoder also terminates and agrees exactly with
+``PinName.decode`` on every slice of at most 255 bytes, including NUL and
+malformed escapes returned as Rust ``None``. Changing the decoded dot to
+an exclamation mark in an ephemeral generated copy breaks its proof.
+Allocation exhaustion is outside Aeneas's vector model. A copied-source
+mutation
+that tests underscore instead of dot breaks the encoder refinement.
+
 CBMC proofs
 -----------
 

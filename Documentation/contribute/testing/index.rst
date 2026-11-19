@@ -14,4 +14,5 @@ the tests and proofs cover and what they do not.
    testing
    test-coverage
    proofs
+   aeneas
    proof-coverage
