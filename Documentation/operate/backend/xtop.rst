@@ -73,6 +73,15 @@ In SBOM, ``!^linux`` leaves out the findings of the packages whose names
 start with ``linux``, and ``high !^linux`` keeps the high ones of the
 rest. Enter keeps the search, Esc clears it.
 
+A value too long for its column ends where the column does. ``k`` past
+the first row, or a click, puts the cursor on a column's header, which
+then ends in ``−+``: a click on ``+`` or the ``+`` key widens the column
+by two characters, ``−`` or ``-`` narrows it, and ``0`` gives it back
+its own width. The column that takes the rest of the line, such as
+``LABELS``, keeps what it is given and pushes the columns after it off
+the right edge once there is no room. A view keeps the widths until
+xtop exits.
+
 Read the nodes
 --------------
 

@@ -58,31 +58,74 @@ const compare = (a: number | string, b: number | string) =>
     ? a - b
     : String(a).localeCompare(String(b), undefined, { numeric: true });
 
+/** Columns a click on − or +, or the - or + key, takes off or adds. */
+const RESIZE_STEP = 2;
+const MIN_WIDTH = 4;
+const MAX_WIDTH = 200;
+
+/**
+ * Widths the user gave columns, per column set, so that they outlive a
+ * table remounted for a drill-down or a switch of tab.
+ */
+const resized = new WeakMap<object, Record<string, number>>();
+
+/**
+ * A column the user resized keeps its width; a flexible one still takes
+ * what the fixed ones leave, but no less.
+ */
+function cellLayout<T>(col: Column<T>, width: number | undefined) {
+  const w = width ?? col.width;
+  if (w === undefined) return { flexGrow: 1, flexBasis: 0, flexShrink: 1, minWidth: 8 };
+  if (col.width === undefined) return { flexGrow: 1, flexBasis: w, flexShrink: 0, minWidth: w };
+  return { width: w, flexGrow: 0, flexShrink: 0 };
+}
+
 function Cell<T>({
   col,
+  width,
   children,
   inverse,
-  cellRef,
 }: {
   col: Column<T>;
+  width: number | undefined;
   children: ReactNode;
   inverse?: boolean;
-  cellRef?: (el: DOMElement | null) => void;
 }) {
   return (
-    <Box
-      ref={cellRef}
-      width={col.width}
-      flexGrow={col.width ? 0 : 1}
-      flexBasis={col.width ? undefined : 0}
-      flexShrink={col.width ? 0 : 1}
-      minWidth={col.width ? undefined : 8}
-      justifyContent={col.align === "right" ? "flex-end" : undefined}
-      paddingRight={1}
-    >
+    <Box {...cellLayout(col, width)} justifyContent={col.align === "right" ? "flex-end" : undefined} paddingRight={1}>
       <Text inverse={inverse} wrap="truncate-end">
         {children}
       </Text>
+    </Box>
+  );
+}
+
+/** A header cell; the focused one ends in the − and + that resize it. */
+function HeaderCell<T>({
+  col,
+  width,
+  children,
+  focused,
+  cellRef,
+}: {
+  col: Column<T>;
+  width: number | undefined;
+  children: ReactNode;
+  focused: boolean;
+  cellRef: (el: DOMElement | null) => void;
+}) {
+  return (
+    <Box ref={cellRef} {...cellLayout(col, width)} paddingRight={1}>
+      <Box flexGrow={1} flexShrink={1} overflow="hidden" justifyContent={col.align === "right" ? "flex-end" : undefined}>
+        <Text inverse={focused} wrap="truncate-end">
+          {children}
+        </Text>
+      </Box>
+      {focused && (
+        <Box flexShrink={0}>
+          <Text color="cyan">−+</Text>
+        </Box>
+      )}
     </Box>
   );
 }
@@ -94,8 +137,10 @@ const TABS = -2;
 /**
  * Sortable, scrollable, optionally searchable table. Keyboard: j/k ↑↓ rows,
  * k past the top reaches the header where h/l ←→ pick a column and Enter
- * sorts; g/G, ^d/^u, PgUp/PgDn; / searches; Enter or l opens a row; h or Esc
- * closes. Mouse: click a header to sort, click a row to open, wheel scrolls.
+ * sorts, - and + narrow and widen that column and 0 gives it back its own
+ * width; g/G, ^d/^u, PgUp/PgDn; / searches; Enter or l opens a row; h or Esc
+ * closes. Mouse: click a header to sort, the focused header's − or + to
+ * resize its column, a row to open; the wheel scrolls.
  */
 export function DataTable<T>({
   rows: input,
@@ -124,6 +169,9 @@ export function DataTable<T>({
   const [query, setQuery] = useState(initialQuery);
   const [searching, setSearching] = useState(false);
   const headerRefs = useRef<(DOMElement | null)[]>([]);
+  const [widths, setWidths] = useState<Record<string, number>>(() => resized.get(columns) ?? {});
+
+  useEffect(() => void resized.set(columns, widths), [columns, widths]);
 
   useEffect(() => onSearchingChange?.(searching), [searching, onSearchingChange]);
   useEffect(() => () => onSearchingChange?.(false), [onSearchingChange]);
@@ -164,6 +212,14 @@ export function DataTable<T>({
   const move = (d: number) => setCursor((c) => Math.max(tabs ? TABS : HEADER, Math.min(last, c + d)));
   const moveRows = (d: number) => setCursor((c) => Math.max(0, Math.min(last, Math.max(0, c) + d)));
   const moveCol = (d: number) => setHeaderCol((i) => (i + d + columns.length) % columns.length);
+  // A flexible column starts from the width it was laid out at.
+  const resize = (i: number, d: number) => {
+    const col = columns[i]!;
+    const el = headerRefs.current[i];
+    const current = widths[col.id] ?? col.width ?? (el ? measureElement(el).width : MIN_WIDTH);
+    setWidths((w) => ({ ...w, [col.id]: Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, current + d)) }));
+  };
+  const resetWidth = (i: number) => setWidths(({ [columns[i]!.id]: _, ...rest }) => rest);
 
   useInput(
     (ch, key) => {
@@ -188,6 +244,9 @@ export function DataTable<T>({
         if (key.leftArrow || ch === "h") return moveCol(-1);
         if (key.rightArrow || ch === "l") return moveCol(1);
         if (key.return) return sortBy(headerCol);
+        if (ch === "-") return resize(headerCol, -RESIZE_STEP);
+        if (ch === "+" || ch === "=") return resize(headerCol, RESIZE_STEP);
+        if (ch === "0") return resetWidth(headerCol);
       } else if (ch === "h") return onClose();
       else if (key.return || ch === "l") {
         const row = rows[cursor];
@@ -241,10 +300,14 @@ export function DataTable<T>({
           const m = measureElement(el);
           return e.x >= m.x && e.x < m.x + m.width;
         });
-        if (i >= 0) {
-          sortBy(i);
-          setCursor(HEADER);
-        }
+        if (i < 0) return;
+        // The − and + sit just left of the cell's padding column.
+        const m = measureElement(headerRefs.current[i]!);
+        const plus = m.x + m.width - 2;
+        if (cursor === HEADER && headerCol === i && (e.x === plus - 1 || e.x === plus))
+          return resize(i, e.x === plus ? RESIZE_STEP : -RESIZE_STEP);
+        sortBy(i);
+        setCursor(HEADER);
       } else if (e.y > headerY && e.y <= headerY + Math.min(visible, rows.length - top)) {
         const i = top + (e.y - headerY - 1);
         setCursor(i);
@@ -275,12 +338,18 @@ export function DataTable<T>({
           const sorted = sort.col === col.id;
           const focused = active && cursor === HEADER && headerCol === i;
           return (
-            <Cell key={col.id} col={col} inverse={focused} cellRef={(el) => (headerRefs.current[i] = el)}>
+            <HeaderCell
+              key={col.id}
+              col={col}
+              width={widths[col.id]}
+              focused={focused}
+              cellRef={(el) => (headerRefs.current[i] = el)}
+            >
               <Text color={sorted ? "cyan" : "gray"} bold={sorted}>
                 {col.title}
                 {sorted ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
               </Text>
-            </Cell>
+            </HeaderCell>
           );
         })}
       </Box>
@@ -292,7 +361,7 @@ export function DataTable<T>({
           return (
             <Box key={rowKey(r)} flexShrink={0}>
               {columns.map((col) => (
-                <Cell key={col.id} col={col} inverse={selected}>
+                <Cell key={col.id} col={col} width={widths[col.id]} inverse={selected}>
                   {col.render(r)}
                 </Cell>
               ))}
