@@ -2,10 +2,11 @@
 // Copyright (c) 2026 Authors of shirudo
 //
 // What the SBOMs and kernels say is vulnerable on the nodes, one row per
-// finding, or the images of the SBOM store and how far they are scanned.
-// Enter on a finding shows its nodes; on an image, its findings.
+// finding or one per advisory, or the images of the SBOM store and how far
+// they are scanned. Enter on a finding shows its nodes; on an advisory, its
+// packages; on an image, its findings.
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import type { Backend } from "../lib/backend.ts";
 import { ago } from "../lib/format.ts";
@@ -14,6 +15,7 @@ import { literalSearch } from "../lib/search.ts";
 import {
   FINDING_STATUS_RANK,
   IMAGE_STATES,
+  groupByVuln,
   imageKey,
   type Finding,
   type FindingStatus,
@@ -21,6 +23,7 @@ import {
   type ImagesReport,
   type SbomImage,
   type SbomReport,
+  type Vuln,
 } from "../lib/sbom.ts";
 import { severityRank } from "../lib/shields.ts";
 import { DataTable, Tabs, type Column } from "./DataTable.tsx";
@@ -28,7 +31,7 @@ import { ViewMessage } from "./ViewMessage.tsx";
 import { FindingDetail } from "./FindingDetail.tsx";
 import { FINDING_STATUS_STYLE, IMAGE_STATE_COLOR, SeverityText } from "./style.tsx";
 
-export type SbomMode = "findings" | "images";
+export type SbomMode = "findings" | "vulns" | "images";
 
 type Props = {
   backend: Backend;
@@ -39,7 +42,7 @@ type Props = {
   active: boolean;
   onClose: () => void;
   onSearchingChange: (searching: boolean) => void;
-  /** A finding's nodes are open. */
+  /** A finding's nodes or an advisory's packages are open. */
   onDetailChange?: (open: boolean) => void;
 };
 
@@ -82,12 +85,7 @@ const FINDING_COLUMNS: readonly Column<Finding>[] = [
     title: "PACKAGE",
     defaultDir: "asc",
     sortKey: (f) => f.package,
-    render: (f) => (
-      <>
-        <Text color={f.source === "kernel" ? "magenta" : "cyan"}>{f.source === "kernel" ? "kernel" : f.package}</Text>
-        <Text dimColor> {f.installed.join(", ")}</Text>
-      </>
-    ),
+    render: (f) => <PackageCell f={f} />,
   },
   {
     id: "fixed",
@@ -143,6 +141,151 @@ const findingFields = (f: Finding) =>
 
 const findingTiebreak = (a: Finding, b: Finding) =>
   severityRank(a.severity) - severityRank(b.severity) || b.affected - a.affected || a.vulnId.localeCompare(b.vulnId);
+
+function PackageCell({ f, more = 0 }: { f: Finding; more?: number }) {
+  return (
+    <>
+      <Text color={f.source === "kernel" ? "magenta" : "cyan"}>{f.source === "kernel" ? "kernel" : f.package}</Text>
+      {more > 0 && <Text color="yellow"> +{more}</Text>}
+      <Text dimColor> {f.installed.join(", ")}</Text>
+    </>
+  );
+}
+
+// ---- vulnerabilities -------------------------------------------------------
+
+const VULN_COLUMNS: readonly Column<Vuln>[] = [
+  {
+    id: "severity",
+    title: "SEVERITY",
+    width: 10,
+    defaultDir: "asc",
+    sortKey: (v) => severityRank(v.severity),
+    render: (v) => <SeverityText severity={v.severity} />,
+  },
+  {
+    id: "id",
+    title: "VULNERABILITY",
+    width: 18,
+    defaultDir: "asc",
+    sortKey: (v) => v.vulnId,
+    render: (v) => <Text bold>{v.vulnId}</Text>,
+  },
+  {
+    id: "packages",
+    title: "PACKAGES",
+    defaultDir: "desc",
+    sortKey: (v) => v.findings.length,
+    render: (v) => <PackageCell f={v.findings[0]!} more={v.findings.length - 1} />,
+  },
+  {
+    id: "fixed",
+    title: "FIXED IN",
+    width: 12,
+    defaultDir: "asc",
+    sortKey: (v) => v.findings[0]!.fixed,
+    render: (v) => {
+      const fixed = v.findings[0]!.fixed;
+      return fixed ? <Text color="green">{fixed}</Text> : <Text dimColor>none yet</Text>;
+    },
+  },
+  {
+    id: "nodes",
+    title: "NODES",
+    width: 9,
+    align: "right",
+    defaultDir: "desc",
+    sortKey: (v) => v.affected,
+    render: (v) => (
+      <Text>
+        <Text bold>{v.affected}</Text>
+        <Text dimColor>/{v.total}</Text>
+      </Text>
+    ),
+  },
+  {
+    id: "shield",
+    title: "SHIELD",
+    width: 14,
+    defaultDir: "asc",
+    sortKey: (v) => v.upatchIds.join(" ") || "~",
+    render: (v) => (v.upatchIds.length ? <Text>{v.upatchIds.join(", ")}</Text> : <Text dimColor>—</Text>),
+  },
+  {
+    id: "status",
+    title: "STATUS",
+    width: 15,
+    defaultDir: "asc",
+    sortKey: (v) => FINDING_STATUS_RANK[v.status],
+    render: (v) => <Text color={FINDING_STATUS_STYLE[v.status].color}>{FINDING_STATUS_STYLE[v.status].label}</Text>,
+  },
+];
+
+const vulnFields = (v: Vuln) => [...new Set(v.findings.flatMap(findingFields))];
+
+const vulnTiebreak = (a: Vuln, b: Vuln) =>
+  severityRank(a.severity) - severityRank(b.severity) || b.affected - a.affected || a.vulnId.localeCompare(b.vulnId);
+
+/** The findings of one advisory, one row per package, in the popup. */
+const PACKAGE_COLUMNS: readonly Column<Finding>[] = [
+  { ...FINDING_COLUMNS.find((c) => c.id === "package")!, render: (f) => <PackageCell f={f} /> },
+  ...FINDING_COLUMNS.filter((c) => c.id !== "id" && c.id !== "package"),
+];
+
+const findingKey = (f: Finding) => `${f.vulnId}\0${f.package}`;
+
+function VulnDetail({
+  vuln: v,
+  height,
+  active,
+  onClose,
+  onOpen,
+  onSearchingChange,
+}: {
+  /** null when the advisory left node_vulns since it was opened. */
+  vuln: Vuln | null;
+  height: number;
+  active: boolean;
+  onClose: () => void;
+  onOpen: (f: Finding) => void;
+  onSearchingChange: (searching: boolean) => void;
+}) {
+  if (!v)
+    return (
+      <ViewMessage active={active} onClose={onClose} color="yellow">
+        the advisory is no longer in node_vulns
+      </ViewMessage>
+    );
+  const style = FINDING_STATUS_STYLE[v.status];
+  return (
+    <Box flexDirection="column">
+      <Text wrap="truncate-end">
+        <Text bold>{v.vulnId}</Text> <SeverityText severity={v.severity} />
+        <Text color={style.color}>  {style.label}</Text>
+        <Text dimColor>
+          {"  "}
+          {v.findings.length} package{v.findings.length === 1 ? "" : "s"} · {v.affected} of {v.total} nodes · shield {v.upatchIds.join(", ") || "none"}
+        </Text>
+        {v.stale && <Text color="red"> · from a stale scan</Text>}
+      </Text>
+      <DataTable
+        key={v.vulnId}
+        footerHint="enter nodes · esc back"
+        rows={v.findings}
+        columns={PACKAGE_COLUMNS}
+        rowKey={findingKey}
+        height={Math.max(4, height - 1)}
+        active={active}
+        initialSort={{ col: "package", dir: "asc" }}
+        tiebreak={findingTiebreak}
+        searchFields={findingFields}
+        onSearchingChange={onSearchingChange}
+        onClose={onClose}
+        onOpen={onOpen}
+      />
+    </Box>
+  );
+}
 
 // ---- images ----------------------------------------------------------------
 
@@ -227,20 +370,22 @@ const imageFields = (i: SbomImage) =>
 
 export function SbomView({ backend, mode, onModeChange, height, active, onClose, onSearchingChange, onDetailChange }: Props) {
   const [reload, setReload] = useState(0);
-  const findings = useRefreshing<SbomReport>(mode === "findings", reload, () => backend.getSbom());
+  const findings = useRefreshing<SbomReport>(mode !== "images", reload, () => backend.getSbom());
   const images = useRefreshing<ImagesReport>(mode === "images", reload, () => backend.getSbomImages());
+  const vulns = useMemo(() => (findings.data ? groupByVuln(findings.data.findings) : []), [findings.data]);
   const [searching, setSearching] = useState(false);
   // Set when drilling into an image; seeds the findings table's search.
   const [drill, setDrill] = useState("");
   const [onTabs, setOnTabs] = useState(false);
   const [detail, setDetail] = useState<string | null>(null);
-  const keyOf = (f: Finding) => `${f.vulnId}\0${f.package}`;
-  const detailFinding = detail ? (findings.data?.findings.find((f) => keyOf(f) === detail) ?? null) : null;
+  const [openVuln, setOpenVuln] = useState<string | null>(null);
+  // As of the newest query, so a refresh updates the open pane.
+  const detailFinding = detail ? (findings.data?.findings.find((f) => findingKey(f) === detail) ?? null) : null;
+  const vulnDetail = openVuln ? (vulns.find((v) => v.vulnId === openVuln) ?? null) : null;
+  const paneOpen = detail !== null || openVuln !== null;
 
-  const showDetail = (key: string | null) => {
-    setDetail(key);
-    onDetailChange?.(key !== null);
-  };
+  useEffect(() => onDetailChange?.(paneOpen), [paneOpen, onDetailChange]);
+
   const reportSearching = (s: boolean) => {
     setSearching(s);
     onSearchingChange(s);
@@ -250,29 +395,31 @@ export function SbomView({ backend, mode, onModeChange, height, active, onClose,
     setOnTabs(fromTabs);
     onModeChange(m);
   };
-  const modes: SbomMode[] = ["findings", "images"];
+  const modes: SbomMode[] = ["findings", "vulns", "images"];
   const tabs = {
-    labels: ["findings", "images"],
+    labels: ["findings", "vulnerabilities", "images"],
     selected: modes.indexOf(mode),
     onSelect: (i: number) => switchTo(modes[i]!, true),
   };
+  const next = modes[(modes.indexOf(mode) + 1) % modes.length]!;
+  const footerHint = `t ${tabs.labels[modes.indexOf(next)]} · r refresh`;
 
   useInput(
     (input) => {
-      if (input === "t") switchTo(mode === "findings" ? "images" : "findings");
+      if (input === "t") switchTo(next);
       if (input === "r") setReload((r) => r + 1);
     },
-    { isActive: active && !searching && !detail },
+    { isActive: active && !searching && !paneOpen },
   );
 
   const tableHeight = Math.max(4, height);
-  const query = mode === "findings" ? findings : images;
+  const query = mode === "images" ? images : findings;
   if (!query.data)
     return (
       <Box flexDirection="column">
         <Tabs labels={tabs.labels} selected={tabs.selected} />
         <ViewMessage active={active && !searching} onClose={onClose} color={query.error ? "red" : undefined}>
-          {query.error ? `${mode} query failed: ${query.error}` : "querying backend…"}
+          {query.error ? `${mode === "images" ? "images" : "findings"} query failed: ${query.error}` : "querying backend…"}
         </ViewMessage>
       </Box>
     );
@@ -290,7 +437,7 @@ export function SbomView({ backend, mode, onModeChange, height, active, onClose,
       <DataTable
         tabs={tabs}
         startOnTabs={onTabs}
-        footerHint="t findings · r refresh"
+        footerHint={footerHint}
         rows={report.images}
         columns={IMAGE_COLUMNS}
         rowKey={(i) => `${imageKey(i)} ${i.imageRoot}`}
@@ -325,44 +472,90 @@ export function SbomView({ backend, mode, onModeChange, height, active, onClose,
   }
 
   const report = findings.data!;
+  const shieldCounts = <R extends { status: FindingStatus }>(rows: readonly R[]) => {
+    const count = (s: FindingStatus) => rows.filter((r) => r.status === s).length;
+    return (
+      <>
+        <Text color="red">{count("no_shield")} no shield</Text> · <Text color="yellow">{count("partial")} partial</Text> ·{" "}
+        <Text color="yellow">{count("pending")} pending</Text> · <Text color="green">{count("shielded")} shielded</Text>
+      </>
+    );
+  };
   return (
     <Box flexDirection="column">
-      {detail && <FindingDetail finding={detailFinding} height={tableHeight} active={active} onClose={() => showDetail(null)} />}
-      {/* Hidden, not unmounted, so the table keeps its cursor, sort and search. */}
+      {detail && <FindingDetail finding={detailFinding} height={tableHeight} active={active} onClose={() => setDetail(null)} />}
+      {/* Hidden, not unmounted, so the tables keep their cursor, sort and search. */}
       <Box flexDirection="column" display={detail ? "none" : "flex"}>
-        <DataTable
-          key={`findings:${drill}`}
-          tabs={tabs}
-          startOnTabs={onTabs}
-          footerHint="t images · r refresh"
-          rows={report.findings}
-          columns={FINDING_COLUMNS}
-          rowKey={keyOf}
-          height={tableHeight}
-          active={active && !detail}
-          initialSort={{ col: "status", dir: "asc" }}
-          initialQuery={drill}
-          tiebreak={findingTiebreak}
-          searchFields={findingFields}
-          onSearchingChange={reportSearching}
-          onClose={onClose}
-          onOpen={(f) => showDetail(keyOf(f))}
-          summary={(rows, sortedBy) => {
-            const count = (s: FindingStatus) => rows.filter((f) => f.status === s).length;
-            const stale = rows.some((f) => f.stale);
-            return (
+        {mode === "findings" ? (
+          <DataTable
+            key={`findings:${drill}`}
+            tabs={tabs}
+            startOnTabs={onTabs}
+            footerHint={footerHint}
+            rows={report.findings}
+            columns={FINDING_COLUMNS}
+            rowKey={findingKey}
+            height={tableHeight}
+            active={active && !paneOpen}
+            initialSort={{ col: "status", dir: "asc" }}
+            initialQuery={drill}
+            tiebreak={findingTiebreak}
+            searchFields={findingFields}
+            onSearchingChange={reportSearching}
+            onClose={onClose}
+            onOpen={(f) => setDetail(findingKey(f))}
+            summary={(rows, sortedBy) => (
               <>
                 {failed}
-                <Text bold>{rows.length}</Text> findings · <Text color="red">{count("no_shield")} no shield</Text> ·{" "}
-                <Text color="yellow">{count("partial")} partial</Text> · <Text color="yellow">{count("pending")} pending</Text> ·{" "}
-                <Text color="green">{count("shielded")} shielded</Text>
-                {stale && <Text color="red"> · from a stale scan</Text>}
+                <Text bold>{rows.length}</Text> findings · {shieldCounts(rows)}
+                {rows.some((f) => f.stale) && <Text color="red"> · from a stale scan</Text>}
                 <Text dimColor> · sorted by {sortedBy}</Text>
                 {status(report.generatedAt)}
               </>
-            );
-          }}
-        />
+            )}
+          />
+        ) : (
+          <>
+            {openVuln && (
+              <VulnDetail
+                vuln={vulnDetail}
+                height={tableHeight}
+                active={active && !detail}
+                onClose={() => setOpenVuln(null)}
+                onOpen={(f) => setDetail(findingKey(f))}
+                onSearchingChange={reportSearching}
+              />
+            )}
+            <Box flexDirection="column" display={openVuln ? "none" : "flex"}>
+              <DataTable
+                tabs={tabs}
+                startOnTabs={onTabs}
+                footerHint={footerHint}
+                rows={vulns}
+                columns={VULN_COLUMNS}
+                rowKey={(v) => v.vulnId}
+                height={tableHeight}
+                active={active && !paneOpen}
+                initialSort={{ col: "status", dir: "asc" }}
+                tiebreak={vulnTiebreak}
+                searchFields={vulnFields}
+                onSearchingChange={reportSearching}
+                onClose={onClose}
+                onOpen={(v) => setOpenVuln(v.vulnId)}
+                summary={(rows, sortedBy) => (
+                  <>
+                    {failed}
+                    <Text bold>{rows.length}</Text> vulnerabilities in{" "}
+                    {rows.reduce((n, v) => n + v.findings.length, 0)} findings · {shieldCounts(rows)}
+                    {rows.some((v) => v.stale) && <Text color="red"> · from a stale scan</Text>}
+                    <Text dimColor> · sorted by {sortedBy}</Text>
+                    {status(report.generatedAt)}
+                  </>
+                )}
+              />
+            </Box>
+          </>
+        )}
       </Box>
     </Box>
   );

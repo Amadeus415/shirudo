@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { toFinding, toSbomImage, type FindingRow, type ImageRow } from "../src/lib/backend.ts";
-import { findingStatus } from "../src/lib/sbom.ts";
+import { findingStatus, groupByVuln } from "../src/lib/sbom.ts";
 
 const ROOT = "a3c3f1b0e4c2d7f09e3b6b2a8b1d5e7c4f6a9d0b2c8e1f3a5b7d9c0e2f4a6b8c";
 
@@ -124,5 +124,34 @@ describe("toSbomImage", () => {
 
   test("refuses a state it does not know", () => {
     expect(() => toSbomImage(image({ state: "scanning" }))).toThrow(/unknown image state/);
+  });
+});
+
+describe("groupByVuln", () => {
+  const node = (name: string): FindingRow["nodes"][number] =>
+    [name, `ak-${name}`, "shielded", "fleet-os", "2026.11.1", "1.0", "verified", "healthy"];
+
+  test("one row per advisory, its packages by name with the kernel first", () => {
+    const vulns = groupByVuln([
+      toFinding(finding({ vuln_id: "CVE-1", package: "linux-modules", source: "sbom", severity: "HIGH", upatch_id: "" })),
+      toFinding(finding({ vuln_id: "CVE-1", package: "linux", source: "kernel", severity: "CRITICAL" })),
+      toFinding(finding({ vuln_id: "CVE-1", package: "linux-headers", source: "sbom", severity: "HIGH", stale: true })),
+      toFinding(finding({ vuln_id: "CVE-2", package: "openssl", source: "sbom" })),
+    ]);
+    expect(vulns.map((v) => v.vulnId)).toEqual(["CVE-1", "CVE-2"]);
+    const v = vulns[0]!;
+    expect(v.findings.map((f) => f.package)).toEqual(["linux", "linux-headers", "linux-modules"]);
+    expect(v.severity).toBe("CRITICAL");
+    expect(v.status).toBe("no_shield");
+    expect(v.upatchIds).toEqual(["xfs-fix"]);
+    expect(v.stale).toBe(true);
+  });
+
+  test("counts a node affected through several packages once", () => {
+    const [v] = groupByVuln([
+      toFinding(finding({ package: "a", nodes: [node("n1"), node("n2")] })),
+      toFinding(finding({ package: "b", nodes: [node("n2"), node("n3")] })),
+    ]);
+    expect(v!.affected).toBe(3);
   });
 });

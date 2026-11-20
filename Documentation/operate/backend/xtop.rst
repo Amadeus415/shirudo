@@ -244,7 +244,18 @@ version, the binding of its image to an SBOM and its status. ``/``
 searches the advisory, package, severity, source, shield, status, the
 installed versions, and the names and images of the nodes it affects.
 
-``t`` switches to the images: every image of ``sbom_images`` at its
+``t`` switches to the vulnerabilities, one row per advisory however many
+packages have it: the kernel of an Ubuntu image has an advisory in
+``linux-image-*``, ``linux-headers-*``, ``linux-modules-*`` and every
+other package built from it, which the findings list one by one. The
+row has the highest severity of the advisory's findings, its first
+package, the kernel first and then by name, with ``+N`` for the others,
+that package's ``FIXED IN``, the nodes any of them affects, each counted
+once, every upatch linked to it and the least shielded status of its
+findings. Enter on an advisory lists its packages, one finding each, and
+Enter on a package shows that finding's nodes as from the findings.
+
+``t`` again switches to the images: every image of ``sbom_images`` at its
 newest scan, with its state (:doc:`sbom-scan`), ``stale`` when that scan
 is older than ``sbom_stale_seconds``, the nodes that run it, its
 findings with how many are critical and high, how long ago it was

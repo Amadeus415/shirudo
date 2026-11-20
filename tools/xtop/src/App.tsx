@@ -29,7 +29,7 @@ const HINTS: Record<Focus, string> = {
   "menu-open": "j/k menu · l/enter open · tab back to view · esc close view · q quit",
   nodes: "j/k scroll · k past top → sort, -/+ width, then tabs · / search · enter node checks, image → nodes · t by image · r refresh · tab menu · esc close · q quit",
   shields: "j/k scroll · k past top → sort, -/+ width · / search · enter details · r refresh · tab menu · esc close · q quit",
-  sbom: "j/k scroll · k past top → sort, -/+ width, then tabs · / search · enter finding nodes, image → findings · t images · r refresh · tab menu · esc close · q quit",
+  sbom: "j/k scroll · k past top → sort, -/+ width, then tabs · / search · enter finding → nodes, vulnerability → packages, image → findings · t next tab · r refresh · tab menu · esc close · q quit",
   detail: "esc back · q quit",
   search: "regexes, all must match · !re drops matches · enter keep · esc clear",
 };

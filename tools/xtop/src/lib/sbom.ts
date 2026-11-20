@@ -5,6 +5,8 @@
 // nodes, from node_vulns, and how far the SBOM store is scanned, from
 // sbom_images.
 
+import { severityRank } from "./shields.ts";
+
 /** node_vulns.exposure of one node. */
 export type Exposure =
   | "shielded"
@@ -114,3 +116,46 @@ export function findingStatus(f: Pick<Finding, "upatchId" | "affected" | "shield
 }
 
 export const imageKey = (i: Pick<SbomImage, "imageId" | "imageVersion">) => `${i.imageId} ${i.imageVersion}`;
+
+/** The findings of one advisory, in whichever packages it is. */
+export type Vuln = {
+  vulnId: string;
+  /** The highest any of its findings has. */
+  severity: string;
+  /** By package name, the kernel first. */
+  findings: Finding[];
+  /** Nodes affected through any of its packages, each counted once. */
+  affected: number;
+  total: number;
+  upatchIds: string[];
+  /** The least shielded of its findings. */
+  status: FindingStatus;
+  stale: boolean;
+};
+
+const packageOrder = (a: Finding, b: Finding) =>
+  Number(b.source === "kernel") - Number(a.source === "kernel") || a.package.localeCompare(b.package);
+
+export function groupByVuln(findings: readonly Finding[]): Vuln[] {
+  const byId = new Map<string, Finding[]>();
+  for (const f of findings) {
+    const group = byId.get(f.vulnId);
+    if (group) group.push(f);
+    else byId.set(f.vulnId, [f]);
+  }
+  return [...byId.entries()].map(([vulnId, group]) => {
+    group.sort(packageOrder);
+    const worst = <K>(key: (f: Finding) => K, rank: (k: K) => number) =>
+      group.map(key).reduce((a, b) => (rank(b) < rank(a) ? b : a));
+    return {
+      vulnId,
+      severity: worst((f) => f.severity, severityRank),
+      findings: group,
+      affected: new Set(group.flatMap((f) => f.nodes.map((n) => n.akName))).size,
+      total: Math.max(...group.map((f) => f.total)),
+      upatchIds: [...new Set(group.map((f) => f.upatchId).filter(Boolean))].sort(),
+      status: worst((f) => f.status, (s) => FINDING_STATUS_RANK[s]),
+      stale: group.some((f) => f.stale),
+    };
+  });
+}
