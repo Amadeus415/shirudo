@@ -25,6 +25,10 @@ ROOTFS_URL="${TEST_VM_ROOTFS_URL:-$DEFAULT_ROOTFS_URL}"
 ROOTFS_SHA256="${TEST_VM_ROOTFS_SHA256:-}"
 ROOTFS_NAME="ubuntu-26.04-server-cloudimg-${TEST_VM_ARCH_DEB}.img"
 ROOTFS_CACHE="${WORK_DIR}/cache/rootfs/${ROOTFS_NAME}"
+# shirudo-pwru signs the pwru upatch t3118 loads, from this commit.
+SHIRUDO_PWRU_URL="https://github.com/shirudo-dev/shirudo-pwru"
+SHIRUDO_PWRU_COMMIT=0b6c530079a3e33efe6fc8e947539c0fe1a6fe7d
+SHIRUDO_PWRU_CACHE="${WORK_DIR}/cache/shirudo-pwru/${SHIRUDO_PWRU_COMMIT}"
 LOCK_FILE="${BUNDLE_DIR}.lock"
 STAMP_FILE="${TEST_VM_BUNDLE_STAMP:-${BUNDLE_DIR}/.stamp}"
 STAMP_INPUTS="${TEST_VM_BUNDLE_INPUTS:-}"
@@ -336,6 +340,28 @@ prepare_runtime_image()
 	fi
 }
 
+# The cache holds the commit's tree, fetched once: git checks each object
+# it fetches against its hash, and the commit against the one pinned.
+fetch_shirudo_pwru()
+{
+	local tmp="${SHIRUDO_PWRU_CACHE}.tmp.$$"
+
+	[[ -d "$SHIRUDO_PWRU_CACHE" ]] && return 0
+	require_command git git
+	rm -rf -- "$tmp"
+	git init -q "$tmp/git"
+	git -C "$tmp/git" fetch -q --depth 1 "$SHIRUDO_PWRU_URL" \
+		"$SHIRUDO_PWRU_COMMIT" ||
+		die "could not fetch shirudo-pwru $SHIRUDO_PWRU_COMMIT from $SHIRUDO_PWRU_URL"
+	[[ "$(git -C "$tmp/git" rev-parse FETCH_HEAD)" == "$SHIRUDO_PWRU_COMMIT" ]] ||
+		die "$SHIRUDO_PWRU_URL gave another commit than $SHIRUDO_PWRU_COMMIT"
+	mkdir -p "$tmp/tree"
+	git -C "$tmp/git" archive FETCH_HEAD | tar -x -C "$tmp/tree"
+	mkdir -p "$(dirname "$SHIRUDO_PWRU_CACHE")"
+	mv -T -- "$tmp/tree" "$SHIRUDO_PWRU_CACHE"
+	rm -rf -- "$tmp"
+}
+
 bundle_is_current()
 {
 	local input
@@ -423,6 +449,8 @@ cleanup()
 	rm -rf -- "$TMP_DIR" "$FIXTURE_WORK"
 }
 trap cleanup EXIT
+fetch_shirudo_pwru
+cp -a -- "$SHIRUDO_PWRU_CACHE" "$FIXTURE_WORK/shirudo-pwru"
 if [[ "$BUILD_CONTAINER" == 0 ]]; then
 	"$REPO_ROOT/testing/vm/build-bundle-payload.sh" "$TMP_DIR" "$FIXTURE_WORK"
 else

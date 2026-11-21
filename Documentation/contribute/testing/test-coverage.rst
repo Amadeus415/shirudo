@@ -320,6 +320,21 @@ signed config image.
        every op as ``activity`` and, for a marked socket whose op failed, a
        ``hit``. A spliced failing decrypt moves both counters; an ordinary
        copying failing decrypt moves only ``activity``; the unload removes it
+   * - ``t3118-pwru``
+     - The upatch shirudo-pwru signs, at the commit
+       :src:`testing/vm/build-bundle.sh` pins, with the filter
+       ``udp and host 127.0.0.2 and port 4242``, loads with its 11
+       ``fentry`` programs and its 3 ``tp_btf`` ones, and records UDP over
+       loopback that the filter matches and no other: at ``ip_output``
+       and ``__dev_queue_xmit``, before the packet has an Ethernet
+       header, and at ``dev_hard_start_xmit``,
+       ``__netif_receive_skb_core``, ``ip_rcv_core`` and
+       ``ip_protocol_deliver_rcu`` with one, the same ``sk_buff`` on the
+       way out and in, and a datagram to a port nothing listens on at
+       the ``kfree_skb`` tracepoint with its reason. It returns them through
+       its decoder with their tuple, exports them to an OTLP collector,
+       which drains them, and unloads. The translation of the filter is
+       covered by the tests of shirudo-pwru.
 
 ``tpm`` (4)
 ~~~~~~~~~~~

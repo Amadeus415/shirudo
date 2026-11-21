@@ -772,6 +772,29 @@ build_copyfail_detector_fixture()
 	)
 }
 
+# shirudo-pwru, which build-bundle.sh put into the fixture work, builds
+# against this tree and signs through its shirudo build; t3118 sends UDP
+# to 127.0.0.2 port 4242 over loopback, and other traffic, through it.
+build_pwru_fixture()
+{
+	local keys_dir="$1" src="$FIXTURE_WORK/shirudo-pwru"
+	local builder="$REPO_ROOT/tools/shirudo-build/shirudo-build"
+	local payload
+
+	make -C "$src" SHIRUDO_SRC="$REPO_ROOT" shirudo-pwru >/dev/null
+	SHIRUDO_BUILD="$builder" "$src/shirudo-pwru" \
+		--shirudo "$REPO_ROOT/shirudo" --keys-dir "$keys_dir" \
+		-o "$TMP_DIR/fixtures/pwru.upatch" \
+		udp and host 127.0.0.2 and port 4242 >/dev/null
+	payload="$($REPO_ROOT/shirudo upatch info \
+		"$TMP_DIR/fixtures/pwru.upatch" --json |
+		python3 -c 'import json,sys; print(json.load(sys.stdin)["payload_sha256"])')"
+	"$builder" --unload pwru --payload-sha256 "$payload" \
+		-o "$TMP_DIR/fixtures/pwru.unload.upatch" \
+		--key "$keys_dir/signing_key.pem" \
+		--cert "$keys_dir/cert.der" >/dev/null
+}
+
 build_policy_labels_fixture()
 {
 	local source_dir="$FIXTURE_WORK/policy-labels"
@@ -870,6 +893,7 @@ queue_fixture build_af_alg_block_fixture "$FIXTURE_WORK/trusted"
 queue_fixture build_alg_splice_block_fixture "$FIXTURE_WORK/trusted"
 queue_fixture build_copyfail_detector_fixture "$FIXTURE_WORK/trusted"
 queue_fixture build_java_fixture
+queue_fixture build_pwru_fixture "$FIXTURE_WORK/trusted"
 wait_fixture_jobs
 
 basic_payload="$($REPO_ROOT/shirudo upatch info \

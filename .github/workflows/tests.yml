@@ -62,6 +62,21 @@ jobs:
           github-token: ${{ secrets.KERNEL_REPO_READ_TOKEN }}
           path: build/kernel-ci-artifact
 
+      - name: Resolve shirudo-pwru commit
+        if: matrix.vm == '1'
+        id: pwru
+        run: .github/scripts/shirudo-pwru-commit.sh >>"$GITHUB_OUTPUT"
+
+      - name: Check out shirudo-pwru
+        if: matrix.vm == '1'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: shirudo-dev/shirudo-pwru
+          ref: ${{ steps.pwru.outputs.commit }}
+          token: ${{ secrets.SHIRUDO_PWRU_READ_TOKEN }}
+          persist-credentials: false
+          path: build/test-vm/cache/shirudo-pwru/${{ steps.pwru.outputs.commit }}
+
       - name: Restore the static target dependencies
         if: matrix.vm == '1'
         id: target-deps

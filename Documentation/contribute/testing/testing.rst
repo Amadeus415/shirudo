@@ -46,7 +46,8 @@ Before you begin
   it misses with an install command for ``apt-get`` or ``dnf``. The
   bundle carries the TPM simulator helper, so
   :src:`testing/vm/build-bundle.sh` builds no bundle without
-  ``libtpms-dev``.
+  ``libtpms-dev``. The first bundle also needs network access, to fetch
+  shirudo-pwru, which signs the pwru upatch of ``t3118``.
 - For the end-to-end tests: Docker on the host, and network access the
   first time, when the runner adds clang 23 from apt.llvm.org and the
   operator's build dependencies, a JDK among them, to the image of the
@@ -59,7 +60,11 @@ The ``CI suite`` workflow uses the x86-64 CI kernel package from
 kernel does not change what a series is tested on. For a manual run,
 set ``kernel_run_id`` to select another run. The run must contain that
 artifact. The ``KERNEL_REPO_READ_TOKEN`` secret needs Actions read
-access to the kernel repository. Setup extracts the image and headers
+access to the kernel repository. shirudo-pwru is private as well: the
+workflow checks it out at the commit :src:`testing/vm/build-bundle.sh`
+pins into the cache where the bundle build finds it, with the
+``SHIRUDO_PWRU_READ_TOKEN`` secret, which needs Contents read access to
+that repository. Setup extracts the image and headers
 packages, checks BTF for the signed-loader ABI and every LSM hook a
 program of ``bpf/`` attaches to, and stages the result for the test VM.
 The kernel project owns the kernel source, configuration and patch
@@ -516,6 +521,13 @@ changes are in the bundle and the host's own build is left alone. It
 keeps the static target dependencies it builds under
 ``build/test-vm/cache/target-deps/``, one directory per image and
 :src:`Makefile.target-deps`.
+
+The host fetches `shirudo-pwru <https://github.com/shirudo-dev/shirudo-pwru>`_
+at the commit ``SHIRUDO_PWRU_COMMIT`` of :src:`testing/vm/build-bundle.sh`
+into ``build/test-vm/cache/shirudo-pwru/<commit>/`` once, with git,
+which needs credentials that can read that private repository, and puts
+a copy into the fixture work. The payload builds it against the tree
+and signs with it the pwru upatch that ``t3118`` loads.
 
 ``BUILD_CONTAINER=0`` builds the bundle in the checkout with the host's
 toolchain, the way the host tier always builds: OpenSSL 3.5 and clang 23,
