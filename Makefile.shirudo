@@ -231,6 +231,7 @@ CLANG_BPF := $(CLANG) -target bpf -mcpu=v4 -fno-jump-tables -O2 -g -Wall -Wextra
 UTIL_SRCS := \
 	$(CRYPTO_SRC) \
 	$(TLS_SRC) \
+    util/runtime_entry.c \
     util/loader.c \
     util/upatch.c \
     util/xdp.c \
@@ -798,6 +799,7 @@ TEST_HELPERS := $(VERITY_TEST_HELPERS) \
                 testing/helper/test-config-update \
                 testing/helper/test-config-attest \
                 testing/helper/test-tpm-command \
+                testing/helper/test-runtime-entry \
                 testing/helper/test-image-keys \
                 testing/helper/test-conditions \
                 testing/helper/test-config-image \
@@ -1062,6 +1064,15 @@ testing/helper/test-config-update: testing/helper/test-config-update.c \
 testing/helper/test-tpm-command: testing/helper/test-tpm-command.c include/shirudo/tpm_command.h
 	@printf '  CC      $@\n'
 	$(Q)$(CC) $(CFLAGS) -o $@ $<
+
+testing/helper/test-runtime-entry: testing/helper/test-runtime-entry.c util/runtime_entry.o \
+                                  testing/helper/test-runtime-entry.h \
+                                  util/runtime_entry.h include/shirudo/runtime_entry.h \
+                                  util/string.o util/malloc.o $(LIBBPF_A)
+	@printf '  CC      $@\n'
+	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(filter-out %.h,$^) \
+	    -Wl,--wrap=bpf_map_lookup_elem -Wl,--wrap=bpf_map_update_elem \
+	    -Wl,--wrap=bpf_map_freeze $(LIBELF_LIBS) $(ZLIB_LIBS)
 
 testing/helper/test-config-attest: testing/helper/test-config-attest.c \
 		util/attest.o util/upatch.o $(REGISTER_OBJS)
