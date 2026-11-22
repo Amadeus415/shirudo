@@ -1049,16 +1049,17 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
        ``EOVERFLOW``; a view without a history writes nothing
    * - ``config-evidence-verify``
      - ``replay()``, ``config_evidence_verify()``,
-       ``config_measure_event()``
+       ``config_measure_event()``, ``config_measure_nvpcr_initial()``
      - Every view of 0 to 3 events, without events or past 4096 of them,
-       every quote mask, TPM boot, PCR value and expectation; SHA-256 as
-       any digest or failure
+       every quote mask, TPM boot, PCR value, certified NvPCR value or
+       its absence, and expectation; SHA-256 as any digest or failure
      - Passes exactly when the PCR is one from 0 to 15 but 9 and 11,
-       quoted and the expected one, the reset count the quote's, the events
-       one boot event then updates in sequence, the quoted value the
-       initial one extended by each event's digest in order, and the last
-       root the expected one; a digest hashes the tag, the kind and the
-       root; a root without its PCR is refused
+       quoted, or the config NvPCR with a certified value and an initial
+       value of SHA-256 over 64 zero bytes. The register and last root
+       match any operator expectation, the reset count is the quote's,
+       and replay of one boot event then updates in sequence reaches the
+       quoted or certified value. An event digest hashes the tag, the
+       kind and the root. A root without its register is refused.
    * - ``config-evidence-collect``
      - ``config_evidence_collect()``, ``collect_event()``
      - Every journal of 0 to 2 records and every active selection, the

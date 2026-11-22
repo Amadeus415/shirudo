@@ -4,9 +4,9 @@
  *
  * replay() and config_evidence_verify() of util/config_attest.c on every
  * history of LEN events: a history passes only as one boot event and then
- * updates in sequence, and only when the quoted PCR holds the initial value
- * extended by each event's digest in order. SHA-256 gives any digest or
- * fails: nothing is assumed of it, collision resistance least of all.
+ * updates in sequence, reaching the quoted PCR or certified NvPCR value.
+ * An NvPCR history starts at SHA-256 of 64 zero bytes. The hash model
+ * gives any digest or fails.
  */
 
 #include "proof.h"
@@ -25,9 +25,10 @@ static const char event_tag[] = "shirudo-config-root-v1";
 
 /* A PCR that the history's events extend, as far as they were hashed. */
 static const struct config_evidence *history;
+static const __u8 *nvpcr_initial;
 static __u8 pcr_now[32], event_digest[32];
 static size_t n_extended;
-static bool digest_ready, hash_failed;
+static bool digest_ready, initial_hashed, hash_failed;
 
 static bool same(const __u8 *a, const __u8 *b)
 {
@@ -71,12 +72,26 @@ static void check_extend(const __u8 *in)
 
 int sha256_buffer(const void *data, size_t len, __u8 out[32])
 {
+	static const __u8 zero[32] = {};
 	int ret;
 
 	__CPROVER_assert(__CPROVER_r_ok(data, len), "hashes only its input");
 	__CPROVER_assert(__CPROVER_w_ok(out, 32), "a digest's room");
 	__CPROVER_assert(len == EVENT_BYTES || len == EXTEND_BYTES,
-			 "an event or an extend");
+			 "an event, an extend or an NvPCR initialization");
+	if (ret)
+		hash_failed = true;
+	if (len == EXTEND_BYTES && !digest_ready) {
+		__CPROVER_assert(nvpcr_initial && !initial_hashed && !n_extended &&
+				 history->pcr == TPM_CONFIG_NVPCR_INDEX,
+				 "initializes the NvPCR once before replay");
+		__CPROVER_assert(same(data, zero) &&
+				 same((const __u8 *)data + 32, zero),
+				 "extends a zero value with a zero digest");
+		memcpy(out, nvpcr_initial, 32);
+		initial_hashed = true;
+		return ret;
+	}
 	if (len == EVENT_BYTES)
 		check_event(data);
 	else
@@ -90,8 +105,6 @@ int sha256_buffer(const void *data, size_t len, __u8 out[32])
 		digest_ready = false;
 		n_extended++;
 	}
-	if (ret)
-		hash_failed = true;
 	return ret;
 }
 
@@ -162,18 +175,23 @@ static void replayed(void)
 
 static void verified(void)
 {
-	bool holds_events, config_pcr, approved, have_root;
-	__u32 quote_mask, reset;
+	bool holds_events, approved, have_root, have_certified;
 	const __u8 *expected_root = NULL;
+	const __u8 *certified = NULL;
+	const __u8 *live = NULL;
 	struct config_evidence view;
 	const char *reason = NULL;
+	__u8 pcrs[24][32], initial[32];
+	__u32 quote_mask, reset;
 	int expected_pcr, ret;
-	__u8 pcrs[24][32];
 
 	any_view(&view, &holds_events);
+	nvpcr_initial = initial;
 	if (have_root)
 		expected_root = any_bytes(32);
-	ret = config_evidence_verify(&view, quote_mask, reset, pcrs,
+	if (have_certified)
+		certified = any_bytes(32);
+	ret = config_evidence_verify(&view, quote_mask, reset, pcrs, certified,
 				     expected_root, expected_pcr, &reason);
 	__CPROVER_assert(reason, "a reason either way");
 	if (!view.present) {
@@ -182,28 +200,30 @@ static void verified(void)
 				 "no history passes only when none is expected");
 		return;
 	}
-	config_pcr = view.pcr < 16 && view.pcr != CHAIN_PCR &&
-		     view.pcr != CHAIN_PHASE_PCR;
-	approved = config_pcr && (quote_mask >> view.pcr & 1) &&
-		   (expected_pcr < 0 || view.pcr == (__u32)expected_pcr) &&
+	approved = (expected_pcr < 0 || view.pcr == (__u32)expected_pcr) &&
 		   view.reset_count == reset &&
 		   !(expected_root && expected_pcr < 0);
-	if (!approved) {
-		__CPROVER_assert(ret,
-				 "refused unless quoted, expected and of the quote's TPM boot");
+	if (view.pcr == TPM_CONFIG_NVPCR_INDEX) {
+		live = certified;
+		approved = approved && same(view.initial_pcr, initial);
+	} else if (view.pcr < 16 && view.pcr != CHAIN_PCR &&
+		   view.pcr != CHAIN_PHASE_PCR && (quote_mask >> view.pcr & 1)) {
+		live = pcrs[view.pcr];
+	}
+	if (!approved || !live || !holds_events || !in_order(&view) ||
+	    hash_failed) {
+		__CPROVER_assert(ret, "an invalid history or register is refused");
 		return;
 	}
-	if (!holds_events || !in_order(&view) || hash_failed) {
-		__CPROVER_assert(ret, "no history and one out of order refused");
-		return;
-	}
+	__CPROVER_assert(initial_hashed == (view.pcr == TPM_CONFIG_NVPCR_INDEX),
+			 "only an NvPCR needs a digest of its initial value");
 	__CPROVER_assert(n_extended == LEN, "every event extended");
 	__CPROVER_assert(!ret ==
-			 (same(pcrs[view.pcr], pcr_now) &&
+			 (same(live, pcr_now) &&
 			  (!expected_root ||
 			   same(view.events[LEN - 1].root_hash,
 				expected_root))),
-			 "passes exactly on the quoted PCR's replay and the expected last root");
+			 "passes exactly on the register's replay and the expected last root");
 }
 
 void harness(void)
