@@ -1032,7 +1032,8 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
        events, cut or malformed at any point; ``json_parse()`` a model of
        its contract, SHA-256 as any result
      - Takes exactly a history with every key, schema 1, a PCR from 0 to
-       15 but 9 and 11, 32-bit counts, 64 hex digits of initial value and
+       15 except 9 and 11 or the config NvPCR index, 32-bit counts,
+       64 hex digits of initial value and
        one boot event then updates in sequence, as said, and names one
        out of order with ``EKEYREJECTED``; a refusal and evidence without
        a history return nothing, with nothing left allocated

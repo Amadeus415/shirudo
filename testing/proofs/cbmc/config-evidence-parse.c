@@ -43,9 +43,10 @@ static bool whole(void)
 {
 	size_t i;
 
-	if (!said.schema.given || said.schema.value != 1 ||
-	    !said.pcr.given || said.pcr.value < 0 || said.pcr.value > 15 ||
-	    said.pcr.value == CHAIN_PCR || said.pcr.value == CHAIN_PHASE_PCR ||
+	if (!said.schema.given || said.schema.value != 1 || !count(&said.pcr) ||
+	    ((said.pcr.value > 15 || said.pcr.value == CHAIN_PCR ||
+	      said.pcr.value == CHAIN_PHASE_PCR) &&
+	     said.pcr.value != TPM_CONFIG_NVPCR_INDEX) ||
 	    !count(&said.reset_count) || !count(&said.restart_count) ||
 	    !said.initial_pcr.given ||
 	    !hex_digits(said.initial_pcr.text, 64) || !said.events || !LEN)
