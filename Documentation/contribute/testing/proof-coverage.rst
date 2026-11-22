@@ -1044,7 +1044,8 @@ or shorter, and "lengths 0 to 6" every input of each of those lengths.
        each member under its key, ``json_parse()`` one that hands them to
        the schema
      - The parser returns every field the writer was given, exactly for a
-       view that replays; a sequence past a ``__s64`` is refused with
+       view that replays with a valid static PCR or the config NvPCR
+       index; a sequence past a ``__s64`` is refused with
        ``EOVERFLOW``; a view without a history writes nothing
    * - ``config-evidence-verify``
      - ``replay()``, ``config_evidence_verify()``,
