@@ -93,11 +93,12 @@ kernel.
 Host userspace coverage
 -----------------------
 
-On every run of the ``CI suite``, the x86-64 job builds its host userspace C
-binaries with coverage instrumentation. It sends an LCOV report to Coveralls
-after the existing test steps pass. The ``main`` reports provide a baseline for
-pull request coverage comparisons. Reports exclude test code, vendored code,
-QEMU guests and BPF programs.
+On every run of the ``CI suite``, the x86-64 jobs build their host userspace C
+binaries with coverage instrumentation. After those jobs pass, the workflow
+merges their LCOV reports and uploads to Coveralls independently of the arm64
+job. The ``main`` reports provide a baseline for pull request coverage
+comparisons. Reports exclude test code, vendored code, QEMU guests and BPF
+programs.
 
 Check the quickstart and quick guides
 -------------------------------------

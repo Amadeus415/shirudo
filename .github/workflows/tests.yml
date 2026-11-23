@@ -80,15 +80,12 @@ jobs:
             runner: ubuntu-latest
             vm: '1'
             suite: end2end
-          - name: CI host tests (arm64)
-            runner: ubuntu-24.04-arm
-            vm: '0'
-            suite: host
     env:
       VM: ${{ matrix.vm }}
-      COVERAGE: ${{ matrix.suite != 'host' && '1' || '0' }}
+      COVERAGE: '1'
+      TEST_SUITE: ${{ matrix.suite }}
 
-    steps:
+    steps: &test_steps
       - name: Require successful kernel preparation
         if: >-
           needs.kernel-plan.result != 'success' ||
@@ -114,7 +111,7 @@ jobs:
         run: testing/vm/kernel-artifact.sh download
 
       - name: Restore the static target dependencies
-        if: matrix.vm == '1'
+        if: env.VM == '1'
         id: target-deps
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -136,7 +133,7 @@ jobs:
           key: host-libtpms-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/vm-toolchain.sh', '.github/scripts/install-libtpms.sh') }}
 
       - name: Restore the VM images
-        if: matrix.vm == '1'
+        if: env.VM == '1'
         id: images
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -150,7 +147,7 @@ jobs:
         run: .github/scripts/tests.sh setup
 
       - name: Run unit tests
-        if: matrix.suite == 'unit' || matrix.suite == 'host'
+        if: env.TEST_SUITE == 'unit' || env.TEST_SUITE == 'host'
         env:
           SHIRUDO_SKIP_TREE_CHECKS: >-
             ${{ (github.event_name == 'pull_request' ||
@@ -158,21 +155,19 @@ jobs:
         run: .github/scripts/tests.sh run unit
 
       - name: Run host functional tests
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.suite == 'host' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && env.TEST_SUITE == 'host' }}
         run: .github/scripts/tests.sh run functional
 
       - name: Run selected test suite
-        if: matrix.vm == '1'
+        if: env.VM == '1'
         id: suite
-        env:
-          TEST_SUITE: ${{ matrix.suite }}
         run: .github/scripts/tests.sh run "$TEST_SUITE"
 
       - name: Upload guest logs
         if: always() && steps.suite.outcome == 'failure'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: guest-logs-${{ matrix.suite }}
+          name: guest-logs-${{ env.TEST_SUITE }}
           path: |
             build/test-vm/vms/*/result
             build/test-vm/vms/*/console.log
@@ -186,7 +181,7 @@ jobs:
         if: env.COVERAGE == '1'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: host-coverage-${{ matrix.suite }}
+          name: host-coverage-${{ env.TEST_SUITE }}
           path: coverage/host.lcov
           if-no-files-found: error
           overwrite: true
@@ -194,7 +189,7 @@ jobs:
       # Save each expensive build once it is complete, even when a later
       # step fails, so the next run does not rebuild it.
       - name: Save the static target dependencies
-        if: always() && matrix.vm == '1' && steps.target-deps.outputs.cache-hit != 'true' && hashFiles('build/target-deps/lib/libcrypto.a') != '' && hashFiles('build/target-deps/curl/lib/libcurl.a') != ''
+        if: always() && env.VM == '1' && steps.target-deps.outputs.cache-hit != 'true' && hashFiles('build/target-deps/lib/libcrypto.a') != '' && hashFiles('build/target-deps/curl/lib/libcurl.a') != ''
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/target-deps
@@ -217,11 +212,24 @@ jobs:
       # Only end-to-end builds the operator image. Save the shared cache
       # from that job once the image's key file marks it complete.
       - name: Save the VM images
-        if: always() && matrix.suite == 'end2end' && steps.images.outputs.cache-hit != 'true' && hashFiles('build/test-vm/cache/runtime/.operator-*.key') != ''
+        if: always() && env.TEST_SUITE == 'end2end' && steps.images.outputs.cache-hit != 'true' && hashFiles('build/test-vm/cache/runtime/.operator-*.key') != ''
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/test-vm/cache
           key: ${{ steps.images.outputs.cache-primary-key }}
+
+  arm64-tests:
+    needs: [kernel-plan, kernel-build]
+    if: ${{ !cancelled() }}
+    name: CI host tests (arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 150
+    env:
+      VM: '0'
+      COVERAGE: '0'
+      TEST_SUITE: host
+
+    steps: *test_steps
 
   coverage:
     name: Publish host userspace coverage
