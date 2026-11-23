@@ -110,17 +110,18 @@ static int notdot(const struct dirent *e)
 static noinline_for_stack int count_eventlog(long *entries, long *bytes)
 {
 	char buf[65536];
+	int fd, ret = 0;
 	struct stat st;
 	long lines = 0;
 	ssize_t n;
-	int fd;
 
-	if (stat(eventlog_path(), &st) != 0)
-		return -errno;
-	*bytes = (long)st.st_size;
 	fd = open(eventlog_path(), O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		return -errno;
+	if (fstat(fd, &st) != 0) {
+		ret = -errno;
+		goto out;
+	}
 	while ((n = read(fd, buf, sizeof(buf))) > 0) {
 		ssize_t i;
 
@@ -129,9 +130,15 @@ static noinline_for_stack int count_eventlog(long *entries, long *bytes)
 				lines++;
 		}
 	}
-	close(fd);
+	if (n < 0) {
+		ret = -errno;
+		goto out;
+	}
+	*bytes = (long)st.st_size;
 	*entries = lines;
-	return 0;
+out:
+	close(fd);
+	return ret;
 }
 
 struct asset_view {
