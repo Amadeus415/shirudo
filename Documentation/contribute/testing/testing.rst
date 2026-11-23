@@ -60,6 +60,11 @@ functional tests together.
 The workflow merges the x86-64 host userspace coverage reports and
 publishes the combined report to Coveralls.
 
+On pull requests and pushes to ``main``, Lint runs the full-tree Coccinelle
+and unused-function checks. The CI suite and sanitizer jobs still run the
+self-tests for both scripts. Local, manually dispatched, and sanitizer tag
+runs also scan the full tree as part of ``ci-checks``.
+
 The ``CI suite`` workflow uses the x86-64 CI kernel package.
 :src:`testing/vm/kernel-artifact.sh` pins its build run ID and checksums.
 When a change touches the kernel build inputs, CI builds packages for
