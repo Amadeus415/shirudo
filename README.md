@@ -30,8 +30,8 @@ if not weeks or months.
 
 ## Getting Started
 
-Run `make docs` to render the documentation and access it through:
-http://127.0.0.1:8000
+Read the [shirudo documentation](https://docs.shirudo.dev/).
+Follow the [quickstart](https://docs.shirudo.dev/start/quickstart.html) to build shirudo, boot a test VM, and load your first upatch.
 
 ## Releases
 
