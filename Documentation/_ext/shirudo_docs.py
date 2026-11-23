@@ -6,7 +6,8 @@
 # footer, console blocks whose prompts name the role a command runs in,
 # :src: links to the files of the repository, the figures of images/
 # written into the page, so that they take the colors of its theme, and
-# literals in tables that break after punctuation.
+# literals in tables that break after punctuation, and mermaid sequence
+# diagrams that the page's script draws in the browser.
 
 import html
 import os
@@ -53,6 +54,18 @@ def meta_line(app, doctree, docname):
             line = nodes.paragraph("", " · ".join(parts), classes=["meta"])
             title.parent.insert(title.parent.index(title) + 1, line)
         return
+
+
+def mermaid_blocks(app, doctree, docname):
+    """A fence of language mermaid, which GitHub draws in a Markdown page,
+    goes into an HTML page as text that shirudo.js draws."""
+    if app.builder.format != "html":
+        return
+    for block in list(doctree.findall(nodes.literal_block)):
+        if block.get("language") != "mermaid":
+            continue
+        markup = "<pre class='mermaid'>%s</pre>" % html.escape(block.astext())
+        block.replace_self(nodes.raw("", markup, format="html"))
 
 
 def inline_figures(app, doctree, docname):
@@ -199,6 +212,7 @@ def setup(app):
     CHANGES.update(last_changes())
     app.connect("doctree-resolved", meta_line)
     app.connect("doctree-resolved", inline_figures)
+    app.connect("doctree-resolved", mermaid_blocks)
     app.connect("doctree-resolved", break_table_literals)
     app.connect("html-page-context", page_context)
     app.connect("build-finished", write_llms)

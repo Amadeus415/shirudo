@@ -25,4 +25,5 @@ states what the mechanisms here defend against and where they stop.
    config-images
    kernel-interfaces
    kernel-patches
+   java-upatch
    design-decisions

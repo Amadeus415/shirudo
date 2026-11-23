@@ -204,6 +204,50 @@
 		button.hidden = false;
 	}
 
+	/*
+	 * Draw the mermaid diagrams of a page. The library comes from a pinned
+	 * release, checked by its hash, and only for a page that has a diagram.
+	 */
+	function diagrams() {
+		var blocks = document.querySelectorAll("pre.mermaid");
+		var root = document.documentElement;
+		var media = window.matchMedia("(prefers-color-scheme: dark)");
+		var script;
+
+		if (!blocks.length)
+			return;
+		var draw = function () {
+			var dark = (root.getAttribute("data-theme") ||
+				    (media.matches ? "dark" : "light")) === "dark";
+
+			window.mermaid.initialize({
+				startOnLoad: false,
+				theme: dark ? "dark" : "default",
+			});
+			blocks.forEach(function (block) {
+				block.textContent = block.dataset.source;
+				block.removeAttribute("data-processed");
+			});
+			window.mermaid.run({ nodes: blocks });
+		};
+
+		blocks.forEach(function (block) {
+			block.dataset.source = block.textContent;
+		});
+		script = document.createElement("script");
+		script.src = "https://cdn.jsdelivr.net/npm/mermaid@12.3.0/dist/mermaid.min.js";
+		script.integrity = "sha384-HHW54r639fK42Ip0coGF3mz8oSiGn0eEoWNTLs75X7H63pLSDBa0Tqs0RwGmLlXE";
+		script.crossOrigin = "anonymous";
+		script.onload = function () {
+			draw();
+			new MutationObserver(draw).observe(root, {
+				attributes: true,
+				attributeFilter: ["data-theme"],
+			});
+		};
+		document.head.appendChild(script);
+	}
+
 	document.addEventListener("DOMContentLoaded", function () {
 		tree();
 		menu();
@@ -211,5 +255,6 @@
 		spy();
 		search();
 		theme();
+		diagrams();
 	});
 })();

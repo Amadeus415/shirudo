@@ -13,7 +13,7 @@ author = "Authors of shirudo"
 copyright = "2026, Authors of shirudo"
 
 extensions = ["myst_parser", "shirudo_docs", "clickhouse_schema"]
-source_suffix = {".rst": "restructuredtext"}
+source_suffix = {".rst": "restructuredtext", ".md": "markdown"}
 root_doc = "index"
 exclude_patterns = ["output", "_ext", "_themes", "logos"]
 language = "en"
