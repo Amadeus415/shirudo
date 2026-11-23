@@ -307,7 +307,9 @@ quicken_local_stack_timers()
 	EOF
 	cat >/etc/systemd/system/shirudo-keepalive.timer.d/local-stack.conf <<-'EOF'
 	[Timer]
+	OnBootSec=
 	OnUnitInactiveSec=
+	OnBootSec=5s
 	OnUnitInactiveSec=10s
 	EOF
 	systemctl daemon-reload
