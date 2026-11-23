@@ -68,17 +68,22 @@ static int download_https(const char *source, struct image_download *download)
 	ret = tls_curl_policy(curl, NULL);
 	if (ret)
 		goto out;
-	curl_easy_setopt(curl, CURLOPT_URL, source);
-	curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
-	curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
-	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-	curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
-	curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
-	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
-	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
-	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L);
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, download_write);
-	curl_easy_setopt(curl, CURLOPT_WRITEDATA, download);
+	if (curl_easy_setopt(curl, CURLOPT_URL, source) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https") != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR,
+			     "https") != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
+			     download_write) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_WRITEDATA, download) != CURLE_OK) {
+		ret = -EINVAL;
+		goto out;
+	}
 	result = curl_easy_perform(curl);
 	if (result != CURLE_OK)
 		ret = download->err ? download->err : -EIO;
