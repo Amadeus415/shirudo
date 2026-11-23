@@ -199,3 +199,6 @@ distclean: clean
 .PHONY: vm vm-console vm-ssh vm-enroll vm-sbom vm-stop vm-clean oci telemetry stack-up stack-down xtop shields
 vm vm-console vm-ssh vm-enroll vm-sbom vm-stop vm-clean oci telemetry stack-up stack-down xtop shields:
 	+$(Q)$(MAKE) -C testing $@
+
+# The stack's ClickHouse is a keepalive backend only with the checker.
+telemetry stack-up: quote-check
