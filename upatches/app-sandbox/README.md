@@ -129,6 +129,17 @@ leaves the labels, which restrict nothing once the upatch is gone.
 
 Every refusal is `EACCES`.
 
+## Try it with Apache
+
+`demo/` in the source of this package holds a web server to try the
+`apache` sandbox on: Apache httpd with PHP from the official
+`php:8.4-apache` image, a site on port 8443 and `attack.php`, which
+does from inside PHP what an attacker would next. `demo/build.sh` writes
+the image's file system to an archive, and `demo/apache.sh` unpacks it
+on a target and runs Apache from it in a chroot, with `/usr/sbin/apache2`
+a hard link to its binary. `Documentation/start/guides/system-hardening.rst`
+walks through it.
+
 ## Limits
 
 - A path that does not exist at the load is not labeled, and a file
