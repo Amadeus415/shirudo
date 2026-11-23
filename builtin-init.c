@@ -1486,6 +1486,13 @@ static int state_source(char *buf, size_t cap)
 	return strsprintf(buf, cap, "%s%s", sysroot(), VAR_LIB);
 }
 
+static void initrd_leave(void)
+{
+	if (umount2(VAR_LIB, MNT_DETACH) != 0)
+		pr_warn("initrd: detach %s: %s", VAR_LIB,
+			strerror(errno));
+}
+
 /*
  * The initrd phase reads the root's state tree: the archived upatches
  * to restore, the eventlog to continue, the keys to compare. A
@@ -1541,19 +1548,12 @@ static int initrd_enter(void)
 		ret = 0;
 	}
 	if (ret) {
-		umount2(VAR_LIB, MNT_DETACH);
+		initrd_leave();
 		return ret;
 	}
 	pr_info("initrd: %s bound writable at %s for config recovery",
 		src, VAR_LIB);
 	return 0;
-}
-
-static void initrd_leave(void)
-{
-	if (umount2(VAR_LIB, MNT_DETACH) != 0)
-		pr_warn("initrd: detach %s: %s", VAR_LIB,
-			strerror(errno));
 }
 
 static int init_phase_error(int ret, const char *phase)
