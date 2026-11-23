@@ -19,6 +19,9 @@ input = "watch.list"
 generator = ["python3", "gen_watch_rodata.py"]
 update = ["python3", "gen_watch_rodata.py"]
 
+[upatches.tree]
+id = "kernel-obs"
+
 [[upatches]]
 source = "userns-unshare-counter.bpf.c"
 

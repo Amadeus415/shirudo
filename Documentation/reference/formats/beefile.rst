@@ -641,7 +641,9 @@ Generated data
 
 :src:`upatches/kernel-obs/Beefile` declares two upatches, one with two
 generated ``.rodata`` variables, and ships the generators and their
-input beside them. It has no tree entry: it is installed with ``bpm
+input beside them. The tree entry of the first has no selector, so
+every node that follows a tree it is appended to loads ``kernel-obs``;
+``userns-unshare-counter`` has none and is installed with ``bpm
 install``.
 
 .. literalinclude:: ../../../upatches/kernel-obs/Beefile

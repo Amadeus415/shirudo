@@ -47,6 +47,15 @@ sudo shirudo upatch list
 
 `shirudo bpm info "$PACKAGE"` prints this document without installing.
 
+The Beefile has a tree entry for `kernel-obs`, without a selector, so
+a signed upatch tree can take it and every node that syncs the tree
+loads it. `userns-unshare-counter` has none and reaches a node with
+`bpm install` alone:
+
+```sh
+shirudo bpm tree append kernel-obs-<version>.bee oci://<registry>/<tree> --keys-dir <keys>
+```
+
 ## Tables
 
 To inspect the unshare counter, use `shirudo upatch map

@@ -123,10 +123,7 @@ publish() {
 	rm -rf "$W"
 	mkdir -p "$W/pkg"
 	cp -R "$REPO/upatches/kernel-obs" "$W/pkg/kernel-obs"
-	sed -i '/^source = "kernel-obs.bpf.c"$/a\
-\
-[upatches.tree]\
-id = "kernel-obs"\
+	sed -i '/^id = "kernel-obs"$/a\
 \
 [upatches.tree.selector.labels]\
 role = ["edge"]' "$W/pkg/kernel-obs/Beefile"
