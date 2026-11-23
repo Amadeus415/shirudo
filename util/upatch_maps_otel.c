@@ -699,8 +699,16 @@ static int validate_endpoint_security(struct otel_state *st)
 		ret = -EINVAL;
 		goto out;
 	}
-	curl_url_get(url, CURLUPART_USER, &user, 0);
-	curl_url_get(url, CURLUPART_PASSWORD, &password, 0);
+	uc = curl_url_get(url, CURLUPART_USER, &user, 0);
+	if (uc != CURLUE_OK && uc != CURLUE_NO_USER) {
+		ret = -EINVAL;
+		goto out;
+	}
+	uc = curl_url_get(url, CURLUPART_PASSWORD, &password, 0);
+	if (uc != CURLUE_OK && uc != CURLUE_NO_PASSWORD) {
+		ret = -EINVAL;
+		goto out;
+	}
 	if ((user && user[0]) || (password && password[0])) {
 		ret = -EINVAL;
 		goto out;
@@ -1763,6 +1771,7 @@ static int validate_s3_endpoint(struct otel_s3_state *st)
 {
 	CURLU *url;
 	char *scheme = NULL, *host = NULL, *user = NULL, *password = NULL;
+	CURLUcode uc;
 	int ret = 0;
 
 	if (!st->custom_endpoint) {
@@ -1782,8 +1791,16 @@ static int validate_s3_endpoint(struct otel_s3_state *st)
 		ret = -EINVAL;
 		goto out;
 	}
-	curl_url_get(url, CURLUPART_USER, &user, 0);
-	curl_url_get(url, CURLUPART_PASSWORD, &password, 0);
+	uc = curl_url_get(url, CURLUPART_USER, &user, 0);
+	if (uc != CURLUE_OK && uc != CURLUE_NO_USER) {
+		ret = -EINVAL;
+		goto out;
+	}
+	uc = curl_url_get(url, CURLUPART_PASSWORD, &password, 0);
+	if (uc != CURLUE_OK && uc != CURLUE_NO_PASSWORD) {
+		ret = -EINVAL;
+		goto out;
+	}
 	if ((user && user[0]) || (password && password[0]) ||
 	    strchr(st->endpoint, '?') || strchr(st->endpoint, '#')) {
 		ret = -EINVAL;
