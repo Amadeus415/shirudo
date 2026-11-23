@@ -56,17 +56,37 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: CI tests
+          - name: CI unit tests
+            runner: ubuntu-latest
+            vm: '0'
+            suite: unit
+          - name: CI functional tests (shard 1)
             runner: ubuntu-latest
             vm: '1'
-            coverage: '1'
+            suite: functional-ci-1
+          - name: CI functional tests (shard 2)
+            runner: ubuntu-latest
+            vm: '1'
+            suite: functional-ci-2
+          - name: CI functional tests (shard 3)
+            runner: ubuntu-latest
+            vm: '1'
+            suite: functional-ci-3
+          - name: CI functional tests (shard 4)
+            runner: ubuntu-latest
+            vm: '1'
+            suite: functional-ci-4
+          - name: CI end-to-end tests
+            runner: ubuntu-latest
+            vm: '1'
+            suite: end2end
           - name: CI host tests (arm64)
             runner: ubuntu-24.04-arm
             vm: '0'
-            coverage: '0'
+            suite: host
     env:
       VM: ${{ matrix.vm }}
-      COVERAGE: ${{ matrix.coverage }}
+      COVERAGE: ${{ matrix.suite != 'host' && '1' || '0' }}
 
     steps:
       - name: Require successful kernel preparation
@@ -121,7 +141,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/test-vm/cache
-          key: test-vm-images-${{ hashFiles('testing/vm/runtime-packages', 'testing/vm/operator-packages', 'testing/vm/prepare-runtime.sh', 'testing/vm/build-bundle.sh', 'testing/vm/arch.sh', '.github/scripts/install-clang.sh', '.github/scripts/install-static-libcrypto-deps.sh', 'testing/container/Containerfile', 'testing/container/packages', 'Makefile.target-deps') }}
+          key: test-vm-runtime-and-operator-${{ hashFiles('testing/vm/runtime-packages', 'testing/vm/operator-packages', 'testing/vm/prepare-runtime.sh', 'testing/vm/build-bundle.sh', 'testing/vm/arch.sh', '.github/scripts/install-clang.sh', '.github/scripts/install-static-libcrypto-deps.sh', 'testing/container/Containerfile', 'testing/container/packages', 'Makefile.target-deps') }}
 
       - name: Prepare the test environment
         id: setup
@@ -130,59 +150,42 @@ jobs:
         run: .github/scripts/tests.sh setup
 
       - name: Run unit tests
-        id: unit
+        if: matrix.suite == 'unit' || matrix.suite == 'host'
         run: .github/scripts/tests.sh run unit
 
-      - name: Upload unit guest logs
-        if: always() && steps.unit.outcome == 'failure'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: guest-logs-unit
-          path: |
-            build/test-vm/vms/*/result
-            build/test-vm/vms/*/console.log
-          if-no-files-found: ignore
-
-      - name: Run functional tests
-        id: functional
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+      - name: Run host functional tests
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.suite == 'host' }}
         run: .github/scripts/tests.sh run functional
 
-      - name: Upload functional guest logs
-        if: always() && steps.functional.outcome == 'failure'
+      - name: Run selected test suite
+        if: matrix.vm == '1'
+        id: suite
+        env:
+          TEST_SUITE: ${{ matrix.suite }}
+        run: .github/scripts/tests.sh run "$TEST_SUITE"
+
+      - name: Upload guest logs
+        if: always() && steps.suite.outcome == 'failure'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: guest-logs-functional
+          name: guest-logs-${{ matrix.suite }}
           path: |
             build/test-vm/vms/*/result
             build/test-vm/vms/*/console.log
           if-no-files-found: ignore
-
-      - name: Run end-to-end tests
-        id: end2end
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.vm == '1' }}
-        run: .github/scripts/tests.sh run end2end
 
       - name: Collect host userspace coverage
         if: env.COVERAGE == '1'
         run: .github/scripts/coverage.sh
 
-      - name: Upload coverage to Coveralls
+      - name: Save host userspace coverage
         if: env.COVERAGE == '1'
-        uses: coverallsapp/github-action@cfd0633edbd2411b532b808ba7a8b5e04f76d2c8 # v2.3.4
-        with:
-          file: coverage/host.lcov
-          format: lcov
-
-      - name: Upload end-to-end guest logs
-        if: always() && steps.end2end.outcome == 'failure'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: guest-logs-end2end
-          path: |
-            build/test-vm/vms/*/result
-            build/test-vm/vms/*/console.log
-          if-no-files-found: ignore
+          name: host-coverage-${{ matrix.suite }}
+          path: coverage/host.lcov
+          if-no-files-found: error
+          overwrite: true
 
       # Save each expensive build once it is complete, even when a later
       # step fails, so the next run does not rebuild it.
@@ -207,15 +210,41 @@ jobs:
           path: build/host-libtpms
           key: ${{ steps.host-libtpms.outputs.cache-primary-key }}
 
-      # hashFiles reads every byte it matches and gives up after two
-      # minutes, too short for an image; the key file beside one is
-      # written once the image is complete.
+      # Only end-to-end builds the operator image. Save the shared cache
+      # from that job once the image's key file marks it complete.
       - name: Save the VM images
-        if: always() && matrix.vm == '1' && steps.images.outputs.cache-hit != 'true' && hashFiles('build/test-vm/cache/runtime/.*.key') != ''
+        if: always() && matrix.suite == 'end2end' && steps.images.outputs.cache-hit != 'true' && hashFiles('build/test-vm/cache/runtime/.operator-*.key') != ''
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/test-vm/cache
           key: ${{ steps.images.outputs.cache-primary-key }}
+
+  coverage:
+    name: Publish host userspace coverage
+    needs: tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install LCOV
+        run: sudo apt-get update && sudo apt-get install -y lcov
+
+      - name: Download the x86-64 coverage reports
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: host-coverage-*
+          path: coverage
+
+      - name: Merge host userspace coverage
+        run: .github/scripts/coverage.sh merge
+
+      - name: Upload coverage to Coveralls
+        uses: coverallsapp/github-action@cfd0633edbd2411b532b808ba7a8b5e04f76d2c8 # v2.3.4
+        with:
+          file: coverage/host.lcov
+          format: lcov
 
   backend:
     name: Backend SQL tests

@@ -7,6 +7,12 @@ set -eu
 cd "$(git rev-parse --show-toplevel)"
 mkdir -p coverage
 
+if [ "${1:-}" = merge ]; then
+	exec lcov --ignore-errors inconsistent \
+		--add-tracefile 'coverage/host-coverage-*/host.lcov' \
+		--output-file coverage/host.lcov
+fi
+
 capture() {
 	suffix=$1
 	shift
