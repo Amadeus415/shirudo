@@ -410,14 +410,16 @@ int bpm_oci_parse_endpoint(const char *endpoint, struct bpm_oci_client *c)
  * carry takes at a floor rate: room bytes, in a minute and at 128 KiB a
  * second.
  */
-static void bpm_curl_deadlines(CURL *curl, __u64 room)
+static int bpm_curl_deadlines(CURL *curl, __u64 room)
 {
 	__u64 seconds = BPM_TRANSFER_BASE_S + room / BPM_TRANSFER_RATE_MIN;
 
-	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
-	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
-	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L);
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)seconds);
+	if (curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)seconds) != CURLE_OK)
+		return -EINVAL;
+	return 0;
 }
 
 static int curl_once_ex(struct bpm_oci_client *c, const char *method,
@@ -471,58 +473,75 @@ static int curl_once_ex(struct bpm_oci_client *c, const char *method,
 		curl_slist_free_sensitive(headers);
 		return -ENOMEM;
 	}
-	curl_easy_setopt(curl, CURLOPT_URL, url);
-	curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
-	if (str_equals_nocase(method, "HEAD"))
-		curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-	curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf);
-	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-	bpm_curl_deadlines(curl, (file ? file->room : BPM_MAX_HTTP_BODY) +
-				 body_len);
+	if (curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method) != CURLE_OK ||
+	    (str_equals_nocase(method, "HEAD") &&
+	     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L) != CURLE_OK) ||
+	    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L) != CURLE_OK ||
+	    bpm_curl_deadlines(curl, (file ? file->room : BPM_MAX_HTTP_BODY) +
+				     body_len))
+		goto setup_failed;
 	/*
 	 * OCI registries commonly redirect blob GETs to a signed CDN URL.
 	 * Follow only for blobs, never for manifest or upload calls.
 	 */
-	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, follow ? 1L : 0L);
+	if (curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION,
+			     follow ? 1L : 0L) != CURLE_OK)
+		goto setup_failed;
 	if (follow) {
 		const char *redirect_protocols =
 			str_has_prefix(c->base_url, "https://") ? "https" : "http,https";
 
-		curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
+		if (curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L) != CURLE_OK)
+			goto setup_failed;
 #if LIBCURL_VERSION_NUM >= 0x075500
-		curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, redirect_protocols);
+		if (curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR,
+				     redirect_protocols) != CURLE_OK)
+			goto setup_failed;
 #else
-		curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS,
-				 !strcmp(redirect_protocols, "https") ? CURLPROTO_HTTPS :
-				 CURLPROTO_HTTP | CURLPROTO_HTTPS);
+		if (curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS,
+				     !strcmp(redirect_protocols, "https") ? CURLPROTO_HTTPS :
+				     CURLPROTO_HTTP | CURLPROTO_HTTPS) != CURLE_OK)
+			goto setup_failed;
 #endif
 		/* Keep Authorization restricted to the original registry host. */
-		curl_easy_setopt(curl, CURLOPT_UNRESTRICTED_AUTH, 0L);
+		if (curl_easy_setopt(curl, CURLOPT_UNRESTRICTED_AUTH,
+				     0L) != CURLE_OK)
+			goto setup_failed;
 	}
-	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+	if (curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L) != CURLE_OK)
+		goto setup_failed;
 	if (tls_curl_policy(curl, &c->tls_ca)) {
 		pr_err("bpm OCI request %s: cannot apply TLS policy", url);
 		curl_easy_cleanup(curl);
 		curl_slist_free_sensitive(headers);
 		return -EHOSTUNREACH;
 	}
-	if (body) {
-		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
-		curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)body_len);
-	}
+	if (body &&
+	    (curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body) != CURLE_OK ||
+	     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE,
+			      (curl_off_t)body_len) != CURLE_OK))
+		goto setup_failed;
 	if (file) {
-		curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE,
-				 (curl_off_t)file->room);
-		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, bpm_write_file);
-		curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
+		if (curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE,
+				     (curl_off_t)file->room) != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
+				     bpm_write_file) != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_WRITEDATA, file) != CURLE_OK)
+			goto setup_failed;
 	} else {
-		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, bpm_write_memory);
-		curl_easy_setopt(curl, CURLOPT_WRITEDATA, r);
+		if (curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
+				     bpm_write_memory) != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_WRITEDATA, r) != CURLE_OK)
+			goto setup_failed;
 	}
-	curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, bpm_header);
-	curl_easy_setopt(curl, CURLOPT_HEADERDATA, r);
+	if (curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION,
+			     bpm_header) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_HEADERDATA, r) != CURLE_OK)
+		goto setup_failed;
 	cc = curl_easy_perform(curl);
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
 	r->status = status;
@@ -537,6 +556,12 @@ static int curl_once_ex(struct bpm_oci_client *c, const char *method,
 	tls_ca_cleanup(&c->tls_ca);
 	return status < 0 ? -EHOSTUNREACH : 0;
 
+setup_failed:
+	pr_err("bpm OCI request %s: cannot set up the transfer", url);
+	curl_easy_cleanup(curl);
+	curl_slist_free_sensitive(headers);
+	tls_ca_cleanup(&c->tls_ca);
+	return -EINVAL;
 too_long:
 	curl_slist_free_sensitive(headers);
 	return -E2BIG;
@@ -728,23 +753,24 @@ static int get_bearer_token(struct bpm_oci_client *c, const char *challenge)
 			goto out;
 		}
 	}
-	curl_easy_setopt(curl, CURLOPT_URL, url);
 	/*
 	 * The realm is the registry's to name and the credentials go there:
 	 * over no weaker a transport than the registry's own.
 	 */
-	curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR,
-			 str_has_prefix(c->base_url, "https://") ? "https" :
-								    "http,https");
-	curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
-	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-	bpm_curl_deadlines(curl, BPM_MAX_HTTP_BODY);
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, bpm_write_memory);
-	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &r);
-	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-	if (tls_curl_policy(curl, &c->tls_ca)) {
+	if (curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR,
+			     str_has_prefix(c->base_url, "https://") ?
+			     "https" : "http,https") != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L) != CURLE_OK ||
+	    bpm_curl_deadlines(curl, BPM_MAX_HTTP_BODY) ||
+	    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
+			     bpm_write_memory) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &r) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L) != CURLE_OK ||
+	    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L) != CURLE_OK ||
+	    tls_curl_policy(curl, &c->tls_ca)) {
 		ret = -EINVAL;
 		goto out;
 	}
