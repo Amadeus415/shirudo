@@ -53,7 +53,7 @@ The operator and target may use different architectures. See
 - **TPM measurement.** Changes to the loaded upatch set extend a
   per-boot TPM register. `shirudo attest` returns evidence that
   operators can verify offline.
-- Upatches are small logically contained programs that engineers and
+- **Upatches** are small logically contained programs that engineers and
   agents can read, generate and maintain. Commands take and produce
   structured data.
 - **Pull-based delivery.** Targets use one-shot commands to pull packages
