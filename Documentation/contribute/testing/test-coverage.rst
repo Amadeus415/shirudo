@@ -1029,6 +1029,9 @@ the functional tests run.
    * - ``image``
      - Runtime image bootstrap settings and a config image's verity
        superblock
+   * - ``jar``
+     - A Java agent's jar, and a manifest in a jar written around it, as
+       ``shirudo-build`` checks them
    * - ``json``
      - The JSON parser
    * - ``kconfig``
