@@ -1241,35 +1241,44 @@ static noinline_for_stack int otel_post(struct otel_state *st,
 			ret = -ENOMEM;
 			break;
 		}
-		curl_easy_setopt(curl, CURLOPT_URL, st->endpoint);
-		curl_easy_setopt(curl, CURLOPT_POST, 1L);
-		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
-		curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE,
-				 (curl_off_t)body_len);
-		curl_easy_setopt(curl, CURLOPT_HTTPHEADER, st->headers);
-		curl_easy_setopt(curl, CURLOPT_USERAGENT,
-				 "shirudo OTel-OTLP-Exporter-C/1");
-		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, response_write);
-		curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-		curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, response_header);
-		curl_easy_setopt(curl, CURLOPT_HEADERDATA, &response);
-		curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-		curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, st->timeout_ms);
-		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER,
-				 st->insecure_tls ? 0L : 1L);
-		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST,
-				 st->insecure_tls ? 0L : 2L);
-		if (tls_curl_policy(curl, NULL)) {
+		if (curl_easy_setopt(curl, CURLOPT_URL, st->endpoint) != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_POST, 1L) != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body) != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE,
+				     (curl_off_t)body_len) != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_HTTPHEADER,
+				     st->headers) != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_USERAGENT,
+				     "shirudo OTel-OTLP-Exporter-C/1") != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
+				     response_write) != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_WRITEDATA,
+				     &response) != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION,
+				     response_header) != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_HEADERDATA,
+				     &response) != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L) != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS,
+				     st->timeout_ms) != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER,
+				     st->insecure_tls ? 0L : 1L) != CURLE_OK ||
+		    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST,
+				     st->insecure_tls ? 0L : 2L) != CURLE_OK ||
+		    tls_curl_policy(curl, NULL) ||
+		    (st->ca_file &&
+		     curl_easy_setopt(curl, CURLOPT_CAINFO,
+				      st->ca_file) != CURLE_OK) ||
+		    (st->client_cert &&
+		     curl_easy_setopt(curl, CURLOPT_SSLCERT,
+				      st->client_cert) != CURLE_OK) ||
+		    (st->client_key &&
+		     curl_easy_setopt(curl, CURLOPT_SSLKEY,
+				      st->client_key) != CURLE_OK)) {
 			curl_easy_cleanup(curl);
 			ret = -EINVAL;
 			break;
 		}
-		if (st->ca_file)
-			curl_easy_setopt(curl, CURLOPT_CAINFO, st->ca_file);
-		if (st->client_cert)
-			curl_easy_setopt(curl, CURLOPT_SSLCERT, st->client_cert);
-		if (st->client_key)
-			curl_easy_setopt(curl, CURLOPT_SSLKEY, st->client_key);
 		cc = curl_easy_perform(curl);
 		if (cc == CURLE_OK)
 			curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
